@@ -12,6 +12,7 @@ import {
   classifyNewRuns,
   isTerminalState,
   resultExitCode,
+  headlessChannelRefusal,
 } from "./run.mjs"
 
 // --- parseArgv ----------------------------------------------------------------------------------
@@ -146,4 +147,31 @@ test("resultExitCode: отсутствующий/нечисловой code — 2
   assert.equal(resultExitCode({}), 2)
   assert.equal(resultExitCode({ code: "0" }), 2)
   assert.equal(resultExitCode(null), 2)
+})
+
+// --- headlessChannelRefusal -----------------------------------------------------------------------
+
+test("headlessChannelRefusal: operatorChannel=checkpoint — отказ с диагнозом, а не тихая пауза", () => {
+  const diagnosis = headlessChannelRefusal({ operatorChannel: "checkpoint" })
+  assert.equal(typeof diagnosis, "string")
+  assert.match(diagnosis, /checkpoint/)
+  assert.match(diagnosis, /terminal/)
+})
+
+test("headlessChannelRefusal: operatorChannel=terminal — не его случай, null", () => {
+  assert.equal(headlessChannelRefusal({ operatorChannel: "terminal" }), null)
+})
+
+test("headlessChannelRefusal: поле отсутствует — не его случай (диагноз даёт izi.js), null", () => {
+  assert.equal(headlessChannelRefusal({}), null)
+  assert.equal(headlessChannelRefusal({ loops: { brd: 3 } }), null)
+})
+
+test("headlessChannelRefusal: незнакомое значение — тоже не его случай, null", () => {
+  assert.equal(headlessChannelRefusal({ operatorChannel: "slack" }), null)
+})
+
+test("headlessChannelRefusal: pipeline не объект — не роняет функцию, null", () => {
+  assert.equal(headlessChannelRefusal(null), null)
+  assert.equal(headlessChannelRefusal(undefined), null)
 })

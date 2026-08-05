@@ -35,6 +35,42 @@ if (orderTplCat.exitCode !== 0) {
 }
 const orderTpl = orderTplCat.stdout;
 
+// operatorChannel — policy declared in pipeline.json (see its own "//operatorChannel" comment) and
+// proven once, in the open, by core/operator-channel.mjs (node --test). Mirrored inline, not imported:
+// this sandbox exposes no import/require/process (pi-extensible-workflows SKILL.md: "Workflow
+// JavaScript has no imports, filesystem, network, process, or timers" — only the globals this file
+// already uses reach it). No default: a field this run does not declare must not silently pick a
+// channel a script author is trusted to remember — same argument as pipeline.json's loops/models.
+const OPERATOR_CHANNELS = ["terminal", "checkpoint"];
+const operatorChannel = pipeline.operatorChannel;
+if (operatorChannel === undefined) {
+  return {
+    step: "config", track: "err", kind: "crashed",
+    subject: "pipeline.json: operatorChannel не объявлен — умолчания нет, канал прогона обязан быть данными",
+    code: 2,
+  };
+}
+if (!OPERATOR_CHANNELS.includes(operatorChannel)) {
+  return {
+    step: "config", track: "err", kind: "crashed",
+    subject: `pipeline.json: operatorChannel=${JSON.stringify(operatorChannel)} — допустимо только terminal | checkpoint`,
+    code: 2,
+  };
+}
+
+// UTF-8 byte length without Buffer/TextEncoder — neither reaches this sandbox. Needed below because
+// pi-extensible-workflows caps a checkpoint's `prompt` at 1024 UTF-8 bytes at the RPC boundary
+// (validation.ts, validateCheckpoint) — Cyrillic runs ~2 bytes/char, so this is a real ceiling, not a
+// formality.
+function utf8ByteLength(s) {
+  let n = 0;
+  for (const ch of s) {
+    const cp = ch.codePointAt(0);
+    n += cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+  }
+  return n;
+}
+
 // Несущие контракты, перенесённые дословно из izi-flow-v2 (PLAN.md §1):
 //   1. Квитанция закрывает шаг, а не наличие out — bin/receipt.mjs / bin/promote.mjs пишут её.
 //   2. Промоут staging→out только на зелёном чеке; чек исполняется по staging-пути ДО промоута.
@@ -92,11 +128,60 @@ for (let i = 0; i < pipeline.loops.brd; i++) {
   const env = await agent(order, { role: "gilb", outputSchema: ENVELOPE, timeoutMs: 180000 });
 
   if (env.track === "err") {
-    // Вопрос оператору (или иной err) — терминальный возврат прогона, без пере-делегации.
-    // Оператор исполняет env.answer_cmd, перезапускает прогон — накопленные ответы приезжают
-    // в наряд следующего запуска через .agent/answers.md.
-    log("izi: brd err — terminal return to operator");
-    return { step: "brd", ...env, code: 10 };
+    // Прочие kind (blocked, invalid, escalate, crashed) чекпоинт не трогает — они терминальны на
+    // обоих каналах: только question — штатный ход, для которого канал вообще имеет смысл выбирать.
+    if (env.kind !== "question" || operatorChannel === "terminal") {
+      // Терминальный возврат прогона, без пере-делегации. На канале terminal оператор исполняет
+      // env.answer_cmd и перезапускает прогон — накопленные ответы приезжают в наряд следующего
+      // запуска через .agent/answers.md.
+      log("izi: brd err — terminal return to operator");
+      return { step: "brd", ...env, code: 10 };
+    }
+
+    // operatorChannel === "checkpoint" && env.kind === "question": пауза В ЭТОМ прогоне, а не
+    // терминальный возврат. Текст ответа этим каналом не едет — checkpoint(input) возвращает
+    // раннеру только строку approved|rejected (ui.select(prompt, ["Approve","Reject"]) —
+    // pi-extensible-workflows/src/host.ts); правда по-прежнему на диске в .agent/answers.md,
+    // которую пишет bin/answer.mjs и которую эта же итерация цикла перечитает после approve.
+    const cmd = env.answer_cmd || `node bin/answer.mjs --q=${JSON.stringify(env.subject)} --text="<ответ>"`;
+    const checkpointPrompt = [
+      `Роль gilb ждёт ответа (brd, попытка ${i + 1}/${pipeline.loops.brd}):`,
+      env.subject,
+      "",
+      "Выполните команду:",
+      cmd,
+      "",
+      "затем нажмите Approve. Reject — вопрос уходит человеку (escalate), прогон останавливается.",
+    ].join("\n");
+
+    if (utf8ByteLength(checkpointPrompt) > 1024) {
+      // Хост режет checkpoint prompt на 1024 UTF-8 байтах (validation.ts, validateCheckpoint) —
+      // молча ужать чужой subject/evidence значило бы придумать текст, которого роль не писала.
+      // Честный ход — не звать checkpoint() вовсе и вернуть тот же вопрос терминально, как на
+      // канале terminal; логируем причину, чтобы это не выглядело потерянным решением.
+      log(`izi: brd question prompt exceeds checkpoint's 1024-byte limit (${utf8ByteLength(checkpointPrompt)}b) — falling back to terminal return for this question`);
+      return { step: "brd", ...env, code: 10 };
+    }
+
+    log(`izi: brd question — pausing at checkpoint brd-q${i + 1} (channel: checkpoint)`);
+    const decision = await checkpoint({
+      name: `brd-q${i + 1}`,
+      prompt: checkpointPrompt,
+      context: { subject: env.subject, evidence: env.evidence, answer_cmd: cmd },
+    });
+
+    if (decision !== "approved") {
+      // rejected (или любое иное значение, кроме буквального "approved") — оператор отказался
+      // отвечать здесь и сейчас; решает человек, а не следующая итерация цикла.
+      log(`izi: brd question — checkpoint ${decision}, escalate`);
+      return { step: "brd", track: "err", kind: "escalate", subject: env.subject, evidence: env.evidence, code: 10 };
+    }
+
+    // approved: ответ оператора уже на диске (.agent/answers.md, записан bin/answer.mjs ДО Approve
+    // — так гласит текст чекпоинта выше). Следующая итерация цикла перечитает ANSWERS и соберёт
+    // наряд заново; agent() в ЭТОЙ итерации не вызывается второй раз.
+    log(`izi: brd question — checkpoint approved, retrying with fresh answers`);
+    continue;
   }
 
   const check = await shell(CHECK);

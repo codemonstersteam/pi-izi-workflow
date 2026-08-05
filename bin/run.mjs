@@ -22,6 +22,7 @@
 //               classifyNewRuns(newRuns) -> { kind: "none" } | { kind: "one", run } | { kind: "many", runs }
 //               isTerminalState(state) -> boolean
 //               resultExitCode(result) -> number
+//               headlessChannelRefusal(pipeline) -> string | null
 //
 //   node bin/run.mjs [--task=TASK.md]
 //
@@ -48,6 +49,33 @@
 // `tools: [read, write]` (`roles/gilb.md`) — DO NOT remove `read` or `write` from the allowlist below,
 // only `bash`/`edit`/anything else the launcher does not need: dropping `read` or `write` makes every
 // run fail validation before the workflow's own guardrail ever runs, not just narrow the launcher.
+
+// Contract update (S6, operatorChannel): pipeline.json now declares operatorChannel — "terminal" (the
+// behaviour above, unchanged) or "checkpoint" (workflows/izi.js pauses in-run via checkpoint(), only
+// meaningful inside an interactive pi window — see pipeline.json's own "//operatorChannel" comment).
+// A headless launch through THIS file cannot honour "checkpoint" at all: pi-extensible-workflows'
+// checkpointBridge refuses outright when there is no UI to show Approve/Reject to
+// (`~/.pi/agent/npm/node_modules/pi-extensible-workflows/src/host.ts` — `if (isForeground() &&
+// !ui?.select) fail("RESUME_INCOMPATIBLE", "Foreground checkpoints require UI")`, and again
+// `if (headless) fail("RESUME_INCOMPATIBLE", "Headless CLI checkpoints are unsupported")` — `pi -p`
+// is exactly this case, matching PLAN.md §0's recorded fact). Two ways to keep bin/run.mjs from
+// silently sitting on a pause it can never resolve: (a) refuse before spawning `pi -p` at all, with a
+// diagnosis telling the operator to flip the field, or (b) transparently substitute "terminal" for the
+// duration of this one launch. (b) was rejected: bin/run.mjs parses pipeline.json ONLY to pick the
+// launcher model — workflows/izi.js re-reads the file itself, independently, via its own
+// shell("cat pipeline.json") (see that file's own top-of-file contract note: args is not used at all,
+// precisely because the model-mediated tool call is not a reliable channel). There is no args-like
+// channel between this process and the workflow script to carry a substituted value through — the
+// ONLY way to make the workflow SEE "terminal" would be to rewrite pipeline.json on disk before spawn
+// (a race against anything else reading the file, and a dirty tree the moment the process is killed
+// before it can restore the original — exactly the trap the task brief calls out) or to invent a new
+// side-channel file izi.js does not otherwise know about (unverifiable without a live run, and another
+// place the two readers of "the" config could disagree). (a) has neither problem and fails LOUD, at
+// preflight, before a single token is spent talking to a launcher model that would just watch the
+// checkpoint call blow up deep inside the run. Chosen: headlessChannelRefusal() below refuses with
+// exit 2 whenever pipeline.json.operatorChannel is exactly "checkpoint"; every other value (including
+// "terminal", missing, or invalid) is workflows/izi.js's own preflight to accept or reject — this file
+// does not re-validate the whole enum, only the one value it alone knows is fatal to a headless launch.
 
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
@@ -186,6 +214,27 @@ export function resultExitCode(result) {
   return result && typeof result === "object" && Number.isFinite(result.code) ? result.code : 2
 }
 
+// FUNCTION_CONTRACT: headlessChannelRefusal — the one operatorChannel value this headless launcher must refuse
+//   Input:        pipeline — the parsed contents of pipeline.json, any shape
+//   Dependencies: —
+//   Antecedent:   any value; pipeline?.operatorChannel may be absent, "terminal", "checkpoint", or
+//                 anything else — this function only ever recognises "checkpoint" as ITS problem
+//   Consequent:   success: a diagnosis string when pipeline.operatorChannel === "checkpoint" — this
+//                          launcher spawns `pi -p`, which has no UI for checkpoint()'s Approve/Reject
+//                          (see the module's Contract-update note above); null in every other case —
+//                          "terminal" is this launcher's own working mode, and an absent or invalid
+//                          value is workflows/izi.js's own preflight to diagnose, not duplicated here
+//                 failure: none — total
+export function headlessChannelRefusal(pipeline) {
+  if (pipeline && typeof pipeline === "object" && pipeline.operatorChannel === "checkpoint") {
+    return 'preflight: pipeline.json.operatorChannel="checkpoint" — headless-раннер (bin/run.mjs → pi -p) ' +
+      "не проводит чекпоинты (pi-extensible-workflows отказывает checkpoint() без UI кодом " +
+      'RESUME_INCOMPATIBLE), переключите канал на "terminal" для запуска через bin/run.mjs — ' +
+      '"checkpoint" держите для интерактивного окна pi'
+  }
+  return null
+}
+
 // ── io orchestration below — not unit-covered (standards/code.md §5: a head/io pipe of already-
 //    proven parts is proven by a live run, not a unit wearing a unit's name) ────────────────────
 
@@ -296,6 +345,9 @@ async function main() {
   catch { fail(2, "preflight: pipeline.json не парсится как JSON"); return }
   const model = pipeline?.models?.routing?.id
   if (!model) fail(2, "preflight: pipeline.json.models.routing.id не объявлен — какой моделью запускать launcher, решить нечем")
+
+  const channelRefusal = headlessChannelRefusal(pipeline)
+  if (channelRefusal) fail(2, channelRefusal)
 
   const scriptPath = join(root, "workflows", "izi.js")
   if (!existsSync(scriptPath)) fail(2, "preflight: workflows/izi.js не существует")
