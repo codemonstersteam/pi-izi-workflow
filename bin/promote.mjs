@@ -8,8 +8,13 @@
 //               gated this promote ran against staging, and a missing file means it never ran.
 // io:           fs
 // Invariants:   promoteStep never calls writeReceipt unless the staging file was copied to `out`
-//               first, in the same call; the staging path and out path for a step come from
-//               STEP_PATHS (bin/steps-map.mjs) — no literal path lives in this file
+//               first, in the same call; the staging path and out path for a step come from the
+//               MANIFEST (bin/steps.mjs, reading steps/<id>/step.json) — no literal path lives in
+//               this file. The manifest is read from THIS REPOSITORY's own root (this file's own
+//               parent directory), independently of `root` — `root` names the RUN's state
+//               (.agent/staging, .agent/receipts, out), the repository's step declarations are a
+//               separate, fixed concern (bin/install.mjs draws the same distinction between
+//               repoRoot and the installed agent dir)
 // Interface:    promoteStep({ root, step }) -> Result<{ path: string }, Error>
 //
 //   node bin/promote.mjs --step=<id> [--root=<путь>]
@@ -17,30 +22,37 @@
 // Отсутствие staging-файла — отказ (exit 1) с диагнозом, а не тихий успех.
 
 import { copyFileSync, existsSync, mkdirSync } from "node:fs"
-import { join, dirname } from "node:path"
-import { STEP_PATHS } from "./steps-map.mjs"
+import { join, dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { readManifest } from "./steps.mjs"
 import { writeReceipt } from "./receipt.mjs"
 import { isMain } from "./cli-entry.mjs"
 
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+
 // FUNCTION_CONTRACT: promoteStep — copies staging→out, then writes the receipt, in that order
 //   Input:        raw — { root: absolute run root, step: non-empty step id string }
-//   Dependencies: fs (existsSync/copyFileSync/mkdirSync), STEP_PATHS, writeReceipt
-//   Antecedent:   step names an entry in STEP_PATHS carrying a `staging` field; the staging file
+//   Dependencies: fs (existsSync/copyFileSync/mkdirSync), readManifest (bin/steps.mjs), writeReceipt
+//   Antecedent:   step names an entry in the manifest carrying a `staging` field; the staging file
 //                 exists on disk under root at the moment of the call — the check that gates this
 //                 promote already ran against it
 //   Consequent:   success: `{ ok: true, value: { path } }` — out written, receipt closed
 //                 failure: `{ ok: false, error }` —
-//                          "unknown-step": step is not declared in STEP_PATHS
+//                          "manifest-invalid": the manifest itself failed to build (pipeline.json /
+//                                        steps/*/step.json broken — bin/steps.mjs's own lint)
+//                          "unknown-step": step is not declared in the manifest
 //                          "no-staging": the step is declared but carries no `staging` (task: the
 //                                        operator places `out` directly, there is nothing to promote)
 //                          "staging-missing": `staging` is declared but the file is absent on disk —
 //                                        the check this promote depends on never ran against it
 export function promoteStep({ root, step }) {
-  const decl = STEP_PATHS[step]
-  if (!decl) return { ok: false, error: { cls: "unknown-step", detail: `шаг «${step}» не объявлен в STEP_PATHS` } }
+  const manifest = readManifest({ root: REPO_ROOT })
+  if (!manifest.ok) return { ok: false, error: { cls: "manifest-invalid", detail: manifest.error.detail } }
+  const decl = manifest.value[step]
+  if (!decl) return { ok: false, error: { cls: "unknown-step", detail: `шаг «${step}» не объявлен в манифесте` } }
   if (!decl.staging) return { ok: false, error: { cls: "no-staging", detail: `шаг «${step}» не несёт staging — промоутить нечего` } }
   const stagingPath = join(root, decl.staging)
-  const outPath = join(root, decl.out)
+  const outPath = join(root, Object.values(decl.out)[0])
   if (!existsSync(stagingPath)) {
     return { ok: false, error: { cls: "staging-missing", detail: `${stagingPath} не существует — чек, который должен был пройти по этому пути, не исполнялся` } }
   }

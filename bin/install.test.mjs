@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, cpSync
 import { join, dirname } from "node:path"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
-import { resolveAgentDir, buildModelAliases, mergeSettings } from "./install.mjs"
+import { resolveAgentDir, buildModelAliases, mergeSettings, collectRoleFiles } from "./install.mjs"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(HERE, "..")
@@ -60,9 +60,60 @@ test("mergeSettings: новые тиры перекрывают одноимён
   assert.deepEqual(out.modelAliases, { routing: "new", custom: "keep" })
 })
 
+// --- collectRoleFiles -----------------------------------------------------------------------
+
+function fixtureSteps(dir, entries) {
+  for (const { id, role, withRoleMd = true, withStepJson = true, stepJsonText } of entries) {
+    mkdirSync(join(dir, id), { recursive: true })
+    if (withRoleMd) writeFileSync(join(dir, id, "role.md"), `---\ndescription: fixture\n---\nfixture role body\n`)
+    if (withStepJson) writeFileSync(join(dir, id, "step.json"), stepJsonText ?? JSON.stringify({ id, kind: "role", role }))
+  }
+}
+
+test("collectRoleFiles: steps/<id>/role.md собирается под именем role из ЕГО ЖЕ step.json", () => {
+  const dir = mkdtempSync(join(tmpdir(), "steps-"))
+  fixtureSteps(dir, [{ id: "brd", role: "gilb" }, { id: "scope", role: "surveyor" }])
+  const r = collectRoleFiles({ stepsDir: dir, ids: ["brd", "scope"] })
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.value.map((e) => e.roleName).sort(), ["gilb", "surveyor"])
+})
+
+test("collectRoleFiles: срез без role.md молча пропускается — не ошибка", () => {
+  const dir = mkdtempSync(join(tmpdir(), "steps-"))
+  fixtureSteps(dir, [{ id: "brd", role: "gilb" }])
+  mkdirSync(join(dir, "task"), { recursive: true }) // kind=human, никакого role.md
+  const r = collectRoleFiles({ stepsDir: dir, ids: ["brd", "task"] })
+  assert.equal(r.ok, true)
+  assert.equal(r.value.length, 1)
+})
+
+test("collectRoleFiles: role.md есть, step.json нет — имя роли неизвестно, отказ", () => {
+  const dir = mkdtempSync(join(tmpdir(), "steps-"))
+  fixtureSteps(dir, [{ id: "brd", withStepJson: false }])
+  const r = collectRoleFiles({ stepsDir: dir, ids: ["brd"] })
+  assert.equal(r.ok, false)
+  assert.equal(r.error.cls, "role-without-step-json")
+})
+
+test("collectRoleFiles: step.json не объявляет role — отказ", () => {
+  const dir = mkdtempSync(join(tmpdir(), "steps-"))
+  fixtureSteps(dir, [{ id: "brd", stepJsonText: JSON.stringify({ id: "brd", kind: "role" }) }])
+  const r = collectRoleFiles({ stepsDir: dir, ids: ["brd"] })
+  assert.equal(r.ok, false)
+  assert.equal(r.error.cls, "role-name-missing")
+})
+
+test("collectRoleFiles: ни одного role.md среди срезов — no-roles", () => {
+  const dir = mkdtempSync(join(tmpdir(), "steps-"))
+  mkdirSync(join(dir, "task"), { recursive: true })
+  const r = collectRoleFiles({ stepsDir: dir, ids: ["task"] })
+  assert.equal(r.ok, false)
+  assert.equal(r.error.cls, "no-roles")
+})
+
 // --- CLI: временный каталог, не реальный ~ --------------------------------------------------
 
-function buildFixtureRepo({ withRoles, roleFiles = ["gilb.md"], pipelineModels, withPrompts = true, promptFiles = ["izi.md"] }) {
+function buildFixtureRepo({ withRoles, roleSteps = [{ id: "brd", role: "gilb" }], pipelineModels, withPrompts = true, promptFiles = ["izi.md"] }) {
   const dir = mkdtempSync(join(tmpdir(), "install-repo-"))
   mkdirSync(join(dir, "bin"), { recursive: true })
   mkdirSync(join(dir, "core"), { recursive: true })
@@ -71,8 +122,8 @@ function buildFixtureRepo({ withRoles, roleFiles = ["gilb.md"], pipelineModels, 
   cpSync(join(REPO_ROOT, "core", "result.mjs"), join(dir, "core", "result.mjs"))
   writeFileSync(join(dir, "pipeline.json"), JSON.stringify({ models: pipelineModels }))
   if (withRoles) {
-    mkdirSync(join(dir, "roles"), { recursive: true })
-    for (const f of roleFiles) writeFileSync(join(dir, "roles", f), `---\ndescription: fixture\n---\nfixture role body\n`)
+    mkdirSync(join(dir, "steps"), { recursive: true })
+    fixtureSteps(join(dir, "steps"), roleSteps)
   }
   if (withPrompts) {
     mkdirSync(join(dir, "prompts"), { recursive: true })
@@ -96,13 +147,19 @@ function runInstall(repoDir, agentDir) {
   }
 }
 
-test("install: roles/*.md копируются в <agent-dir>/pi-extensible-workflows/roles/", () => {
-  const repo = buildFixtureRepo({ withRoles: true, roleFiles: ["gilb.md", "smoker.md"], pipelineModels: VALID_MODELS })
+test("install: steps/*/role.md копируются в <agent-dir>/pi-extensible-workflows/roles/ ПОД ИМЕНЕМ РОЛИ", () => {
+  const repo = buildFixtureRepo({
+    withRoles: true,
+    roleSteps: [{ id: "brd", role: "gilb" }, { id: "scope", role: "surveyor" }],
+    pipelineModels: VALID_MODELS,
+  })
   const agentDir = mkdtempSync(join(tmpdir(), "agent-dir-"))
   const r = runInstall(repo, agentDir)
   assert.equal(r.code, 0, r.out)
+  // имена файлов — роли (gilb, surveyor), а НЕ id срезов (brd, scope): pi резолвит роль по имени
+  // из agent(order, { role }), не по каталогу, откуда файл переехал.
   assert.equal(existsSync(join(agentDir, "pi-extensible-workflows", "roles", "gilb.md")), true)
-  assert.equal(existsSync(join(agentDir, "pi-extensible-workflows", "roles", "smoker.md")), true)
+  assert.equal(existsSync(join(agentDir, "pi-extensible-workflows", "roles", "surveyor.md")), true)
 })
 
 test("install: prompts/*.md копируются в <agent-dir>/prompts/", () => {
@@ -144,13 +201,30 @@ test("install: сливается с уже существующим settings.js
   assert.equal("unknownKey" in settings, false)
 })
 
-test("install: roles/ отсутствует в репозитории — отказ с диагнозом, не тихий успех", () => {
+test("install: steps/ отсутствует в репозитории — отказ с диагнозом, не тихий успех", () => {
   const repo = buildFixtureRepo({ withRoles: false, pipelineModels: VALID_MODELS })
   const agentDir = mkdtempSync(join(tmpdir(), "agent-dir-"))
   const r = runInstall(repo, agentDir)
   assert.equal(r.code, 1)
-  assert.match(r.out, /roles\/ не существует/)
+  assert.match(r.out, /steps\/ не существует/)
   assert.equal(existsSync(join(agentDir, "pi-extensible-workflows")), false)
+})
+
+test("install: steps/ есть, но ни один срез не несёт role.md — отказ no-roles", () => {
+  const dir = mkdtempSync(join(tmpdir(), "install-repo-"))
+  mkdirSync(join(dir, "bin"), { recursive: true })
+  mkdirSync(join(dir, "core"), { recursive: true })
+  cpSync(join(REPO_ROOT, "bin", "install.mjs"), join(dir, "bin", "install.mjs"))
+  cpSync(join(REPO_ROOT, "bin", "cli-entry.mjs"), join(dir, "bin", "cli-entry.mjs"))
+  cpSync(join(REPO_ROOT, "core", "result.mjs"), join(dir, "core", "result.mjs"))
+  writeFileSync(join(dir, "pipeline.json"), JSON.stringify({ models: VALID_MODELS }))
+  mkdirSync(join(dir, "steps", "task"), { recursive: true }) // kind=human, без role.md
+  mkdirSync(join(dir, "prompts"), { recursive: true })
+  writeFileSync(join(dir, "prompts", "izi.md"), `---\ndescription: fixture\n---\nfixture\n`)
+  const agentDir = mkdtempSync(join(tmpdir(), "agent-dir-"))
+  const r = runInstall(dir, agentDir)
+  assert.equal(r.code, 1)
+  assert.match(r.out, /no-roles/)
 })
 
 test("install: тир не объявлен в pipeline.json — отказ, а не установка с частичными алиасами", () => {

@@ -11,15 +11,18 @@
 node bin/install.mjs
 ```
 
-Копирует `roles/*.md` в **глобальный** каталог pi (`~/.pi/agent/pi-extensible-workflows/roles/`),
-`prompts/*.md` в **глобальный** каталог prompt-шаблонов pi (`~/.pi/agent/prompts/`) и пишет тиры
-моделей из `pipeline.json.models` в `~/.pi/agent/pi-extensible-workflows/settings.json`
-(`modelAliases`). Это не опция, а обязательный шаг: pi подхватывает роли и проектные prompt-шаблоны
-только из глобального каталога — проектные `.pi/pi-extensible-workflows/roles/` и `.pi/prompts/`
-**не работают** без доверия к проекту (см. «Долги» ниже; в репозитории лежит
-`.pi/pi-extensible-workflows/roles/smoker.md` как живое свидетельство этого пути для пробы
-`workflows/smoke2.js`, не как рабочий канал). После установки `/izi` — команда в окне pi (pi's own
-prompt templates,
+Собирает роли по срезам — `steps/*/role.md` — и раскладывает их в **глобальный** каталог pi
+(`~/.pi/agent/pi-extensible-workflows/roles/`) под именем РОЛИ (`steps/<id>/step.json`'s `role`), а
+не под именем шага: pi резолвит роль по имени из `agent(order, { role })`, не по каталогу, откуда файл
+переехал. Каталога `roles/` в репозитории больше нет — роль живёт рядом с остальным срезом
+(`steps/brd/role.md`), см. `docs/workflow.md` §1. Также копирует `prompts/*.md` в **глобальный**
+каталог prompt-шаблонов pi (`~/.pi/agent/prompts/`) и пишет тиры моделей из `pipeline.json.models` в
+`~/.pi/agent/pi-extensible-workflows/settings.json` (`modelAliases`). Это не опция, а обязательный
+шаг: pi подхватывает роли и проектные prompt-шаблоны только из глобального каталога — проектные
+`.pi/pi-extensible-workflows/roles/` и `.pi/prompts/` **не работают** без доверия к проекту (см.
+«Долги» ниже; в репозитории лежит `.pi/pi-extensible-workflows/roles/smoker.md` как живое
+свидетельство этого пути для пробы `workflows/smoke2.js`, не как рабочий канал). После установки
+`/izi` — команда в окне pi (pi's own prompt templates,
 `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/docs/prompt-templates.md`).
 
 ## Запуск
@@ -177,27 +180,35 @@ node bin/run.mjs
 
 ```
 TASK.md                       вход конвейера — кладёт оператор, ≤300 строк, непуст
-pipeline.json                 порядок шагов, loops.brd, models по тирам, operatorChannel,
+pipeline.json                 порядок шагов (order), loops по id, models по тирам, operatorChannel,
                                 questions/checkpointRetries (бюджет обменов с оператором) — данные
-workflows/izi.js               скрипт воркфлоу: task → brd, читает конфиг сам через shell("cat …");
+workflows/izi.js               скрипт воркфлоу: цикл по pipeline.order, диспетчеризация по kind
+                                (human|role) — имён шагов не знает (docs/workflow.md §1 правка 3);
+                                манифест приходит shell("node bin/steps.mjs --json"), конфиг —
+                                shell("cat pipeline.json"); наряд роли читается по step.json.prompt;
                                 вопрос роли едет terminal-возвратом или checkpoint-паузой по operatorChannel;
                                 на checkpoint Approve — барьер, не факт: answerArrived (инлайн-зеркало
                                 core/answer-arrived.mjs) сверяет .agent/answers.md до/после паузы
 workflows/smoke.js             зонд механики pi (shell()+agent(), без роли/схемы) — не часть конвейера
 workflows/smoke2.js            зонд роли+outputSchema вместе (role: "smoker") — держит .pi/…/smoker.md
 
-roles/gilb.md                  роль шага brd (pi-формат: model/thinking/tools во фронтматтере)
+steps/task/step.json           объявление шага task: kind=human, in/out/check/receipt
+steps/task/validate-task.mjs   гардрейл входа: ≤300 строк, непуст (0 токенов)
+
+steps/brd/step.json            объявление шага brd: kind=role, role=gilb, staging/check/prompt/receipt
+steps/brd/role.md              роль шага brd (pi-формат: model/thinking/tools во фронтматтере) — живёт
+                                В СРЕЗЕ, не в отдельном каталоге roles/ (упразднён, docs/workflow.md §1)
+steps/brd/brd.mjs              чистое ядро приёмки BRD: newFit·newRequirement·newSubjects·adviceFor·newBrd
+steps/brd/validate-brd.mjs     io-гардрейл: подключает brd.mjs к диску и коду возврата
+steps/brd/order.tpl            наряд роли (TASK/ANSWERS/FEEDBACK → STAGING)
 
 prompts/izi.md                 pi prompt template — источник /izi, устанавливает bin/install.mjs
                                 в ~/.pi/agent/prompts/; текст — наряд лаунчеру: tool workflow,
                                 name/scriptPath/foreground, ровно один вызов, JSON дословно
 
-steps/task/validate-task.mjs   гардрейл входа: ≤300 строк, непуст (0 токенов)
-steps/brd/brd.mjs              чистое ядро приёмки BRD: newFit·newRequirement·newSubjects·adviceFor·newBrd
-steps/brd/validate-brd.mjs     io-гардрейл: подключает brd.mjs к диску и коду возврата
-steps/brd/order.tpl            наряд роли (TASK/ANSWERS/FEEDBACK → STAGING)
-
 core/answers.mjs               разбор .agent/answers.md в значения {question, text}
+core/resolve-check.mjs         {cmd,args[]} шага + artifact-путь → одна командная строка ({{artifact}}
+                                подставляется); unit-tested, зеркалится inline в workflows/izi.js
 core/form.mjs                  реестр формы BRD и слоёв промпта — наряд/роль подставляют, не пересказывают
 core/findings.mjs              severityOf: находка роняет приёмку (blocker) или едет уликой (advice)
 core/result.mjs                Result<T,E> — общий конверт фабрик
@@ -207,18 +218,25 @@ core/answer-arrived.mjs        answerArrived(before,after,subject): Approve не
                                 изменившийся .agent/answers.md с записью по ключу subject; unit-tested,
                                 зеркалится inline в workflows/izi.js той же причиной, что и выше
 
-bin/install.mjs                роль и prompt-шаблон → глобальный каталог pi, тиры → settings.json
+bin/install.mjs                собирает роли по срезам (steps/*/role.md), раскладывает в глобальный
+                                каталог pi под именем РОЛИ (из её же step.json); prompt-шаблон →
+                                глобальный каталог pi; тиры моделей → settings.json
 bin/run.mjs                    раннер: запускает workflows/izi.js, читает result.json со стенда
 bin/answer.mjs                 записывает ответ оператора в .agent/answers.md по ключу вопроса
 bin/receipt.mjs                пишет .agent/receipts/<step>.json — квитанция закрывает шаг, не out
-bin/promote.mjs                staging → out, и только потом квитанция (в этом порядке, не наоборот)
-bin/steps-map.mjs              staging/out пути по шагам — одно место, не литералы в receipt/promote
+bin/promote.mjs                staging → out, и только потом квитанция (в этом порядке, не наоборот);
+                                staging/out путь шага читает из манифеста bin/steps.mjs
+bin/steps.mjs                  манифест конвейера: steps/*/step.json, объединённые и отфильтрованные
+                                pipeline.order; --json печатает его на stdout; ЛИНТИТ целостность —
+                                шаг без каталога, каталог без step.json, ролевой шаг без staging/role,
+                                шаг без receipt — отказ с диагнозом, ненулевой код
 bin/decisions-log.mjs          append-only .agent/decisions.log — пишет харнес, не модель
 
 .agent/                        состояние ОДНОГО прогона (gitignored, харнес создаёт и чистит сам)
   staging/brd.md                 черновик роли ДО чека
   brd.md                         артефакт ПОСЛЕ промоута (только на зелёном чеке)
-  receipts/{task,brd}.json       квитанции — closes-the-step факт
+  receipts/{task,brd}.json       квитанции — closes-the-step факт; уже закрытый шаг цикл пропускает
+                                  без вызова роли (workflows/izi.js проверяет файл ДО диспетчеризации)
   answers.md                     накопленные ответы оператора
   decisions.log                  журнал переходов
 
@@ -257,7 +275,7 @@ node bin/run.mjs             # → question | ok | blocked, JSON на стдоу
 
 ## Долги — названы вслух, не спрятаны
 
-- **Права «писать только в staging» в pi нет.** `roles/gilb.md` объявляет это дисциплиной
+- **Права «писать только в staging» в pi нет.** `steps/brd/role.md` объявляет это дисциплиной
   ($START_STRATEGY, шаг 7: «you keep this by discipline, not by a permission the host enforces»),
   а не механизмом хоста: у роли `tools: [read, write]` без карты путей, установка схлопывает её в
   `write: allow` на весь диск. Держат это два шва post-factum: квитанция (запись мимо staging шаг не

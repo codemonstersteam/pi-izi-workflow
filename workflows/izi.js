@@ -1,4 +1,10 @@
-// izi: task → brd
+// izi: цикл по pipeline.order, диспетчеризация по kind — программа не знает имён шагов (S9,
+// docs/workflow.md §1 правка 3). Сегодня в pipeline.order лежат ровно task (kind=human) и brd
+// (kind=role); третий род (kind=script), веер (fanout) и условные шаги (when) сюда не входят —
+// они приезжают вместе со срезами survey-plan/scope/design (docs/workflow.md §5), и объявлять их
+// диспетчер здесь значило бы писать код, который живой прогон не может доказать. Кода kind, для
+// которого диспетчер не готов (включая "script" — CANDIDATE, но пока без доказанного шага), —
+// терминальный crashed, code 2: тихого пропуска НЕТ (см. ветку unknown ниже).
 //
 // Конфиг воркфлоу читает сам, детерминированным каналом shell("cat …"), а не принимает снаружи
 // через args. Канал запуска (tool `workflow`) опосредован моделью-запускателем, и то, КАК она
@@ -26,14 +32,26 @@ try {
   };
 }
 
-const orderTplCat = await shell("cat steps/brd/order.tpl");
-if (orderTplCat.exitCode !== 0) {
+// Манифест срезов — steps/*/step.json, объединённые и линченные bin/steps.mjs (S9, докрутка
+// bin/steps-map.mjs). Единственный канал воркфлоу к диску — shell() (песочница pi-extensible-
+// workflows не даёт fs), поэтому манифест приезжает тем же приёмом, что и pipeline.json выше —
+// отдельным, независимым чтением, а не аргументом запуска.
+const stepsCat = await shell("node bin/steps.mjs --json");
+if (stepsCat.exitCode !== 0) {
   return {
     step: "config", track: "err", kind: "crashed",
-    subject: orderTplCat.stderr.trim() || "steps/brd/order.tpl не прочитан", code: 2,
+    subject: stepsCat.stderr.trim() || "bin/steps.mjs манифест не собрался", code: 2,
   };
 }
-const orderTpl = orderTplCat.stdout;
+let steps;
+try {
+  steps = JSON.parse(stepsCat.stdout);
+} catch (e) {
+  return {
+    step: "config", track: "err", kind: "crashed",
+    subject: `bin/steps.mjs --json: ${String(e && e.message ? e.message : e)}`, code: 2,
+  };
+}
 
 // operatorChannel — policy declared in pipeline.json (see its own "//operatorChannel" comment) and
 // proven once, in the open, by core/operator-channel.mjs (node --test). Mirrored inline, not imported:
@@ -59,8 +77,8 @@ if (!OPERATOR_CHANNELS.includes(operatorChannel)) {
 }
 
 // questions/checkpointRetries — policy of the RUN for operator exchanges, declared in pipeline.json
-// (see its own "//questions" comment for the full argument) and split from loops.brd on PURPOSE
-// (S8 defect): loops.brd spends ONLY on a red guardrail check (a paid agent() re-delegation); a
+// (see its own "//questions" comment for the full argument) and split from loops[step] on PURPOSE
+// (S8 defect): loops[step] spends ONLY on a red guardrail check (a paid agent() re-delegation); a
 // question→answer exchange does not re-delegate the role until core/answer-arrived.mjs's mirrored
 // rule (below) confirms the answer as a FACT on disk — a live run died in three re-delegations
 // because Approve alone was being read as three red checks of the same role, loops.brd ran out, and
@@ -101,13 +119,22 @@ function utf8ByteLength(s) {
   return n;
 }
 
-// Несущие контракты, перенесённые дословно из izi-flow-v2 (PLAN.md §1):
-//   1. Квитанция закрывает шаг, а не наличие out — bin/receipt.mjs / bin/promote.mjs пишут её.
-//   2. Промоут staging→out только на зелёном чеке; чек исполняется по staging-пути ДО промоута.
-//   5. Ключ --q="<subject>" в answer_cmd совпадает с subject дословно — держит роль (roles/gilb.md).
-//   6. Красный чек на task уходит оператору (код 10), а не в пере-делегацию.
+// resolveCheck — mirrors core/resolve-check.mjs inline, same reason as operatorChannel/answerArrived
+// above: the sandbox has no import. Proven by node --test over the real module, copied here by hand.
+function resolveCheck(check, artifact) {
+  const args = (check.args || []).map((a) => a.replaceAll("{{artifact}}", artifact));
+  return [check.cmd, ...args].join(" ");
+}
 
-// ENVELOPE — JSON Schema результата роли gilb. Заменяет текстовый конверт IZI/1: форму валидирует
+// Несущие контракты, перенесённые дословно из izi-flow-v2 (PLAN.md §1), теперь читаются из данных
+// (step.json), а не из литералов в этом файле:
+//   1. Квитанция закрывает шаг, а не наличие out — bin/receipt.mjs / bin/promote.mjs пишут её; уже
+//      закрытый шаг (квитанция на диске) пропускается ниже без вызова роли.
+//   2. Промоут staging→out только на зелёном чеке; чек исполняется по staging-пути ДО промоута.
+//   5. Ключ --q="<subject>" в answer_cmd совпадает с subject дословно — держит роль (steps/brd/role.md).
+//   6. Красный чек на human-шаге уходит оператору (код 10), а не в пере-делегацию.
+
+// ENVELOPE — JSON Schema результата роли. Заменяет текстовый конверт IZI/1: форму валидирует
 // хост через workflow_result, а не парсер, который мы больше не переносим (PLAN.md §0.1).
 const ENVELOPE = {
   type: "object",
@@ -125,35 +152,11 @@ const ENVELOPE = {
   additionalProperties: false,
 };
 
-log("izi: start");
-
-// ── шаг task ─────────────────────────────────────────────────────────────
-phase("task");
-const t = await shell("node steps/task/validate-task.mjs TASK.md");
-if (t.exitCode !== 0) {
-  log("izi: task red — terminal return to operator");
-  return { step: "task", track: "err", kind: "blocked", subject: t.stderr.trim(), code: 10 };
-}
-await shell("node bin/receipt.mjs --step=task");
-log("izi: task closed");
-
-// ── шаг brd ──────────────────────────────────────────────────────────────
-phase("brd");
-const TASK = (await shell("cat TASK.md")).stdout;
-const STAGING = ".agent/staging/brd.md";
-const CHECK = `node steps/brd/validate-brd.mjs ${STAGING} --task=TASK.md --answers=.agent/answers.md`;
-// Отсутствие .agent/answers.md — случай, не ошибка инструмента (standards/protocol.md, различение 4):
-// `[ -f … ] && cat … || true` молчит на отсутствующем файле (exit 0, stdout ""), тогда как прежнее
-// `cat … || true` сыпало "No such file or directory" в stderr прогона на каждой итерации ДО первого
-// ответа — журнал ложно выглядел так, будто что-то уже пошло не так.
-const ANSWERS_CMD = "[ -f .agent/answers.md ] && cat .agent/answers.md || true";
-
 // answerArrived — правило доказано юнитами в core/answer-arrived.mjs (node --test); зеркалится
-// инлайн ТЕМ ЖЕ приёмом, что и operatorChannel выше: песочница воркфлоу не даёт import/require.
-// parseAnswers ниже — копия разбора из core/answers.mjs (тот же формат "вопрос:/ответ:", та же
-// регулярка), а не второй, независимо изобретённый парсер: правило "--q= совпадает с subject
-// дословно" (standards/protocol.md §7) живёт в одном месте логически, даже если этот файл существует
-// на диске в двух местах.
+// инлайн ТЕМ ЖЕ приёмом, что и operatorChannel выше. parseAnswers ниже — копия разбора из
+// core/answers.mjs (тот же формат "вопрос:/ответ:", та же регулярка), а не второй, независимо
+// изобретённый парсер: правило "--q= совпадает с subject дословно" (standards/protocol.md §7)
+// живёт в одном месте логически, даже если этот файл существует на диске в двух местах.
 function parseAnswersInline(text) {
   const lines = String(text || "").split("\n");
   const out = [];
@@ -182,147 +185,204 @@ function answerArrived(before, after, subject) {
   return parsed.some((a) => a.question === subject);
 }
 
-let feedback = "";
-let attempt = 0;        // loops.brd budget — тратит ТОЛЬКО красный чек (пере-делегация роли)
-let questionsAsked = 0; // pipeline.questions budget — тратит КАЖДЫЙ РАЗ, когда роль задаёт вопрос
-while (attempt < pipeline.loops.brd) {
-  const ANSWERS = (await shell(ANSWERS_CMD)).stdout || "(no operator answers yet)";
-  const order = prompt(orderTpl, {
-    TASK,
-    ANSWERS,
-    STAGING,
-    CHECK,
-    FEEDBACK: feedback || "(none — first attempt)",
-  });
+// ── ход шага kind=human — красный чек уходит оператору, никакой роли не зовём ─────────────────────
+async function runHumanStep(s) {
+  const artifact = s.staging || Object.values(s.out)[0];
+  const t = await shell(resolveCheck(s.check, artifact));
+  if (t.exitCode !== 0) {
+    log(`izi: ${s.id} red — terminal return to operator`);
+    return { step: s.id, track: "err", kind: "blocked", subject: t.stderr.trim(), code: 10 };
+  }
+  await shell(`node bin/receipt.mjs --step=${s.id}`);
+  log(`izi: ${s.id} closed`);
+  return null; // не терминально — цикл идёт к следующему id
+}
 
-  log(`izi: brd attempt ${attempt + 1}/${pipeline.loops.brd}`);
-  const env = await agent(order, { role: "gilb", outputSchema: ENVELOPE, timeoutMs: 180000 });
+// ── ход шага kind=role — наряд из step.json.prompt, бюджет из pipeline.loops[s.id] ─────────────────
+async function runRoleStep(s) {
+  const loopsBudget = pipeline.loops && pipeline.loops[s.id];
+  if (!Number.isInteger(loopsBudget) || loopsBudget < 1) {
+    return {
+      step: s.id, track: "err", kind: "crashed",
+      subject: `pipeline.json: loops.${s.id} не объявлен — ролевой шаг без бюджета пере-делегаций не собирается`,
+      code: 2,
+    };
+  }
 
-  if (env.track === "err") {
-    // Прочие kind (blocked, invalid, escalate, crashed) чекпоинт не трогает — они терминальны на
-    // обоих каналах: только question — штатный ход, для которого канал вообще имеет смысл выбирать.
-    const isCheckpointQuestion = env.kind === "question" && operatorChannel === "checkpoint";
-    if (!isCheckpointQuestion) {
-      // Терминальный возврат прогона, без пере-делегации. На канале terminal оператор исполняет
-      // env.answer_cmd и перезапускает прогон — накопленные ответы приезжают в наряд следующего
-      // запуска через .agent/answers.md.
-      log("izi: brd err — terminal return to operator");
-      return { step: "brd", ...env, code: 10 };
-    }
+  const orderTplCat = await shell(`cat ${s.prompt}`);
+  if (orderTplCat.exitCode !== 0) {
+    return {
+      step: "config", track: "err", kind: "crashed",
+      subject: orderTplCat.stderr.trim() || `${s.prompt} не прочитан`, code: 2,
+    };
+  }
+  const orderTpl = orderTplCat.stdout;
 
-    // operatorChannel === "checkpoint" && env.kind === "question": пауза В ЭТОМ прогоне, а не
-    // терминальный возврат. checkpoint(input) возвращает раннеру только строку approved|rejected
-    // (ui.select(prompt, ["Approve","Reject"]) — pi-extensible-workflows/src/host.ts) — Approve сам
-    // по себе НЕ факт ответа (это и был живой дефект: три Approve, ноль bin/answer.mjs). Правда
-    // по-прежнему только на диске, в .agent/answers.md — answerArrived() ниже проверяет её как факт,
-    // а не берёт решение оператора на слово.
-    questionsAsked++;
-    if (questionsAsked > questions) {
-      // Бюджет обменов исчерпан. Это НЕ "повторы гардрейла исчерпаны" (escalate) — роль ни разу не
-      // получила плохой ответ, прогону просто разрешено спросить не больше pipeline.json.questions
-      // раз. kind остаётся "question": subject/answer_cmd — последний заданный вопрос, отвечать
-      // на который оператору всё ещё нужно, просто уже вне этого прогона.
-      log(`izi: brd question — questions budget exhausted (${questionsAsked} > ${questions})`);
-      return {
-        step: "brd", track: "err", kind: "question",
-        subject: env.subject, evidence: env.evidence, answer_cmd: env.answer_cmd,
-        diagnosis: `вопросов за прогон больше, чем позволяет pipeline.json.questions=${questions}`,
-        code: 10,
-      };
-    }
+  const TASK = (await shell("cat TASK.md")).stdout;
+  const STAGING = s.staging;
+  const CHECK = resolveCheck(s.check, STAGING);
+  // Отсутствие .agent/answers.md — случай, не ошибка инструмента (standards/protocol.md,
+  // различение 4): `[ -f … ] && cat … || true` молчит на отсутствующем файле (exit 0, stdout ""),
+  // тогда как прежнее `cat … || true` сыпало "No such file or directory" в stderr прогона на
+  // каждой итерации ДО первого ответа — журнал ложно выглядел так, будто что-то уже пошло не так.
+  const ANSWERS_CMD = "[ -f .agent/answers.md ] && cat .agent/answers.md || true";
 
-    const cmd = env.answer_cmd || `node bin/answer.mjs --q=${JSON.stringify(env.subject)} --text="<ответ>"`;
-    const basePrompt = [
-      `Роль gilb ждёт ответа (brd, вопрос ${questionsAsked}/${questions}):`,
-      env.subject,
-      "",
-      "Выполните команду:",
-      cmd,
-      "",
-      "затем нажмите Approve. Reject — вопрос уходит человеку (escalate), прогон останавливается.",
-    ].join("\n");
+  let feedback = "";
+  let attempt = 0;        // loops[s.id] budget — тратит ТОЛЬКО красный чек (пере-делегация роли)
+  let questionsAsked = 0; // pipeline.questions budget — тратит КАЖДЫЙ РАЗ, когда роль задаёт вопрос
+  while (attempt < loopsBudget) {
+    const ANSWERS = (await shell(ANSWERS_CMD)).stdout || "(no operator answers yet)";
+    const order = prompt(orderTpl, {
+      TASK, ANSWERS, STAGING, CHECK,
+      FEEDBACK: feedback || "(none — first attempt)",
+    });
 
-    if (utf8ByteLength(basePrompt) > 1024) {
-      // Хост режет checkpoint prompt на 1024 UTF-8 байтах (validation.ts, validateCheckpoint) —
-      // молча ужать чужой subject/evidence значило бы придумать текст, которого роль не писала.
-      // Честный ход — не звать checkpoint() вовсе и вернуть тот же вопрос терминально, как на
-      // канале terminal; логируем причину, чтобы это не выглядело потерянным решением.
-      log(`izi: brd question prompt exceeds checkpoint's 1024-byte limit (${utf8ByteLength(basePrompt)}b) — falling back to terminal return for this question`);
-      return { step: "brd", ...env, code: 10 };
-    }
+    log(`izi: ${s.id} attempt ${attempt + 1}/${loopsBudget}`);
+    const env = await agent(order, { role: s.role, outputSchema: ENVELOPE, timeoutMs: 180000 });
 
-    // Снимок ДО паузы — контрольная точка, с которой answerArrived() будет сравнивать файл ПОСЛЕ
-    // каждого Approve. Один и тот же снимок для всех переспросов этого вопроса: ответ либо появился
-    // относительно него, либо нет — переспрос не двигает точку отсчёта.
-    const before = (await shell(ANSWERS_CMD)).stdout;
-    let confirmed = false;
-    for (let retry = 1; retry <= checkpointRetries; retry++) {
-      const retryNote = retry === 1
-        ? ""
-        : "\n\n(Повтор: в .agent/answers.md не нашли новую запись — похоже, команда выше не была " +
-          "выполнена. Выполните её и нажмите Approve ещё раз.)";
-      const checkpointPrompt = basePrompt + retryNote;
-      if (utf8ByteLength(checkpointPrompt) > 1024) {
-        log(`izi: brd question retry prompt exceeds checkpoint's 1024-byte limit (${utf8ByteLength(checkpointPrompt)}b) — falling back to terminal return for this question`);
-        return { step: "brd", ...env, code: 10 };
+    if (env.track === "err") {
+      // Прочие kind (blocked, invalid, escalate, crashed) чекпоинт не трогает — они терминальны на
+      // обоих каналах: только question — штатный ход, для которого канал вообще имеет смысл выбирать.
+      const isCheckpointQuestion = env.kind === "question" && operatorChannel === "checkpoint";
+      if (!isCheckpointQuestion) {
+        log(`izi: ${s.id} err — terminal return to operator`);
+        return { step: s.id, ...env, code: 10 };
       }
 
-      log(`izi: brd question — pausing at checkpoint brd-q${questionsAsked} (retry ${retry}/${checkpointRetries}, channel: checkpoint)`);
-      const decision = await checkpoint({
-        name: retry === 1 ? `brd-q${questionsAsked}` : `brd-q${questionsAsked}-retry${retry}`,
-        prompt: checkpointPrompt,
-        context: { subject: env.subject, evidence: env.evidence, answer_cmd: cmd },
-      });
-
-      if (decision !== "approved") {
-        // rejected (или любое иное значение, кроме буквального "approved") — оператор отказался
-        // отвечать здесь и сейчас, на ЛЮБОЙ итерации переспроса; решает человек, а не цикл.
-        log(`izi: brd question — checkpoint ${decision}, escalate`);
-        return { step: "brd", track: "err", kind: "escalate", subject: env.subject, evidence: env.evidence, code: 10 };
+      questionsAsked++;
+      if (questionsAsked > questions) {
+        log(`izi: ${s.id} question — questions budget exhausted (${questionsAsked} > ${questions})`);
+        return {
+          step: s.id, track: "err", kind: "question",
+          subject: env.subject, evidence: env.evidence, answer_cmd: env.answer_cmd,
+          diagnosis: `вопросов за прогон больше, чем позволяет pipeline.json.questions=${questions}`,
+          code: 10,
+        };
       }
 
-      const after = (await shell(ANSWERS_CMD)).stdout;
-      if (answerArrived(before, after, env.subject)) {
-        confirmed = true;
-        break;
+      const cmd = env.answer_cmd || `node bin/answer.mjs --q=${JSON.stringify(env.subject)} --text="<ответ>"`;
+      const basePrompt = [
+        `Роль ${s.role} ждёт ответа (${s.id}, вопрос ${questionsAsked}/${questions}):`,
+        env.subject,
+        "",
+        "Выполните команду:",
+        cmd,
+        "",
+        "затем нажмите Approve. Reject — вопрос уходит человеку (escalate), прогон останавливается.",
+      ].join("\n");
+
+      if (utf8ByteLength(basePrompt) > 1024) {
+        log(`izi: ${s.id} question prompt exceeds checkpoint's 1024-byte limit (${utf8ByteLength(basePrompt)}b) — falling back to terminal return for this question`);
+        return { step: s.id, ...env, code: 10 };
       }
-      // approved, но факта на диске нет: та же самая пауза повторяется — роль НЕ зовётся, денег
-      // это не стоит, только время в окне pi.
-      log(`izi: brd question — checkpoint approved, но .agent/answers.md не несёт ответа на «${env.subject}» — команда, видимо, не выполнена; переспрашиваю (${retry}/${checkpointRetries})`);
+
+      const before = (await shell(ANSWERS_CMD)).stdout;
+      let confirmed = false;
+      for (let retry = 1; retry <= checkpointRetries; retry++) {
+        const retryNote = retry === 1
+          ? ""
+          : "\n\n(Повтор: в .agent/answers.md не нашли новую запись — похоже, команда выше не была " +
+            "выполнена. Выполните её и нажмите Approve ещё раз.)";
+        const checkpointPrompt = basePrompt + retryNote;
+        if (utf8ByteLength(checkpointPrompt) > 1024) {
+          log(`izi: ${s.id} question retry prompt exceeds checkpoint's 1024-byte limit (${utf8ByteLength(checkpointPrompt)}b) — falling back to terminal return for this question`);
+          return { step: s.id, ...env, code: 10 };
+        }
+
+        log(`izi: ${s.id} question — pausing at checkpoint ${s.id}-q${questionsAsked} (retry ${retry}/${checkpointRetries}, channel: checkpoint)`);
+        const decision = await checkpoint({
+          name: retry === 1 ? `${s.id}-q${questionsAsked}` : `${s.id}-q${questionsAsked}-retry${retry}`,
+          prompt: checkpointPrompt,
+          context: { subject: env.subject, evidence: env.evidence, answer_cmd: cmd },
+        });
+
+        if (decision !== "approved") {
+          log(`izi: ${s.id} question — checkpoint ${decision}, escalate`);
+          return { step: s.id, track: "err", kind: "escalate", subject: env.subject, evidence: env.evidence, code: 10 };
+        }
+
+        const after = (await shell(ANSWERS_CMD)).stdout;
+        if (answerArrived(before, after, env.subject)) {
+          confirmed = true;
+          break;
+        }
+        log(`izi: ${s.id} question — checkpoint approved, но .agent/answers.md не несёт ответа на «${env.subject}» — команда, видимо, не выполнена; переспрашиваю (${retry}/${checkpointRetries})`);
+      }
+
+      if (!confirmed) {
+        log(`izi: ${s.id} question — ответ не получен за ${checkpointRetries} переспросов`);
+        return {
+          step: s.id, track: "err", kind: "question",
+          subject: env.subject, evidence: env.evidence, answer_cmd: cmd,
+          diagnosis: `ответ не получен за ${checkpointRetries} переспросов`,
+          code: 10,
+        };
+      }
+
+      log(`izi: ${s.id} question — answer confirmed on disk, retrying with fresh answers`);
+      continue;
     }
 
-    if (!confirmed) {
-      // Переспросы исчерпаны, ответа так и нет. Тоже НЕ escalate — причина иная, чем "повторы
-      // гардрейла исчерпаны": оператор не ответил, роль тут ни при чём.
-      log(`izi: brd question — ответ не получен за ${checkpointRetries} переспросов`);
-      return {
-        step: "brd", track: "err", kind: "question",
-        subject: env.subject, evidence: env.evidence, answer_cmd: cmd,
-        diagnosis: `ответ не получен за ${checkpointRetries} переспросов`,
-        code: 10,
-      };
+    const check = await shell(CHECK);
+    if (check.exitCode === 0) {
+      await shell(`node bin/promote.mjs --step=${s.id}`); // staging→out, потом квитанция
+      log(`izi: ${s.id} closed`);
+      return { step: s.id, track: "ok", artifact: Object.values(s.out)[0], advice: check.stdout, code: 0 };
     }
 
-    // Ответ подтверждён ФАКТОМ на диске — следующая итерация цикла перечитает ANSWERS и соберёт
-    // наряд заново. attempt НЕ увеличен: вопрос-ответ — не пере-делегация по красному чеку, это
-    // структурно видно здесь — continue ведёт на `while (attempt < …)` с тем же attempt.
-    log(`izi: brd question — answer confirmed on disk, retrying with fresh answers`);
+    // Красный чек — пере-делегация той же роли с уликами. advice не роняет приёмку, feedback — роняет.
+    // Только этот путь двигает attempt — loops[s.id] тратится ИСКЛЮЧИТЕЛЬНО красным чеком гардрейла.
+    feedback = check.stderr;
+    attempt++;
+    log(`izi: ${s.id} check red (attempt ${attempt}/${loopsBudget}) — redelegating with feedback`);
+  }
+
+  log(`izi: ${s.id} retries exhausted — escalate`);
+  return { step: s.id, track: "err", kind: "escalate", subject: "повторы исчерпаны", code: 10 };
+}
+
+// ── программа: цикл по pipeline.order, диспетчеризация по kind ─────────────────────────────────
+log("izi: start");
+
+let lastOk = { track: "ok", code: 0 };
+for (const id of pipeline.order) {
+  const doneCheck = await shell(`[ -f .agent/receipts/${id}.json ]`);
+  if (doneCheck.exitCode === 0) {
+    log(`izi: ${id} already closed — skip, роль не зовём`);
     continue;
   }
 
-  const check = await shell(CHECK);
-  if (check.exitCode === 0) {
-    await shell("node bin/promote.mjs --step=brd"); // staging→out, потом квитанция
-    log("izi: brd closed");
-    return { step: "brd", track: "ok", artifact: ".agent/brd.md", advice: check.stdout, code: 0 };
+  const s = steps[id];
+  if (!s) {
+    // Недостижимо по построению: bin/steps.mjs уже отказал бы (exitCode!==0) выше, будь id из
+    // pipeline.order без записи в манифесте. Оставлено как явный терминальный отказ, а не молчание.
+    return {
+      step: id, track: "err", kind: "crashed",
+      subject: `«${id}» объявлен в pipeline.order, но манифест bin/steps.mjs его не несёт`, code: 2,
+    };
   }
 
-  // Красный чек — пере-делегация той же роли с уликами. advice не роняет приёмку, feedback — роняет.
-  // Только этот путь двигает attempt — loops.brd тратится ИСКЛЮЧИТЕЛЬНО красным чеком гардрейла.
-  feedback = check.stderr;
-  attempt++;
-  log(`izi: brd check red (attempt ${attempt}/${pipeline.loops.brd}) — redelegating with feedback`);
+  phase(id);
+
+  if (s.kind === "human") {
+    const r = await runHumanStep(s);
+    if (r) return r;
+    continue;
+  }
+
+  if (s.kind === "role") {
+    const r = await runRoleStep(s);
+    if (r.track === "ok") { lastOk = r; continue; }
+    return r;
+  }
+
+  // Веер (fanout) и условные шаги (when) сюда не входят (см. верхний комментарий файла) — их kind
+  // здесь неизвестен, и неизвестное — рельса, а не тихий пропуск (standards/protocol.md, различение 3).
+  return {
+    step: id, track: "err", kind: "crashed",
+    subject: `«${id}»: неизвестный kind=${JSON.stringify(s.kind)} — диспетчер не собран для этого рода`, code: 2,
+  };
 }
 
-log("izi: brd retries exhausted — escalate");
-return { step: "brd", track: "err", kind: "escalate", subject: "повторы исчерпаны", code: 10 };
+log("izi: pipeline order exhausted — все шаги закрыты");
+return lastOk;

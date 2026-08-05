@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// MODULE_CONTRACT: install.mjs — roles/*.md → global pi roles dir; prompts/*.md → global pi prompts
-//               dir; pipeline.json tiers → settings.json
+// MODULE_CONTRACT: install.mjs — steps/*/role.md → global pi roles dir, under the ROLE's name;
+//               prompts/*.md → global pi prompts dir; pipeline.json tiers → settings.json
 // Purpose:      one decision — pi only picks up roles from its GLOBAL directory
 //               (~/.pi/agent/pi-extensible-workflows/roles/), confirmed on the stand
 //               (PLAN.md §0: a project-local `.pi/pi-extensible-workflows/roles/` role never ran a
@@ -10,6 +10,13 @@
 //               is trusted (docs/prompt-templates.md, "Locations"), which this repository does not
 //               have (README.md, «Долги»); the only reachable location is the GLOBAL
 //               `${agentDir}/prompts/`.
+//
+//               Second decision (S9, docs/workflow.md §1 правка 1): there is no standalone `roles/`
+//               collection any more — a role is part of its slice, `steps/<id>/role.md`. This file
+//               COLLECTS roles by scanning `steps/*/role.md`, and the file it writes on the pi side
+//               is named after the ROLE (`steps/<id>/step.json`'s `role` field), not after the step
+//               id — pi resolves a role by the name a workflow's `agent(order, { role })` call
+//               passes, which is the role name, never the step id.
 // io:           fs
 // Invariants:   settings.json is written with EXACTLY the four keys pi's own validator accepts —
 //               concurrency, modelAliases, disabledAgentResources, extensions — an unknown key
@@ -20,6 +27,7 @@
 // Interface:    resolveAgentDir({ env, home }) -> string
 //               buildModelAliases(models) -> Result<{routing,execution,judgment}, Error>
 //               mergeSettings({ existing, aliases }) -> object
+//               collectRoleFiles({ stepsDir, ids }) -> Result<{ roleName: string, src: string }[], Error>
 //
 //   node bin/install.mjs [--agent-dir=<override, для тестов>]
 //
@@ -91,6 +99,47 @@ export function mergeSettings({ existing, aliases }) {
   return out
 }
 
+// FUNCTION_CONTRACT: collectRoleFiles — steps/*/role.md, named by their OWN step.json's `role`
+//   Input:        raw — { stepsDir: absolute path to the repo's steps/ directory,
+//                          ids: string[] — steps/ subdirectory names to scan }
+//   Dependencies: fs (existsSync/readFileSync) — this scans slices on disk, it does not receive
+//                 them pre-read; the caller supplies only WHICH ids to look at, not their content
+//   Antecedent:   stepsDir is a non-empty string naming an existing directory; ids is an array of
+//                 directory names under it (possibly not carrying role.md at all — that is the
+//                 ordinary "this slice has no role" case, not an error)
+//   Consequent:   success: `{ roleName, src }[]`, one entry per steps/<id>/role.md found, `roleName`
+//                          taken from that SAME step's step.json `role` field — never the step id,
+//                          since pi resolves a role by the name a workflow's `agent(order, {role})`
+//                          passes, not by which slice happens to own the file
+//                 failure: "role-without-step-json" — role.md exists but its step.json does not, so
+//                                        no name is knowable;
+//                          "bad-step-json" — step.json exists but does not parse;
+//                          "role-name-missing" — step.json exists but declares no non-empty `role`;
+//                          "no-roles" — not one steps/*/role.md found across `ids` — nothing to
+//                                        install, a repository with slices but no roles is not
+//                                        silently "done"
+export function collectRoleFiles({ stepsDir, ids }) {
+  const found = []
+  for (const id of ids) {
+    const roleMd = join(stepsDir, id, "role.md")
+    if (!existsSync(roleMd)) continue
+    const stepJsonPath = join(stepsDir, id, "step.json")
+    if (!existsSync(stepJsonPath)) {
+      return err("role-without-step-json", `steps/${id}/role.md есть, но steps/${id}/step.json отсутствует — имя роли неизвестно`)
+    }
+    let stepJson
+    try { stepJson = JSON.parse(readFileSync(stepJsonPath, "utf8")) }
+    catch (e) { return err("bad-step-json", `steps/${id}/step.json не парсится: ${e.message}`) }
+    const roleName = stepJson.role
+    if (!roleName || typeof roleName !== "string" || !roleName.trim()) {
+      return err("role-name-missing", `steps/${id}/step.json не объявляет role — steps/${id}/role.md некуда установить`)
+    }
+    found.push({ roleName, src: roleMd })
+  }
+  if (!found.length) return err("no-roles", "ни одного steps/*/role.md — нечего устанавливать")
+  return ok(found)
+}
+
 function fail(detail) { console.error(`✗ ${detail}`); process.exit(1) }
 
 function main() {
@@ -102,14 +151,16 @@ function main() {
   const agentDir = agentDirOverride || resolveAgentDir({ env: process.env, home: homedir() })
   const wfDir = join(agentDir, "pi-extensible-workflows")
 
-  const rolesSrc = join(repoRoot, "roles")
-  if (!existsSync(rolesSrc)) fail("roles/ не существует в репозитории — каталог создаёт задача S2 параллельно с установкой; повтори после того, как она готова")
-  const roleFiles = readdirSync(rolesSrc).filter((f) => f.endsWith(".md"))
-  if (!roleFiles.length) fail("roles/ пуст — ни одной роли .md, нечего устанавливать")
+  const stepsDir = join(repoRoot, "steps")
+  if (!existsSync(stepsDir)) fail("steps/ не существует в репозитории — нечего собирать")
+  const stepIds = readdirSync(stepsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)
+  const roleResult = collectRoleFiles({ stepsDir, ids: stepIds })
+  if (!roleResult.ok) fail(`[${roleResult.error.cls}] ${roleResult.error.detail}`)
+  const roleEntries = roleResult.value
 
   const rolesDst = join(wfDir, "roles")
   mkdirSync(rolesDst, { recursive: true })
-  for (const f of roleFiles) copyFileSync(join(rolesSrc, f), join(rolesDst, f))
+  for (const { roleName, src } of roleEntries) copyFileSync(src, join(rolesDst, `${roleName}.md`))
 
   const promptsSrc = join(repoRoot, "prompts")
   if (!existsSync(promptsSrc)) fail("prompts/ не существует в репозитории — источник шаблона /izi отсутствует, установка отказывает вместо тихого пропуска")
@@ -139,8 +190,8 @@ function main() {
   mkdirSync(wfDir, { recursive: true })
   writeFileSync(settingsPath, `${JSON.stringify(merged, null, 2)}\n`)
 
-  console.log(`роли: ${roleFiles.length} → ${rolesDst}`)
-  for (const f of roleFiles) console.log(`  ${f}`)
+  console.log(`роли: ${roleEntries.length} → ${rolesDst}`)
+  for (const { roleName, src } of roleEntries) console.log(`  ${roleName}.md ← ${src.slice(repoRoot.length + 1)}`)
   console.log(`шаблоны: ${promptFiles.length} → ${promptsDst}`)
   for (const f of promptFiles) console.log(`  ${f}`)
   console.log(`settings: ${settingsPath}`)

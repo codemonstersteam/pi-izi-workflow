@@ -1,0 +1,27 @@
+{
+  "id": "brd",
+  "kind": "role",
+  "role": "gilb",
+  "title": "сырое требование → измеримый BRD",
+  "prompt": "steps/brd/order.tpl",
+  "in": {
+    "task": "TASK.md"
+  },
+  "out": {
+    "brd": ".agent/brd.md"
+  },
+  "staging": ".agent/staging/brd.md",
+  "//staging": "Контракт: роль имеет право write ТОЛЬКО сюда (steps/brd/role.md, $START_OUTPUT_FORMAT — держится дисциплиной роли, не механизмом хоста, см. README «Долги»). Промоут staging→out делает bin/promote.mjs, и только при track=ok И зелёном check. Это чинит находку F1 донора: право писать в .agent/brd.md было бы открыто безусловно, и роль на рельсе err успевала бы оставить на диске конверт-вопрос под именем готового артефакта.",
+  "check": {
+    "cmd": "node steps/brd/validate-brd.mjs",
+    "args": ["{{artifact}}", "--task=TASK.md", "--answers=.agent/answers.md"]
+  },
+  "//check": "check — объект {cmd, args[]}: строка когда-то читалась бы как готовый шелл-вызов, а {{artifact}} внутри было бы нельзя отличить от литерала. workflows/izi.js резолвит {{artifact}} в staging-путь и запускает check ДО промоута — гардрейл судит именно то, что роль написала на этом ходу, а не старую копию из прошлого прогона.",
+  "returns": [
+    "requirements",
+    "questions"
+  ],
+  "receipt": "brd",
+  "//receipt": "Контракт: шаг закрывает КВИТАНЦИЯ .agent/receipts/brd.json — её пишет bin/promote.mjs, и только после того как staging промоутирован в out по зелёному check. Существование .agent/brd.md само по себе больше ничего не значит (standards/protocol.md «Квитанция закрывает шаг»).",
+  "//donor-fields-dropped": "compose/on_invalid/on_blocked/fanout из донора (izi-flow-v2/steps/brd/step.json, standards/protocol.md «Что обязан объявить шаг») сюда не перенесены: это части снятого конверта-механизма IZI/1 (bin/compose.mjs, bin/accept.mjs, core/steps.mjs), которых в izi-pi-v2 нет — их заменяет outputSchema хоста и прямой цикл workflows/izi.js (PLAN.md §2). loops живёт в pipeline.json (per-step, читается по id), а не здесь — это политика ПРОГОНА, не контракт шага (pipeline.json «//loops»)."
+}
