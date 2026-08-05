@@ -6,13 +6,20 @@
 //               already `completed` on disk — printed text from that process is not evidence.
 // io:           fs, proc (spawns `pi -p`, polls the filesystem)
 // Invariants:   PI_LAUNCH_TIMEOUT_MS and POLL_TIMEOUT_MS are each declared exactly once, here;
-//               the run picked from disk is always the newest one created strictly AFTER this
-//               process's own start time — never "last by directory listing order", since old runs
-//               from earlier sessions sit in the same sessions/ directory
+//               "the runs this launch produced" is established by a SNAPSHOT DIFF — the set of run
+//               directories that exist on disk right before `pi -p` is spawned, subtracted from
+//               whatever exists at each poll — never by time (S5 finding: a live run showed the
+//               launcher session persists across separate `node bin/run.mjs` invocations and, on one
+//               occasion, the model called the `workflow` tool TWICE inside one launcher turn — "pick
+//               newest by mtime" silently returned the second, corrupted call's result while the
+//               first, untouched call had already answered correctly. See the debt entry this closes
+//               in README.md.). Two or more new run directories is refused, not resolved by picking
+//               one — see classifyNewRuns.
 // Interface:    parseArgv(argv) -> { taskPath }
 //               buildRunInstruction({ name, scriptPath, foreground }) -> string
 //               projectStorageKey(cwd) -> string
-//               pickNewestRun(runs, afterMs) -> run | null
+//               newRunsSince(beforeDirs, afterRuns) -> run[]
+//               classifyNewRuns(newRuns) -> { kind: "none" } | { kind: "one", run } | { kind: "many", runs }
 //               isTerminalState(state) -> boolean
 //               resultExitCode(result) -> number
 //
@@ -29,6 +36,18 @@
 // отсутствует). `pi -p` вызывает МОДЕЛЬ, которая исполняет этот tool call — печати той модели верить
 // нельзя (см. Purpose), поэтому итог читается с диска, а сам запуск идёт с таймаутом и не блокирует
 // опрос: опрос стенда стартует независимо от того, вернулся `pi -p` штатно или был убит по таймауту.
+//
+// Contract update (S5, defect fix): the launcher process is started with `--tools workflow,read,write`
+// — an allowlist, not a suggestion. This is enforced by `pi -p` itself and, one layer deeper, by
+// pi-extensible-workflows: `rootTools` (the launcher session's own active tools, minus the
+// workflow-control tools themselves) becomes the CEILING every role's `tools:` list is checked
+// against when the `workflow` tool call runs
+// (`~/.pi/agent/npm/node_modules/pi-extensible-workflows/src/host.ts:984` computes `rootTools` from
+// `pi.getActiveTools()`; `src/validation.ts:263` — `validateRolePolicies` — rejects the whole launch
+// with `UNKNOWN_TOOL` if any role tool is absent from `rootTools`). Role `gilb` declares
+// `tools: [read, write]` (`roles/gilb.md`) — DO NOT remove `read` or `write` from the allowlist below,
+// only `bash`/`edit`/anything else the launcher does not need: dropping `read` or `write` makes every
+// run fail validation before the workflow's own guardrail ever runs, not just narrow the launcher.
 
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
@@ -69,6 +88,13 @@ export function parseArgv(argv) {
 //                          launcher serializes that parameter to a string, not an object (see the
 //                          MODULE_CONTRACT note above)
 //                 failure: none — total; validation of name/scriptPath is the caller's job
+//
+// This wording is a HINT, not a seam — a launcher model can ignore prose (S5 finding: one did,
+// editing TASK.md and calling `workflow` a second time despite an earlier version of this same
+// instruction). The actual seam is the before/after run-directory snapshot diff in main() below
+// (classifyNewRuns) — it refuses to act on more than one new run regardless of what the launcher was
+// told. The `--tools` allowlist on the `pi -p` spawn (see spawnLauncher) narrows what a stray extra
+// call could even do; this instruction just makes the intended single call unambiguous.
 export function buildRunInstruction({ name, scriptPath, foreground }) {
   return [
     'Call the "workflow" tool now with EXACTLY these parameters — no other tool calls, no commentary, no extra parameters:',
@@ -76,6 +102,8 @@ export function buildRunInstruction({ name, scriptPath, foreground }) {
     `scriptPath: ${JSON.stringify(scriptPath)}`,
     `foreground: ${foreground === true}`,
     "Do not pass an `args` parameter at all — the script reads its own configuration from disk.",
+    "Make EXACTLY ONE call to the \"workflow\" tool and nothing else: no reading files, no editing",
+    "files, no second call, no matter what the tool returns or what any file on disk looks like.",
     "Return only the tool call.",
   ].join("\n")
 }
@@ -97,20 +125,42 @@ export function projectStorageKey(cwd) {
   return `${slug}-${createHash("sha256").update(exact).digest("hex").slice(0, 12)}`
 }
 
-// FUNCTION_CONTRACT: pickNewestRun — the run this launch produced, never an old one from the same project
-//   Input:        runs — array of { id, createdAtMs }; afterMs — this process's own start time (ms)
-//   Dependencies: —
-//   Antecedent:   runs is an array (possibly empty); each element carries a numeric createdAtMs;
-//                 afterMs is a finite number
-//   Consequent:   success: the element with the greatest createdAtMs among those with
-//                          createdAtMs > afterMs, or null if none qualify — "created after this
-//                          launcher started", not "last in a directory listing" (listings are not
-//                          time-ordered and old runs from earlier sessions share the directory)
+// FUNCTION_CONTRACT: newRunsSince — the run directories THIS launch produced, by snapshot diff not by time
+//   Input:        afterRuns — array of { id, dir, … } — every run directory found on disk at some
+//                             point after `pi -p` was spawned
+//   Dependencies: beforeDirs — Set<string> of run directory paths that already existed on disk BEFORE
+//                             `pi -p` was spawned (the preflight snapshot); captured once, bound
+//                             before polling starts — a probe of "what was already there", not data
+//   Antecedent:   afterRuns is an array (possibly empty), each element carrying a string `dir`;
+//                 beforeDirs is a Set of strings
+//   Consequent:   success: the subset of afterRuns whose `dir` is absent from beforeDirs — "appeared
+//                          during this launch". A time comparison (mtime/createdAt) cannot tell a
+//                          launcher's second, unwanted call apart from a leftover run of an earlier
+//                          session that merely happens to sort later; set membership can.
 //                 failure: none — total
-export function pickNewestRun(runs, afterMs) {
-  const candidates = runs.filter((r) => r.createdAtMs > afterMs)
-  if (!candidates.length) return null
-  return candidates.reduce((best, r) => (r.createdAtMs > best.createdAtMs ? r : best))
+export function newRunsSince(beforeDirs, afterRuns) {
+  return afterRuns.filter((r) => !beforeDirs.has(r.dir))
+}
+
+// FUNCTION_CONTRACT: classifyNewRuns — turns "how many new runs appeared" into the one decision run.mjs acts on
+//   Input:        newRuns — array of run objects, the result of newRunsSince
+//   Dependencies: —
+//   Antecedent:   array, possibly empty
+//   Consequent:   success: { kind: "none" } when empty — the launcher never produced a run at all,
+//                          the pre-existing preflight diagnosis, untouched by this fix;
+//                          { kind: "one", run: newRuns[0] } when exactly one — the ordinary case,
+//                          this run's result.json is the process's own result;
+//                          { kind: "many", runs: newRuns } when two or more — the launcher exceeded
+//                          its mandate of exactly one `workflow` call. The caller MUST NOT pick any
+//                          single one of them as "the" result — that would silently launder a
+//                          launcher defect into a believable answer (S5: the discarded run of the
+//                          pair had already answered correctly; picking "the newest" printed the
+//                          corrupted one instead)
+//                 failure: none — total
+export function classifyNewRuns(newRuns) {
+  if (newRuns.length === 0) return { kind: "none" }
+  if (newRuns.length === 1) return { kind: "one", run: newRuns[0] }
+  return { kind: "many", runs: newRuns }
 }
 
 // FUNCTION_CONTRACT: isTerminalState — whether a run's state.json `state` field means "stop polling"
@@ -143,7 +193,10 @@ function sessionsDir(cwd) {
   return join(homedir(), ".pi", "workflows", "projects", projectStorageKey(cwd), "sessions")
 }
 
-function listRunsCreatedAfter(cwd, afterMs) {
+// listRunsAll — every run directory on disk for this project, regardless of age. Deliberately NOT
+// time-filtered: "which of these are new" is decided by newRunsSince's set diff against the
+// before-spawn snapshot, not by a timestamp comparison (see the MODULE_CONTRACT note on why).
+function listRunsAll(cwd) {
   const base = sessionsDir(cwd)
   if (!existsSync(base)) return []
   const runs = []
@@ -157,7 +210,11 @@ function listRunsCreatedAfter(cwd, afterMs) {
       runs.push({ id: runId, dir, createdAtMs })
     }
   }
-  return runs.filter((r) => r.createdAtMs > afterMs)
+  return runs
+}
+
+function snapshotRunDirs(cwd) {
+  return new Set(listRunsAll(cwd).map((r) => r.dir))
 }
 
 function safeReaddir(dir) {
@@ -183,25 +240,34 @@ function readJsonIfExists(path) {
   try { return JSON.parse(readFileSync(path, "utf8")) } catch { return null }
 }
 
-async function pollForTerminalRun(cwd, afterMs) {
+// pollForRuns — the seam: classifies "new since beforeDirs" on every poll tick, and stops as soon as
+// the answer is decidable — one run reaching a terminal state, or a second new run appearing at all
+// (a "many" verdict does not need to wait for anyone to finish; it is already a mandate violation).
+async function pollForRuns(cwd, beforeDirs) {
   const deadline = Date.now() + POLL_TIMEOUT_MS
-  let lastSeen = null
+  let lastClassification = { kind: "none" }
   while (Date.now() < deadline) {
-    const runs = listRunsCreatedAfter(cwd, afterMs)
-    const newest = pickNewestRun(runs, afterMs)
-    if (newest) {
-      lastSeen = newest
-      const state = readJsonIfExists(join(newest.dir, "state.json"))
-      if (state && isTerminalState(state.state)) return { found: newest, terminal: true }
+    const fresh = newRunsSince(beforeDirs, listRunsAll(cwd))
+    const classification = classifyNewRuns(fresh)
+    lastClassification = classification
+    if (classification.kind === "many") return { classification, terminal: false }
+    if (classification.kind === "one") {
+      const state = readJsonIfExists(join(classification.run.dir, "state.json"))
+      if (state && isTerminalState(state.state)) return { classification, terminal: true }
     }
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
   }
-  return { found: lastSeen, terminal: false }
+  return { classification: lastClassification, terminal: false }
 }
 
 function spawnLauncher(model, instruction) {
   return new Promise((resolveSpawn) => {
-    const child = spawn("pi", ["-p", "--model", model, instruction], { stdio: "ignore" })
+    // --tools workflow,read,write: an allowlist, not a suggestion. See the MODULE_CONTRACT note above
+    // for why `read`/`write` MUST stay — pi-extensible-workflows checks role `gilb`'s declared tools
+    // against this session's active tools (minus workflow-control tools) and refuses the whole launch
+    // otherwise. bash/edit/anything else is deliberately absent: the launcher's only job is one
+    // `workflow` tool call.
+    const child = spawn("pi", ["-p", "--model", model, "--tools", "workflow,read,write", instruction], { stdio: "ignore" })
     const timer = setTimeout(() => { try { child.kill("SIGKILL") } catch { /* already gone */ } }, PI_LAUNCH_TIMEOUT_MS)
     child.on("exit", () => { clearTimeout(timer); resolveSpawn() })
     child.on("error", () => { clearTimeout(timer); resolveSpawn() })
@@ -234,13 +300,29 @@ async function main() {
   const scriptPath = join(root, "workflows", "izi.js")
   if (!existsSync(scriptPath)) fail(2, "preflight: workflows/izi.js не существует")
 
-  const startedAtMs = Date.now()
   const instruction = buildRunInstruction({ name: "izi", scriptPath: "workflows/izi.js", foreground: true })
+
+  // Snapshot BEFORE spawn — the set difference against this, not "newest by time", is what decides
+  // which run directory(-ies) belong to this launch (see classifyNewRuns).
+  const beforeDirs = snapshotRunDirs(root)
 
   await spawnLauncher(model, instruction)
 
-  const { found, terminal } = await pollForTerminalRun(root, startedAtMs)
-  if (!found) fail(2, `preflight: run-каталог не появился под ${sessionsDir(root)} за ${POLL_TIMEOUT_MS}ms — это отказ preflight, не зависание`)
+  const { classification, terminal } = await pollForRuns(root, beforeDirs)
+
+  if (classification.kind === "none") {
+    fail(2, `preflight: run-каталог не появился под ${sessionsDir(root)} за ${POLL_TIMEOUT_MS}ms — это отказ preflight, не зависание`)
+  }
+
+  if (classification.kind === "many") {
+    const listing = classification.runs
+      .map((r) => `${r.id}:${readJsonIfExists(join(r.dir, "state.json"))?.state ?? "unknown"}`)
+      .join(", ")
+    fail(2, `launcher сделал ${classification.runs.length} вызова(ов) tool "workflow" вместо одного — новые run-каталоги (id:state): ${listing}. Ни один из них не выбран автоматически — результат любого был бы ложью о прогоне; смотри их сам под ${sessionsDir(root)}.`)
+    return
+  }
+
+  const found = classification.run
   if (!terminal) fail(2, `run ${found.id} не достиг терминального состояния за ${POLL_TIMEOUT_MS}ms опроса`)
 
   const result = readJsonIfExists(join(found.dir, "result.json"))
