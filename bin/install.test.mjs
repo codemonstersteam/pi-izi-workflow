@@ -62,7 +62,7 @@ test("mergeSettings: новые тиры перекрывают одноимён
 
 // --- CLI: временный каталог, не реальный ~ --------------------------------------------------
 
-function buildFixtureRepo({ withRoles, roleFiles = ["gilb.md"], pipelineModels }) {
+function buildFixtureRepo({ withRoles, roleFiles = ["gilb.md"], pipelineModels, withPrompts = true, promptFiles = ["izi.md"] }) {
   const dir = mkdtempSync(join(tmpdir(), "install-repo-"))
   mkdirSync(join(dir, "bin"), { recursive: true })
   mkdirSync(join(dir, "core"), { recursive: true })
@@ -73,6 +73,10 @@ function buildFixtureRepo({ withRoles, roleFiles = ["gilb.md"], pipelineModels }
   if (withRoles) {
     mkdirSync(join(dir, "roles"), { recursive: true })
     for (const f of roleFiles) writeFileSync(join(dir, "roles", f), `---\ndescription: fixture\n---\nfixture role body\n`)
+  }
+  if (withPrompts) {
+    mkdirSync(join(dir, "prompts"), { recursive: true })
+    for (const f of promptFiles) writeFileSync(join(dir, "prompts", f), `---\ndescription: fixture prompt\n---\nfixture prompt body\n`)
   }
   return dir
 }
@@ -99,6 +103,23 @@ test("install: roles/*.md копируются в <agent-dir>/pi-extensible-work
   assert.equal(r.code, 0, r.out)
   assert.equal(existsSync(join(agentDir, "pi-extensible-workflows", "roles", "gilb.md")), true)
   assert.equal(existsSync(join(agentDir, "pi-extensible-workflows", "roles", "smoker.md")), true)
+})
+
+test("install: prompts/*.md копируются в <agent-dir>/prompts/", () => {
+  const repo = buildFixtureRepo({ withRoles: true, pipelineModels: VALID_MODELS, promptFiles: ["izi.md"] })
+  const agentDir = mkdtempSync(join(tmpdir(), "agent-dir-"))
+  const r = runInstall(repo, agentDir)
+  assert.equal(r.code, 0, r.out)
+  assert.equal(existsSync(join(agentDir, "prompts", "izi.md")), true)
+})
+
+test("install: prompts/ отсутствует в репозитории — отказ с диагнозом, не тихий пропуск", () => {
+  const repo = buildFixtureRepo({ withRoles: true, pipelineModels: VALID_MODELS, withPrompts: false })
+  const agentDir = mkdtempSync(join(tmpdir(), "agent-dir-"))
+  const r = runInstall(repo, agentDir)
+  assert.equal(r.code, 1)
+  assert.match(r.out, /prompts\/ не существует/)
+  assert.equal(existsSync(join(agentDir, "prompts")), false)
 })
 
 test("install: settings.json несёт modelAliases по трём тирам и ровно разрешённые ключи", () => {

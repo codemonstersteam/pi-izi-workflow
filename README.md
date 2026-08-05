@@ -11,12 +11,16 @@
 node bin/install.mjs
 ```
 
-Копирует `roles/*.md` в **глобальный** каталог pi (`~/.pi/agent/pi-extensible-workflows/roles/`) и
-пишет тиры моделей из `pipeline.json.models` в `~/.pi/agent/pi-extensible-workflows/settings.json`
-(`modelAliases`). Это не опция, а обязательный шаг: pi подхватывает роли только оттуда — проектный
-каталог `.pi/pi-extensible-workflows/roles/` **не работает** без доверия к проекту (см. «Долги»
-ниже; в репозитории лежит `.pi/pi-extensible-workflows/roles/smoker.md` как живое свидетельство
-этого пути для пробы `workflows/smoke2.js`, не как рабочий канал).
+Копирует `roles/*.md` в **глобальный** каталог pi (`~/.pi/agent/pi-extensible-workflows/roles/`),
+`prompts/*.md` в **глобальный** каталог prompt-шаблонов pi (`~/.pi/agent/prompts/`) и пишет тиры
+моделей из `pipeline.json.models` в `~/.pi/agent/pi-extensible-workflows/settings.json`
+(`modelAliases`). Это не опция, а обязательный шаг: pi подхватывает роли и проектные prompt-шаблоны
+только из глобального каталога — проектные `.pi/pi-extensible-workflows/roles/` и `.pi/prompts/`
+**не работают** без доверия к проекту (см. «Долги» ниже; в репозитории лежит
+`.pi/pi-extensible-workflows/roles/smoker.md` как живое свидетельство этого пути для пробы
+`workflows/smoke2.js`, не как рабочий канал). После установки `/izi` — команда в окне pi (pi's own
+prompt templates,
+`/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/docs/prompt-templates.md`).
 
 ## Запуск
 
@@ -86,8 +90,22 @@ node bin/run.mjs
 Что печатает оператор — **одно сообщение на весь прогон**, до того, как задавать `TASK.md`:
 
 ```
+/izi
+```
+
+Это prompt template (`prompts/izi.md` в репозитории, установленный `bin/install.mjs` в
+`~/.pi/agent/prompts/izi.md` — см. «Установка» выше и pi's own
+`docs/prompt-templates.md`); он раскрывается в ровно тот же наряд модели-лаунчеру, что и раньше.
+Если шаблон не установлен (`/izi` не находится автодополнением), запасной путь — напечатать текст
+абзацем самому, дословно:
+
+```
 запусти workflow izi (scriptPath: workflows/izi.js, foreground: true)
 ```
+
+Это же первое сообщение можно передать `pi` через argv, минуя ручной ввод в редакторе — `pi`
+принимает первое сообщение сессии аргументом командной строки, так что `pi --model … "/izi"`
+стартует интерактивную сессию с уже запущенным воркфлоу; удобно для алиаса.
 
 Дальше в окне pi:
 
@@ -130,6 +148,10 @@ workflows/smoke2.js            зонд роли+outputSchema вместе (role
 
 roles/gilb.md                  роль шага brd (pi-формат: model/thinking/tools во фронтматтере)
 
+prompts/izi.md                 pi prompt template — источник /izi, устанавливает bin/install.mjs
+                                в ~/.pi/agent/prompts/; текст — наряд лаунчеру: tool workflow,
+                                name/scriptPath/foreground, ровно один вызов, JSON дословно
+
 steps/task/validate-task.mjs   гардрейл входа: ≤300 строк, непуст (0 токенов)
 steps/brd/brd.mjs              чистое ядро приёмки BRD: newFit·newRequirement·newSubjects·adviceFor·newBrd
 steps/brd/validate-brd.mjs     io-гардрейл: подключает brd.mjs к диску и коду возврата
@@ -142,7 +164,7 @@ core/result.mjs                Result<T,E> — общий конверт фаб�
 core/operator-channel.mjs      правило operatorChannel (terminal|checkpoint), unit-tested; зеркалится
                                 inline в workflows/izi.js — песочница воркфлоу без import/require
 
-bin/install.mjs                роль → глобальный каталог pi, тиры → settings.json
+bin/install.mjs                роль и prompt-шаблон → глобальный каталог pi, тиры → settings.json
 bin/run.mjs                    раннер: запускает workflows/izi.js, читает result.json со стенда
 bin/answer.mjs                 записывает ответ оператора в .agent/answers.md по ключу вопроса
 bin/receipt.mjs                пишет .agent/receipts/<step>.json — квитанция закрывает шаг, не out
@@ -185,7 +207,7 @@ arch/slices/{task.md,brd.md}   архитектурные заметки по с
 
 ```bash
 node --test                  # вся линия — обязана быть зелёной до любого живого прогона
-node bin/install.mjs         # роль → глобальный каталог pi (один раз на машину)
+node bin/install.mjs         # роль и /izi → глобальный каталог pi (один раз на машину)
 echo "…бизнес-требование…" > TASK.md
 node bin/run.mjs             # → question | ok | blocked, JSON на стдоуте, код 0/10/2
 ```

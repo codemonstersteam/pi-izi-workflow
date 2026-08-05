@@ -1,10 +1,15 @@
 #!/usr/bin/env node
-// MODULE_CONTRACT: install.mjs — roles/*.md → global pi roles dir; pipeline.json tiers → settings.json
+// MODULE_CONTRACT: install.mjs — roles/*.md → global pi roles dir; prompts/*.md → global pi prompts
+//               dir; pipeline.json tiers → settings.json
 // Purpose:      one decision — pi only picks up roles from its GLOBAL directory
 //               (~/.pi/agent/pi-extensible-workflows/roles/), confirmed on the stand
 //               (PLAN.md §0: a project-local `.pi/pi-extensible-workflows/roles/` role never ran a
 //               launch; `--approve` did not help). Installing is therefore mandatory, not optional
-//               convenience, and this file is the one place that performs it.
+//               convenience, and this file is the one place that performs it. Prompt templates carry
+//               the exact same fact: pi loads project-local `.pi/prompts/*.md` only after the project
+//               is trusted (docs/prompt-templates.md, "Locations"), which this repository does not
+//               have (README.md, «Долги»); the only reachable location is the GLOBAL
+//               `${agentDir}/prompts/`.
 // io:           fs
 // Invariants:   settings.json is written with EXACTLY the four keys pi's own validator accepts —
 //               concurrency, modelAliases, disabledAgentResources, extensions — an unknown key
@@ -106,6 +111,15 @@ function main() {
   mkdirSync(rolesDst, { recursive: true })
   for (const f of roleFiles) copyFileSync(join(rolesSrc, f), join(rolesDst, f))
 
+  const promptsSrc = join(repoRoot, "prompts")
+  if (!existsSync(promptsSrc)) fail("prompts/ не существует в репозитории — источник шаблона /izi отсутствует, установка отказывает вместо тихого пропуска")
+  const promptFiles = readdirSync(promptsSrc).filter((f) => f.endsWith(".md"))
+  if (!promptFiles.length) fail("prompts/ пуст — ни одного шаблона .md, нечего устанавливать")
+
+  const promptsDst = join(agentDir, "prompts")
+  mkdirSync(promptsDst, { recursive: true })
+  for (const f of promptFiles) copyFileSync(join(promptsSrc, f), join(promptsDst, f))
+
   const pipelinePath = join(repoRoot, "pipeline.json")
   if (!existsSync(pipelinePath)) fail("pipeline.json не существует в репозитории")
   let pipeline
@@ -127,6 +141,8 @@ function main() {
 
   console.log(`роли: ${roleFiles.length} → ${rolesDst}`)
   for (const f of roleFiles) console.log(`  ${f}`)
+  console.log(`шаблоны: ${promptFiles.length} → ${promptsDst}`)
+  for (const f of promptFiles) console.log(`  ${f}`)
   console.log(`settings: ${settingsPath}`)
   console.log(`  modelAliases: ${Object.entries(aliasResult.value).map(([k, v]) => `${k}=${v}`).join(", ")}`)
   console.log(`✓ установлено в ${agentDir}`)
