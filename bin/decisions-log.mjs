@@ -1,10 +1,11 @@
 // MODULE_CONTRACT: decisions-log — appends one line to .agent/decisions.log
 // Purpose:      one decision — the run journal is written by the HARNESS, never by the model
-//               (donor finding F2: a journal the model writes about itself is not evidence). Both
-//               bin/receipt.mjs and bin/answer.mjs need this, so the format lives here once instead
-//               of two copies drifting apart. The donor keeps this pure in core/log.mjs
-//               (core/*.mjs is out of scope for this task — PLAN.md §S3 territory is bin/*.mjs
-//               only), so the same tab-separated shape is reproduced here as an io module instead.
+//               (donor finding F2: a journal the model writes about itself is not evidence).
+//               bin/answer.mjs is the one remaining caller (S11 folded receipt/promote into
+//               ext/index.mjs's `promote`, which does not journal — see that file's own contract
+//               for why). The donor keeps this pure in core/log.mjs (core/*.mjs was out of scope for
+//               the original port — PLAN.md §S3 territory was bin/*.mjs only), so the same
+//               tab-separated shape is reproduced here as an io module instead.
 // io:           fs
 // Invariants:   one call appends exactly one line ending in "\n"; note is escaped so that "\t"/"\n"
 //               inside it cannot be mistaken for a field/record separator

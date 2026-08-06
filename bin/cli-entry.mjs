@@ -1,14 +1,14 @@
 // MODULE_CONTRACT: cli-entry — is this .mjs file the process entry point, or an import?
-// Purpose:      one decision — every bin/*.mjs here is both a CLI (`node bin/x.mjs`) and an
-//               importable module (bin/promote.mjs imports bin/receipt.mjs's writeReceipt directly,
-//               tests import exported functions). The usual guard
-//               `import.meta.url === \`file://${process.argv[1]}\`` breaks silently whenever the
-//               script sits under a symlinked directory — macOS aliases /tmp → /private/tmp and
+// Purpose:      one decision — bin/answer.mjs (S11: the last bin/*.mjs left — the pipeline's io now
+//               lives in ext/index.mjs, trusted host code, not a CLI) guards its own `main()` with
+//               this so `node bin/answer.mjs` runs it while a future import would not. The usual
+//               guard `import.meta.url === \`file://${process.argv[1]}\`` breaks silently whenever
+//               the script sits under a symlinked directory — macOS aliases /tmp → /private/tmp and
 //               /var → /private/var, `import.meta.url` resolves the realpath, `process.argv[1]`
-//               does not, and the guard compares a resolved path to an unresolved one. Found by
-//               bin/install.test.mjs running a fixture copy of install.mjs from a temp directory:
-//               main() silently never ran, exit 0, nothing written, no error — the worst kind of
-//               failure, indistinguishable from success without reading the filesystem.
+//               does not, and the guard compares a resolved path to an unresolved one. Found on the
+//               donor's own install script run from a temp fixture: main() silently never ran, exit
+//               0, nothing written, no error — the worst kind of failure, indistinguishable from
+//               success without reading the filesystem.
 // io:           fs (realpathSync only — no read/write of content)
 // Invariants:   —
 // Interface:    isMain(importMetaUrl) -> boolean

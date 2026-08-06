@@ -154,11 +154,12 @@ test("улика не роняет приёмку, а едет вместе с �
 
 // --- реестр и роль не разошлись --------------------------------------------------------------------
 
-// izi-pi-v2 (S9): роль переехала обратно рядом с ядром среза, как у донора izi-flow-v2 —
-// steps/brd/role.md, а не отдельный каталог roles/ (docs/workflow.md §1, правка 1). Каталог
-// roles/ упразднён; bin/install.mjs теперь собирает роли по срезам (steps/*/role.md) и раскладывает
-// их в глобальный каталог pi под именем роли из steps/brd/step.json, а не под именем шага.
-const ROLE_PATH = join(HERE, "role.md")
+// izi-pi-v2 (S9): роль живёт рядом с ядром среза, как у донора izi-flow-v2 — steps/brd/, а не
+// отдельный каталог roles/ (docs/workflow.md §1). S11: файл роли называется по имени РОЛИ,
+// steps/brd/gilb.md, а не steps/brd/role.md — расширение объявляет steps/brd/ как roleDirectories
+// (ext/index.mjs), и pi-extensible-workflows резолвит роль по имени файла (<role>.md), не по
+// каталогу шага; role.md было бы установлено как роль «role», не «gilb».
+const ROLE_PATH = join(HERE, "gilb.md")
 test("роль знает про invented-default", () => {
   assert.match(readFileSync(ROLE_PATH, "utf8"), /invented-default/)
 })

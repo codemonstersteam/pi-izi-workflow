@@ -284,7 +284,7 @@ const MIN_LETTERS = 6
 // и токен нетронуты), в отличие от снятого 01.08 правила про язык subjects[], где исполнение ЛОМАЛО
 // артефакт (якорь обязан совпадать с идентификатором репозитория). Разные породы: там правило
 // приказывало испортить, здесь — перевести прозу вокруг значения. Запас на ложный красный дан
-// повтором: loops.brd = 3 (pipeline.json).
+// повтором: LOOPS = 3 (workflows/izi.js, литерал S11 — было pipeline.json.loops.brd).
 export function languageDrifted(fit, source) {
   const src = String(source || "")
   if (!src.trim()) return false

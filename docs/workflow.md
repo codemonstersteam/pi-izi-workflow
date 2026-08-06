@@ -5,89 +5,106 @@
 
 ---
 
-## 1. Срез = каталог
+## 1. Два шага, никакой обвязки (S11)
 
-Один шаг живёт в одном каталоге со всем, что ему нужно: наряд, роль, гардрейл, чистое ядро, тест.
-Читать шаг — значит открыть одну папку, а не собирать его из пяти мест.
-
-```
-steps/<id>/
-  step.json        объявление шага: род, вход, выход, staging, чек, квитанция
-  role.md          роль (только у kind=role) — pi-формат: model/thinking/tools + тело
-  order.tpl        наряд роли: плейсхолдеры {TASK}, {ANSWERS}, {FEEDBACK}, …
-  <guard>.mjs      io-гардрейл: подключает ядро к диску и коду возврата
-  <core>.mjs       чистое ядро: фабрики, разбор, правила
-  <core>.test.mjs  тест по формуле — 1 happy + Σ ветвей антецедента
-```
+Оператор сказал прямо: «кто тебя просил универсальный харнес под двенадцать, убирай всю
+универсальность, делай конкретные два шага». `pipeline.json`, `step.json`, манифест
+(`bin/steps.mjs`), квитанции (`bin/receipt.mjs`), генерический промоут (`bin/promote.mjs`) и
+headless-раннер (`bin/run.mjs`) — упразднены целиком, не переписаны. Их работу теперь делают пять
+именованных функций хоста и программа в полсотни строк, которая знает оба шага по имени, а не по
+данным из файла.
 
 ```
-pipeline.json      ПОРЯДОК и политика прогона: order · loops · questions ·
-                   checkpointRetries · operatorChannel · maxCells · filesPerCell ·
-                   maxParallel · models по тирам
-workflows/izi.js   программа: исполняет порядок, сама шагом не является
-bin/               обвязка: install · run · answer · receipt · promote · steps
-core/              общее для нескольких срезов (answers, findings, result, form)
-app/               картируемое приложение — граница разведки, объявлена положительно
-.agent/            состояние прогона: staging · receipts · артефакты · answers.md · pending.json
+ext/
+  index.mjs         pi-extensible-workflows extension: readText · answers · checkTask · checkBrd ·
+                     promote — глобалы внутри workflows/izi.js; roleDirectories → steps/brd/
+  package.json      МИНИМАЛЬНЫЙ package.json — не пайплайну, а расширению: pi.extensions,
+                     зависимость на pi-extensible-workflows (контракт хоста, объяснено в файле)
+
+steps/task/
+  task.mjs          ЧИСТОЕ правило входа: непуст, ≤300 строк — checkTaskText(text)
+  task.test.mjs     тест по формуле — 1 happy + Σ ветвей антецедента
+
+steps/brd/
+  gilb.md           роль (имя файла = имя роли — так резолвит pi-extensible-workflows,
+                     ext/index.mjs::roleDirectories, см. ниже)
+  order.tpl         наряд роли: плейсхолдеры {TASK}, {ANSWERS}, {FEEDBACK}, {STAGING}, {CHECK}
+  brd.mjs           ЧИСТОЕ ядро приёмки: newBrd(text, sources) — источники чисел: TASK.md + ЗНАЧЕНИЯ
+                     ответов оператора, не текст его вопросов
+  brd.test.mjs      тест по формуле
+
+workflows/izi.js    вся программа: две рельсы, литералы бюджетов, ok/err/exit
+core/               общее (answers, findings, result, form) — как и было
+bin/{answer,cli-entry,decisions-log}.mjs  единственная оставшаяся обвязка: канал, которым
+                     ОПЕРАТОР пишет ответ на диск — воркфлоу-скрипт его не читает, читает функция
+                     расширения `answers`
+.agent/             состояние прогона: staging/ · brd.md · answers.md · decisions.log
 ```
 
-**Как это устроено сегодня (S9 — три механические правки сделаны).**
+**Установка.**
+```bash
+cd ext && npm install && cd ..
+pi install ./ext
+```
+`npm install` внутри `ext/` нужен один раз (создаёт `ext/node_modules/`, каталог в `.gitignore`) —
+это проверено фактом, не предположением: `pi install ./ext` (локальный путь) НЕ гоняет `npm install`
+сам, и без этого шага сессия `pi -p` падает на старте с `Cannot find module
+'pi-extensible-workflows'`; разбор причины — в `ext/package.json`. После `npm install`
+`pi install ./ext` подключает разом функции, `steps/brd/` как источник ролей и `prompts/` (третьим
+полем того же `pi`-манифеста, `"prompts": ["../prompts"]`) — отдельный `bin/install.mjs` для этого
+больше не нужен.
 
-1. Роль живёт В СРЕЗЕ, а не в отдельной коллекции: `steps/brd/role.md`, каталога `roles/` в
-   репозитории больше нет. `bin/install.mjs` **собирает** роли по срезам (`steps/*/role.md`) и
-   раскладывает их в глобальный каталог pi — под именем РОЛИ (`steps/<id>/step.json`'s `role`), а не
-   под именем шага: pi резолвит роль по имени из `agent(order, { role })`, не по каталогу, откуда файл
-   переехал. Среза без `role.md` — молча пропускается (kind=human у него нет роли вовсе); ни одного
-   `role.md` среди срезов — внятный отказ, а не тихая установка нуля ролей.
-2. `workflows/izi.js` не знает имён шагов. Цикл идёт по `pipeline.order`, диспетчеризация — по
-   `s.kind` (`human` / `role`); наряд роли читается по пути из её же `step.json` (`prompt`), а не по
-   литералу. `kind`, для которого диспетчер не собран (веер, условные шаги, `script` — они приходят
-   вместе со срезами `scope`/`design`), — терминальный `crashed`, код 2, а не тихий пропуск.
-3. Манифест собирает скрипт `bin/steps.mjs`: `shell("node bin/steps.mjs --json")` возвращает
-   объединённые `steps/*/step.json`, отфильтрованные по `pipeline.order` — шаг, которого там нет, в
-   манифест не попадает и в конвейер не входит. Тот же вызов **линтит целостность**: шаг из `order`
-   без каталога, каталог без `step.json`, ролевой шаг без `staging` или без `role`, шаг без `receipt`
-   — отказ с диагнозом и ненулевым кодом, до того как воркфлоу успеет опереться на дыру. Воркфлоу в
-   песочнице pi не имеет `fs` — единственный законный канал к диску у него `shell()`, и всю работу с
-   файлами делает скрипт, а не он сам. Потребители путей внутри репозитория (`bin/promote.mjs`) тоже
-   читают этот манифест, а не носят собственную копию — `bin/steps-map.mjs` упразднён.
+**Почему `gilb.md`, а не `role.md`.** `pi-extensible-workflows` резолвит роль по ИМЕНИ ФАЙЛА в
+объявленном `roleDirectories` (`validation.js::scanRoleFiles`: `name = basename(entry.name, ".md")`),
+не по каталогу шага и не по отдельному полю конфигурации. Расширение объявляет `roleDirectories:
+[new URL("../steps/brd/", import.meta.url)]` — сам срез, а не отдельный каталог `roles/`: не-`.md`
+соседи (`brd.mjs`, `order.tpl`, тест) сканеру ролей не мешают, он берёт только `*.md`. Файл, названный
+`role.md`, установился бы как роль «role», и `agent({ role: "gilb" })` её бы не нашёл — проверено
+фактом: живой прогон с файлом, названным верно, дал `agentLaunches: 1` в `summary.json` реального
+запуска (см. §3, карточка `brd`).
 
 ---
 
 ## 2. Программа
 
-```js
-const steps = JSON.parse(await shell("node bin/steps.mjs --json"))      // манифест срезов
-const pipe  = JSON.parse(await shell("cat pipeline.json"))              // порядок и политика
+`workflows/izi.js` целиком — две рельсы, `ok`/`err`/`exit`, литералы бюджетов вместо
+`pipeline.json` (шагов два — политика прогона данными пока не нужна, см. `docs/concept.md`,
+раздел «Что отложено и почему»):
 
-for (const id of pipe.order) {
-  if (await done(id)) continue                                          // квитанция закрывает шаг
-  const s = steps[id]
-  const r = await move(s)                                               // ход шага
-  if (r.stop) return r                                                  // первый стоп заканчивает прогон
+```js
+const LOOPS = 3, QUESTIONS = 3, CHECKPOINT_RETRIES = 2;   // литералы, не файл — двух шагов мало,
+                                                            // чтобы платить за policy-as-data
+
+const ok  = (fields) => ({ track: "ok", code: 0, ...fields });
+const err = (kind, fields) => ({ track: "err", kind, code: kind === "crashed" ? 2 : 10, ...fields });
+const exit = (result) => { throw new Exit(result); };      // throw-to-unwind из глубины цикла
+
+async function task() {
+  const t = await checkTask({});                           // функция хоста, не shell("cat …")
+  if (!t.ok) exit(err("blocked", { subject: t.why }));
 }
-return ok()
 
-// ход одного шага — одна труба на любой род
-const move = (s) =>
-  s.kind === "script" ? check(s) >> receipt(s)
-: s.kind === "human"  ? gate(s)
-: /* role */            order(s) >> delegate(s) >> accept(s)
+async function brd() {
+  // читает order.tpl и TASK.md функцией readText, ANSWERS — функцией answers();
+  // делегирует agent(order, { role: "gilb", outputSchema: ENVELOPE });
+  // на вопросе — checkpoint() + answers() до/после (Approve без появившегося ответа = переспрос,
+  //   роль не зовётся заново — не тратит LOOPS);
+  // на ok — checkBrd({ path: STAGING }) ПО STAGING, зелёный → promote({ from, to }) → exit(ok(...)),
+  //   красный → feedback в пере-делегацию — тратит LOOPS
+}
 
-const accept = (s) => (env) =>
-  env.track !== "ok"        ? rail(s, env)                  // question → оператор, прочее → стоп
-: green(await check(s))     ? promote(s) >> receipt(s)      // чек ПО STAGING, до промоута
-:                             redelegate(s)                 // тратит loops[s], не бюджет вопросов
+try { await task(); await brd(); }
+catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: String(e?.message ?? e) }); }
 ```
 
-Веерный шаг — та же труба, только клеток много:
+Полный файл — `workflows/izi.js`. Никакого `shell()`, `JSON.parse` или кода возврата процесса —
+воркфлоу-скрипт не знает о процессах вообще, только о функциях хоста (`readText`, `answers`,
+`checkTask`, `checkBrd`, `promote`) и о встроенных глобалах pi (`agent`, `checkpoint`, `prompt`,
+`log`, `phase`).
 
-```js
-const moveAll = (s, cells) =>
-  chunksOf(pipe.maxParallel, cells)                          // потолок pi: concurrency 1..16
-    |> mapSeq(batch => parallel(s.id, batch.map(c => () => move(cell(s, c)))))
-    |> foldFirstStop
-```
+Веер (шаги 3-12 — план, не реализация) сюда пока не входит: у него будет своя программа, когда
+появится первый веерный срез. Тогда же встанет вопрос, возвращать ли порядок в данные — см.
+`docs/concept.md`, «Что отложено и почему».
 
 ---
 
@@ -98,15 +115,29 @@ const moveAll = (s, cells) =>
 ### 1. `task` — оператор кладёт требование · human · **есть**
 - **вход:** — (внешний: человек)
 - **выход:** `TASK.md`
-- **проверка:** `node steps/task/validate-task.mjs TASK.md` — непуст, ≤300 строк
-- **оператор:** кладёт файл. Красный чек уходит ему, а не в пере-делегацию: его артефакт чинит человек
+- **проверка:** `checkTask({})` (функция расширения) → `steps/task/task.mjs::checkTaskText` —
+  непуст, ≤300 строк
+- **оператор:** кладёт файл. Красный чек — терминальный `err(blocked)`, роль не зовётся вовсе: у
+  этого шага роли нет, чинит человек
 
 ### 2. `brd` — сырое требование → измеримый BRD · role `gilb` · **есть**
 - **вход:** `TASK.md`, `.agent/answers.md`
-- **выход:** `.agent/brd.md` (через staging)
-- **проверка:** `node steps/brd/validate-brd.mjs {{artifact}} --task=TASK.md --answers=…` — каждое
-  требование измеримо, число имеет источник, 3..7 якорей, открытых вопросов ноль
-- **оператор:** отвечает на закрытый вопрос роли — `/izi-answer <ответ>` в терминале pi
+- **выход:** `.agent/brd.md` (через `.agent/staging/brd.md`)
+- **проверка:** `checkBrd({ path: ".agent/staging/brd.md" })` (функция расширения) →
+  `steps/brd/brd.mjs::newBrd` — каждое требование измеримо, число имеет источник (TASK.md или
+  ЗНАЧЕНИЕ ответа оператора, не текст вопроса), 3..7 якорей, открытых вопросов ноль
+- **оператор:** отвечает на закрытый вопрос роли через `checkpoint()` — `node bin/answer.mjs
+  --q="…" --text="…"`, затем Approve. Approve без появившегося в `.agent/answers.md` ответа не
+  считается ответом и не зовёт роль заново
+- **живое доказательство (S11, живой прогон в этом репозитории):** `agentLaunches: 1..3` в
+  `summary.json` — роль `gilb` резолвится из `roleDirectories` и вызывается по-настоящему;
+  `.agent/staging/brd.md` перезаписывается на каждой пере-делегации, `checkBrd` читает именно его
+  (staging, не `.agent/brd.md`) на каждой проверке; предзаполненный `.agent/answers.md` (`node
+  bin/answer.mjs --q="…" --text="4"`) даёт роли значение прямо на первой попытке, и оно доезжает до
+  `fit:` требования дословно. Артефакт `.agent/brd.md` в этом конкретном прогоне не дописался — это
+  нашло не дефект переноса, а существующую (не тронутую S11) чувствительность `numbersIn` в
+  `steps/brd/brd.mjs`: формат `ISO-8601` в `fit:` читается как число `8601` и требует источника —
+  тот же код вёл бы себя так же и под старым `bin/validate-brd.mjs`. Не в объёме этой задачи.
 
 ### 3. `survey-plan` — раскладка разведки · script · **новое**
 - **вход:** `.agent/brd.md`, `app/`
@@ -190,8 +221,10 @@ const moveAll = (s, cells) =>
 ## 4. Тесты — минимум, но со швом
 
 На срез: **один тест на правило, которое может тихо деградировать**, и чистое ядро по формуле
-`1 happy + Σ ветвей антецедента`. Гардрейл-труба и голова юнитами не покрываются — их доказывает
-живой прогон среза. Тест, который ни от какой правки кода не краснеет, — комментарий; такой не пишем.
+`1 happy + Σ ветвей антецедента`. `ext/index.mjs` — io-модуль (подключает `task.mjs`/`brd.mjs`/
+`core/answers.mjs` к диску) и юнитами не покрывается по той же причине, что и бывшие `bin/*.mjs`
+гардрейлы: доказывает его живой прогон, а не тест, играющий роль интеграционного под именем юнита.
+Тест, который ни от какой правки кода не краснеет, — комментарий; такой не пишем.
 
 ## 5. Порядок разработки
 
@@ -202,7 +235,14 @@ survey-plan → scope(рой) → graph → intake → weight → ripple → des
 ```
 
 Первые три дают `appgraph.xml` — после него полоса впервые знает о репозитории хоть что-то, и
-дальнейшие шаги перестают быть догадкой. Механические правки из §1 (роль в срез, цикл по `order`,
-манифест) сделаны ДО `survey-plan` (S9) — иначе каждый новый шаг пришлось бы вписывать в `izi.js`
-руками. `survey-plan` заводит первый `kind=script` шаг: диспетчер `izi.js` сегодня знает только
-`human`/`role` (см. §2) — включить `script` в него предстоит вместе с этим срезом, не раньше.
+дальнейшие шаги перестают быть догадкой.
+
+**S11 разобрала генерический диспетчер (манифест `step.json`, цикл по `pipeline.order`,
+универсальный `move(s)` на любой `kind`), который §1-§2 несли до этой правки** — оператор явно
+велел выбросить универсальность, рассчитанную на двенадцать шагов, пока их два. Отсюда прямое
+следствие для `survey-plan`: он больше не «включается в уже готовый диспетчер, знающий `script`» —
+диспетчера в этом смысле не существует, есть `task()`/`brd()` по имени. Добавление `survey-plan`
+означает: либо третья именованная функция-фаза рядом с `task()`/`brd()` (та же рука, тот же стиль,
+ещё один литерал бюджета), либо к этому моменту цена ручного перечисления фаз превысит цену
+policy-as-data и `pipeline.json`/манифест стоит вернуть — это решение принимается ТОГДА, с фактами
+трёх шагов на руках, а не сейчас с фактами двух (`docs/concept.md`, «Что отложено и почему»).
