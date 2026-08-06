@@ -99,3 +99,32 @@
    чекпоинты и восстановление придётся написать самим (~1100 строк `host.ts`).
 
 Рекомендация: 1 + 2. Первое бесплатно, второе — одна функция расширения и три вызова в скрипте.
+
+## 6. Что дал herdr (S15, проверено)
+
+| | без herdr | с herdr fully-inspectable |
+|---|---|---|
+| прогресс прогона | только в `/workflow` → дашборд фаз и блок `Logs` | то же плюс живая сессия каждого агента в отдельной панели |
+| ошибка роли | видна постфактум в `journal.json` | видна в момент, в панели агента |
+| цена | ноль | ядро pi-extensible-workflows приходится держать репозиторной сборкой |
+
+**Условие, которого нет в документации.** `herdr`-расширение репозиторное и написано под
+репозиторное ядро: его регистрация несёт только `version` + `headline`, а npm-ядро 5.1.1 требует
+ещё и `description` (`npm/.../registry.ts:42` против `repo/packages/core/src/registry.ts:46` при
+одинаковой версии `5.1.1`). Поэтому режим включается только так:
+
+```bash
+cd <repo>/pi-extensible-workflows && npm ci
+npm run build -w pi-extensible-workflows && npm run build -w @piewf/herdr
+pi remove npm:pi-extensible-workflows          # два ядра разом → Tool "workflow" conflicts
+pi install <repo>/packages/core
+pi install <repo>/packages/extensions/herdr
+# ~/.pi/agent/pi-extensible-workflows/settings.json:
+# { "extensions": { "herdr": { "enableFullyInspectableMode": true } } }
+```
+
+Регресс на репозиторном ядре пройден: прогон `8814d8a4-7263-4cf0-bb54-f0361bddbdd9` в
+`/tmp/quarkus-rest-json-app-v2-t1-3` дошёл до `.agent/brd.md`, реестр функций расширения виден
+(`workflow_catalog` → семь наших функций).
+
+Откат: `pi remove <repo>/packages/extensions/herdr && pi remove <repo>/packages/core && pi install npm:pi-extensible-workflows`.
