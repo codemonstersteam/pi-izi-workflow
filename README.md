@@ -14,14 +14,20 @@ cd ext && npm install && cd ..
 pi install ./ext
 ```
 
-`ext/` — pi-extension: пять функций хоста (`readText`, `answers`, `checkTask`, `checkBrd`,
-`promote`) и `roleDirectories: [steps/brd/]`, откуда pi резолвит роль `gilb` по имени файла
-`gilb.md`. `npm install` внутри `ext/` нужен один раз — `pi install <локальный путь>` сам его не
-запускает (это проверено фактом: без `node_modules/pi-extensible-workflows` сессия `pi -p` падает
-на старте с `Cannot find module 'pi-extensible-workflows'`); разбор, почему `ext/package.json`
-несёт зависимость и это не противоречит `standards/code.md` — в самом файле. `pi install ./ext`
-подключает разом функции, роль и `prompts/izi.md` (третьим полем того же `pi`-манифеста) — так
-`/izi` становится доступна в терминале pi без отдельного шага установки.
+`ext/` — pi-extension: семь функций хоста для воркфлоу-песочницы (`readText`, `answers`,
+`checkTask`, `checkBrd`, `promote`, `setPending`, `clearPending`), `roleDirectories: [steps/brd/]`,
+откуда pi резолвит роль `gilb` по имени файла `gilb.md`, и (S13) tool `izi_answer`, зарегистрированный
+на самой ИНТЕРАКТИВНОЙ сессии через `pi.registerTool` — не на песочнице воркфлоу, а на модели,
+которая читает этот README прямо сейчас. `export default function extension(pi)` в `ext/index.mjs`
+делает оба вызова разом: `pi.registerTool(...)` (обычный контракт pi-расширения,
+`ExtensionFactory = (pi: ExtensionAPI) => void`, `@earendil-works/pi-coding-agent`) и
+`registerWorkflowExtension(...)` (контракт `pi-extensible-workflows`). `npm install` внутри `ext/`
+нужен один раз — `pi install <локальный путь>` сам его не запускает (это проверено фактом: без
+`node_modules/pi-extensible-workflows` сессия `pi -p` падает на старте с `Cannot find module
+'pi-extensible-workflows'`); разбор, почему `ext/package.json` несёт зависимость и это не
+противоречит `standards/code.md` — в самом файле. `pi install ./ext` подключает разом функции, роль,
+tool и `prompts/izi.md` (третьим полем того же `pi`-манифеста) — так `/izi` становится доступна в
+терминале pi без отдельного шага установки.
 
 Проверка: `pi list` показывает путь до `ext/` среди установленных пакетов.
 
@@ -36,29 +42,60 @@ pi install ./ext
 ```
 
 Раскрывается в наряд лаунчеру: ровно один вызов tool `workflow` с `scriptPath:
-"workflows/izi.js"`. Прогон идёт сам до конца или до вопроса роли `gilb` — паузы `checkpoint()` в
-том же окне.
+"workflows/izi.js"`, `foreground: false` (S13). Tool возвращается НЕМЕДЛЕННО с `{ runId,
+state: "running" }` — прогон идёт в фоне; финал и любые паузы `checkpoint()` приезжают в этот же
+чат ОТДЕЛЬНЫМИ follow-up сообщениями (`pi-extensible-workflows/src/host.ts:673-677`,
+`deliverBackgroundCheckpoint`).
+
+**Почему не `foreground: true`.** Было ровно так до S13, и это заперло оператора: с
+`foreground: true` пауза `checkpoint()` отдаёт Approve/Reject модальному `ui.select`
+(`host.ts:686`, `checkpointBridge`), который забирает ввод у ВСЕГО окна — напечатать ответ роли
+`gilb` было физически негде, `esc` просто перерисовывал те же две кнопки. `backlog.md`, «Обмен
+вопрос→ответ ни разу не завершился получением `.agent/brd.md`» — это и есть причина: не логическая
+ошибка обмена, а канал, в котором у оператора нет клавиатуры. `foreground: false` меняет это одним
+полем: та же пауза — обычное текстовое сообщение, редактор свободен.
 
 ## Цикл вопрос → ответ
 
 Роль `gilb` не имеет права разговаривать с оператором иначе как через `err(question)`. Барьер и
 данные разделены нарочно: `checkpoint(input)` в песочнице `pi-extensible-workflows` возвращает
 воркфлоу-скрипту только строку `"approved"` | `"rejected"` — текста ответа этим каналом не едет
-никогда (`~/.pi/agent/npm/node_modules/pi-extensible-workflows/src/host.ts`). Текст приезжает
-файлом:
+никогда (`~/.pi/agent/npm/node_modules/pi-extensible-workflows/src/host.ts`). До S13 факт (текст
+ответа) ехал ВТОРЫМ каналом — вторым терминалом, где оператор руками выполнял `bin/answer.mjs`.
+С S13 факт остаётся файлом, но пишет его модель ЭТОГО ЖЕ чата, инструментом, а не человек второй
+командой:
 
 ```
-пауза checkpoint()  печатает вопрос gilb дословно + готовую команду
+пауза checkpoint() — приезжает в чат обычным сообщением (foreground: false):
+  "Workflow izi checkpoint <name>: <инструкция>. Context: {...}. Respond with workflow_respond."
+  Перед паузой workflows/izi.js::askOperator вызвал host-функцию setPending({subject, evidence}) —
+  ПОЛНЫЙ вопрос (без байтового предела) лёг в .agent/pending.json ДО того, как чат увидел паузу.
 
-оператор — в терминале ЭТОГО ЖЕ репозитория:
-  node bin/answer.mjs --q="<вопрос дословно>" --text="<ответ>"
-оператор — в окне pi: Approve
+модель этого чата, следуя инструкции из сообщения:
+  1. спрашивает оператора вопрос дословно ПРЯМО В ЭТОМ ЧАТЕ
+     (или — если вопрос длиннее ~600 байт и не влез в prompt целиком — сперва читает его дословно
+     из .agent/pending.json; сам вопрос при этом никогда не обрезается)
+  2. оператор отвечает — обычным текстом, в этом же окне, без второго терминала
+  3. модель вызывает tool izi_answer({ text: <ответ дословно> }) — ОДИН параметр; ключ вопроса тул
+     берёт из .agent/pending.json САМ, модель его не передаёт и подменить не может
+  4. модель вызывает workflow_respond({ runId, name: <label из этого же сообщения>, approved: true })
 
 workflows/izi.js — Approve сам по себе не факт: answers({}) до и после паузы сверяются
   по subject; ответ не появился → та же пауза переспрашивается (до CHECKPOINT_RETRIES=2 раз),
   роль НЕ зовётся заново — переспрос не тратит бюджет пере-делегации (LOOPS=3)
-  ответ появился → наряд собирается заново, gilb вызывается ещё раз
+  ответ появился → clearPending() снимает .agent/pending.json, наряд собирается заново, gilb
+  вызывается ещё раз
 ```
+
+`izi_answer` — обычный tool (`pi.registerTool`, `ext/index.mjs`), не функция песочницы воркфлоу:
+он живёт на ЭТОЙ сессии, той самой, что читает данный README. Отсутствие `.agent/pending.json` в
+момент вызова — внятный отказ тула (`throw`), а не запись в никуда: без открытого вопроса писать
+некуда, и тул на этом настаивает, а не молчит. Запись идёт тем же форматом и той же проверкой на
+шаблон-плейсхолдер (`<ответ>`), что раньше делал только `bin/answer.mjs` — правило одно,
+`bin/write-answer.mjs` + `core/answers.mjs::looksLikeTemplate`, вызывающих два. `bin/answer.mjs`
+(CLI `node bin/answer.mjs --q="…" --text="…"`) никуда не делся — он остаётся рабочим запасным
+входом (например, для отладки без интерактивного чата), но больше не единственный и не основной:
+основной путь — печатать ответ прямо в окне pi.
 
 **Reject** на любой паузе — вопрос уходит человеку эскалацией (`kind: escalate`), прогон
 останавливается терминально. Бюджет вопросов на весь прогон — `QUESTIONS=3` (литерал в
@@ -85,8 +122,10 @@ TASK.md                       вход конвейера — кладёт оп�
 workflows/izi.js               вся программа: task() → brd(), литералы LOOPS/QUESTIONS/
                                 CHECKPOINT_RETRIES, ok/err/exit, ENVELOPE (outputSchema)
 
-ext/index.mjs                  pi-extension: readText/answers/checkTask/checkBrd/promote —
-                                глобалы внутри workflows/izi.js; roleDirectories → steps/brd/
+ext/index.mjs                  pi-extension: readText/answers/checkTask/checkBrd/promote/setPending/
+                                clearPending — глобалы внутри workflows/izi.js; roleDirectories →
+                                steps/brd/; ПЛЮС tool izi_answer, зарегистрированный на самой
+                                интерактивной сессии через pi.registerTool (S13, не глобал воркфлоу)
 ext/package.json                МИНИМАЛЬНЫЙ package.json расширения (не пайплайна) — pi.extensions,
                                 pi.prompts, зависимость на pi-extensible-workflows; разбор — в файле
 
@@ -98,16 +137,20 @@ steps/brd/order.tpl            наряд роли (TASK/ANSWERS/FEEDBACK/STAGIN
 steps/brd/brd.mjs              ЧИСТОЕ ядро приёмки: newFit·newRequirement·newSubjects·adviceFor·newBrd
 steps/brd/brd.test.mjs         тест по формуле
 
-prompts/izi.md                 pi prompt template — источник /izi; устанавливается вместе с ext/
-                                (pi.prompts в ext/package.json), не отдельным шагом
+prompts/izi.md                 pi prompt template — источник /izi; foreground: false (S13);
+                                устанавливается вместе с ext/ (pi.prompts в ext/package.json)
 
-core/answers.mjs               разбор .agent/answers.md в значения {question, text}
+core/answers.mjs               разбор .agent/answers.md в значения {question, text};
+                                looksLikeTemplate(text) — общая проверка на шаблон-плейсхолдер
+                                (S13: один правило, два вызывающих — bin/answer.mjs и izi_answer)
 core/form.mjs                  реестр формы BRD и слоёв промпта — наряд/роль подставляют, не пересказывают
 core/findings.mjs              severityOf: находка роняет приёмку (blocker) или едет уликой (advice)
 core/result.mjs                Result<T,E> — общий конверт фабрик
 
-bin/answer.mjs                 записывает ответ оператора в .agent/answers.md по ключу вопроса —
-                                единственная оставшаяся точка входа человека кроме TASK.md
+bin/answer.mjs                 CLI-обёртка: записывает ответ оператора в .agent/answers.md по ключу
+                                вопроса — запасной вход помимо чата (izi_answer — основной, S13)
+bin/write-answer.mjs           S13: общая io-запись answers.md (mkdir/read/dedupe/write) — используют
+                                И bin/answer.mjs, И ext/index.mjs::izi_answer, не два раза одна логика
 bin/cli-entry.mjs               isMain(): guard `main()` в bin/answer.mjs
 bin/decisions-log.mjs           append-only .agent/decisions.log
 
@@ -115,6 +158,9 @@ bin/decisions-log.mjs           append-only .agent/decisions.log
   staging/brd.md                  черновик роли ДО чека
   brd.md                          артефакт ПОСЛЕ промоута (только на зелёном чеке)
   answers.md                      накопленные ответы оператора
+  pending.json                    S13: {subject, evidence} текущего открытого вопроса — пишет
+                                   setPending() ДО checkpoint(), izi_answer берёт из него ключ,
+                                   clearPending() снимает ПОСЛЕ подтверждённого ответа
   decisions.log                   журнал переходов (пишет bin/answer.mjs, не модель)
 
 standards/{protocol.md,code.md,role.md}   контракты конверта/кода/роли — не пересказываются здесь
@@ -165,12 +211,18 @@ echo "…бизнес-требование…" > TASK.md
   забытый `cd ext && npm install` даёт `Cannot find module 'pi-extensible-workflows'` в момент
   загрузки расширения, а не в момент `pi install`, что легко спутать с успешной установкой.
 
-- **`steps/brd/brd.mjs::numbersIn` не различает число критерия и число внутри токена формата.**
-  Найдено живым прогоном S11 (booking-задача, `fit: … (ISO-8601)`): `ISO-8601` читается как число
-  `8601`, требует источника, которого нет ни в `TASK.md`, ни в ответах — роль получает
-  `invented-default` за формат, который сама не выдумывала. Тот же код вёл бы себя так же и под
-  снятым `bin/validate-brd.mjs` — это не регрессия S11, а существующая чувствительность правила,
-  не входящая в объём этой задачи (правило `newFit`/`numbersIn` не тронуто).
+- ~~`steps/brd/brd.mjs::numbersIn` не различает число критерия и число внутри токена формата.~~
+  **Закрыто (S13).** Найдено живым прогоном S11 (booking-задача, `fit: … (ISO-8601)`): `ISO-8601`
+  читалось как число `8601`, требовало источника, которого нет ни в `TASK.md`, ни в ответах — роль
+  получала `invented-default` за формат, который сама не выдумывала. `numbersIn` теперь отличает
+  обозначение формата (буква вплотную/через дефис-слэш, ЗАГЛАВНОЕ слово через один пробел) от
+  числа-величины — `steps/brd/brd.mjs::isDesignationDigit`, покрыто таблицей случаев в
+  `steps/brd/brd.test.mjs` (`ISO-8601`/`UTF-8`/`SHA-256`/`RFC 3339`/`base64`/`p95` — не число;
+  `20`/`90 дней`/`1..100`/`не более 20`/`300ms` — число; `100` без источника краснеет и рядом с
+  `ISO-8601`, шов проверен возвратом дефекта). Живьём: тот же booking-`TASK.md`, тот же `fit:
+  формат времени — ISO-8601, …`, прогон `0445e4cd-2667-43e4-8db8-9102679146fb` (и повтор
+  `79c0aa0a-e410-4172-a5cf-a1af6a78f8e8`) дошли до `.agent/brd.md` с `track:"ok"` — `ISO-8601` в
+  `fit:` больше не требует источника.
 
 - **`TASK.md` и `task.md` — один и тот же файл на регистронезависимой ФС** (APFS по умолчанию на
   macOS, аналогично NTFS на Windows). Код, ссылающийся на `TASK.md` литералом, не застрахован от

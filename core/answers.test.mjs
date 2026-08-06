@@ -4,7 +4,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { answerEntry, newAnswers } from "./answers.mjs"
+import { answerEntry, newAnswers, looksLikeTemplate } from "./answers.mjs"
 
 // --- answerEntry: тотальна, ветвей нет --------------------------------------------------------
 
@@ -31,4 +31,15 @@ test("вопрос без ответа — половина пары не фак
 test("числа из альтернатив вопроса не становятся источником", () => {
   const r = newAnswers("- вопрос: cap — 20 by default (alternatives: 50, 100)?\n  ответ: 20\n")
   assert.equal(r.value.map((a) => a.text).join(" ").includes("100"), false)
+})
+
+// --- looksLikeTemplate: тотальна, 1 happy + 1 различимый исход ---------------------------------
+// S13: одна проверка, два вызывающих (bin/answer.mjs, ext/index.mjs::izi_answer) — не две копии.
+
+test("обычный ответ шаблоном не выглядит", () => {
+  assert.equal(looksLikeTemplate("20"), false)
+})
+
+test("плейсхолдер формы <...> — шаблон, а не ответ", () => {
+  assert.equal(looksLikeTemplate("<operator answer>"), true)
 })

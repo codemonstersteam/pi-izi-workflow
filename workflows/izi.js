@@ -1,9 +1,17 @@
 // izi: two concrete rails, task → brd (S11). No step manifest, no pipeline.json, no shell() — the
-// extension (ext/index.mjs) puts readText/answers/checkTask/checkBrd/promote on the sandbox as
-// globals, and this script calls them directly. Docs: docs/workflow.md §1-§2, docs/concept.md.
-// Loop/question budgets are literals — two steps do not earn a policy-as-data mechanism yet
-// (docs/concept.md, «отложено»). The operator channel is checkpoint only: no headless run exists
-// any more (bin/run.mjs is gone) — this workflow starts from an interactive pi session via `/izi`.
+// extension (ext/index.mjs) puts readText/answers/checkTask/checkBrd/promote/setPending/clearPending
+// on the sandbox as globals, and this script calls them directly. Docs: docs/workflow.md §1-§2,
+// docs/concept.md. Loop/question budgets are literals — two steps do not earn a policy-as-data
+// mechanism yet (docs/concept.md, «отложено»). The operator channel is checkpoint only: no headless
+// run exists any more (bin/run.mjs is gone) — this workflow starts from an interactive pi session
+// via `/izi`. S13: `prompts/izi.md` launches with `foreground: false`, so the operator answers gilb's
+// question DIRECTLY in that same chat window instead of a second terminal running bin/answer.mjs —
+// `foreground: true` hands checkpoint's Approve/Reject to a modal `ui.select` that swallows all other
+// input (pi-extensible-workflows/src/host.ts:686, checkpointBridge) and the operator is locked out of
+// typing an answer at all; `foreground: false` delivers the same pause as an ordinary chat message
+// instead (host.ts:673-677, deliverBackgroundCheckpoint) and the editor stays free. askOperator()
+// below writes that message's `prompt` to instruct the model, not the operator, directly: read the
+// question, relay it, wait for the reply, call the izi_answer tool, then workflow_respond.
 
 const LOOPS = 3;              // gilb red-check redelegations (guardrail failures), NOT questions
 const QUESTIONS = 3;          // operator exchanges allowed in one run
@@ -35,22 +43,58 @@ async function task() {
   if (!t.ok) exit(err("blocked", { subject: t.why }));
 }
 
-// askOperator — checkpoint is a barrier (approved|rejected), never a fact. The fact is an answer
-// that shows up in .agent/answers.md under the exact question key — until then Approve is a no-op
-// and gilb is not called again (a re-pause is a peer-review of the operator, not a paid redelegation).
+// byteLen — UTF-8 byte length without Buffer: the workflow sandbox is a bare vm.createContext
+// (pi-extensible-workflows/src/execution.ts) carrying only {agent, shell, prompt, checkpoint,
+// parallel, pipeline, phase, log, args, Promise, JSON, Math} plus registered functions — Buffer is a
+// Node global, never injected here. encodeURIComponent/unescape ARE plain ECMAScript globals (not
+// Node-specific, not on the sandbox's blacklist), and the escape-to-one-char-per-byte trick gives an
+// exact UTF-8 byte count without either.
+function byteLen(s) { return unescape(encodeURIComponent(String(s == null ? "" : s))).length; }
+
+// checkpoint()'s prompt is capped at 1024 UTF-8 bytes and context at 4096
+// (pi-extensible-workflows/src/validation.ts:17-22, validateCheckpoint) — past that it throws
+// INVALID_METADATA and the run crashes, not degrades. gilb's subject is natural-language operator
+// prose with no length contract of its own (steps/brd/gilb.md does not bound it), so the prompt
+// cannot simply interpolate it and hope. ASK_LONG is the fallback used when the short form would
+// not fit: it never truncates the subject text itself — a clipped question can silently change its
+// meaning mid-sentence — instead it points at .agent/pending.json, which setPending() below writes
+// with NO byte limit (a file, not this channel), so the operator always gets the question complete,
+// just via one extra file read in the rare long-subject case instead of inline chat text.
+const ASK_HEAD = "Роль gilb ждёт ответа оператора в этом чате. ";
+const ASK_TAIL = " Получив ответ — вызови tool izi_answer({text: ответ дословно}). Затем workflow_respond({runId: <runId запуска>, name: <name из заголовка этого сообщения>, approved: true}). Отказ оператора — approved: false.";
+const ASK_LONG = "Вопрос слишком длинный для этого сообщения — прочитай его дословно в .agent/pending.json (поле subject) и задай оператору оттуда.";
+
+function askPrompt(subject, retryNote) {
+  const note = retryNote || "";
+  const short = `${ASK_HEAD}Спроси оператора дословно:\n${subject}${ASK_TAIL}${note}`;
+  if (byteLen(short) <= 1024) return short;
+  return `${ASK_HEAD}${ASK_LONG}${ASK_TAIL}${note}`; // byte-safe by construction — independent of subject length
+}
+
+const RETRY_NOTE = "\n\n(Ответ не найден в .agent/answers.md по этому ключу — переспроси и повтори вызовы.)";
+
+// askOperator — checkpoint is a barrier (approved|rejected), never a fact (host.ts: checkpoint()
+// resolves to a boolean, the operator's text never travels this channel). The fact is an answer that
+// shows up in .agent/answers.md under the exact question key — until then Approve is a no-op and
+// gilb is not called again (a re-pause is a peer-review of the operator, not a paid redelegation).
+// setPending()/clearPending() bracket the exchange: the question key the izi_answer tool writes
+// against is never a model input, it is read from .agent/pending.json — setPending() puts it there
+// BEFORE the pause (so it exists the instant the checkpoint message lands in chat), clearPending()
+// removes it only AFTER an answer to THIS subject is confirmed present (never on Reject or on
+// exhausted retries — the run is terminating there anyway, and the next run's first askOperator call
+// overwrites pending.json before its own pause).
 async function askOperator(env, n) {
-  const cmd = env.answer_cmd || `node bin/answer.mjs --q=${JSON.stringify(env.subject)} --text="<ответ>"`;
+  await setPending({ subject: env.subject, evidence: env.evidence || "" });
   for (let retry = 1; retry <= CHECKPOINT_RETRIES; retry++) {
-    const retryNote = retry === 1 ? "" : "\n\n(Ответ не найден — выполните команду и нажмите Approve ещё раз.)";
     const decision = await checkpoint({
       name: retry === 1 ? `brd-q${n}` : `brd-q${n}-retry${retry}`,
-      prompt: `Роль gilb ждёт ответа:\n${env.subject}\n\nВыполните команду:\n${cmd}\n\nзатем Approve. Reject — остановка.${retryNote}`,
-      context: { subject: env.subject, evidence: env.evidence, answer_cmd: cmd },
+      prompt: askPrompt(env.subject, retry === 1 ? "" : RETRY_NOTE),
+      context: { pending: ".agent/pending.json" },
     });
     if (decision !== "approved") exit(err("escalate", { subject: env.subject, evidence: env.evidence }));
-    if ((await answers({})).some((a) => a.question === env.subject)) return;
+    if ((await answers({})).some((a) => a.question === env.subject)) { await clearPending({}); return; }
   }
-  exit(err("question", { subject: env.subject, evidence: env.evidence, answer_cmd: cmd, diagnosis: `ответ не получен за ${CHECKPOINT_RETRIES} переспросов` }));
+  exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `ответ не получен за ${CHECKPOINT_RETRIES} переспросов` }));
 }
 
 async function brd() {

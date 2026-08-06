@@ -6,6 +6,7 @@
 // Invariants:   вопрос и ответ разделены машинно, а не глазами; порядок записей сохраняется
 // Interface:    answerEntry(raw) -> string
 //               newAnswers(text) -> Result<Answer[], "malformed">
+//               looksLikeTemplate(text) -> boolean
 //
 // ЗАЧЕМ РАЗДЕЛЕНИЕ. Прогон run-5 (находка F17): роль спросила «response cap — 20 by default
 // (alternatives: 50, 100)?», оператор ответил «20», а в критерий уехало «20 records by default,
@@ -58,4 +59,21 @@ export function newAnswers(text) {
   }
   if (pending !== null) return err("malformed", `вопрос без ответа: «${pending.slice(0, 40)}»`)
   return ok(Object.freeze(out))
+}
+
+// FUNCTION_CONTRACT: looksLikeTemplate — текст ответа неотличим от шаблона, скопированного как есть
+//   Input:        text — кандидат в ответ оператора; тип не ограничен
+//   Dependencies: —
+//   Antecedent:   любое значение — приводится к строке через String(text || "")
+//   Consequent:   success: true, когда обрезанный текст целиком имеет форму `<…>` (плейсхолдер вида
+//                          `<ответ>`, `<operator answer>` — форма примера роли, попавшая в файл
+//                          дословно, не значение); false во всех прочих случаях, включая пустую
+//                          строку
+//                 failure: нет — тотальна
+// Один и тот же класс ошибки, что «модель скопировала форму вместо значения»: такой текст молча
+// становится источником числа для fit, поэтому оба входа человека в answers.md — CLI (bin/answer.mjs)
+// и tool-вызов (ext/index.mjs::izi_answer) — проверяют его этой ОДНОЙ функцией, а не каждый своей
+// копией регулярки.
+export function looksLikeTemplate(text) {
+  return /^<.*>$/.test(String(text || "").trim())
 }

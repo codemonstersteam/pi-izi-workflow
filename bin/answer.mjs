@@ -23,11 +23,15 @@
 // Ключ `--q=` ЗДЕСЬ НЕ сверяется с заданным вопросом — эту проверку делает разбор конверта роли
 // (`answer-cmd-key-mismatch`, донор F5). Дублировать её тут значило бы держать одно требование в
 // двух местах — а они однажды разойдутся.
+//
+// S13: запись на диск (mkdir/read/dedupe/write) переехала в bin/write-answer.mjs — второй вызывающий
+// появился (ext/index.mjs::izi_answer, tool-вызов ассистента из фонового чекпоинта), и правило
+// «повтор того же (вопрос, ответ) не дублируется» не может жить в двух копиях. Эта команда — CLI-
+// оболочка того же правила, не вторая его реализация.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
-import { join } from "node:path"
-import { answerEntry } from "../core/answers.mjs"
 import { appendDecision } from "./decisions-log.mjs"
+import { looksLikeTemplate } from "../core/answers.mjs"
+import { writeAnswer } from "./write-answer.mjs"
 
 const args = process.argv.slice(2)
 const opt = (n) => { const h = args.find((a) => a.startsWith(`--${n}=`)); return h ? h.slice(n.length + 3) : "" }
@@ -38,17 +42,12 @@ const TEXT = opt("text")
 if (!Q || !TEXT) { console.error('usage: answer.mjs --q="<вопрос>" --text="<ответ>"'); process.exit(2) }
 // Шаблон из примера роли, попавший в файл дословно, — не ответ. Это тот же класс, что «модель
 // скопировала форму вместо значения»: дальше он молча станет источником числа для fit.
-if (/^<.*>$/.test(TEXT.trim())) { console.error("✗ ответ выглядит шаблоном, а не ответом оператора"); process.exit(2) }
+if (looksLikeTemplate(TEXT)) { console.error("✗ ответ выглядит шаблоном, а не ответом оператора"); process.exit(2) }
 
-const AGENT = join(ROOT, ".agent")
-const OUT = join(AGENT, "answers.md")
-mkdirSync(AGENT, { recursive: true })
-const prev = existsSync(OUT) ? readFileSync(OUT, "utf8") : ""
 // Накопительно: ответы прошлых обменов остаются, иначе роль потеряет их при следующем вопросе.
-const entry = answerEntry({ question: Q, text: TEXT })
-if (prev.includes(entry)) { console.log("✓ ответ уже записан"); process.exit(0) }
-writeFileSync(OUT, prev + entry)
-console.log(`✓ .agent/answers.md: ${prev.split("- вопрос:").length} ответов`)
+const written = writeAnswer(ROOT, { question: Q, text: TEXT })
+if (!written.written) { console.log("✓ ответ уже записан"); process.exit(0) }
+console.log(`✓ .agent/answers.md: ${written.count} ответов`)
 
 // Журнал — след, а не гейт (F2): пишем ТОЛЬКО когда ответ реально дописан — дубликат выше уже
 // остановил процесс раньше, и повторной строки в журнале не будет. "_answer" — не id шага:

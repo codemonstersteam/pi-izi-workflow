@@ -16,8 +16,12 @@ headless-раннер (`bin/run.mjs`) — упразднены целиком, �
 
 ```
 ext/
-  index.mjs         pi-extensible-workflows extension: readText · answers · checkTask · checkBrd ·
-                     promote — глобалы внутри workflows/izi.js; roleDirectories → steps/brd/
+  index.mjs         pi-extension: readText · answers · checkTask · checkBrd · promote · setPending ·
+                     clearPending — глобалы внутри workflows/izi.js (roleDirectories → steps/brd/);
+                     ПЛЮС (S13) tool izi_answer, зарегистрированный через pi.registerTool на самой
+                     интерактивной сессии — export default function extension(pi) одновременно
+                     обычный ExtensionFactory pi (`(pi: ExtensionAPI) => void`,
+                     @earendil-works/pi-coding-agent) И фабрика pi-extensible-workflows
   package.json      МИНИМАЛЬНЫЙ package.json — не пайплайну, а расширению: pi.extensions,
                      зависимость на pi-extensible-workflows (контракт хоста, объяснено в файле)
 
@@ -35,10 +39,12 @@ steps/brd/
 
 workflows/izi.js    вся программа: две рельсы, литералы бюджетов, ok/err/exit
 core/               общее (answers, findings, result, form) — как и было
-bin/{answer,cli-entry,decisions-log}.mjs  единственная оставшаяся обвязка: канал, которым
-                     ОПЕРАТОР пишет ответ на диск — воркфлоу-скрипт его не читает, читает функция
+bin/{answer,write-answer,cli-entry,decisions-log}.mjs  запасной канал (S13: не единственный —
+                     основной путь чат-tool izi_answer), которым ОПЕРАТОР может писать ответ на
+                     диск руками; write-answer.mjs — общая io-запись, использует и bin/answer.mjs,
+                     и izi_answer. Воркфлоу-скрипт .agent/answers.md не читает — читает функция
                      расширения `answers`
-.agent/             состояние прогона: staging/ · brd.md · answers.md · decisions.log
+.agent/             состояние прогона: staging/ · brd.md · answers.md · pending.json · decisions.log
 ```
 
 **Установка.**
@@ -87,8 +93,11 @@ async function task() {
 async function brd() {
   // читает order.tpl и TASK.md функцией readText, ANSWERS — функцией answers();
   // делегирует agent(order, { role: "gilb", outputSchema: ENVELOPE });
-  // на вопросе — checkpoint() + answers() до/после (Approve без появившегося ответа = переспрос,
-  //   роль не зовётся заново — не тратит LOOPS);
+  // на вопросе — askOperator(): setPending({subject, evidence}) ДО checkpoint() (S13 — полный
+  //   вопрос лежит в .agent/pending.json ДО того, как чат увидит паузу; foreground: false, значит
+  //   пауза приезжает ОБЫЧНЫМ сообщением — оператор отвечает прямо в этом чате, модель зовёт tool
+  //   izi_answer, потом workflow_respond) + answers() до/после (Approve без появившегося ответа =
+  //   переспрос, роль не зовётся заново — не тратит LOOPS; ответ появился → clearPending());
   // на ok — checkBrd({ path: STAGING }) ПО STAGING, зелёный → promote({ from, to }) → exit(ok(...)),
   //   красный → feedback в пере-делегацию — тратит LOOPS
 }
@@ -99,8 +108,11 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
 
 Полный файл — `workflows/izi.js`. Никакого `shell()`, `JSON.parse` или кода возврата процесса —
 воркфлоу-скрипт не знает о процессах вообще, только о функциях хоста (`readText`, `answers`,
-`checkTask`, `checkBrd`, `promote`) и о встроенных глобалах pi (`agent`, `checkpoint`, `prompt`,
-`log`, `phase`).
+`checkTask`, `checkBrd`, `promote`, `setPending`, `clearPending`) и о встроенных глобалах pi
+(`agent`, `checkpoint`, `prompt`, `log`, `phase`). `izi_answer` НЕ входит в этот список — это tool
+интерактивной сессии (`pi.registerTool`, `ext/index.mjs`), а не функция песочницы воркфлоу; внутри
+`workflows/izi.js` его вызвать нельзя и не нужно — его зовёт модель ЧАТА в ответ на follow-up
+сообщение паузы.
 
 Веер (шаги 3-12 — план, не реализация) сюда пока не входит: у него будет своя программа, когда
 появится первый веерный срез. Тогда же встанет вопрос, возвращать ли порядок в данные — см.
@@ -126,18 +138,33 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
 - **проверка:** `checkBrd({ path: ".agent/staging/brd.md" })` (функция расширения) →
   `steps/brd/brd.mjs::newBrd` — каждое требование измеримо, число имеет источник (TASK.md или
   ЗНАЧЕНИЕ ответа оператора, не текст вопроса), 3..7 якорей, открытых вопросов ноль
-- **оператор:** отвечает на закрытый вопрос роли через `checkpoint()` — `node bin/answer.mjs
-  --q="…" --text="…"`, затем Approve. Approve без появившегося в `.agent/answers.md` ответа не
-  считается ответом и не зовёт роль заново
+- **оператор (S13):** пауза `checkpoint()` (`foreground: false`) приезжает в чат ОБЫЧНЫМ сообщением
+  — модальный `ui.select`, который до S13 забирал ввод у всего окна и не давал оператору напечатать
+  ничего (`foreground: true`, `pi-extensible-workflows/src/host.ts:686`), здесь не участвует.
+  Оператор отвечает вопрос дословно ПРЯМО В ЭТОМ ЧАТЕ; модель вызывает `izi_answer({ text })`
+  (ключ вопроса тул берёт из `.agent/pending.json`, не от модели), затем `workflow_respond({runId,
+  name, approved: true})`. `bin/answer.mjs` остаётся запасным CLI-входом, не основным. Approve без
+  появившегося в `.agent/answers.md` ответа не считается ответом и не зовёт роль заново
 - **живое доказательство (S11, живой прогон в этом репозитории):** `agentLaunches: 1..3` в
   `summary.json` — роль `gilb` резолвится из `roleDirectories` и вызывается по-настоящему;
   `.agent/staging/brd.md` перезаписывается на каждой пере-делегации, `checkBrd` читает именно его
   (staging, не `.agent/brd.md`) на каждой проверке; предзаполненный `.agent/answers.md` (`node
   bin/answer.mjs --q="…" --text="4"`) даёт роли значение прямо на первой попытке, и оно доезжает до
-  `fit:` требования дословно. Артефакт `.agent/brd.md` в этом конкретном прогоне не дописался — это
-  нашло не дефект переноса, а существующую (не тронутую S11) чувствительность `numbersIn` в
-  `steps/brd/brd.mjs`: формат `ISO-8601` в `fit:` читается как число `8601` и требует источника —
-  тот же код вёл бы себя так же и под старым `bin/validate-brd.mjs`. Не в объёме этой задачи.
+  `fit:` требования дословно.
+
+- **живое доказательство (S13, живые прогоны через `herdr`, тот же `TASK.md` — booking-задача).**
+  Прогон `8bb23932-f368-4632-9b0b-75ea32eea95f`: оператор напечатал `4` прямо в чате в ответ на
+  вопрос `gilb`, `izi_answer` записал ответ в `.agent/answers.md`, `workflow_respond` подтвердил
+  паузу — весь обмен вопрос→ответ прошёл БЕЗ второго терминала. Этот прогон вскрыл живой дефект
+  вызова (`clearPending()` без обязательного JSON-аргумента —
+  `"clearPending requires exactly one JSON object argument"` в `result.json`, `askOperator` крашился
+  на последней строке уже ПОСЛЕ того, как ответ был принят), почин в `workflows/izi.js`
+  (`clearPending({})`). Повторный прогон с исправленным кодом, `0445e4cd-2667-43e4-8db8-9102679146fb`,
+  дошёл до `.agent/brd.md`, `track:"ok"`, `requirements:4` — с `fit: формат времени — ISO-8601, …` в
+  R1, доказывая заодно закрытие находки `numbersIn` (см. README «Долги») живым прогоном, не только
+  юнитом. Чистый повтор с нуля (`.agent/` очищен, новая сессия), `79c0aa0a-e410-4172-a5cf-a1af6a78f8e8`
+  — оператор ответил `давай 2 часа`, `.agent/pending.json` корректно снят `clearPending()` после
+  подтверждённого ответа, прогон дошёл до `track:"ok"` за один заход, без ручного вмешательства.
 
 ### 3. `survey-plan` — раскладка разведки · script · **новое**
 - **вход:** `.agent/brd.md`, `app/`
