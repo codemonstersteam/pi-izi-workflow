@@ -1,7 +1,7 @@
-// MODULE_CONTRACT: ext/index.mjs — pi-extensible-workflows extension: host functions for izi's two
-//               steps (task, brd), replacing the bin/*.mjs + shell() harness (S11), plus (S13) the
-//               izi_answer tool that lets the OPERATOR window itself carry the question→answer
-//               exchange
+// MODULE_CONTRACT: ext/index.mjs — pi-extensible-workflows extension: host functions for izi's three
+//               steps (task, brd, survey-plan), replacing the bin/*.mjs + shell() harness (S11), plus
+//               (S13) the izi_answer tool that lets the OPERATOR window itself carry the
+//               question→answer exchange
 // Purpose:      one decision — the workflow sandbox has no fs/import at all ("Workflow JavaScript
 //               has no imports, filesystem, network, process, or timers" — pi-extensible-workflows'
 //               own SKILL.md). Two steps do not need a generic step-manifest harness reached through
@@ -48,18 +48,20 @@
 // Interface:    default export — extension(pi): registers the izi_answer tool on pi AND calls
 //               registerWorkflowExtension (pi-extensible-workflows contract) for the sandbox
 //               functions and role directory. readText/answers/checkTask/checkBrd/promote/
-//               setPending/clearPending are ALSO named exports — pi-extensible-workflows never
+//               setPending/clearPending/survey are ALSO named exports — pi-extensible-workflows never
 //               exercises run(input, context) itself (it is the caller, not test scaffolding), so
 //               ext/index.test.mjs imports these directly and calls run() with a fabricated
 //               { run: { cwd } } context to prove the anchor without a live pi/workflow harness.
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, rmSync } from "node:fs"
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, rmSync, readdirSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { Type } from "typebox"
-import { registerWorkflowExtension } from "pi-extensible-workflows"
+import { registerWorkflowExtension, herdrAvailable, herdrPaneId, loadSettings } from "pi-extensible-workflows"
 import { checkTaskText } from "../steps/task/task.mjs"
-import { newBrd } from "../steps/brd/brd.mjs"
+import { newBrd, parseBrd } from "../steps/brd/brd.mjs"
+import { newPlan } from "../steps/survey-plan/plan.mjs"
 import { newAnswers, looksLikeTemplate } from "../core/answers.mjs"
+import { newBudgets, BUDGETS_PATH } from "../core/budgets.mjs"
 import { writeAnswer } from "../bin/write-answer.mjs"
 
 // runRoot — the anchor itself: context.run.cwd for sandbox functions, process.cwd() for izi_answer
@@ -152,6 +154,70 @@ export const checkBrd = {
   },
 }
 
+export const budgets = {
+  description: "Run budgets from the project's izi.config.json (loops, questions, checkpointRetries). A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      loops: { type: "number" },
+      questions: { type: "number" },
+      checkpointRetries: { type: "number" },
+      source: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_input, context) {
+    const root = runRoot(context)
+    const raw = readIfExists(root, BUDGETS_PATH)
+    const r = newBudgets(raw)
+    if (!r.ok) return { ok: false, why: r.error.detail }
+    return { ok: true, ...r.value, source: raw.trim() ? BUDGETS_PATH : "defaults" }
+  },
+}
+
+// herdrStatus — наблюдаем ли прогон в herdr. Правило доступности НЕ пересказано здесь: оно
+// подставлено из хоста (`herdrAvailable`/`herdrPaneId`, pi-extensible-workflows/src/herdr.ts —
+// HERDR_ENV=1 И HERDR_PANE_ID И HERDR_SOCKET_PATH в окружении процесса pi), а режим
+// fully-inspectable — из того же файла настроек, что читает сам @piewf/herdr (`loadSettings()`,
+// ~/.pi/agent/pi-extensible-workflows/settings.json).
+//
+// Зачем это существует: herdr-расширение при недоступном herdr не регистрируется ВООБЩЕ
+// (`registerHerdrExtension` возвращает false и молчит), поэтому прогон, запущенный из обычного
+// терминала, идёт полностью вслепую и выглядит точно так же, как сломанная интеграция. Один
+// печатный факт в начале прогона отличает «herdr выключен» от «herdr не работает».
+export const herdrStatus = {
+  description: "Is this run observable in herdr? Reports the host's own herdrAvailable() verdict, the pane id and whether fully-inspectable mode is on. Never fails the run — an unobserved run is still a run.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      available: { type: "boolean" },
+      pane: { type: "string" },
+      fullyInspectable: { type: "boolean" },
+      why: { type: "string" },
+    },
+    required: ["available"],
+    additionalProperties: false,
+  },
+  run() {
+    const available = herdrAvailable(process.env)
+    const settings = loadSettings()
+    const fullyInspectable = Boolean(settings?.extensions?.herdr?.enableFullyInspectableMode)
+    if (available) return { available: true, pane: herdrPaneId(process.env) || "", fullyInspectable }
+    const missing = ["HERDR_ENV=1", "HERDR_PANE_ID", "HERDR_SOCKET_PATH"]
+      .filter((v) => (v === "HERDR_ENV=1" ? process.env.HERDR_ENV !== "1" : !process.env[v]))
+    return {
+      available: false,
+      fullyInspectable,
+      why: `pi запущен не в пейне herdr (нет ${missing.join(", ")}) — панели агентов не откроются`,
+    }
+  },
+}
+
 const PENDING_PATH = ".agent/pending.json"
 
 export const setPending = {
@@ -202,6 +268,90 @@ export const promote = {
   },
 }
 
+// --- survey: дерево прогона → .agent/survey-plan.json ---------------------------------------------
+//
+// SKIP — граница обхода вместо каталога app/ (docs/survey-plan.md §1). Первые шесть имён — сам
+// харнес: install.mjs копирует его В проект, поэтому там они принадлежат конвейеру, а не приложению.
+// Принятая цена названа вслух: проект, у которого СВОЙ каталог зовётся так же, потеряет его из
+// разведки.
+const SKIP = new Set(["workflows", "steps", "core", "bin", "ext", "prompts",
+                      "node_modules", "dist", "build", "target", "coverage"]) // + любой каталог на точку
+const SKIP_FILES = new Set(["mvnw", "mvnw.cmd", "gradlew", "gradlew.bat"])    // вендоренные обёртки сборщика
+const KEEP_DOTS = new Set([".github"])   // исключение из «точечные каталоги пропускаем»: там CI
+const MAX_BYTES = 512 * 1024             // файл крупнее рою не читать — он и не поедет в наряд
+
+// SPINE — хребет: где живут ответы на четыре вопроса графа (docs/survey-plan.md §1 — как тестировать,
+// как менять, как выключают, как ветвятся). Имена ЭКОСИСТЕМ, не раскладка конкретного репозитория.
+// Ни одно не совпало → клетки c0 нет, и это ДАННЫЕ, а не отказ: список — ускоритель, а не условие.
+const SPINE = [/^pom\.xml$/, /^build\.gradle(\.kts)?$/, /^settings\.gradle(\.kts)?$/, /^gradle\.properties$/,
+               /^package\.json$/, /^go\.mod$/, /^Makefile$/, /^pyproject\.toml$/,
+               /resources\/application\.[^/]+$/, /(^|\/)\.env/, /(^|\/)config\//,
+               /^\.github\/workflows\//, /^\.gitlab-ci\.yml$/, /^Jenkinsfile$/,
+               /^README/i, /^CONTRIBUTING/i]
+
+// walk/hitsFor — io-обвязка, юнитами не покрывается (standards/code.md: io-трубу доказывает живой
+// прогон слайса). walk идёт от корня ПРОГОНА и отдаёт пути со слэшем, относительные к нему.
+function walk(root, rel, out) {
+  for (const e of readdirSync(at(root, rel), { withFileTypes: true })) {
+    const path = rel ? `${rel}/${e.name}` : e.name
+    if (e.isDirectory()) {
+      if (SKIP.has(e.name)) continue
+      if (e.name.startsWith(".") && !KEEP_DOTS.has(e.name)) continue
+      walk(root, path, out)
+      continue
+    }
+    if (!e.isFile()) continue                                   // симлинк/сокет — не файл проекта
+    if (SKIP_FILES.has(e.name)) continue
+    const bytes = statSync(join(root, path)).size
+    if (bytes > MAX_BYTES) continue
+    out.push({ path, bytes })
+  }
+  return out
+}
+
+// Якорь ПОМЕЧАЕТ файл, а не фильтрует его: подстрока без учёта регистра, по пути И по тексту.
+// Матч по границе слова проверен и отвергнут фактом — он теряет `fruits` при якоре `fruit` и
+// `FruitResourceIT` целиком (docs/survey-plan.md §1).
+function hitsFor(root, file, anchors) {
+  if (!anchors.length) return []
+  const hay = `${file.path}\n${readFileSync(at(root, file.path), "utf8")}`.toLowerCase()
+  return anchors.filter((a) => hay.includes(String(a).toLowerCase()))
+}
+
+export const survey = {
+  description: "Build .agent/survey-plan.json: the run's whole file tree minus the skip list, cut into scout cells. Anchors from .agent/brd.md annotate files; they never filter them.",
+  input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      files: { type: "number" },
+      bytes: { type: "number" },
+      cells: { type: "number" },
+      gaps: { type: "array", items: { type: "string" } },
+      at: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ path }, context) {
+    const root = runRoot(context)                                     // cwd ПРОГОНА, не этого репозитория
+    const anchors = parseBrd(readIfExists(root, ".agent/brd.md")).subjects || []  // разбор один, из steps/brd
+    const scanned = walk(root, "", [])
+    const isSpine = (p) => SPINE.some((re) => re.test(p))
+    const spine = scanned.filter((f) => isSpine(f.path)).map((f) => ({ path: f.path, bytes: f.bytes, subjects: [] }))
+    const files = scanned.map((f) => ({ path: f.path, bytes: f.bytes, subjects: hitsFor(root, f, anchors) }))
+
+    const r = newPlan({ files, spine, subjects: anchors })
+    if (!r.ok) return { ok: false, why: r.error.detail }               // единственный отказ — no-files
+    mkdirSync(dirname(at(root, path)), { recursive: true })            // пишем ПОСЛЕ решения принять
+    writeFileSync(at(root, path), JSON.stringify(r.value, null, 2))
+    return { ok: true, files: r.value.files, bytes: r.value.bytes, cells: r.value.cells.length,
+             gaps: [...r.value.gaps], at: new Date().toISOString() }
+  },
+}
+
 // izi_answer — an ordinary pi TOOL (not a workflow sandbox function: this one is called by the
 // INTERACTIVE session's own model, reacting to the checkpoint follow-up message that
 // workflows/izi.js's askOperator() delivers into this same chat). It takes exactly one parameter,
@@ -249,10 +399,10 @@ const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.1.0",
-    headline: "izi: task → brd host functions",
-    description: "readText/answers/checkTask/checkBrd/promote/setPending/clearPending, plus the gilb role directory (steps/brd/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, checkTask, checkBrd, promote, setPending, clearPending },
+    version: "1.4.0",
+    headline: "izi: task → brd → survey-plan host functions",
+    description: "readText/answers/budgets/herdrStatus/checkTask/checkBrd/promote/setPending/clearPending/survey, plus the gilb role directory (steps/brd/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, budgets, herdrStatus, checkTask, checkBrd, promote, setPending, clearPending, survey },
     // steps/brd/ carries gilb.md (the role file, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside brd.mjs/order.tpl/step tests; pi-extensible-workflows scans a role
     // directory for *.md files only (validation.js scanRoleFiles), so the non-.md neighbours here

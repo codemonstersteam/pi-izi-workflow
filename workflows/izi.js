@@ -1,6 +1,8 @@
-// izi: two concrete rails, task → brd (S11). No step manifest, no pipeline.json, no shell() — the
-// extension (ext/index.mjs) puts readText/answers/checkTask/checkBrd/promote/setPending/clearPending
-// on the sandbox as globals, and this script calls them directly. Docs: docs/workflow.md §1-§2,
+// izi: three concrete rails, task → brd → survey-plan (S11, S15). No step manifest, no
+// pipeline.json, no shell() — the extension (ext/index.mjs) puts readText/answers/checkTask/checkBrd/
+// promote/setPending/clearPending/survey on the sandbox as globals, and this script calls them
+// directly. Order stays CODE, not data: a third phase is one more named function, not a manifest
+// entry plus a dispatcher plus their tests. Docs: docs/workflow.md §1-§2, docs/survey-plan.md §5,
 // docs/concept.md. Loop/question budgets are literals — two steps do not earn a policy-as-data
 // mechanism yet (docs/concept.md, «отложено»). The operator channel is checkpoint only: no headless
 // run exists any more (bin/run.mjs is gone) — this workflow starts from an interactive pi session
@@ -13,9 +15,14 @@
 // below writes that message's `prompt` to instruct the model, not the operator, directly: read the
 // question, relay it, wait for the reply, call the izi_answer tool, then workflow_respond.
 
-const LOOPS = 3;              // gilb red-check redelegations (guardrail failures), NOT questions
-const QUESTIONS = 3;          // operator exchanges allowed in one run
-const CHECKPOINT_RETRIES = 2; // re-pause on the SAME question when no matching answer showed up
+// S16: the three budgets are no longer literals here. The operator raises them per project in
+// izi.config.json, read by the budgets() host function (core/budgets.mjs holds the defaults — one
+// place — and refuses a broken file instead of silently falling back to them). They are assigned
+// ONCE, at the start of the run, before any phase: a budget that could change mid-run would make
+// "цикл исчерпан за N попыток" a statement about nothing.
+let LOOPS;              // gilb red-check redelegations (guardrail failures), NOT questions
+let QUESTIONS;          // operator exchanges allowed in one run
+let CHECKPOINT_RETRIES; // re-pause on the SAME question when no matching answer showed up
 
 const ok = (fields) => ({ track: "ok", code: 0, ...fields });
 const err = (kind, fields) => ({ track: "err", kind, code: kind === "crashed" ? 2 : 10, ...fields });
@@ -119,8 +126,9 @@ async function brd() {
 
     const check = await checkBrd({ path: STAGING }); // check runs ON STAGING, before any promote
     if (check.ok) {
-      const p = await promote({ from: STAGING, to: ".agent/brd.md" }); // green check → THEN promote
-      exit(ok({ artifact: ".agent/brd.md", requirements: check.requirements, advice: check.advice, at: p.at }));
+      await promote({ from: STAGING, to: ".agent/brd.md" }); // green check → THEN promote
+      log(`brd: ok, requirements=${check.requirements}`);
+      return; // S15: no longer the end of the run — survey-plan follows
     }
     feedback = check.blockers;
     attempt++;
@@ -132,12 +140,45 @@ async function brd() {
   exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
 }
 
+// surveyPlan — step 3, a SCRIPT step: no role, no model call, no operator at all. The layout is
+// computable, and what is computable is computed by a script for 0 tokens (docs/survey-plan.md).
+// The numbers are logged BEFORE the swarm of step 4 exists: the cost of reading this repository is
+// visible in journal.json ahead of paying it, and the decision "that is too much" belongs to step 4.
+async function surveyPlan() {
+  const PLAN = ".agent/survey-plan.json";
+  const p = await survey({ path: PLAN });
+  if (!p.ok) exit(err("blocked", { subject: p.why }));
+  log(`survey-plan: files=${p.files} bytes=${p.bytes} cells=${p.cells}`);
+  exit(ok({ artifact: PLAN, files: p.files, cells: p.cells, gaps: p.gaps }));
+}
+
 log("izi: start");
 try {
+  const b = await budgets({});
+  if (!b.ok) exit(err("blocked", { subject: b.why })); // сломанный конфиг — отказ, не тихое умолчание
+  LOOPS = b.loops; QUESTIONS = b.questions; CHECKPOINT_RETRIES = b.checkpointRetries;
+  log(`budgets: loops=${LOOPS} questions=${QUESTIONS} checkpointRetries=${CHECKPOINT_RETRIES} (${b.source})`);
+
+  // Наблюдаемость объявляется вслух, а не предполагается: herdr-расширение при недоступном herdr
+  // не регистрируется вовсе и МОЛЧИТ, поэтому прогон из обычного терминала выглядит так же, как
+  // сломанная интеграция. Прогон при этом не блокируется — ненаблюдаемый прогон всё равно прогон.
+  const h = await herdrStatus({});
+  log(h.available
+    ? `herdr: on pane=${h.pane}${h.fullyInspectable ? " fully-inspectable" : " (fully-inspectable выключен в ~/.pi/agent/pi-extensible-workflows/settings.json)"}`
+    : `herdr: off — ${h.why}`);
+
   phase("task"); await task();
   phase("brd"); await brd();
-  return ok({}); // unreachable — brd() always exits — kept so a future third phase has a fall-through
+  phase("survey-plan"); await surveyPlan();
+  return ok({}); // unreachable — surveyPlan() always exits — kept as the fall-through for a fourth phase
 } catch (e) {
   if (e instanceof Exit) return e.result;
-  return err("crashed", { subject: String((e && e.message) || e) });
+  const msg = String((e && e.message) || e);
+  // «X is not defined» на функции хоста значит ровно одно: расширение в этой сессии pi СТАРШЕ
+  // воркфлоу-скрипта (ext/index.mjs читается при старте сессии, workflows/izi.js — при каждом
+  // прогоне). Диагноз называет починку, иначе он неотличим от опечатки в скрипте.
+  if (/ is not defined$/.test(msg)) {
+    return err("crashed", { subject: `${msg} — функции хоста нет в этой сессии pi: расширение старше воркфлоу, перезапусти pi` });
+  }
+  return err("crashed", { subject: msg });
 }

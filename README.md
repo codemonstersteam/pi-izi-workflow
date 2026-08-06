@@ -1,9 +1,11 @@
 # izi-pi-v2
 
-Первые два шага конвейера `izi-flow-v2` (`task → brd`), перенесённые на `pi-extensible-workflows`
-(pi v5.1.1) и переписанные на функции расширения (S11). Оба шага и их бюджеты пере-делегации —
-код `workflows/izi.js`, не файл конфигурации: на двух шагах платить за policy-as-data было бы
-украшением, не механизмом. Роль `gilb` превращает сырое требование оператора в измеримый BRD.
+Первые три шага конвейера `izi-flow-v2` (`task → brd → survey-plan`), перенесённые на
+`pi-extensible-workflows` (pi v5.1.1) и переписанные на функции расширения (S11, S15). Порядок шагов
+— код `workflows/izi.js`, а не манифест; бюджеты прогона с S16 поднимаются файлом проекта
+`izi.config.json` (см. ниже). Роль `gilb` превращает сырое требование оператора
+в BRD, который можно принять; шаг `survey-plan` — чистый скрипт без роли и без оператора: он режет дерево
+репозитория на клетки, которые скаут шага 4 физически способен прочесть (`docs/survey-plan.md`).
 Подробности программы — `docs/workflow.md`; принципы и что из них отложено на двух шагах —
 `docs/concept.md`.
 
@@ -14,8 +16,8 @@ cd ext && npm install && cd ..
 pi install ./ext
 ```
 
-`ext/` — pi-extension: семь функций хоста для воркфлоу-песочницы (`readText`, `answers`,
-`checkTask`, `checkBrd`, `promote`, `setPending`, `clearPending`), `roleDirectories: [steps/brd/]`,
+`ext/` — pi-extension: десять функций хоста для воркфлоу-песочницы (`readText`, `answers`, `budgets`,
+`herdrStatus`, `checkTask`, `checkBrd`, `promote`, `setPending`, `clearPending`, `survey`), `roleDirectories: [steps/brd/]`,
 откуда pi резолвит роль `gilb` по имени файла `gilb.md`, и (S13) tool `izi_answer`, зарегистрированный
 на самой ИНТЕРАКТИВНОЙ сессии через `pi.registerTool` — не на песочнице воркфлоу, а на модели,
 которая читает этот README прямо сейчас. `export default function extension(pi)` в `ext/index.mjs`
@@ -82,7 +84,7 @@ state: "running" }` — прогон идёт в фоне; финал и люб�
 
 workflows/izi.js — Approve сам по себе не факт: answers({}) до и после паузы сверяются
   по subject; ответ не появился → та же пауза переспрашивается (до CHECKPOINT_RETRIES=2 раз),
-  роль НЕ зовётся заново — переспрос не тратит бюджет пере-делегации (LOOPS=3)
+  роль НЕ зовётся заново — переспрос не тратит бюджет пере-делегации (loops)
   ответ появился → clearPending() снимает .agent/pending.json, наряд собирается заново, gilb
   вызывается ещё раз
 ```
@@ -98,12 +100,69 @@ workflows/izi.js — Approve сам по себе не факт: answers({}) д�
 основной путь — печатать ответ прямо в окне pi.
 
 **Reject** на любой паузе — вопрос уходит человеку эскалацией (`kind: escalate`), прогон
-останавливается терминально. Бюджет вопросов на весь прогон — `QUESTIONS=3` (литерал в
-`workflows/izi.js`); исчерпан → терминальный `err(question)` с диагнозом, а не `escalate`: роль не
-отказывалась и не получала плохого ответа, оператор просто не ответил вовремя. `LOOPS=3` и
-`QUESTIONS=3` — разные счётчики: пере-делегация тратит `LOOPS` (оплаченный вызов `agent()` по
-красному чеку гардрейла), обмен с оператором — `QUESTIONS`, и виток «Approve подтверждён» не
-трогает `LOOPS` вовсе.
+останавливается терминально. Бюджет вопросов на весь прогон — `questions` (по умолчанию 3);
+исчерпан → терминальный `err(question)` с диагнозом, а не `escalate`: роль не отказывалась и не
+получала плохого ответа, оператор просто не ответил вовремя. `loops` и `questions` — разные
+счётчики: пере-делегация тратит `loops` (оплаченный вызов `agent()` по красному чеку гардрейла),
+обмен с оператором — `questions`, и виток «Approve подтверждён» не трогает `loops` вовсе.
+
+## Наблюдаемость в herdr — три переменные окружения, а не настройка (S16)
+
+Прогон виден в herdr (панель на каждого агента, режим fully-inspectable) ТОЛЬКО если сам процесс
+`pi` запущен ВНУТРИ пейна herdr. Проверка хоста — `herdrAvailable()`
+(`pi-extensible-workflows/src/herdr.ts`): нужны **все три** переменные, `HERDR_ENV=1`,
+`HERDR_PANE_ID`, `HERDR_SOCKET_PATH`; их выставляет herdr процессам, которые запускает сам.
+
+Ловушка, стоившая прогона: при их отсутствии herdr-расширение **не регистрируется вовсе**
+(`registerHerdrExtension` возвращает `false`) и НЕ говорит об этом ни слова, а
+`~/.pi/agent/pi-extensible-workflows/settings.json` с `"enableFullyInspectableMode": true` при этом
+выглядит корректным — он и есть корректный, просто инертный. `pi`, запущенный из обычного
+терминала, идёт вслепую и неотличим от сломанной интеграции.
+
+Поэтому прогон объявляет наблюдаемость ВСЛУХ, второй строкой журнала:
+
+```
+herdr: on pane=%1 fully-inspectable
+herdr: off — pi запущен не в пейне herdr (нет HERDR_ENV=1, HERDR_PANE_ID, HERDR_SOCKET_PATH) — панели агентов не откроются
+```
+
+Правило доступности не пересказано в нашем коде — оно подставлено из хоста
+(`ext/index.mjs::herdrStatus` зовёт `herdrAvailable`/`herdrPaneId`/`loadSettings`). Прогон при этом
+не блокируется: ненаблюдаемый прогон — всё равно прогон.
+
+**ПРОВЕРЕНО ФАКТОМ (herdr 0.8.0): пейн herdr этих переменных шеллу НЕ отдаёт.** Ни пейн, открытый в
+TUI, ни пейн, созданный через `herdr tab create` — в окружении их дочернего `zsh` нет ни одной
+`HERDR_*`. Значит `pi`, запущенный в пейне просто как `pi`, интеграции не получит, сколько бы
+настроек ни стояло. Запускать надо так — из ТОГО пейна, в котором работаете:
+
+```bash
+HERDR_ENV=1 \
+HERDR_SOCKET_PATH="$HOME/.config/herdr/herdr.sock" \
+HERDR_PANE_ID="$(herdr api snapshot | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).result.snapshot.focused_pane_id))')" \
+pi
+```
+
+Первый же прогон печатает вердикт сам: `herdr: on pane=w7:p3 fully-inspectable` (проверено живым
+прогоном `805c26bf-d6af-4743-ac7c-dc2d1ad396d5`) либо `herdr: off — …` с перечнем недостающих
+переменных.
+
+**Расширение читается при СТАРТЕ сессии pi, воркфлоу — на каждом прогоне.** Поэтому новая функция
+хоста (`budgets`, `herdrStatus`, `survey`) требует перезапуска `pi`; иначе прогон падает на
+`<имя> is not defined`, и `workflows/izi.js` называет починку прямо в диагнозе.
+
+## Бюджеты прогона — `izi.config.json` (S16)
+
+Три числа поднимаются файлом в корне ПРОЕКТА, править код установленного харнеса не нужно:
+
+```json
+{ "loops": 5, "questions": 10, "checkpointRetries": 2 }
+```
+
+Файла нет → умолчания `3 / 3 / 2`, объявленные ОДИН раз в `core/budgets.mjs::DEFAULT_BUDGETS`.
+Частичный конфиг разрешён (недостающий ключ берёт умолчание), НЕИЗВЕСТНЫЙ ключ или значение не
+целое ≥ 1 — терминальный `blocked` с диагнозом: опечатка в имени бюджета иначе тихо оставила бы
+старое число, и оператор считал бы, что поднял его. Прочитанные числа печатаются первой строкой
+прогона (`budgets: loops=… questions=… checkpointRetries=… (izi.config.json|defaults)`).
 
 ## Проверка BRD — по staging, до промоута
 
@@ -111,6 +170,11 @@ workflows/izi.js — Approve сам по себе не факт: answers({}) д�
 `ext/index.mjs`, подключает `steps/brd/brd.mjs::newBrd` к диску) читает именно этот путь — не
 `.agent/brd.md` — и судит числа критерия ТОЛЬКО по `TASK.md` и ЗНАЧЕНИЯМ ответов оператора, не по
 тексту его вопросов (роль не имеет права цитировать собственные альтернативы как источник числа).
+**S16:** правило «`fit` обязан нести измеримый токен» СНЯТО решением оператора — живой прогон
+`ed1d4094` дал на нём ложный красный (`fit: регистронезависимое вхождение подстроки` — предикат,
+проверяемый машиной, но без числа/диапазона/`|`/сравнения/формата) и сжёг все три пере-делегации.
+Гардрейл судит СОСТАВ (есть `fit`, есть `verify`, у числа есть источник, якорей 3..7, открытых
+вопросов ноль); качество формулировки судит человек, принимающий BRD.
 Зелёный чек → `promote({ from: ".agent/staging/brd.md", to: ".agent/brd.md" })` копирует staging в
 `out`; отсутствие staging на этом шаге — отказ с диагнозом (`promote` бросает исключение), а не
 тихий успех. Красный чек возвращает `blockers`, они едут в `FEEDBACK` следующей пере-делегации.
@@ -119,11 +183,13 @@ workflows/izi.js — Approve сам по себе не факт: answers({}) д�
 
 ```
 TASK.md                       вход конвейера — кладёт оператор, ≤300 строк, непуст
-workflows/izi.js               вся программа: task() → brd(), литералы LOOPS/QUESTIONS/
-                                CHECKPOINT_RETRIES, ok/err/exit, ENVELOPE (outputSchema)
+workflows/izi.js               вся программа: task() → brd() → surveyPlan(), бюджеты из budgets()
+                                (izi.config.json), ok/err/exit, ENVELOPE (outputSchema)
+izi.config.json                НЕОБЯЗАТЕЛЬНЫЙ файл ПРОЕКТА: loops/questions/checkpointRetries;
+                                нет файла — умолчания из core/budgets.mjs
 
 ext/index.mjs                  pi-extension: readText/answers/checkTask/checkBrd/promote/setPending/
-                                clearPending — глобалы внутри workflows/izi.js; roleDirectories →
+                                clearPending/survey — глобалы внутри workflows/izi.js; roleDirectories →
                                 steps/brd/; ПЛЮС tool izi_answer, зарегистрированный на самой
                                 интерактивной сессии через pi.registerTool (S13, не глобал воркфлоу)
 ext/package.json                МИНИМАЛЬНЫЙ package.json расширения (не пайплайна) — pi.extensions,
@@ -137,6 +203,12 @@ steps/brd/order.tpl            наряд роли (TASK/ANSWERS/FEEDBACK/STAGIN
 steps/brd/brd.mjs              ЧИСТОЕ ядро приёмки: newFit·newRequirement·newSubjects·adviceFor·newBrd
 steps/brd/brd.test.mjs         тест по формуле
 
+steps/survey-plan/plan.mjs     ЧИСТОЕ ядро раскладки: newPlan({files, spine, subjects}) — клетки роя;
+                                CELL_FILES=20 · CELL_BYTES=200 КБ, клетка закрывается по тому, что
+                                раньше. Роли у шага нет — ни gilb-подобного .md, ни order.tpl, ни
+                                staging: артефакт производит сам чек (S15)
+steps/survey-plan/plan.test.mjs тест по формуле: happy · шов по байтам · no-files
+
 prompts/izi.md                 pi prompt template — источник /izi; foreground: false (S13);
                                 устанавливается вместе с ext/ (pi.prompts в ext/package.json)
 
@@ -145,6 +217,7 @@ core/answers.mjs               разбор .agent/answers.md в значени�
                                 (S13: один правило, два вызывающих — bin/answer.mjs и izi_answer)
 core/form.mjs                  реестр формы BRD и слоёв промпта — наряд/роль подставляют, не пересказывают
 core/findings.mjs              severityOf: находка роняет приёмку (blocker) или едет уликой (advice)
+core/budgets.mjs               ЧИСТОЕ чтение izi.config.json: DEFAULT_BUDGETS + newBudgets(raw)
 core/result.mjs                Result<T,E> — общий конверт фабрик
 
 bin/answer.mjs                 CLI-обёртка: записывает ответ оператора в .agent/answers.md по ключу

@@ -1,9 +1,10 @@
 // MODULE_CONTRACT: brd — фронт-дор конвейера: единственное место, где решается, сдан ли BRD
 // Purpose:    одно решение — состав правил приёмки BRD (обязательные поля R, происхождение чисел
-//             критерия, измеримость fit, желание-не-требование, дизайн-течь в формулировке,
-//             грепабельность subjects, закрытые open-questions) собран в одном списке проверок, а
-//             не разбросан прозой по роли и наряду — самосертификация снята: «agent-ready» решает
-//             скрипт, а не роль о себе.
+//             критерия, желание-не-требование, дизайн-течь в формулировке, грепабельность
+//             subjects, закрытые open-questions) собран в одном списке проверок, а не разбросан
+//             прозой по роли и наряду — самосертификация снята: «agent-ready» решает скрипт, а не
+//             роль о себе. S16: проверка «fit измерим токеном» снята решением оператора — см.
+//             newFit ниже, живой прогон ed1d4094.
 // io:         none
 // Invariants: WISH_WORDS и DESIGN_MARKS — константы модуля, зафиксированы при загрузке, не меняются
 //             исполнением; SUBJECTS_MIN/SUBJECTS_MAX — снимок BRD_FORM.subjectsMin/subjectsMax на
@@ -15,7 +16,7 @@
 //             SUBJECTS_MAX — верхняя граница числа якорей
 //             numbersIn(text) -> Set<string>
 //             parseBrd(text) -> { requirements, subjects, openQuestions }
-//             newFit(raw, known) -> Result<Fit, "no-fit" | "fit-not-measurable" | "invented-default">
+//             newFit(raw, known) -> Result<Fit, "no-fit" | "invented-default">
 //             newRequirement(raw, known) -> Result<Requirement, "invalid-requirement">
 //             newSubjects(list) -> Result<Subjects, "invalid-subjects">
 //             adviceFor(r) -> Advice[]
@@ -47,7 +48,7 @@ import { severityOf } from "../../core/findings.mjs"
 // в тексте R» из кода удалено (живой прогон 01.08: BRD по-русски с английскими якорями корректен, а
 // правило валило его целиком), но в прозе шаблонов оно осталось — и роль исполняла несуществующее
 // правило. Реестр объявляет намерение один раз: проверяемое и заказываемое — одна запись.
-import { BRD_FORM, cyrillicRatio, isMeasurable, MEASURABLE_TOKENS } from "../../core/form.mjs"
+import { BRD_FORM, cyrillicRatio } from "../../core/form.mjs"
 
 export const SUBJECTS_MIN = BRD_FORM.subjectsMin
 export const SUBJECTS_MAX = BRD_FORM.subjectsMax
@@ -200,24 +201,27 @@ export function parseBrd(text) {
 //    заплатить пятью вызовами за то, что сообщается одним. Поэтому detail несёт весь список.
 //    Значение при этом всё равно не строится — представимость невалидного BRD закрыта.
 
-// FUNCTION_CONTRACT: newFit — измеримый критерий требования
+// FUNCTION_CONTRACT: newFit — критерий требования
 //   Input:        raw — строка поля fit
 //   Dependencies: known — множество чисел, встречающихся в источниках (задача, ответы оператора),
 //                 либо null, если источники не поданы
-//   Antecedent:   непустая строка, несущая хотя бы один измеримый токен (MEASURABLE_TOKENS), и —
-//                 когда источники известны — ни одного числа, которого в них нет
+//   Antecedent:   непустая строка и — когда источники известны — ни одного числа, которого в них нет
 //   Consequent:   success: критерий
-//                 failure: "no-fit" — требование без измеримости не сдано
-//                          "fit-not-measurable" — критерий, который нельзя измерить, не критерий
+//                 failure: "no-fit" — требования без критерия не бывает
 //                          "invented-default" — умолчание подставлено, а не спрошено
 // invented-default — смысл существования этого шага: он ловит число, взятое моделью из головы.
 // known === null значит «источники не поданы», и это НЕ «нарушений нет»: правило молчит, потому
 // что сверять не с чем, а не потому, что сверка прошла.
+//
+// S16, РЕШЕНИЕ ОПЕРАТОРА: правило «fit обязан нести измеримый токен» (`fit-not-measurable`,
+// словарь MEASURABLE_TOKENS) СНЯТО. Живой прогон ed1d4094 опроверг заявление словаря «ложных
+// срабатываний нет»: `fit: регистронезависимое вхождение подстроки` — предикат, проверяемый
+// машиной (его `verify` это и делает), но ни числа, ни диапазона, ни `|`, ни сравнения, ни слова
+// «формат» в нём нет. Три пере-делегации подряд получили один и тот же красный, и роль ходила
+// спрашивать оператора вместо починки. Осталось то, у чего есть резолвер истины: fit ЕСТЬ,
+// verify ЕСТЬ, число в fit имеет ИСТОЧНИК. Качество формулировки судит человек на приёмке BRD.
 export function newFit(raw, known) {
-  if (!raw) return err("no-fit", "нет fit-критерия — требование без измеримости не сдано")
-  if (!isMeasurable(raw)) {
-    return err("fit-not-measurable", `fit не несёт ни одного измеримого токена (${MEASURABLE_TOKENS.map((t) => t.name).join(", ")})`)
-  }
+  if (!raw) return err("no-fit", "нет fit-критерия — требование без критерия приёмки не сдано")
   if (known) {
     const invented = [...numbersIn(raw)].filter((n) => !known.has(n))
     if (invented.length) {

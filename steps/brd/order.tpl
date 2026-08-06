@@ -26,7 +26,8 @@ $END_CONSTRAINTS
 
 $START_FEEDBACK
 Evidence from the last red check on `.agent/staging/brd.md`, if this is a redelegation. Empty means
-this is the first attempt — nothing to fix yet.
+this is the first attempt — nothing to fix yet. Non-empty: repair EXACTLY the `R` it names before
+anything else — a question about another requirement leaves this blocker where it is.
 $START_CONTENT
 {FEEDBACK}
 $END_CONTENT
@@ -36,7 +37,7 @@ $START_OUTPUT
 path: {STAGING}
 schema:
   R<N> <statement: what, not how>
-     fit:    <value | range | enum | format>
+     fit:    <value | range | enum | format | predicate>
      verify: <command | artifact>
   subjects[]: <term> · <term> · …
   open-questions: 0

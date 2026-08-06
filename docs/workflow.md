@@ -17,7 +17,8 @@ headless-раннер (`bin/run.mjs`) — упразднены целиком, �
 ```
 ext/
   index.mjs         pi-extension: readText · answers · checkTask · checkBrd · promote · setPending ·
-                     clearPending — глобалы внутри workflows/izi.js (roleDirectories → steps/brd/);
+                     clearPending · survey (S15) · budgets · herdrStatus (S16) — глобалы izi.js
+                     (roleDirectories → steps/brd/);
                      ПЛЮС (S13) tool izi_answer, зарегистрированный через pi.registerTool на самой
                      интерактивной сессии — export default function extension(pi) одновременно
                      обычный ExtensionFactory pi (`(pi: ExtensionAPI) => void`,
@@ -37,7 +38,12 @@ steps/brd/
                      ответов оператора, не текст его вопросов
   brd.test.mjs      тест по формуле
 
-workflows/izi.js    вся программа: две рельсы, литералы бюджетов, ok/err/exit
+steps/survey-plan/  (S15) шаг-СКРИПТ: роли нет, значит нет ни .md-роли, ни order.tpl, ни staging —
+  plan.mjs           ЧИСТОЕ ядро раскладки: newPlan({files, spine, subjects}) → клетки роя,
+                      CELL_FILES=20 · CELL_BYTES=200 КБ (что раньше)
+  plan.test.mjs      тест по формуле: happy · шов по байтам · no-files
+
+workflows/izi.js    вся программа: три рельсы, литералы бюджетов, ok/err/exit
 core/               общее (answers, findings, result, form) — как и было
 bin/{answer,write-answer,cli-entry,decisions-log}.mjs  запасной канал (S13: не единственный —
                      основной путь чат-tool izi_answer), которым ОПЕРАТОР может писать ответ на
@@ -73,13 +79,19 @@ pi install ./ext
 
 ## 2. Программа
 
-`workflows/izi.js` целиком — две рельсы, `ok`/`err`/`exit`, литералы бюджетов вместо
-`pipeline.json` (шагов два — политика прогона данными пока не нужна, см. `docs/concept.md`,
-раздел «Что отложено и почему»):
+`workflows/izi.js` целиком — три рельсы, `ok`/`err`/`exit`, литералы бюджетов вместо
+`pipeline.json` (бюджеты тратят только первые два шага — политика прогона данными пока не нужна,
+см. `docs/concept.md`, раздел «Что отложено и почему»):
 
 ```js
-const LOOPS = 3, QUESTIONS = 3, CHECKPOINT_RETRIES = 2;   // литералы, не файл — двух шагов мало,
-                                                            // чтобы платить за policy-as-data
+let LOOPS, QUESTIONS, CHECKPOINT_RETRIES;                  // S16: не литералы — izi.config.json
+const b = await budgets({});                              // умолчания 3/3/2 живут в core/budgets.mjs,
+if (!b.ok) exit(err("blocked", { subject: b.why }));      // сломанный конфиг = отказ, не умолчание
+LOOPS = b.loops; QUESTIONS = b.questions; CHECKPOINT_RETRIES = b.checkpointRetries;
+
+const h = await herdrStatus({});                          // S16: наблюдаемость объявляется вслух —
+log(h.available ? `herdr: on pane=${h.pane}` : `herdr: off — ${h.why}`);  // herdr при недоступности
+                                                          // молчит, и прогон идёт вслепую
 
 const ok  = (fields) => ({ track: "ok", code: 0, ...fields });
 const err = (kind, fields) => ({ track: "err", kind, code: kind === "crashed" ? 2 : 10, ...fields });
@@ -90,7 +102,8 @@ async function task() {
   if (!t.ok) exit(err("blocked", { subject: t.why }));
 }
 
-async function brd() {
+async function brd() {                                     // на зелёном чеке RETURN, не exit —
+                                                           // S15: brd больше не конец прогона
   // читает order.tpl и TASK.md функцией readText, ANSWERS — функцией answers();
   // делегирует agent(order, { role: "gilb", outputSchema: ENVELOPE });
   // на вопросе — askOperator(): setPending({subject, evidence}) ДО checkpoint() (S13 — полный
@@ -98,25 +111,37 @@ async function brd() {
   //   пауза приезжает ОБЫЧНЫМ сообщением — оператор отвечает прямо в этом чате, модель зовёт tool
   //   izi_answer, потом workflow_respond) + answers() до/после (Approve без появившегося ответа =
   //   переспрос, роль не зовётся заново — не тратит LOOPS; ответ появился → clearPending());
-  // на ok — checkBrd({ path: STAGING }) ПО STAGING, зелёный → promote({ from, to }) → exit(ok(...)),
+  // на ok — checkBrd({ path: STAGING }) ПО STAGING, зелёный → promote({ from, to }) → log + return,
   //   красный → feedback в пере-делегацию — тратит LOOPS
 }
 
-try { await task(); await brd(); }
+async function surveyPlan() {                              // S15: шаг-СКРИПТ — ни роли, ни вызова
+  const PLAN = ".agent/survey-plan.json";                  // модели, ни оператора, ни checkpoint
+  const p = await survey({ path: PLAN });                  // одна функция хоста делает весь шаг
+  if (!p.ok) exit(err("blocked", { subject: p.why }));     // единственный отказ — no-files
+  log(`survey-plan: files=${p.files} bytes=${p.bytes} cells=${p.cells}`);   // стоимость роя ДО роя
+  exit(ok({ artifact: PLAN, files: p.files, cells: p.cells, gaps: p.gaps }));
+}
+
+try { phase("task"); await task(); phase("brd"); await brd(); phase("survey-plan"); await surveyPlan(); }
 catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: String(e?.message ?? e) }); }
 ```
 
+Порядок остаётся КОДОМ, а не `pipeline.json`: третья фаза — ещё одна именованная функция. Решение
+принято с фактами трёх шагов на руках (`docs/survey-plan.md` §5): три ручных вызова подряд дешевле,
+чем манифест плюс диспетчер плюс их тесты.
+
 Полный файл — `workflows/izi.js`. Никакого `shell()`, `JSON.parse` или кода возврата процесса —
 воркфлоу-скрипт не знает о процессах вообще, только о функциях хоста (`readText`, `answers`,
-`checkTask`, `checkBrd`, `promote`, `setPending`, `clearPending`) и о встроенных глобалах pi
+`checkTask`, `checkBrd`, `promote`, `setPending`, `clearPending`, `survey`, `budgets`, `herdrStatus`) и о встроенных глобалах pi
 (`agent`, `checkpoint`, `prompt`, `log`, `phase`). `izi_answer` НЕ входит в этот список — это tool
 интерактивной сессии (`pi.registerTool`, `ext/index.mjs`), а не функция песочницы воркфлоу; внутри
 `workflows/izi.js` его вызвать нельзя и не нужно — его зовёт модель ЧАТА в ответ на follow-up
 сообщение паузы.
 
-Веер (шаги 3-12 — план, не реализация) сюда пока не входит: у него будет своя программа, когда
-появится первый веерный срез. Тогда же встанет вопрос, возвращать ли порядок в данные — см.
-`docs/concept.md`, «Что отложено и почему».
+Веер (шаги 4-12 — план, не реализация) сюда пока не входит: шаг 3 его только РАСКЛАДЫВАЕТ, а
+батчами по `maxParallel` рой погонит уже своя программа, когда появится первый веерный срез. Тогда
+же встанет вопрос, возвращать ли порядок в данные — см. `docs/concept.md`, «Что отложено и почему».
 
 ---
 
@@ -136,8 +161,12 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
 - **вход:** `TASK.md`, `.agent/answers.md`
 - **выход:** `.agent/brd.md` (через `.agent/staging/brd.md`)
 - **проверка:** `checkBrd({ path: ".agent/staging/brd.md" })` (функция расширения) →
-  `steps/brd/brd.mjs::newBrd` — каждое требование измеримо, число имеет источник (TASK.md или
-  ЗНАЧЕНИЕ ответа оператора, не текст вопроса), 3..7 якорей, открытых вопросов ноль
+  `steps/brd/brd.mjs::newBrd` — у каждого требования ЕСТЬ `fit` и `verify`, число в `fit` имеет
+  источник (TASK.md или ЗНАЧЕНИЕ ответа оператора, не текст вопроса), 3..7 якорей, открытых
+  вопросов ноль. **S16:** правило «`fit` обязан нести измеримый токен» снято решением оператора —
+  живой прогон `ed1d4094` показал ложный красный на предикатном критерии (`регистронезависимое
+  вхождение подстроки`) и сжёг на нём все три пере-делегации. Качество формулировки судит человек,
+  гардрейл судит состав
 - **оператор (S13):** пауза `checkpoint()` (`foreground: false`) приезжает в чат ОБЫЧНЫМ сообщением
   — модальный `ui.select`, который до S13 забирал ввод у всего окна и не давал оператору напечатать
   ничего (`foreground: true`, `pi-extensible-workflows/src/host.ts:686`), здесь не участвует.
@@ -166,7 +195,7 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   — оператор ответил `давай 2 часа`, `.agent/pending.json` корректно снят `clearPending()` после
   подтверждённого ответа, прогон дошёл до `track:"ok"` за один заход, без ручного вмешательства.
 
-### 3. `survey-plan` — раскладка разведки · script · **новое**
+### 3. `survey-plan` — раскладка разведки · script · **есть** (S15)
 - **вход:** `.agent/brd.md` (только `subjects[]`), дерево файлов от cwd прогона минус список
   пропуска (сам харнес, точечные каталоги, зависимости) — не каталог `app/`: имя каталога кода
   диктовать репозиторию нельзя, разбор — `docs/survey-plan.md` §1
@@ -182,6 +211,14 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   где лежат зависимости
 - **якорь помечает, а не отбирает:** `subjects[]` из BRD проставляются пометкой на файле и клетке;
   якорь, не встретившийся нигде, едет в `gaps`. Разбор — `docs/survey-plan.md` §1
+- **живое доказательство (S15, чужой проект `/private/tmp/quarkus-rest-json-app-v2-t1-3`,
+  прогон `cffa2e65-4c68-48ae-840c-a32c6dd28bae`):** `track:"ok"`, `.agent/survey-plan.json`,
+  `files=20 bytes=28549 cells=2` — читается из `journal.json` (`function/survey/1`), а не из того,
+  что напечатала модель. `c0` = `pom.xml` + `README.md`; `mvnw`/`mvnw.cmd` и `.mvn/` в план не
+  попали (`SKIP_FILES` и точечный каталог), `Legume*.java` попали — под якоря они не подходят, и
+  именно это доказывает, что якорь ПОМЕЧАЕТ, а не фильтрует. Цена помётки названа фактом того же
+  прогона: якорь `limit` сработал на `Dockerfile.jvm` (слово в комментарии) — ложное попадание
+  стоит скауту абзаца, ложный пропуск стоил бы графу узла
 
 ### 4. `scope` — рой скаутов · role `scout` **веер** · **новое**
 - **вход:** клетка плана, `.agent/brd.md`

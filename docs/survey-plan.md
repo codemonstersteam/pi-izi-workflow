@@ -1,8 +1,13 @@
 # Шаг 3 `survey-plan` — раскладка разведки
 
 Карточка шага — `docs/workflow.md` §3.3, обоснование — `docs/concept.md` («Разведка (шаги 3–5)»).
-Здесь: что строится, каким кодом и как встаёт в `workflows/izi.js`. Концепт утверждён оператором,
-работы заведены в `backlog.md`.
+Здесь: что строится, каким кодом и как встаёт в `workflows/izi.js`.
+
+**РЕАЛИЗОВАНО (S15).** Код — `steps/survey-plan/plan.mjs` (+ `plan.test.mjs`),
+`ext/index.mjs::survey`, третья фаза `workflows/izi.js::surveyPlan`. Живой прогон в чужом проекте:
+`cffa2e65-4c68-48ae-840c-a32c6dd28bae` (`/private/tmp/quarkus-rest-json-app-v2-t1-3`) — `track:"ok"`,
+`.agent/survey-plan.json`, `files=20 bytes=28549 cells=2`, `c0` = `pom.xml` + `README.md`.
+Блоки кода ниже — ЗАМЫСЕЛ на момент утверждения; источник истины — файлы, а не этот документ.
 
 ---
 
