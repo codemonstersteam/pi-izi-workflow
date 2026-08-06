@@ -1,65 +1,64 @@
-# izi-pi-v2 — как здесь работать
+# izi-pi — how to work here
 
-Первые два шага (`task → brd`) конвейера `izi-flow-v2`, перенесённые на `pi-extensible-workflows`
-и переписанные на функции расширения (S11). Оба шага и их бюджеты — код (`workflows/izi.js`), не
-файл конфигурации: на двух шагах `pipeline.json` был бы украшением, не механизмом (`docs/concept.md`,
-«Что отложено и почему»). Диск читает `ext/index.mjs` (pi-extension, доверенный хост-код), сам
-воркфлоу-скрипт зовёт его функции как глобалы. Роль `gilb` возвращает конверт через хостовый
-`outputSchema`. Подробности — `README.md`, программа и карточки шагов — `docs/workflow.md`, история
-решений переноса — `PLAN.md`.
+$START_GOAL
+Turn a human's raw requirement into a plan they accept, where every decision on the way left a trace
+a machine can check. Two steps exist today: `task` → `brd`. The rest is `docs/concept.md`.
+$END_GOAL
 
-## Прежде чем править код
+$START_CONTEXT
+The pipeline runs on `pi-extensible-workflows` — a pi extension for deterministic multi-agent runs.
 
-**Правишь любой `.mjs` — сначала прочитай `standards/code.md`.** Контракт модуля/функции, правила
-проектирования, правило, по которому тест держится — там. Пересказывать их здесь означало бы
-завести второе место для одного требования, а оно расходится (ровно то, от чего предостерегает
-`standards/code.md` §7 и донорский `run/run-1.md`, находка F4).
+- `workflows/izi.js` — the whole program: two rails, ~95 lines, no step manifest, no config file.
+- `ext/index.mjs` — the extension: host functions (`readText`, `answers`, `checkTask`, `checkBrd`,
+  `promote`, `setPending`, `clearPending`) plus the pi tool `izi_answer`. All disk work lives here —
+  the sandbox has no `fs`.
+- `steps/<id>/` — one vertical slice: role, order template, pure core, its test.
+- `core/` — rules shared by several slices. `bin/answer.mjs` — the operator's fallback channel.
 
-Остальные стандарты по принадлежности: `standards/protocol.md` — конверт результата роли (две
-рельсы `ok`/`err`, пять родов ошибки), `standards/role.md` — скелет роли и слои промпта.
-`README.md` — как это запускать и что где лежит.
+Read before touching anything: `standards/workflow.md` (the host's real constraints, with
+file:line evidence), `standards/code.md` (module and test contracts), `standards/role.md` (how a
+role is written).
+$END_CONTEXT
 
-## Чек-лист сдачи
+$START_RUN
+```bash
+cd ext && npm install && pi install ./      # once per machine: functions, role, /izi template
+node bin/install.mjs --to=<project>         # copies workflows/ steps/ core/ bin/ into a project
+cd <project> && pi                          # then type /izi
+node --test                                 # the whole line, before any live run
+```
 
-Работа не считается сделанной, пока не верно ВСЁ:
+The operator answers the role's question **in the chat** — the run is launched with
+`foreground: false`, so the pause arrives as a message and the editor stays free.
+Diagnosis lives on disk: `~/.pi/workflows/projects/<slug>/sessions/<sid>/runs/<runId>/journal.json`.
+Never trust what the launching model printed.
+$END_RUN
 
-- [ ] `node --test` зелёный целиком, без единого `skip`; самопропускающийся тест — это комментарий
-      (`standards/code.md`, «тест без запуска — не тест»), а не приемлемый способ дождаться
-      параллельной задачи;
-- [ ] новый модуль несёт `MODULE_CONTRACT` (`Purpose`, `io`, `Invariants`, `Interface`);
-- [ ] новая экспортируемая функция несёт `FUNCTION_CONTRACT` (Input/Dependencies/Antecedent/Consequent);
-- [ ] `Interface:` перечисляет ровно то, что модуль экспортирует, `io:` совпадает с импортами;
-- [ ] новое правило имеет **шов** — тест, который от его нарушения краснеет, проверено возвратом
-      дефекта (сломай — увидь красное — верни обратно), а не прозой в роли или наряде;
-- [ ] если правишь `steps/brd/gilb.md` или `steps/brd/order.tpl` — проверь, что пункт не задублирован
-      в обоих: наряд не повторяет роль (`standards/role.md`, правило 10) — на каждом вызове это
-      оплачивается токенами.
+$START_CONSTRAINTS
+1. **The guardrail decides, not the role.** A step closes on a script's verdict; a role never
+   certifies itself.
+2. **Check the staging path before promoting it.** An artifact written on the error rail must not
+   close a step.
+3. **A number in `fit:` must have a source** — the task or an operator's answer value. Anything else
+   is `invented-default`.
+4. **The question key is copied by the machine**, not retyped by a human or recalled by a model:
+   the workflow writes `.agent/pending.json`, `izi_answer` reads the key from there.
+5. **Paths resolve against the run's cwd** (`context.run.cwd`), never against this repository.
+   Proven by a live defect: the installed project read this repo's `TASK.md` for three redelegations.
+6. **Verify in a project other than this one.** Everything green here can still be broken there.
+$END_CONSTRAINTS
 
-## Чего не делать
+$START_FORBIDDEN
+- Do not declare work done with red tests. Red is a result — report it.
+- Do not edit a test to make it green.
+- Do not restate a rule in prose when it already lives in code — substitute it from one place.
+- Do not add dependencies to the pipeline; `ext/` may depend only on the host package.
+- Do not write into `.agent/` by hand — it is run state.
+- Do not generalise for steps that do not exist yet.
+$END_FORBIDDEN
 
-- **Не объявляй работу сделанной при красных тестах.** Красное — результат, о нём говорят вслух.
-- **Не правь тест, чтобы он позеленел**, и не глуши его пропуском вместо разбора причины — красный
-  тест или тест, самопропускающий себя «пока нет файла», сообщает о дефекте, а не о неудобстве.
-- **Не дублируй правило прозой**, если оно уже живёт в коде или в реестре (`core/form.mjs`,
-  `core/findings.mjs`) — подставляй из одного места, а не пересказывай своими словами.
-- **Не добавляй зависимостей конвейеру.** `steps/`, `core/`, `workflows/izi.js` — только `node:test`,
-  `node:fs`, регулярки. Исключение — `ext/package.json`: это контракт РАСШИРЕНИЯ хоста
-  (`pi-extensible-workflows` не читается ни одним файлом конвейера), не пайплайна; разбор — в самом
-  файле. Не заводи вторую зависимость там же без такого же разбора.
-- **Не пиши в `.agent/` руками.** Это состояние одного прогона; каталог в `.gitignore`, его не
-  коммитят. `bin/answer.mjs` — единственный CLI, которым его трогает оператор.
-- **Не гоняй живой прогон (`/izi` в окне pi) вслепую и десятками раз.** Каждый вызов, дошедший до
-  `agent()`, тратит реальные токены. Сформулируй вопрос, на который отвечает конкретный прогон, ДО
-  того как его запускать; смотри `summary.json.usage` за фактической ценой, не считай по печати.
-
-## Что под ногами (не гипотеза — см. README «Долги»)
-
-- Прав «писать только в `.agent/staging/`» в pi нет: у роли `gilb` `tools: [read, write]` без карты
-  путей. Держит это `ext/index.mjs::promote`, который копирует staging-файл сам, а не верит роли.
-- Проектные роли и project-local prompts не подхватываются без доверия к проекту — установка через
-  ГЛОБАЛЬНЫЙ `pi install ./ext` обязательна, не опция.
-- `ext/node_modules/` не ставится автоматически `pi install <локальный путь>` — `cd ext && npm
-  install` нужен один раз до первого `pi install ./ext`, иначе загрузка расширения падает
-  `Cannot find module 'pi-extensible-workflows'`.
-- `steps/brd/brd.mjs::numbersIn` путает число внутри токена формата (`ISO-8601` → `8601`) с числом
-  критерия — известная чувствительность правила, не тронутая S11, см. README «Долги».
+$START_SUCCESS
+- `node --test` green as a whole.
+- A live run in an installed project reaches `.agent/brd.md`.
+- Every new rule has a seam, and the seam was proven by reintroducing the defect.
+$END_SUCCESS

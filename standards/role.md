@@ -1,215 +1,85 @@
-# Стандарт описания роли
+# Standard: writing a role
 
-Роль — системный промпт субагента. Грузится раз за сессию. Не путать с нарядом (`prompts/*.tpl`):
-роль отвечает «что мне вообще дозволено», наряд — «что именно сегодня».
+$START_GOAL
+A role file is an API contract for one judgement: given an order, return one validated result.
+Everything the role may not decide is decided outside it.
+$END_GOAL
 
-## Скелет: слои, порядок фиксирован
-
-```
-frontmatter        права и тир модели (машинное)
-$START_ROLE        кто ты и чего НЕ делаешь — одно-два предложения
-$START_LAW         инварианты: что остаётся истиной, как бы ни сложился ход
-$START_INPUT       что тебе приходит и чего у тебя нет
-$START_TOOLS       границы прав словами — пишет bin/install.mjs, руками не пишется
-$START_STRATEGY    пронумерованные шаги
-$START_FORBIDDEN   запреты
-$START_OUTPUT_FORMAT  форма артефакта + замкнутый набор возвратов
-$START_EXAMPLE     один сквозной прогон: вход → шаги → возврат
-$START_LINKS       для сопровождающего роли, не для модели
-```
-
-Список — не проза: он объявлен в `core/form.mjs` (`SYSTEM_LAYERS`, `USER_LAYERS`), и оба линта
-берут его оттуда. Слоя не хватает → роль не собирается (`missingLayers`). Слой открыт, а реестром
-не объявлен → тоже красное (`extraLayers`): набор слотов обязан быть ОДИН для всех ролей, иначе
-разметка перестаёт типизировать контекст и становится оформлением. `LAW` и `LINKS` жили вне реестра
-ровно так и не краснели ни от чего.
-
-**LAW — не половина ROLE.** ROLE отвечает «кто ты», LAW — «что не обсуждается». Инвариант,
-разложенный по STRATEGY и FORBIDDEN, читается как частная оговорка, и роль торгуется с ним на
-первом же неудобном входе.
-
-## Правила
-
-| # | Правило | Проверяемо |
-|---|---|---|
-| 1 | Задача — одно предложение, повелительное наклонение, один глагол | линт |
-| 2 | Каждый шаг стратегии называет ИНСТРУМЕНТ и его аргументы | линт |
-| 3 | У каждого условия назван вычислитель | линт |
-| 4 | «Нет данных» — обязательный ответ, молчание запрещено | линт |
-| 5 | Каждый запрет проверяем без интерпретации | линт |
-| 6 | Числа не пишутся прозой, если выводимы из данных | линт |
-| 7 | Формат ответа приведён целиком | линт |
-| 8 | Пример обязателен и сквозной | линт |
-| 9 | `outputs:` фронтматтера ⊆ `$START_STRATEGY` | сверка двух источников |
-| 10 | Наряд не повторяет роль | сверка двух источников |
-| 11 | Плейсхолдера `{{…}}` в роли нет | линт |
-| 12 | Язык промпта субагента — из реестра `PROMPT_LANG` | линт |
-
-Правила 1–8 и 11–12 смотрят на один файл. Правила 9 и 10 — на два, и именно они ловят самое дорогое.
-
-## Пояснения к правилам, которые нарушают чаще всего
-
-**2 — инструмент и аргументы.** «Изучи контекст» — не шаг. `read(change-delta.md)` — шаг.
-`read(file, offset=hit−5, limit=60)` — шаг, который ещё и объявляет цену.
-
-**3 — вычислитель условия.** «Если дизайн нужен» — запрещено: роль начнёт выводить сама.
-«Поле `case:` наряда равно `graph`» — разрешено: условие вычислил кто-то другой.
-
-**5 — проверяемость запрета.** «Не будь многословным» — не запрет. «Тело ≤ 40 строк» — запрет.
-
-**6 — числа.** Правило, записанное числом в роли и числом в валидаторе, разойдётся. Формулировка
-приходит подстановкой из реестра (`{{subjectRule}}`), а не копируется.
-
-**9 — выход назван стратегией.** Роль объявляет два выхода, стратегия называет один — второй
-не напишется, и все потребители молча возьмут умолчание. Резолвер: имя файла из `outputs:`
-против текста `$START_STRATEGY`, по границе слова.
-
-**10 — дубль слоёв.** Пункт, стоящий и в роли, и в наряде, оплачивается числом вызовов.
-Роль грузится раз за сессию, наряд — на каждый вызов; на веере это ×6–13 за прогон. Сравнение по
-смыслу резолвера истины не имеет, поэтому судится не смысл, а РЕЕСТР: грамматика артефакта живёт
-в коде (`GRAPH_TAGS`), роль обязана привести её целиком (правило 7), наряд — не упоминать ни одним
-тегом. Шов: `steps/scope/graph.test.mjs`.
-
-**11 — плейсхолдер в роли.** Роль не рендерит НИКТО: `bin/compose.mjs` собирает наряд (`step.prompt`),
-`bin/install.mjs` копирует тело роли байтами. `{{staging}}`, оставленный в `role.md`, доезжает до
-модели литералом — она видит не путь, а разметку харнеса. Дефект жил в `steps/scope/role.md`
-в двух местах и не краснел ни от чего.
-
-**12 — язык.** Роль субагента и её наряд пишутся на языке из `PROMPT_LANG` (сейчас `en`). Порог
-ПОСТРОЧНЫЙ: русский термин внутри английской фразы законен, русская строка — нет. Доля по файлу
-правила не держит — вставленный абзац даёт 0.017 и проходит любой разумный потолок; это проверено
-возвратом дефекта. Роутер `izi.md` из области исключён: его `$START_OUTPUT_FORMAT` дословно копирует
-строки, которые печатает `bin/accept.mjs`, и переводить его в отрыве от кода нельзя.
-
-Числа же роль не знает вовсе: предел приходит НАРЯДОМ, а объявлен один раз в `step.json`
-(`compose.vars`), откуда его берут и аргумент чека, и шаблон (`resolveCheck`).
-
-## Права
-
-Право — механизм, проза — нет. Что роли не нужно, закрывается в `permission`, а не запрещается
-словами в `$START_FORBIDDEN`.
+$START_CONTEXT
+A role is `steps/<step>/<name>.md`. **The filename is the role name** pi resolves — `gilb.md` is
+called as `agent(order, { role: "gilb" })`; a file named `role.md` installs as the role "role".
+The extension exposes the directory through `roleDirectories`. Frontmatter is YAML; the body is
+appended to pi's system prompt unless `overrideSystemPrompt: true`.
 
 ```yaml
-permission:
-  read: allow
-  grep: deny          # роль не ищет — ей ДАЮТ якорь
-  glob: deny
-  bash: deny
-  edit:
-    ".agent/brd.md": allow
-    "*": deny
+---
+description: Requirements front door — raw business request into a measurable BRD
+model: openrouter/qwen/qwen3.6-27b
+thinking: low
+tools: [read, write]
+---
 ```
 
-Если раннер не умеет карту путей и схлопывает её в одно значение — граница печатается словами
-в слое, но остаётся **объявленной**, а не потерянной молча.
+Supported keys: `description`, `model`, `thinking`, `tools`, `overrideSystemPrompt`, `contextFiles`,
+`disabledAgentResources`. **There is no per-path permission map in pi** — "writes only to staging" is
+discipline plus the guardrail, not a host-enforced boundary. Say so in the role; do not pretend.
+$END_CONTEXT
 
-## Замкнутый набор возвратов
+$START_LAYERS
+Use paired tags. Each layer answers one question and nothing else.
 
-Роль возвращает ОДНУ строку, глагол — из набора, объявленного в её же `$START_OUTPUT_FORMAT`.
-Набор объявляется **один раз** — в роли. Наряд на него ссылается, но не переобъявляет.
-
-```
-gilb → question: <один закрытый вопрос>
-gilb → brd ready: N требований, M вопросов задано
-gilb → split: <причина>
-```
-
-Глагол вне набора = шаг провален, роль пере-делегируется. Прозу не интерпретируют.
-
-## Антипаттерны
-
-| Симптом | Чем кончается |
+| tag | content |
 |---|---|
-| Роль сертифицирует себя («agent-ready») | «Готово» решает гардрейл, а не модель о себе |
-| Роль знает порядок конвейера | Однажды вспомнит его иначе |
-| Роль читает репозиторий «чтобы уточнить» | Уходит в разведку, платит токенами, приносит догадку |
-| Роль обещает механизм, которого нет на её раннере | Обещание прозой там, где нужен хук |
-| Роль знает только одну ветку из двух | На второй обязана эскалировать по своему же закону |
+| `$START_ROLE` | who you are, in two sentences; what you never do |
+| `$START_LAW` | rules that hold on every run, whatever the order says |
+| `$START_INPUT` | what arrives in the order — and that nothing else exists |
+| `$START_STRATEGY` | numbered steps, each with a verb and a stop condition |
+| `$START_FORBIDDEN` | explicit prohibitions, each with the machine check that catches it |
+| `$START_OUTPUT_FORMAT` | the artifact's shape and the `outputSchema` fields |
+| `$START_EXAMPLE` | one worked example, from a different domain |
+$END_LAYERS
 
-$start_example
----
-description: Поисковый субагент на базе Grok
-mode: subagent
-model: "kilo/x-ai/grok-code-fast-1:optimized:free"
-temperature: 0.1
-steps: 5
-hidden: false
-permission:
-  edit: deny
-  write: deny
-  bash:
-    "*": deny
-    "grep *": allow
-    "ls *": allow
-  read: allow
-  glob: allow
----
-Ты — семантический сканер кодовой базы.
+$START_CONSTRAINTS
+1. **State the rule once.** A limit that lives in the guardrail is not restated in the role — two
+   copies drift, and the machine copy is the one that runs.
+2. **Every prohibition names its check.** "Do not invent a number — machine-checked as
+   `[invented-default]`" beats "be careful with numbers".
+3. **The example uses a different domain from any real input.** An example indistinguishable from
+   live input stops being an example: the role returns the prepared answer instead of reading the
+   order. This has happened in a live run.
+4. **The order carries the data; the role does not go looking for files.** If the role has `read`,
+   say explicitly what it may read and why — otherwise it will browse.
+5. **The artifact speaks the order's language**, not the role's. Write the role in English and say
+   this out loud; a Russian request must yield a Russian artifact.
+6. **The role never self-certifies.** "Done" is the guardrail's exit code. A role that found a
+   blocker succeeded — a negative verdict is data, not an error.
+$END_CONSTRAINTS
 
-### Твоя задача
-Получаешь запрос: «просканируй папку X, какие файлы отвечают за Y».
-Должен вернуть обзор папки и рекомендацию: какие файлы читать для ответа.
-Главный принцип: минимум чтения, максимум пользы от grep-сканирования.
-
-### Стратегия (строго по шагам)
-
-**Шаг 1 — glob.** Найди `.py` (или другие расширения по контексту) в целевой папке.
-
-**Шаг 2 — grep GREP_SUMMARY|STRUCTURE.** Используй grep tool (не bash) с паттерном `GREP_SUMMARY|STRUCTURE`. Сохрани номера строк для каждого найденного файла. Составь первичную таблицу: файл → что делает (GREP_SUMMARY) → структура (STRUCTURE).
-
-**Шаг 3 — read чанка от 1 до строки GREP_SUMMARY.** Для файлов, которые выглядят релевантно: прочитай чанк `read(file, offset=1, limit=LINE_NUMBER)`, где LINE_NUMBER — строка, где найден GREP_SUMMARY. Это захватит MODULE_CONTRACT (PURPOSE, SCOPE, INPUT, OUTPUT, INVARIANTS, MODULE_MAP) без чтения всего файла.
-
-**Шаг 4 — углублённое чтение (опционально).** Если после шага 3 не хватает данных — прочитай ещё 30-50 строк после конца контракта (для захвата docstring функции, первых блоков).
-
-**Шаг 5 — рекомендация.** Верни итоговую таблицу и укажи, какие файлы читать для ответа на запрос.
-
-### Запреты
-- Bash запрещён полностью. Только glob, grep tool, read.
-- НЕ читай весь файл целиком. Только чанки.
-- НЕ трогай файлы, не релевантные запросу (после шага 2).
-- НЕ выдумывай. Нет тега — пиши «нет данных».
-
-### Формат ответа
+$START_OUTPUT_FORMAT
+The role returns through `outputSchema` — the host validates it, so the role only has to describe
+the fields:
 
 ```
-=== ПАПКА: [path] ===
-Найдено файлов: N
-
-=== ТАБЛИЦА ===
-| Файл | GREP_SUMMARY (строка N) | STRUCTURE | Контракт (PURPOSE/INPUT/OUTPUT) | Релевантность запросу |
-
-=== РЕКОМЕНДАЦИЯ ===
-Для ответа на запрос "[запрос]" прочитать (в порядке приоритета):
-1. `file.py` — причина
-2. ...
-
-=== MERMAID (опционально) ===
-flowchart TD по STRUCTURE для ключевых файлов
+track: "ok" | "err"
+ok  → artifact (path), plus the numbers the next step consumes
+err → kind: "question" | "invalid" | "escalate", subject, evidence, answer_cmd
 ```
 
-### Пример
-Запрос: «что в папке doxygen_test, какие файлы за проверку библиотек?»
+`subject` is one closed question with a recommended answer and alternatives, so the operator can
+reply in one word. The key inside `answer_cmd` must equal `subject` verbatim — it is the only link
+between a question and its answer.
+$END_OUTPUT_FORMAT
 
-Шаг 1: glob doxygen_test/*.py → [test_m.py (строка 33), test2.py (строка 33)]
-Шаг 2: grep GREP_SUMMARY → test_m.py: "Environment, dependencies..." (L33), test2.py: "TEST2!" (L33)
-Шаг 3: read(test_m.py, 1..33) → контракт: PURPOSE=Verification of AI libraries presence, OUTPUT=dict
-Шаг 4: не нужно, контракт полный
-Шаг 5: рекомендация → читать test_m.py
+$START_SUCCESS
+- Every prohibition in the role is enforced by a script somewhere, or it is decoration.
+- The role's own test asserts the rules it claims (e.g. `steps/brd/brd.test.mjs` greps the role for
+  `invented-default`).
+- A live run produces the artifact without the role explaining itself in prose.
+$END_SUCCESS
 
-$end_example
-
-## Пример обязан отличаться от боевого входа
-
-`$START_EXAMPLE` — иллюстрация ФОРМЫ, а не источник содержания. Пример, неотличимый от реального
-входа, перестаёт быть примером: роль узнаёт задачу и возвращает заготовку вместо работы с нарядом.
-
-Правило: **сюжет примера берётся из домена, которого нет ни в одной боевой фикстуре.** Совпадение
-общей лексики требований («существующие вызовы не ломать») законно — совпадать не должен предмет.
-
-Шов: `bin/accept.mjs` сверяет `subject`/`evidence` конверта-вопроса с блоком `$START_EXAMPLE` той же
-роли; дословное совпадение — пере-делегирование с диагнозом, а не принятый вопрос.
-
-Основание — пять прогонов подряд, где пример перевешивал `$START_OUTPUT_FORMAT`: F5 (`run-1`),
-F9 (`run-2`), F15 (`run-3`), F16 (`run-5`). Последний вышел за форму и определил СОДЕРЖАНИЕ
-артефакта: русское требование дало английский BRD, потому что пример был английским. Это свойство
-участника, а не серия совпадений, и потому оно закрыто механизмом, а не абзацем.
+$START_EXAMPLE
+Prompting model to copy — `/Users/mac/IdeaProjects/turboai/LESSON_2/.kilo/agents/grok_searcher.md`:
+frontmatter with tool permissions, a numbered strategy where every step names the tool and its
+argument, then a short prohibition list ("Bash denied. Do not read whole files. Only chunks.").
+Short, imperative, checkable — no persona, no encouragement.
+$END_EXAMPLE

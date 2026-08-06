@@ -40,7 +40,7 @@
 //               never throw either: "the artifact is bad" is DATA (`ok:false`), not a host failure.
 //               promote DOES throw on a missing staging file — that is a contract violation (the
 //               check gating this call ran against staging and found it, or should not have called
-//               promote at all), never a silent no-op success (standards/protocol.md, «Квитанция
+//               promote at all), never a silent no-op success (standards/workflow.md, «step shape
 //               закрывает шаг»: staging→out precedes any "done" fact, and a promote that quietly did
 //               nothing would let a run claim a fact that never happened). izi_answer follows the
 //               same discipline: no .agent/pending.json means no open question, and the tool THROWS

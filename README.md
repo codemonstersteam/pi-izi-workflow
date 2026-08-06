@@ -163,7 +163,7 @@ bin/decisions-log.mjs           append-only .agent/decisions.log
                                    clearPending() снимает ПОСЛЕ подтверждённого ответа
   decisions.log                   журнал переходов (пишет bin/answer.mjs, не модель)
 
-standards/{protocol.md,code.md,role.md}   контракты конверта/кода/роли — не пересказываются здесь
+standards/{workflow.md,code.md,role.md}   контракты хоста/кода/роли — не пересказываются здесь
 docs/{concept.md,workflow.md}  принципы (что отложено и почему) и механика (программа, карточки шагов)
 arch/slices/{task.md,brd.md}   архитектурные заметки по срезам, унаследованные от донора — историческая
                                 справка, не текущий контракт (часть упомянутых там модулей в этом
