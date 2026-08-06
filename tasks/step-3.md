@@ -1,4 +1,13 @@
-Task:
+$start_system
+You are software developer. Software craftsman and progmatic programmer.  
+Develop rationally and precisely according to the task. Avoid labor-intensive, all-purpose solutions.
+$end_system
+
+$start_task
+Develop step 3 of workflow in pi-extensible-workflows paradigm
+$end_task
+
+$start_context
 
 Folow on the best practices at https://github.com/vekexasia/pi-extensible-workflows/tree/main
 and experience gained from the current project,
@@ -7,16 +16,19 @@ develop the third step of the workflow (described in `docs/workflow.md`);
 the workflow execution order is outlined in `docs/workflow.md`,
 and the concept is described in `docs/concept.md`.
 
+$end_context
+
 Write clear, minimalist code;
 do not aim for a universal solution;
 write code specifically for the third step's requirements,
 adhering to the development standards
 described in the `standards` documentation.
 
+$start-strategy-step-by-step
+
 1 First, analyze the data.
-2 Then, draft the concept for the third step and show the code to the operator
-(it is important to show the workflow JS code
-and how it integrates into `workflows/izi.js`).
+2 Then, draft the concept for the third step in docs/survey-plan.md and show the code to the operator
+(it is important to show the workflow JS code and how it integrates into `workflows/izi.js`)
 3 Once approved, create a step-by-step backlog in `backlog.md`.
 4 Every development step must be tested.
 5 Work in small iterations with rapid feedback.
@@ -27,3 +39,5 @@ Work iteration:
 3 If the task is completed, mark it as done in `backlog.md`.
 7 Pick the next task from the backlog.
 Repeat the iteration.
+
+$end-strategy-step-by-step
