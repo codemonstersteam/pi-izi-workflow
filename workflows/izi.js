@@ -125,7 +125,11 @@ async function brd() {
     feedback = check.blockers;
     attempt++;
   }
-  exit(err("escalate", { subject: "повторы исчерпаны" }));
+  // feedback here IS check.blockers from the LAST iteration (set just above, on every red pass
+  // through the loop) — the guardrail's own diagnosis, not a generic "retries exhausted" that
+  // throws away why. A bare "повторы исчерпаны" subject told the operator nothing checkBrd didn't
+  // already know and say better (S14).
+  exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
 }
 
 log("izi: start");

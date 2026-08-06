@@ -22,9 +22,19 @@
 //               does not cover importing pi-extensible-workflows here) — and it is the ONLY place
 //               workflows/izi.js's disk access goes through.
 // io:           fs
-// Invariants:   every path a function receives is relative to REPO_ROOT — this repository's own
-//               root, anchored to THIS FILE's location via import.meta.url, never to the pi
-//               process's cwd (which need not be the repository if pi was launched elsewhere).
+// Invariants:   every path a function receives is relative to the WORKFLOW RUN's own cwd
+//               (context.run.cwd — WorkflowRunContext, pi-extensible-workflows/packages/core/
+//               src/types.ts:119 — the same cwd role agents like gilb run with, agent-execution.ts:
+//               `cwd: input.cwd`), never to THIS repository's own location. install.mjs copies the
+//               harness's workflows/steps/core/bin into an arbitrary project directory; a run
+//               launched there has its TASK.md, .agent/answers.md and .agent/staging/ in THAT
+//               project, not in this repo checkout — anchoring to import.meta.url instead (S14's
+//               proven defect, live run 2e71776f-342c-42e3-b623-d338b2b9c45c: checkBrd never found
+//               staging, three redelegations, escalate) silently reads/writes the WRONG directory.
+//               process.cwd() is the fallback for the one caller with no WorkflowRunContext at
+//               all — izi_answer, an ordinary pi tool the interactive session's own model calls,
+//               not a sandbox function; there ExtensionContext.cwd (execute()'s 5th argument,
+//               @earendil-works/pi-coding-agent's own contract) stands in for context.run.cwd.
 //               readText never throws: a missing file reads as "" — the caller decides what absence
 //               means, the same convention the donor's `cat file || true` used. checkTask/checkBrd
 //               never throw either: "the artifact is bad" is DATA (`ok:false`), not a host failure.
@@ -37,11 +47,14 @@
 //               rather than writing an answer nobody asked for or silently doing nothing.
 // Interface:    default export — extension(pi): registers the izi_answer tool on pi AND calls
 //               registerWorkflowExtension (pi-extensible-workflows contract) for the sandbox
-//               functions and role directory
+//               functions and role directory. readText/answers/checkTask/checkBrd/promote/
+//               setPending/clearPending are ALSO named exports — pi-extensible-workflows never
+//               exercises run(input, context) itself (it is the caller, not test scaffolding), so
+//               ext/index.test.mjs imports these directly and calls run() with a fabricated
+//               { run: { cwd } } context to prove the anchor without a live pi/workflow harness.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, rmSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { fileURLToPath } from "node:url"
 import { Type } from "typebox"
 import { registerWorkflowExtension } from "pi-extensible-workflows"
 import { checkTaskText } from "../steps/task/task.mjs"
@@ -49,9 +62,12 @@ import { newBrd } from "../steps/brd/brd.mjs"
 import { newAnswers, looksLikeTemplate } from "../core/answers.mjs"
 import { writeAnswer } from "../bin/write-answer.mjs"
 
-const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url))
-const at = (p) => join(REPO_ROOT, p)
-const readIfExists = (p) => (existsSync(at(p)) ? readFileSync(at(p), "utf8") : "")
+// runRoot — the anchor itself: context.run.cwd for sandbox functions, process.cwd() for izi_answer
+// (no WorkflowRunContext reaches a pi tool; its caller passes ExtensionContext.cwd through instead —
+// see izi_answer's own execute() below). Never THIS repository's directory (see Invariants above).
+const runRoot = (context) => (context && context.run && context.run.cwd) || process.cwd()
+const at = (root, p) => join(root, p)
+const readIfExists = (root, p) => (existsSync(at(root, p)) ? readFileSync(at(root, p), "utf8") : "")
 
 // parsedAnswers — one parse of .agent/answers.md shared by `answers` and `checkBrd` below, so the
 // format (core/answers.mjs) is read in exactly one place on each call, not twice per run.
@@ -59,16 +75,16 @@ function parsedAnswers(raw) {
   return raw ? newAnswers(raw) : { ok: true, value: [] }
 }
 
-const readText = {
-  description: 'Read a text file relative to the repository root. A missing file reads as "".',
+export const readText = {
+  description: 'Read a text file relative to the workflow run\'s cwd (context.run.cwd). A missing file reads as "".',
   input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
   output: { type: "string" },
-  run({ path }) {
-    return readIfExists(path)
+  run({ path }, context) {
+    return readIfExists(runRoot(context), path)
   },
 }
 
-const answers = {
+export const answers = {
   description: "Operator answers from .agent/answers.md as values ({question,text}[]), not raw text; [] when the file is absent.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
@@ -80,14 +96,15 @@ const answers = {
       additionalProperties: false,
     },
   },
-  run() {
-    const r = parsedAnswers(readIfExists(".agent/answers.md"))
+  run(_input, context) {
+    const root = runRoot(context)
+    const r = parsedAnswers(readIfExists(root, ".agent/answers.md"))
     if (!r.ok) throw new Error(`answers: .agent/answers.md повреждён — ${r.error.detail}`)
     return r.value
   },
 }
 
-const checkTask = {
+export const checkTask = {
   description: "Judge TASK.md by the one-task-one-input rule (non-empty, ≤300 lines) — steps/task/task.mjs wired to disk.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
@@ -96,16 +113,17 @@ const checkTask = {
     required: ["ok"],
     additionalProperties: false,
   },
-  run() {
-    if (!existsSync(at("TASK.md"))) {
+  run(_input, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, "TASK.md"))) {
       return { ok: false, why: "TASK.md не существует — вход конвейера кладёт оператор" }
     }
-    const r = checkTaskText(readFileSync(at("TASK.md"), "utf8"))
+    const r = checkTaskText(readFileSync(at(root, "TASK.md"), "utf8"))
     return r.ok ? { ok: true, lines: r.value.lines } : { ok: false, why: r.error.detail }
   },
 }
 
-const checkBrd = {
+export const checkBrd = {
   description: "Judge a staged BRD by steps/brd/brd.mjs's newBrd. Numbers may come from TASK.md and the VALUES of operator answers only — never from a question's own wording.",
   input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
   output: {
@@ -119,13 +137,14 @@ const checkBrd = {
     required: ["ok"],
     additionalProperties: false,
   },
-  run({ path }) {
-    if (!existsSync(at(path))) {
+  run({ path }, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, path))) {
       return { ok: false, blockers: `${path} не существует — роль ничего не записала по staging-пути` }
     }
-    const text = readFileSync(at(path), "utf8")
-    const task = readIfExists("TASK.md")
-    const ans = parsedAnswers(readIfExists(".agent/answers.md"))
+    const text = readFileSync(at(root, path), "utf8")
+    const task = readIfExists(root, "TASK.md")
+    const ans = parsedAnswers(readIfExists(root, ".agent/answers.md"))
     const answerTexts = ans.ok ? ans.value.map((a) => a.text) : []
     const r = newBrd(text, [task, ...answerTexts])
     if (!r.ok) return { ok: false, blockers: r.error.detail }
@@ -135,7 +154,7 @@ const checkBrd = {
 
 const PENDING_PATH = ".agent/pending.json"
 
-const setPending = {
+export const setPending = {
   description: "Record the operator question currently open at .agent/pending.json, called just before checkpoint() pauses. izi_answer reads this file for the question key — the model never supplies it.",
   input: {
     type: "object",
@@ -144,24 +163,26 @@ const setPending = {
     additionalProperties: false,
   },
   output: { type: "object", properties: {}, additionalProperties: false },
-  run({ subject, evidence }) {
-    mkdirSync(dirname(at(PENDING_PATH)), { recursive: true })
-    writeFileSync(at(PENDING_PATH), JSON.stringify({ subject, evidence: evidence || "" }, null, 2))
+  run({ subject, evidence }, context) {
+    const root = runRoot(context)
+    mkdirSync(dirname(at(root, PENDING_PATH)), { recursive: true })
+    writeFileSync(at(root, PENDING_PATH), JSON.stringify({ subject, evidence: evidence || "" }, null, 2))
     return {}
   },
 }
 
-const clearPending = {
+export const clearPending = {
   description: "Remove .agent/pending.json once the operator's answer to it is confirmed present in .agent/answers.md — called after checkpoint() resolves AND the matching answer is found, never before.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: { type: "object", properties: {}, additionalProperties: false },
-  run() {
-    if (existsSync(at(PENDING_PATH))) rmSync(at(PENDING_PATH))
+  run(_input, context) {
+    const root = runRoot(context)
+    if (existsSync(at(root, PENDING_PATH))) rmSync(at(root, PENDING_PATH))
     return {}
   },
 }
 
-const promote = {
+export const promote = {
   description: "Copy staging→out. A missing staging file is a refusal (throws), never a silent success.",
   input: {
     type: "object",
@@ -170,12 +191,13 @@ const promote = {
     additionalProperties: false,
   },
   output: { type: "object", properties: { at: { type: "string" } }, required: ["at"], additionalProperties: false },
-  run({ from, to }) {
-    if (!existsSync(at(from))) {
+  run({ from, to }, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, from))) {
       throw new Error(`promote: ${from} не существует — чек, который должен был пройти по этому пути, не исполнялся`)
     }
-    mkdirSync(dirname(at(to)), { recursive: true })
-    copyFileSync(at(from), at(to))
+    mkdirSync(dirname(at(root, to)), { recursive: true })
+    copyFileSync(at(root, from), at(root, to))
     return { at: new Date().toISOString() }
   },
 }
@@ -193,13 +215,19 @@ const iziAnswer = {
   description: "Record the operator's reply to the currently open izi checkpoint question in .agent/answers.md. Call with the operator's answer text, verbatim, right after they reply in this chat to a 'Workflow izi checkpoint ...' message. The question key comes from .agent/pending.json, not from you — do not pass it.",
   promptSnippet: "izi_answer({text}) — record the operator's reply to the open izi checkpoint question; the key is read from .agent/pending.json, not supplied here.",
   parameters: Type.Object({ text: Type.String({ description: "The operator's answer, verbatim — not your paraphrase, not the alternatives you offered." }) }, { additionalProperties: false }),
-  async execute(_id, params) {
-    if (!existsSync(at(PENDING_PATH))) {
+  // ctx (5th arg) is pi's ExtensionContext (@earendil-works/pi-coding-agent) — this tool runs in the
+  // INTERACTIVE session, which carries no WorkflowRunContext at all (that only exists inside the
+  // workflow sandbox's registered functions, above). ctx.cwd is the session's own cwd — the same
+  // project directory the operator launched `pi` in — so it is the correct stand-in anchor here;
+  // process.cwd() is only the fallback if ctx is ever missing.
+  async execute(_id, params, _signal, _onUpdate, ctx) {
+    const root = (ctx && ctx.cwd) || process.cwd()
+    if (!existsSync(at(root, PENDING_PATH))) {
       throw new Error("izi_answer: .agent/pending.json отсутствует — нет открытого вопроса izi, отвечать не на что")
     }
     let pending
     try {
-      pending = JSON.parse(readFileSync(at(PENDING_PATH), "utf8"))
+      pending = JSON.parse(readFileSync(at(root, PENDING_PATH), "utf8"))
     } catch {
       throw new Error("izi_answer: .agent/pending.json повреждён — не JSON")
     }
@@ -209,7 +237,7 @@ const iziAnswer = {
     if (looksLikeTemplate(params.text)) {
       throw new Error("izi_answer: текст похож на шаблон-плейсхолдер (форма «<...>»), а не на ответ оператора")
     }
-    const result = writeAnswer(REPO_ROOT, { question: pending.subject, text: params.text })
+    const result = writeAnswer(root, { question: pending.subject, text: params.text })
     const note = result.written ? "новая запись" : "уже была записана"
     return {
       content: [{ type: "text", text: `izi_answer: записано по ключу «${pending.subject}» (${note}, всего ${result.count} в .agent/answers.md).` }],
