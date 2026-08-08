@@ -166,6 +166,12 @@ export const budgets = {
       loops: { type: "number" },
       questions: { type: "number" },
       checkpointRetries: { type: "number" },
+      // maxParallel is declared here as well as in core/budgets.mjs for a reason the host makes
+      // unavoidable: it validates every function's OUTPUT against this schema, and
+      // additionalProperties:false turns a budget missing from this list into
+      // "Invalid output from budgets" — a crashed run with no hint about which key it disliked.
+      // Caught by the first live launch after maxParallel was added (run 657fcd98).
+      maxParallel: { type: "number" },
       source: { type: "string" },
     },
     required: ["ok"],

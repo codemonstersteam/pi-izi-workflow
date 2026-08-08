@@ -49,8 +49,16 @@ steps/design/       шаг 9: две проекции изменения. Сре
   design.mjs         ЧИСТОЕ ядро: parseDesign · parseRoutes · expand · checkDesign · newDesign
   design.test.mjs    happy + пять правил + «ни одного <module>» + тотальность разбора
 
-workflows/izi.js    вся программа: три рельсы, литералы бюджетов, ok/err/exit
-core/               общее (answers, findings, result, form) — как и было
+steps/scope/        (S17) шаг-РОЙ: роль scout, ДВА наряда (по полю kind клетки), одно ядро
+  scout.md           роль (имя файла = имя роли; roleDirectories += steps/scope/)
+  order.survey.tpl   наряд клетки kind="survey": модули, их api и зависимости
+  order.spine.tpl    наряд клетки kind="spine": пять ответов графа или found="no"
+  part.mjs           ЧИСТОЕ ядро: parsePart · checkPart · newPart; правила C1 · S1..S5 · P1..P3
+  part.test.mjs      тест по формуле + швы наряда (плейсхолдеры) и роли (запрет называет проверку)
+
+workflows/izi.js    вся программа: четыре рельсы, бюджеты из конфига, ok/err/exit
+core/               общее (answers, budgets, findings, result, form, xml) — `xml.mjs` (S17) вынут
+                    из steps/design: сканер тегов один на два среза, чтобы грамматика не разошлась
 bin/{answer,write-answer,cli-entry,decisions-log}.mjs  запасной канал (S13: не единственный —
                      основной путь чат-tool izi_answer), которым ОПЕРАТОР может писать ответ на
                      диск руками; write-answer.mjs — общая io-запись, использует и bin/answer.mjs,
@@ -129,7 +137,8 @@ async function surveyPlan() {                              // S15: шаг-СКР
   exit(ok({ artifact: PLAN, files: p.files, cells: p.cells, gaps: p.gaps }));
 }
 
-try { phase("task"); await task(); phase("brd"); await brd(); phase("survey-plan"); await surveyPlan(); }
+try { phase("task"); await task(); phase("brd"); await brd();
+      phase("survey-plan"); await surveyPlan(); phase("scope"); await scope(); }
 catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: String(e?.message ?? e) }); }
 ```
 
@@ -226,7 +235,7 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   прогона: якорь `limit` сработал на `Dockerfile.jvm` (слово в комментарии) — ложное попадание
   стоит скауту абзаца, ложный пропуск стоил бы графу узла
 
-### 4. `scope` — рой скаутов · role `scout` **веер** · **новое**
+### 4. `scope` — рой скаутов · role `scout` **веер** · **есть** (S17)
 - **вход:** клетка плана, `.agent/brd.md`
 - **выход:** `.agent/graph-parts/<клетка>.xml` — ФРАГМЕНТ грамматики графа, не документ: слияние
   делает скрипт, а свободный markdown скриптом не сливается (`docs/concept.md`, «Разведка»)

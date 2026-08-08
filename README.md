@@ -1,11 +1,13 @@
 # izi-pi-v2
 
-Первые три шага конвейера `izi-flow-v2` (`task → brd → survey-plan`), перенесённые на
-`pi-extensible-workflows` (pi v5.1.1) и переписанные на функции расширения (S11, S15). Порядок шагов
+Первые четыре шага конвейера `izi-flow-v2` (`task → brd → survey-plan → scope`), перенесённые на
+`pi-extensible-workflows` (pi v5.1.1) и переписанные на функции расширения (S11, S15, S17). Порядок шагов
 — код `workflows/izi.js`, а не манифест; бюджеты прогона с S16 поднимаются файлом проекта
 `izi.config.json` (см. ниже). Роль `gilb` превращает сырое требование оператора
 в BRD, который можно принять; шаг `survey-plan` — чистый скрипт без роли и без оператора: он режет дерево
-репозитория на клетки, которые скаут шага 4 физически способен прочесть (`docs/survey-plan.md`).
+репозитория на клетки, которые скаут шага 4 физически способен прочесть (`docs/survey-plan.md`);
+шаг `scope` — рой: роль `scout` по клетке в батче, два наряда по роду клетки, гардрейл `checkPart`
+судит СОСТАВ части, а не формулировки (`docs/scope.md`).
 Подробности программы — `docs/workflow.md`; принципы и что из них отложено на двух шагах —
 `docs/concept.md`.
 
@@ -16,9 +18,10 @@ cd ext && npm install && cd ..
 pi install ./ext
 ```
 
-`ext/` — pi-extension: десять функций хоста для воркфлоу-песочницы (`readText`, `answers`, `budgets`,
-`herdrStatus`, `checkTask`, `checkBrd`, `promote`, `setPending`, `clearPending`, `survey`), `roleDirectories: [steps/brd/]`,
-откуда pi резолвит роль `gilb` по имени файла `gilb.md`, и (S13) tool `izi_answer`, зарегистрированный
+`ext/` — pi-extension: двенадцать функций хоста для воркфлоу-песочницы (`readText`, `answers`, `budgets`,
+`herdrStatus`, `checkTask`, `checkBrd`, `promote`, `setPending`, `clearPending`, `survey`, `cells`,
+`checkPart`), `roleDirectories: [steps/brd/, steps/scope/]`,
+откуда pi резолвит роли `gilb` и `scout` по именам файлов `gilb.md` и `scout.md`, и (S13) tool `izi_answer`, зарегистрированный
 на самой ИНТЕРАКТИВНОЙ сессии через `pi.registerTool` — не на песочнице воркфлоу, а на модели,
 которая читает этот README прямо сейчас. `export default function extension(pi)` в `ext/index.mjs`
 делает оба вызова разом: `pi.registerTool(...)` (обычный контракт pi-расширения,
@@ -208,6 +211,12 @@ steps/survey-plan/plan.mjs     ЧИСТОЕ ядро раскладки: newPlan
                                 раньше. Роли у шага нет — ни gilb-подобного .md, ни order.tpl, ни
                                 staging: артефакт производит сам чек (S15)
 steps/survey-plan/plan.test.mjs тест по формуле: happy · шов по байтам · no-files
+
+steps/scope/scout.md           роль роя (S17): читает ТОЛЬКО файлы наряда, непрочитанное — <gap>
+steps/scope/order.survey.tpl   наряд клетки kind="survey" — модули, их api и зависимости
+steps/scope/order.spine.tpl    наряд клетки kind="spine" — пять ответов графа или found="no"
+steps/scope/part.mjs           ЧИСТОЕ ядро: parsePart · checkPart · newPart; правила C1·S1..S5·P1..P3
+steps/scope/part.test.mjs      тест по формуле + швы наряда (плейсхолдеры) и роли (запрет = проверка)
 
 prompts/izi.md                 pi prompt template — источник /izi; foreground: false (S13);
                                 устанавливается вместе с ext/ (pi.prompts в ext/package.json)

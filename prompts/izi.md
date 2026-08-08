@@ -1,5 +1,5 @@
 ---
-description: Запустить workflow izi (task → brd → survey-plan) в текущей сессии pi
+description: Запустить workflow izi (task → brd → survey-plan → scope) в текущей сессии pi
 ---
 Вызови tool `workflow` СЕЙЧАС ровно с этими параметрами — никаких других вызовов, никаких
 комментариев, никаких лишних параметров:

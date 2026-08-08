@@ -3,9 +3,13 @@
 Карточка шага — `docs/workflow.md` §3.4, обоснование — `docs/concept.md` («Разведка (шаги 3–5)»).
 Здесь: что строится, каким кодом и как встаёт в `workflows/izi.js`.
 
-**ЗАМЫСЕЛ на момент утверждения** (акцепт оператора получен до первой строки кода). Источник истины —
-файлы среза, а не этот документ: расхождение читается как дефект документа, если код прошёл тесты и
-живой прогон.
+**РЕАЛИЗОВАНО (S17).** Код — `steps/scope/{scout.md, order.survey.tpl, order.spine.tpl, part.mjs,
+part.test.mjs}`, `core/xml.mjs`, `ext/index.mjs::{cells, checkPart}`, четвёртая фаза
+`workflows/izi.js::scope`. Живой прогон в чужом проекте (quarkus `rest-json-quickstart`,
+`/private/tmp/izi-sandbox-scope`), runId `dee73d00-7b6e-4e8f-9e43-5f8afd5eef04`: `track:"ok"`,
+`cells=2 modules=18 gaps=0`, обе части промоутнуты в `.agent/graph-parts/`. Числа читаются из
+`journal.json` (`function/scope-batch/s2/checkPart/1` → `{ok:true, modules:18}`), а не из того, что
+напечатала модель. Источник истины — файлы среза, а не этот документ.
 
 ---
 
@@ -186,14 +190,19 @@ async function scope() {
   const TPL = { survey: await readText({ path: "steps/scope/order.survey.tpl" }),
                 spine:  await readText({ path: "steps/scope/order.spine.tpl" }) };
 
+  const width = Math.min(MAX_PARALLEL, SWARM_WIDTH);   // SWARM_WIDTH = 8 — ЛИТЕРАЛ, см. факт 4 ниже
   let modules = 0, gaps = 0;
-  for (let i = 0; i < plan.cells.length; i += MAX_PARALLEL) {
-    const batch = plan.cells.slice(i, i + MAX_PARALLEL);
-    const done = await parallel(`scope-b${i / MAX_PARALLEL + 1}`,
-      Object.fromEntries(batch.map((c) => [c.id, () => scout(c, TPL[c.kind], BRD)])));
-    const bad = Object.values(done).filter((r) => !r.ok);
+  for (let i = 0; i < plan.cells.length; i += width) {
+    const batch = plan.cells.slice(i, i + width);
+    const done = await parallel("scope-batch", {          // имя и запись задач — литералы, иначе
+      s1: () => slot(batch, 0, TPL, BRD),                 // хост не запустит скрипт вовсе
+      s2: () => slot(batch, 1, TPL, BRD),
+      // … s3..s8: слот берёт i-ю клетку батча, а если её нет — возвращает null и ничего не стоит
+    });
+    const results = ["s1", "s2", /* … */ "s8"].map((k) => done[k]).filter((r) => r);
+    const bad = results.filter((r) => !r.ok);
     if (bad.length) exit(err("blocked", { subject: bad.map((r) => r.why).join("\n  ") }));
-    for (const r of Object.values(done)) { modules += r.modules; gaps += r.gaps; }
+    for (const r of results) { modules += r.modules; gaps += r.gaps; }
   }
   log(`scope: cells=${plan.cells.length} modules=${modules} gaps=${gaps}`);
   exit(ok({ artifact: ".agent/graph-parts/", cells: plan.cells.length, modules, gaps }));
@@ -223,7 +232,7 @@ async function scout(cell, orderTpl, BRD) {           // одна клетка: 
 меняет `exit(ok(…))` на `log(…) + return` — ровно тем же движением, каким `brd()` перестал быть концом
 прогона в S15.
 
-### Три факта хоста, на которых это стоит
+### Четыре факта хоста, на которых это стоит
 
 1. **`parallel(name, record)`** принимает ЗАПИСЬ `{имя: () => …}`, не массив, и возвращает
    `{имя: значение}` (`pi-extensible-workflows/packages/core/src/execution.ts:245-266`). Имена задач —
@@ -235,8 +244,17 @@ async function scout(cell, orderTpl, BRD) {           // одна клетка: 
    `[inheritedAgentPath, callSite]`, а `parallel` даёт каждой задаче свой путь (`execution.ts:107-130,
    253`). Вне `parallel` тот же код — `INVALID_METADATA`.
 
-Потолка параллелизма у песочницы нет вовсе (`Promise.all` без ограничителя), поэтому батчи — наши, и
-`maxParallel` живёт бюджетом в `izi.config.json`, а не литералом в коде.
+4. **Веер не может быть динамическим — это проверяется ДО запуска.** Хост валидирует исходник
+   воркфлоу статически и требует у `parallel` литеральное имя и литеральную запись задач
+   (`validation.ts:755`). Живой запуск с `Object.fromEntries(batch.map(...))` — как было в первой
+   редакции этого документа — не начался вовсе: `The workflow metadata is invalid: parallel requires
+   an operation name string and tasks record`. Отсюда фиксированные слоты `s1..s8` и `SWARM_WIDTH`
+   **литералом в коде**; бюджет `maxParallel` из `izi.config.json` может только ОПУСТИТЬ ширину
+   (`Math.min`), поднять — нет. Пустой слот возвращает `null` и не стоит ничего.
+
+Потолка параллелизма у песочницы нет вовсе (`Promise.all` без ограничителя), поэтому батчи — наши.
+Цена этого решения названа: ширина роя живёт в двух местах — литералом в коде (потолок) и бюджетом в
+конфиге (фактическая), и первое поднять правкой конфига нельзя.
 
 ---
 

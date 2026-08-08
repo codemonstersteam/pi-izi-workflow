@@ -293,16 +293,45 @@ async function scout(cell, orderTpl, BRD) {
 //
 // EXTERNAL_DEPENDENCY (behavioural): parallel(name, RECORD) — the second argument is a record
 // { taskName: () => Promise }, not an array, and the result is { taskName: value }
-// (execution.ts:245-266). Task names are cell ids: stable, from the plan.
+// (execution.ts:245-266).
 //
-// Why batches at all: the sandbox has NO concurrency limiter — parallel() is Promise.all, so a
-// hundred cells would go to the model at once. MAX_PARALLEL is ours, and it lives in izi.config.json
-// rather than as a literal here (core/budgets.mjs holds the default).
+// BUG_FIX_CONTEXT: live launch in /private/tmp/izi-sandbox-scope, before a single token was spent.
+//   Previous: the batch was built dynamically — parallel(`scope-b${n}`, Object.fromEntries(
+//             batch.map((c) => [c.id, () => scout(c, …)]))), which reads naturally and is what the
+//             concept sketch showed.
+//   Problem:  the host validates the workflow SOURCE before running it and demands both arguments
+//             be literals: a literal string name and an ObjectExpression of tasks
+//             (pi-extensible-workflows/packages/core/src/validation.ts:755). The run never started —
+//             `The workflow metadata is invalid: parallel requires an operation name string and
+//             tasks record`. A swarm whose width comes from a config file at run time is therefore
+//             IMPOSSIBLE here, not merely discouraged.
+//   Fix:      a literal record of SWARM_WIDTH slots, each slot taking the i-th cell of the batch and
+//             returning null when the batch is shorter. The width is a literal in this file; the
+//             izi.config.json budget can only LOWER it (Math.min below), never raise it.
 //
-// Why the same `agent(...)` call site is legal in N concurrent tasks: the host keys its in-flight
+// Why any limit at all: the sandbox has NO concurrency limiter — parallel() is Promise.all, so a
+// hundred cells would go to the model at once.
+//
+// Why the same `agent(...)` call site is legal in N concurrent slots: the host keys its in-flight
 // guard on [inheritedAgentPath, callSite], and parallel() gives every task its own inherited path
 // (execution.ts:107-130, 253). Outside parallel(), two concurrent calls from one line are
 // INVALID_METADATA — which is why the swarm may not be hand-rolled with Promise.all.
+const SWARM_WIDTH = 8; // literal by host contract — see BUG_FIX_CONTEXT above
+
+// FUNCTION_CONTRACT: slot — one seat of the swarm
+//   Input:        batch — the cells of this batch; i — the seat's index; TPL — orders by cell kind;
+//                 BRD — the text of .agent/brd.md
+//   Dependencies: scout
+//   Antecedent:   i is within 0..SWARM_WIDTH-1; the batch may be SHORTER than the swarm
+//   Consequent:   success: scout's result, or null when this seat has no cell — an idle seat costs
+//                          nothing and is filtered out by the caller
+//   Purity:       io (through scout)
+async function slot(batch, i, TPL, BRD) {
+  const cell = batch[i];
+  if (!cell) return null;
+  return scout(cell, TPL[cell.kind] || TPL.survey, BRD);
+}
+
 async function scope() {
   const plan = await cells({ path: ".agent/survey-plan.json" });
   if (!plan.ok) exit(err("blocked", { subject: plan.why }));
@@ -313,17 +342,24 @@ async function scope() {
     spine: await readText({ path: "steps/scope/order.spine.tpl" }),
   };
 
+  const width = Math.min(MAX_PARALLEL, SWARM_WIDTH);
   let modules = 0, gaps = 0;
-  for (let i = 0; i < plan.cells.length; i += MAX_PARALLEL) {
-    const batch = plan.cells.slice(i, i + MAX_PARALLEL);
-    const n = Math.floor(i / MAX_PARALLEL) + 1;
-    log(`scope: batch ${n}, cells ${batch.map((c) => c.id).join(" ")}`);
+  for (let i = 0; i < plan.cells.length; i += width) {
+    const batch = plan.cells.slice(i, i + width);
+    log(`scope: батч ${batch.map((c) => c.id).join(" ")}`);
 
-    const done = await parallel(`scope-b${n}`, Object.fromEntries(
-      batch.map((c) => [c.id, () => scout(c, TPL[c.kind] || TPL.survey, BRD)]),
-    ));
+    const done = await parallel("scope-batch", {
+      s1: () => slot(batch, 0, TPL, BRD),
+      s2: () => slot(batch, 1, TPL, BRD),
+      s3: () => slot(batch, 2, TPL, BRD),
+      s4: () => slot(batch, 3, TPL, BRD),
+      s5: () => slot(batch, 4, TPL, BRD),
+      s6: () => slot(batch, 5, TPL, BRD),
+      s7: () => slot(batch, 6, TPL, BRD),
+      s8: () => slot(batch, 7, TPL, BRD),
+    });
 
-    const results = Object.keys(done).map((id) => done[id]);
+    const results = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"].map((k) => done[k]).filter((r) => r);
     const bad = results.filter((r) => !r.ok);
     if (bad.length) exit(err("blocked", { subject: bad.map((r) => r.why).join("\n  ") }));
     for (const r of results) { modules += r.modules; gaps += r.gaps; }
