@@ -2,3 +2,4 @@
 .DS_Store
 ext/node_modules/
 
+.claude/
