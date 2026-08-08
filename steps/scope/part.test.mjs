@@ -1,0 +1,152 @@
+// Slice `scope`: the guardrail of step 4 — a PURE core; its io (ext/index.mjs::checkPart) is proven
+// by a live run, not by units (standards/code.md). Formula: 1 happy + Σ antecedent branches with a
+// DISTINGUISHABLE consequent — here, one happy path per cell kind, totality, and one unit per rule
+// that can silently degrade (S1, S2, S4, P1, P3). Rule numbers are docs/scope.md §3.
+
+import test from "node:test"
+import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { parsePart, checkPart, newPart } from "./part.mjs"
+
+const surveyCell = {
+  id: "c1",
+  kind: "survey",
+  files: [{ path: "src/Api.java" }, { path: "src/Model.java" }, { path: "src/import.sql" }],
+}
+
+const SURVEY_XML = `
+<part cell="c1" kind="survey">
+  <module path="src/Api.java">
+    <role>REST endpoint for orders</role>
+    <api name="GET /orders"/>
+    <dep path="src/Model.java"/>
+    <test path="src/test/ApiTest.java" suite="unit"/>
+  </module>
+  <module path="src/Model.java" deps="none">
+    <role>plain data record</role>
+  </module>
+  <gap path="src/import.sql" why="not read: 480 KB of seed data, no module in it"/>
+</part>`
+
+const spineCell = { id: "c0", kind: "spine", files: [{ path: "pom.xml" }, { path: "README.md" }] }
+
+const SPINE_XML = `
+<part cell="c0" kind="spine">
+  <suite id="unit" kind="unit" cmd="./mvnw -q test" one="./mvnw -q test -Dtest={class}" path="src/test/java"/>
+  <suite id="it" kind="component" cmd="./mvnw -q verify -Pit" one="" path="src/it"/>
+  <build cmd="./mvnw -q package"/>
+  <toggles found="no"/>
+  <branching branches="feature/&lt;slug&gt;" commits="conventional-commits"/>
+  <contract found="no"/>
+</part>`
+
+test("happy survey: modules, gap and edges parsed; part is green", () => {
+  const part = parsePart(SURVEY_XML)
+  assert.equal(part.cell, "c1")
+  assert.equal(part.kind, "survey")
+  assert.deepEqual(part.modules.map((m) => m.path), ["src/Api.java", "src/Model.java"])
+  assert.deepEqual(part.modules[0].deps, ["src/Model.java"])
+  assert.deepEqual(part.modules[0].api, ["GET /orders"])
+  assert.deepEqual(part.modules[0].tests, [{ path: "src/test/ApiTest.java", suite: "unit" }])
+  assert.equal(part.modules[1].depsNone, true) // absence declared, not omitted
+  assert.equal(part.gaps[0].path, "src/import.sql")
+
+  assert.deepEqual(checkPart({ part, cell: surveyCell }), [])
+  const r = newPart({ xml: SURVEY_XML, cell: surveyCell })
+  assert.equal(r.ok, true)
+  assert.equal(r.value.modules.length, 2)
+})
+
+test("happy spine: five answers, empty `one` and found=\"no\" are valid", () => {
+  const part = parsePart(SPINE_XML)
+  assert.deepEqual(part.suites.map((s) => s.id), ["unit", "it"])
+  assert.equal(part.suites[1].one, "") // valid: step 15 runs the whole suite and logs that price
+  assert.equal(part.answers.toggles.found, "no")
+  assert.equal(part.answers.branching.commits, "conventional-commits")
+  assert.deepEqual(checkPart({ part, cell: spineCell }), [])
+})
+
+test("totality: garbage parses to an empty part, and C1 refuses it — never a throw", () => {
+  const empty = parsePart(undefined)
+  assert.deepEqual(empty.modules, [])
+  assert.deepEqual(empty.gaps, [])
+  assert.equal(empty.cell, "")
+
+  const r = newPart({ xml: "not xml at all", cell: surveyCell })
+  assert.equal(r.ok, false)
+  assert.equal(r.error.cls, "invalid-part")
+  assert.match(r.error.detail, /^C1 c1:/)
+})
+
+test("S1: a cell file closed by neither <module> nor <gap> is a blocker", () => {
+  const xml = SURVEY_XML.replace(/  <gap[^>]*\/>\n/, "")
+  const blockers = checkPart({ part: parsePart(xml), cell: surveyCell })
+  assert.deepEqual(blockers, ["S1 c1: file is closed by neither <module> nor <gap> — src/import.sql"])
+})
+
+test("S2: a path outside the cell is a blocker — the scout does not pick its own files", () => {
+  const xml = SURVEY_XML.replace("src/Model.java\" deps", "src/Other.java\" deps")
+  const blockers = checkPart({ part: parsePart(xml), cell: surveyCell })
+  assert.ok(blockers.some((b) => b.startsWith("S2 c1: path does not belong to this cell — src/Other.java")))
+})
+
+test("S4: a module with neither <dep> nor deps=\"none\" is a blocker; deps=\"none\" is an answer", () => {
+  const silent = SURVEY_XML.replace(' deps="none"', "")
+  assert.deepEqual(checkPart({ part: parsePart(silent), cell: surveyCell }),
+    ['S4 c1: neither <dep> nor deps="none" — src/Model.java'])
+
+  const selfEdge = SURVEY_XML.replace('<dep path="src/Model.java"/>', '<dep path="src/Api.java"/>')
+  assert.ok(checkPart({ part: parsePart(selfEdge), cell: surveyCell })
+    .some((b) => b === 'S4 c1: <dep> points at its own module — src/Api.java'))
+})
+
+test("P1: a missing spine answer is a blocker; suites are answered by <suite> or found=\"no\"", () => {
+  const noToggles = SPINE_XML.replace('  <toggles found="no"/>\n', "")
+  assert.ok(checkPart({ part: parsePart(noToggles), cell: spineCell })
+    .some((b) => b.startsWith("P1 c0: <toggles> is missing or empty")))
+
+  const noSuites = SPINE_XML.replace(/  <suite [^>]*\/>\n/g, "")
+  assert.ok(checkPart({ part: parsePart(noSuites), cell: spineCell })
+    .some((b) => b.startsWith("P1 c0: no <suite> and no <suites")))
+
+  const declaredAbsent = noSuites.replace("<build", '<suites found="no"/>\n  <build')
+  assert.deepEqual(checkPart({ part: parsePart(declaredAbsent), cell: spineCell }), [])
+})
+
+test("P2/P3: a suite without cmd and a duplicate id are blockers", () => {
+  const broken = SPINE_XML
+    .replace('cmd="./mvnw -q verify -Pit" one="" path="src/it"', 'cmd="" one="" path="src/it"')
+    .replace('id="it"', 'id="unit"')
+  const blockers = checkPart({ part: parsePart(broken), cell: spineCell })
+  assert.ok(blockers.some((b) => b === 'P2 c0: <suite id="unit"> has empty cmd'))
+  assert.ok(blockers.some((b) => b === 'P3 c0: duplicate <suite id="unit">'))
+})
+
+// The role and its two orders are files the host reads, not code — but two of their properties can
+// degrade silently and cost a live run each, so they carry a seam here.
+//
+// 1. prompt() demands an EXACT bidirectional match between a template's placeholders and the values
+//    the workflow passes (execution.ts: "Missing prompt value" / "Unused prompt value" both throw).
+//    A key added to one order and forgotten in the other kills the run at launch, not at review.
+//    This is also why `-Dtest={{class}}` in the spine order is doubled: `{class}` would read as a
+//    placeholder the workflow never passes.
+// 2. standards/role.md: every prohibition in a role names the machine check that catches it.
+const ORDER_KEYS = ["CELL", "FILES", "SUBJECTS", "BRD", "FEEDBACK", "STAGING", "CHECK"]
+const placeholders = (tpl) =>
+  [...tpl.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
+
+test("orders: both templates use exactly the keys the workflow passes", () => {
+  for (const file of ["order.survey.tpl", "order.spine.tpl"]) {
+    const tpl = readFileSync(new URL(file, import.meta.url), "utf8")
+    assert.deepEqual([...new Set(placeholders(tpl))].sort(), [...ORDER_KEYS].sort(), file)
+  }
+})
+
+test("role: scout.md names the machine check behind each of its prohibitions", () => {
+  // The role file is named by ROLE, not by step: pi resolves `agent({role: "scout"})` by FILENAME
+  // inside the declared roleDirectories (ext/index.mjs), so scope/role.md would install as "role".
+  const role = readFileSync(new URL("scout.md", import.meta.url), "utf8")
+  for (const rule of ["S1", "S2", "S3", "S4", "S5"]) assert.match(role, new RegExp(`machine-checked as \`${rule}\``))
+  assert.match(role, /deps="none"/)   // the dependency answer, not silence (LAW 3)
+  assert.match(role, /found="no"/)    // "not found" is an answer, not a guess (LAW 5)
+})

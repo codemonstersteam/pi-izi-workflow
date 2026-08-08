@@ -19,7 +19,12 @@ import { ok, err } from "./result.mjs"
 // loops — пере-делегации роли по КРАСНОМУ чеку гардрейла; questions — обмены с оператором за
 // прогон; checkpointRetries — переспросы на ОДНОМ вопросе, когда ответ не появился в answers.md.
 // Три разных счётчика, и путать их нельзя: вопрос не тратит loops (workflows/izi.js::brd).
-export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, questions: 3, checkpointRetries: 2 })
+//
+// maxParallel — размер БАТЧА веера (шаг 4 `scope`), а не потолок числа клеток. Он существует
+// потому, что у песочницы воркфлоу ограничителя нет вовсе: `parallel` — это `Promise.all`
+// (pi-extensible-workflows/packages/core/src/execution.ts:245-266), и сотня клеток ушла бы в модель
+// разом. Умолчание 8 — потолок параллелизма pi.
+export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, questions: 3, checkpointRetries: 2, maxParallel: 8 })
 export const BUDGETS_PATH = "izi.config.json"
 
 const KEYS = Object.keys(DEFAULT_BUDGETS)

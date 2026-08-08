@@ -14,6 +14,7 @@ test("конфиг задаёт бюджеты; недостающий ключ 
 
 test("файла нет — умолчания целиком, а не отказ", () => {
   assert.deepEqual(newBudgets("").value, DEFAULT_BUDGETS)
+  assert.equal(DEFAULT_BUDGETS.maxParallel, 8) // размер батча веера шага 4 живёт здесь, не в izi.js
 })
 
 test("сломанный конфиг — отказ, а не тихое умолчание", () => {

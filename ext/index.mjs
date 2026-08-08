@@ -47,8 +47,8 @@
 //               rather than writing an answer nobody asked for or silently doing nothing.
 // Interface:    default export — extension(pi): registers the izi_answer tool on pi AND calls
 //               registerWorkflowExtension (pi-extensible-workflows contract) for the sandbox
-//               functions and role directory. readText/answers/checkTask/checkBrd/promote/
-//               setPending/clearPending/survey are ALSO named exports — pi-extensible-workflows never
+//               functions and role directories. readText/answers/checkTask/checkBrd/promote/
+//               setPending/clearPending/survey/cells/checkPart are ALSO named exports — pi-extensible-workflows never
 //               exercises run(input, context) itself (it is the caller, not test scaffolding), so
 //               ext/index.test.mjs imports these directly and calls run() with a fabricated
 //               { run: { cwd } } context to prove the anchor without a live pi/workflow harness.
@@ -60,6 +60,7 @@ import { registerWorkflowExtension, herdrAvailable, herdrPaneId, loadSettings } 
 import { checkTaskText } from "../steps/task/task.mjs"
 import { newBrd, parseBrd } from "../steps/brd/brd.mjs"
 import { newPlan } from "../steps/survey-plan/plan.mjs"
+import { newPart } from "../steps/scope/part.mjs"
 import { newAnswers, looksLikeTemplate } from "../core/answers.mjs"
 import { newBudgets, BUDGETS_PATH } from "../core/budgets.mjs"
 import { writeAnswer } from "../bin/write-answer.mjs"
@@ -352,6 +353,117 @@ export const survey = {
   },
 }
 
+// --- scope: plan cells in, graph parts judged ----------------------------------------------------
+//
+// PLAN_PATH — where step 3 leaves the swarm layout. It is a CONSTANT here rather than a parameter of
+// checkPart on purpose: the file list a part is judged against must reach the guardrail from the
+// plan by machine — not from the workflow script, and never from the model. Same discipline as
+// izi_answer reading the question key out of .agent/pending.json instead of taking it as an
+// argument: what a machine can copy, a machine copies.
+const PLAN_PATH = ".agent/survey-plan.json"
+
+// readPlanCells — the plan as data, or a refusal with a diagnosis. Shared by both functions below so
+// the file is parsed in exactly one place. An absent plan is a REFUSAL, not an empty list: "there is
+// no plan" must never silently become "the plan has no cells" (standards/code.md §2).
+function readPlanCells(root) {
+  const raw = readIfExists(root, PLAN_PATH)
+  if (!raw.trim()) return { ok: false, why: `${PLAN_PATH} не существует — шаг 3 survey-plan не отработал` }
+  let plan
+  try {
+    plan = JSON.parse(raw)
+  } catch (e) {
+    return { ok: false, why: `${PLAN_PATH} не разбирается как JSON — ${e.message}` }
+  }
+  if (!plan || !Array.isArray(plan.cells) || !plan.cells.length) {
+    return { ok: false, why: `${PLAN_PATH} не несёт ни одной клетки — картировать нечего` }
+  }
+  return { ok: true, cells: plan.cells }
+}
+
+export const cells = {
+  description: "Scout cells from .agent/survey-plan.json: id, kind, subjects and the file list of each cell. The workflow sandbox has no fs and does not parse JSON — this function is how step 4 sees the layout step 3 produced.",
+  input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      cells: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            kind: { type: "string" },
+            subjects: { type: "array", items: { type: "string" } },
+            files: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { path: { type: "string" }, bytes: { type: "number" } },
+                required: ["path"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["id", "kind"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_input, context) {
+    const root = runRoot(context)
+    const r = readPlanCells(root)
+    if (!r.ok) return { ok: false, why: r.why }
+    return {
+      ok: true,
+      cells: r.cells.map((c) => ({
+        id: c.id,
+        kind: c.kind,
+        subjects: [...(c.subjects || [])],
+        files: (c.files || []).map((f) => ({ path: f.path, bytes: f.bytes })),
+      })),
+    }
+  },
+}
+
+export const checkPart = {
+  description: "Judge a staged graph part by steps/scope/part.mjs::newPart. Takes the CELL ID, never a file list: the files a part must cover are read here from .agent/survey-plan.json, so neither the model nor the workflow can hand the guardrail a list that suits the answer.",
+  input: {
+    type: "object",
+    properties: { path: { type: "string" }, cell: { type: "string" } },
+    required: ["path", "cell"],
+    additionalProperties: false,
+  },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      modules: { type: "number" },
+      gaps: { type: "number" },
+      blockers: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ path, cell }, context) {
+    const root = runRoot(context)
+    const plan = readPlanCells(root)
+    if (!plan.ok) return { ok: false, blockers: plan.why }
+    const target = plan.cells.find((c) => c.id === cell)
+    if (!target) return { ok: false, blockers: `cell ${cell} is not in ${PLAN_PATH} — the workflow ordered a cell the plan does not carry` }
+    if (!existsSync(at(root, path))) {
+      return { ok: false, blockers: `${path} does not exist — the role wrote nothing to the staging path` }
+    }
+    const r = newPart({ xml: readFileSync(at(root, path), "utf8"), cell: target })
+    if (!r.ok) return { ok: false, blockers: r.error.detail }
+    return { ok: true, modules: r.value.modules.length, gaps: r.value.gaps.length }
+  },
+}
+
 // izi_answer — an ordinary pi TOOL (not a workflow sandbox function: this one is called by the
 // INTERACTIVE session's own model, reacting to the checkpoint follow-up message that
 // workflows/izi.js's askOperator() delivers into this same chat). It takes exactly one parameter,
@@ -399,14 +511,14 @@ const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.4.0",
-    headline: "izi: task → brd → survey-plan host functions",
-    description: "readText/answers/budgets/herdrStatus/checkTask/checkBrd/promote/setPending/clearPending/survey, plus the gilb role directory (steps/brd/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, budgets, herdrStatus, checkTask, checkBrd, promote, setPending, clearPending, survey },
-    // steps/brd/ carries gilb.md (the role file, named by ROLE not by step — see steps/brd/gilb.md's
-    // own header) alongside brd.mjs/order.tpl/step tests; pi-extensible-workflows scans a role
-    // directory for *.md files only (validation.js scanRoleFiles), so the non-.md neighbours here
-    // are inert to role resolution.
-    roleDirectories: [new URL("../steps/brd/", import.meta.url)],
+    version: "1.5.0",
+    headline: "izi: task → brd → survey-plan → scope host functions",
+    description: "readText/answers/budgets/herdrStatus/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/checkPart, plus the gilb and scout role directories (steps/brd/, steps/scope/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, budgets, herdrStatus, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, checkPart },
+    // steps/brd/ carries gilb.md and steps/scope/ carries scout.md (role files, named by ROLE not by
+    // step — see steps/brd/gilb.md's own header) alongside their cores/orders/tests;
+    // pi-extensible-workflows scans a role directory for *.md files only (validation.js
+    // scanRoleFiles), so the non-.md neighbours here are inert to role resolution.
+    roleDirectories: [new URL("../steps/brd/", import.meta.url), new URL("../steps/scope/", import.meta.url)],
   })
 }

@@ -24,85 +24,89 @@
       чата и без соседей, обязан суметь его изменить — больше ничем объём комментария не меряется
 - **готово:** правило живёт в одном месте; `docs/scope.md` §7 на него ссылается, а не пересказывает
 
-## S17-1 · `core/xml.mjs` — сканер тегов, один на два среза
-- [ ] `attrs` · `ATTRS` · `tag` вынуты из `steps/design/design.mjs`, тот импортирует их
-- [ ] `ATTRS` сохраняет кавычко-устойчивость (`>` внутри значения — `steps="a -> b"`, `out="Result<T>"`)
-- [ ] своего теста нет: сканер доказывают уже существующие `design.test.mjs` и будущий `part.test.mjs`
+## S17-1 · `core/xml.mjs` — сканер тегов, один на два среза · **СДЕЛАНО**
+- [x] `attrs` · `ATTRS` · `tag` вынуты из `steps/design/design.mjs`, тот импортирует их
+- [x] `ATTRS` сохраняет кавычко-устойчивость (`>` внутри значения — `steps="a -> b"`, `out="Result<T>"`)
+- [x] своего теста нет: сканер доказывают уже существующие `design.test.mjs` и будущий `part.test.mjs`
 - **шов:** существующие тесты `design` остаются зелёными БЕЗ правок — иначе вынос изменил поведение
+- **шов доказан:** `design.test.mjs` зелёный без единой правки после выноса
 
-## S17-2 · `steps/scope/part.mjs` — разбор части
-- [ ] `parsePart(xml) -> { cell, kind, modules[], gaps[], spine{} }`, тотальна: мусор/`undefined` дают
+
+## S17-2 · `steps/scope/part.mjs` — разбор части · **СДЕЛАНО**
+- [x] `parsePart(xml) -> { cell, kind, modules[], gaps[], spine{} }`, тотальна: мусор/`undefined` дают
       пустой разбор, а не исключение
-- [ ] `<module>` несёт `path`, `role`, `api[]`, `deps[]`, `depsNone`, `test{path,suite}`
-- [ ] `part.test.mjs`: happy (survey + spine в одном тексте) · тотальность
+- [x] `<module>` несёт `path`, `role`, `api[]`, `deps[]`, `depsNone`, `test{path,suite}`
+- [x] `part.test.mjs`: happy (survey + spine в одном тексте) · тотальность
 - **шов:** сломать регэксп корня `<part>` → happy краснеет на `cell`/`kind`
 
-## S17-3 · `checkPart` — правила клетки `survey`
-- [ ] C1 (корень совпадает с заказанной клеткой) · S1 покрытие · S2 чужих путей нет · S3 непустой
+## S17-3 · `checkPart` — правила клетки `survey` · **СДЕЛАНО**
+- [x] C1 (корень совпадает с заказанной клеткой) · S1 покрытие · S2 чужих путей нет · S3 непустой
       `role` · S4 зависимость объявлена (`<dep>` либо `deps="none"`, `path` непуст и не свой) ·
       S5 `<gap>` несёт `why`
-- [ ] блокер несёт НОМЕР правила и путь — его читает не человек, а роль в `FEEDBACK`
-- [ ] тест: зелёная часть · по юниту на S1, S2, S4 (различимое следствие)
+- [x] блокер несёт НОМЕР правила и путь — его читает не человек, а роль в `FEEDBACK`
+- [x] тест: зелёная часть · по юниту на S1, S2, S4 (различимое следствие)
 - **шов:** убрать ветку `deps="none"` из S4 → юнит S4 краснеет; вернуть
 
-## S17-4 · `checkPart` — правила клетки `spine`
-- [ ] P1 пять ответов присутствуют (значение или `found="no"`) · P2 у `<suite>` непусты
+## S17-4 · `checkPart` — правила клетки `spine` · **СДЕЛАНО**
+- [x] P1 пять ответов присутствуют (значение или `found="no"`) · P2 у `<suite>` непусты
       `id/kind/cmd/path`, `one` может быть пуст · P3 `id` уникальны
-- [ ] «ни одного `<suite>`» здесь НЕ отказ: `<suites found="no"/>` — валидный ответ, полосу это
+- [x] «ни одного `<suite>`» здесь НЕ отказ: `<suites found="no"/>` — валидный ответ, полосу это
       останавливает на шаге 5
-- [ ] тест: зелёный хребет с пустым `one` · пропущенный ответ (P1) · дубль `id` (P3)
+- [x] тест: зелёный хребет с пустым `one` · пропущенный ответ (P1) · дубль `id` (P3)
 
-## S17-5 · `newPart` — фасад среза
-- [ ] `newPart({xml, cell}) -> Result<Part, "invalid-part">`; блокеры одной строкой через `\n  ` —
+## S17-5 · `newPart` — фасад среза · **СДЕЛАНО**
+- [x] `newPart({xml, cell}) -> Result<Part, "invalid-part">`; блокеры одной строкой через `\n  ` —
       тем же способом, что `newBrd` и `newDesign`
-- [ ] `cell` приходит целиком (`{id, kind, files[]}`): списки S1/S2 берутся из ПЛАНА, не из части
-- [ ] тест: ok несёт `modules`/`gaps` · пустой текст → `invalid-part`
+- [x] `cell` приходит целиком (`{id, kind, files[]}`): списки S1/S2 берутся из ПЛАНА, не из части
+- [x] тест: ok несёт `modules`/`gaps` · пустой текст → `invalid-part`
 
-## S17-6 · `core/budgets.mjs` — `maxParallel`
-- [ ] `DEFAULT_BUDGETS.maxParallel = 8`, целое ≥ 1, как прочие бюджеты
-- [ ] тест `budgets.test.mjs` дополнен: умолчание отдаётся, неизвестный ключ по-прежнему отказ
+## S17-6 · `core/budgets.mjs` — `maxParallel` · **СДЕЛАНО**
+- [x] `DEFAULT_BUDGETS.maxParallel = 8`, целое ≥ 1, как прочие бюджеты
+- [x] тест `budgets.test.mjs` дополнен: умолчание отдаётся, неизвестный ключ по-прежнему отказ
 - **шов:** конфиг с `maxParallel: 0` → отказ, а не тихое умолчание
 
-## S17-7 · `ext/index.mjs` — функции `cells` и `checkPart`
-- [ ] `cells({path})` отдаёт клетки плана воркфлоу-скрипту (в песочнице нет `fs` и нет разбора JSON);
+## S17-7 · `ext/index.mjs` — функции `cells` и `checkPart` · **СДЕЛАНО**
+- [x] `cells({path})` отдаёт клетки плана воркфлоу-скрипту (в песочнице нет `fs` и нет разбора JSON);
       файла нет / битый JSON → `ok:false, why`, а не пустой список
-- [ ] `checkPart({path, cell})` читает `.agent/survey-plan.json` САМ и находит клетку по id — список
+- [x] `checkPart({path, cell})` читает `.agent/survey-plan.json` САМ и находит клетку по id — список
       файлов приезжает в гардрейл машиной, не через модель и не через скрипт
-- [ ] обе резолвят пути от `context.run.cwd`, обе зарегистрированы в `functions`
-- [ ] `roleDirectories += steps/scope/`; `version`/`headline`/`description` расширения обновлены
-- [ ] юнитов нет по контракту io-трубы — доказывает S17-11
+- [x] обе резолвят пути от `context.run.cwd`, обе зарегистрированы в `functions`
+- [x] `roleDirectories += steps/scope/`; `version`/`headline`/`description` расширения обновлены
+- [x] юнитов нет по контракту io-трубы — доказывает S17-11
 
-## S17-8 · Роль `scout` и два наряда
-- [ ] `steps/scope/scout.md` — слои `standards/role.md`, английский; LAW: список файлов приезжает в
+## S17-8 · Роль `scout` и два наряда · **СДЕЛАНО**
+- [x] `steps/scope/scout.md` — слои `standards/role.md`, английский; LAW: список файлов приезжает в
       наряде · непрочитанное = `<gap>` · зависимость объявляется всегда · `found="no"` — валидный
       ответ хребта · роль себя не сертифицирует
-- [ ] `$START_FORBIDDEN` называет машинную проверку каждого запрета (номер правила из `docs/scope.md` §3)
-- [ ] `$START_EXAMPLE` — ЧУЖОЙ домен (не quarkus/fruit: он приедет живым входом)
-- [ ] `order.survey.tpl` и `order.spine.tpl`: плейсхолдеры `{CELL} {FILES} {SUBJECTS} {BRD}
+- [x] `$START_FORBIDDEN` называет машинную проверку каждого запрета (номер правила из `docs/scope.md` §3)
+- [x] `$START_EXAMPLE` — ЧУЖОЙ домен (не quarkus/fruit: он приедет живым входом)
+- [x] `order.survey.tpl` и `order.spine.tpl`: плейсхолдеры `{CELL} {FILES} {SUBJECTS} {BRD}
       {FEEDBACK} {STAGING} {CHECK}` — `prompt()` требует ТОЧНОГО совпадения в обе стороны
-- [ ] тест: оба наряда несут ровно эти ключи; роль называет `<gap>` и `deps="none"` (грепом, как
+- [x] тест: оба наряда несут ровно эти ключи; роль называет `<gap>` и `deps="none"` (грепом, как
       `brd.test.mjs` грепает `invented-default`)
 
-## S17-9 · `workflows/izi.js` — четвёртая фаза, веер
-- [ ] `surveyPlan()` на успехе `log(...) + return` вместо `exit(ok(...))`
-- [ ] `scope()`: клетки → батчи по `MAX_PARALLEL` → `parallel(name, ЗАПИСЬ)`; отказ клетки едет
+## S17-9 · `workflows/izi.js` — четвёртая фаза, веер · **СДЕЛАНО**
+- [x] `surveyPlan()` на успехе `log(...) + return` вместо `exit(ok(...))`
+- [x] `scope()`: клетки → батчи по `MAX_PARALLEL` → `parallel(name, ЗАПИСЬ)`; отказ клетки едет
       ЗНАЧЕНИЕМ (`{ok:false, why}`), потому что `parallel` глотает исключение и бросает своё
-- [ ] `scout(cell, orderTpl, BRD)`: наряд по `cell.kind` → `agent({role:"scout"})` → `checkPart` ПО
+- [x] `scout(cell, orderTpl, BRD)`: наряд по `cell.kind` → `agent({role:"scout"})` → `checkPart` ПО
       STAGING → `promote` только на зелёном; красный → `FEEDBACK`, до `LOOPS` пере-делегаций
-- [ ] `ENVELOPE` дополнен `modules` и `gaps`
-- [ ] `log("scope: cells=… modules=… gaps=…")` перед выходом
-- [ ] юнитов нет: воркфлоу-скрипт доказывает живой прогон (S17-11)
+- [x] `ENVELOPE` дополнен `modules` и `gaps`
+- [x] `log("scope: cells=… modules=… gaps=…")` перед выходом
+- [x] юнитов нет: воркфлоу-скрипт доказывает живой прогон (S17-11)
 
-## S17-10 · Zero-Context: комментарии `workflows/izi.js`
-- [ ] `MODULE_CONTRACT` вместо прозаической шапки
-- [ ] `FUNCTION_CONTRACT` на `task` · `askOperator` · `brd` · `surveyPlan` · `scope` · `scout` ·
+## S17-10 · Zero-Context: комментарии `workflows/izi.js` · **СДЕЛАНО**
+- [x] `MODULE_CONTRACT` вместо прозаической шапки
+- [x] `FUNCTION_CONTRACT` на `task` · `askOperator` · `brd` · `surveyPlan` · `scope` · `scout` ·
       `askPrompt` · `byteLen`
-- [ ] `EXTERNAL_DEPENDENCY`: функции расширения · `izi.config.json` · роли `gilb`/`scout` (резолв по
+- [x] `EXTERNAL_DEPENDENCY`: функции расширения · `izi.config.json` · роли `gilb`/`scout` (резолв по
       ИМЕНИ ФАЙЛА) · глобалы песочницы (без `Date` и `Math.random`)
-- [ ] `BUG_FIX_CONTEXT`: `clearPending({})` (прогон `8bb23932` — краш на пустом аргументе после
-      принятого ответа) · `context.run.cwd` вместо `import.meta.url` (прогон `2e71776f` — три
-      пере-делегации вслепую) · отказ клетки значением (`execution.ts:253-262`)
-- [ ] весь файл по-английски
+- [x] `BUG_FIX_CONTEXT`: `clearPending({})` (прогон `8bb23932` — краш на пустом аргументе после
+      принятого ответа) · отказ клетки ЗНАЧЕНИЕМ (`execution.ts:253-262`) · «X is not defined» =
+      расширение старше воркфлоу · «повторы исчерпаны» без диагноза гардрейла (S14).
+      Дефект `context.run.cwd` вместо `import.meta.url` (прогон `2e71776f`) остался там, где он и
+      живёт — в `ext/index.mjs`: в `izi.js` путей нет вовсе
+- [x] весь файл по-английски
 
 ## S17-11 · Живой прогон в чужом проекте
 - [ ] `/private/tmp/quarkus-rest-json-app-v2-*`, чистый `.agent/`: `/izi` доходит до

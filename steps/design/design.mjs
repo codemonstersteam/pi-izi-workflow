@@ -17,18 +17,12 @@
 //             newDesign({ xml, frd, known }) -> Result<Design, "invalid-design">
 
 import { ok, err } from "../../core/result.mjs"
+// EXTERNAL_DEPENDENCY: core/xml.mjs — сканер тегов (attrs · ATTRS · tag) общий с steps/scope: одна
+// грамматика на два среза читается одним кодом, иначе разбор частей и разбор дизайна разойдутся.
+// Там же живёт BUG_FIX_CONTEXT про кавычко-устойчивость ATTRS.
+import { attrs, ATTRS, tag } from "../../core/xml.mjs"
 
-// Грамматика узкая и своя, поэтому парсер — сканер тегов, а не XML-библиотека: зависимостей
-// конвейеру не заводим (CLAUDE.md, $START_FORBIDDEN), а всё, что шире этой грамматики, гардрейлу
-// всё равно не нужно — незнакомый тег просто не читается.
-const attrs = (tag) => Object.fromEntries([...String(tag).matchAll(/(\w+)="([^"]*)"/g)].map((m) => [m[1], m[2]]))
 const alts = (s) => String(s || "").split("|").map((x) => x.trim()).filter(Boolean)
-
-// ATTRS — тело тега, кавычко-устойчиво: `(?:"[^"]*"|[^>])*` пропускает `>` ВНУТРИ значения. Наивное
-// `[^>]*` обрывалось на первой же стрелке `steps="a -> b"` (и оборвалось бы на `out="Result<T>"`),
-// маршруты не парсились вовсе, и все узлы краснели правилом 2 — поймано тестом, не рассуждением.
-const ATTRS = '((?:"[^"]*"|[^>])*)'
-const tag = (name, tail = "/>") => new RegExp(`<${name}\\b${ATTRS}${tail}`, "g")
 
 // FUNCTION_CONTRACT: parseDesign — узлы дизайн-графа из его текста
 //   Input:        xml — текст `.agent/design-graph.xml`; тип не ограничен
