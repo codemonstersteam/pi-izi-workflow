@@ -78,6 +78,20 @@ const API_SCOPES = Object.freeze(["public", "internal"])
 export const HTTP_API_NAME = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \/\S*$/
 
 const SUITE_KEYS = ["id", "kind", "cmd", "path"] // `one` is deliberately absent: empty is valid
+
+// SUITE_KINDS / suiteId — the vocabulary of test suites and the shape of their id.
+//
+// BUG_FIX_CONTEXT: четыре живых прогона подряд назвали ОДИН И ТОТ ЖЕ сьют по-разному —
+//   `integ-native` (dee73d00), `integration` (e51553dc), `native-it` (03bc51ef),
+//   `native-integration` (8f0e03fc). `kind` при этом проехал как `integration` (e51553dc), которого
+//   в словаре наряда нет вовсе: P2 проверял непустоту, но не принадлежность.
+//   Проблема: имя, которое каждый прогон новое, невозможно ни с чем сшить — ни `<test suite="…">`
+//             узла, ни план шага 10, который собирает из сьюта команду проверки.
+//   Правка:   `kind` из закрытого словаря, а `id` обязан НАЧИНАТЬСЯ со своего рода:
+//             `unit`, `component`, `component-native`, `contract-pact`. Разнобой становится
+//             невозможен по форме, а два сьюта одного рода по-прежнему выразимы.
+export const SUITE_KINDS = Object.freeze(["unit", "component", "contract", "e2e"])
+const suiteId = (kind) => new RegExp(`^${kind}(-[a-z0-9]+)*$`)
 const text = (s) => String(s == null ? "" : s).trim()
 const firstAttrs = (xml, name) => {
   const m = String(xml || "").match(new RegExp(`<${name}\\b${ATTRS}/?>`))
@@ -200,7 +214,15 @@ function checkSurvey(part, cell) {
     //             под нагрузкой.
     //   Правка:   четвёртое объявляемое измерение — <test> либо tests="none".
     if (!m.tests.length && !m.testsNone) B.push(`S8 ${cell.id}: neither <test> nor tests="none" — ${m.path}`)
-    for (const t of m.tests) if (!text(t.path)) B.push(`S8 ${cell.id}: <test> with an empty path — ${m.path}`)
+    for (const t of m.tests) {
+      if (!text(t.path)) B.push(`S8 ${cell.id}: <test> with an empty path — ${m.path}`)
+      // A survey cell CANNOT know a suite id: c0 and c1 go to the model in the same batch
+      // (workflows/izi.js::scope), so the spine part does not exist yet while this one is written.
+      // Run 8f0e03fc obeyed the order and left `suite` off — honest, and it left the graph with no
+      // binding at all. The binding is therefore computed at step 5 by PATH (a test file inside a
+      // suite's folder belongs to that suite), and writing `suite` here can only be a guess.
+      if (text(t.suite)) B.push(`S8 ${cell.id}: <test suite="${t.suite}"> — a suite id is not knowable in a survey cell; step 5 binds by path, drop the attribute (${m.path})`)
+    }
     // S9 — the exposed surface is DECLARED, never omitted. Same shape as S4 and S6, and the reason
     // is the sharpest here: a module with three routes and no <api> used to be green, so "nothing is
     // exposed" and "the scout did not look" were the same XML.
@@ -251,6 +273,11 @@ function checkSpine(part, cell) {
     if (s.found === "no") continue
     const missing = SUITE_KEYS.filter((k) => !text(s[k]))
     if (missing.length) B.push(`P2 ${cell.id}: <suite id="${s.id || "?"}"> has empty ${missing.join(", ")}`)
+    if (text(s.kind) && !SUITE_KINDS.includes(s.kind)) {
+      B.push(`P2 ${cell.id}: <suite kind="${s.kind}"> is not one of ${SUITE_KINDS.join(" ")} — id="${s.id || "?"}"`)
+    } else if (text(s.kind) && text(s.id) && !suiteId(s.kind).test(s.id)) {
+      B.push(`P2 ${cell.id}: <suite id="${s.id}"> must start with its kind — "${s.kind}" or "${s.kind}-<what tells it apart>"`)
+    }
   }
 
   // P3 — a node's <test suite="unit"/> must resolve to exactly one suite.

@@ -70,7 +70,7 @@ pom…») здесь не нужен: решение уже принято и л
     <role>REST resource for fruits</role>
     <api name="GET /fruits" kind="http" scope="public"/>
     <dep path="src/main/java/org/acme/rest/json/Fruit.java"/>
-    <test path="src/test/java/org/acme/rest/json/FruitResourceTest.java" suite="unit"/>
+    <test path="src/test/java/org/acme/rest/json/FruitResourceTest.java"/>
   </module>
   <module path="src/main/java/org/acme/rest/json/FruitRepository.java" api="none" tests="none">
     <role>fruit storage</role>
@@ -89,7 +89,7 @@ pom…») здесь не нужен: решение уже принято и л
 ```xml
 <part cell="c0" kind="spine">
   <suite id="unit" kind="unit" cmd="./mvnw -q test" one="./mvnw -q test -Dtest={class}" path="src/test/java"/>
-  <suite id="it" kind="component" cmd="./mvnw -q verify -Pit" one="" path="src/it"/>
+  <suite id="component-it" kind="component" cmd="./mvnw -q verify -Pit" one="" path="src/it"/>
   <build cmd="./mvnw -q package"/>
   <toggles found="no"/>
   <branching branches="feature/&lt;ticket&gt;-&lt;slug&gt;" commits="conventional-commits"/>
@@ -133,7 +133,7 @@ pom…») здесь не нужен: решение уже принято и л
 | S5 | `<gap>` несёт непустой `why` | «не прочитал» без причины не отличить от «поленился» |
 | S6 | внешние точки **объявлены**: ≥1 `<io>` либо `io="none"` | молчание неотличимо от «не смотрел» — та же болезнь, что лечит S4 |
 | S7 | форма `<io>`: `kind` из `IO_KINDS`, `dir` ∈ `in\|out`, непустой `system`, непусто `config` **или** `target` | точка без адреса и без ключа конфигурации — догадка, а не факт; `config` — ключ сшивки на шаге 5 |
-| S8 | тесты **объявлены**: ≥1 `<test path>` либо `tests="none"`; `path` непуст | измерение, которого никто не требует, исчезает первым: прогон `03bc51ef` потерял все четыре привязки `<test>`, что были в `e51553dc` |
+| S8 | тесты **объявлены**: ≥1 `<test path>` либо `tests="none"`; `path` непуст; атрибута `suite` у `<test>` НЕТ | измерение, которого никто не требует, исчезает первым: прогон `03bc51ef` потерял все четыре привязки `<test>`, что были в `e51553dc`. `suite` запрещён потому, что в survey-клетке он непознаваем: `c0` и `c1` уходят в модель ОДНИМ батчем, хребта ещё не существует — сшивка теста со сьютом делается на шаге 5 по пути |
 | S9 | поверхность **объявлена**: ≥1 `<api>` либо `api="none"` | модуль с тремя роутами и без `<api>` был зелёным: «наружу ничего» = «не смотрел» |
 | S10 | форма `<api>`: `kind` из `API_KINDS`, `scope` ∈ `public\|internal`, непустое `name`, для `kind="http"` — канон `METHOD /path` | `scope` и есть ответ «что выставлено наружу»; канон имени даёт шагу 5 однозначную ссылку потребителя |
 
@@ -142,8 +142,8 @@ pom…») здесь не нужен: решение уже принято и л
 | # | правило | почему |
 |---|---|---|
 | P1 | присутствуют все шесть ответов: сьюты (≥1 `<suite>` либо `<suites found="no"/>`), `<build>`, `<toggles>`, `<branching>`, `<contract>`, интеграции (≥1 `<integration>` либо `<integrations found="no"/>`) — со значением или с `found="no"` | шесть вопросов графа (`docs/concept.md`); молчание по любому из них встаёт шагом 5, 10 или 17 |
-| P2 | у `<suite>` непусты `id`, `kind`, `cmd`, `path`; `one` может быть пуст | команда без папки или без рода на шаге 10 не соберётся в команду узла |
-| P3 | `id` сьютов уникальны | `<test suite="unit">` узла обязан резолвиться в ровно один сьют |
+| P2 | у `<suite>` непусты `id`, `kind`, `cmd`, `path`; `one` может быть пуст; `kind` из `SUITE_KINDS`, а `id` начинается со своего рода (`component`, `component-native`) | команда без папки или без рода на шаге 10 не соберётся в команду узла; четыре прогона подряд назвали ОДИН сьют `integ-native` · `integration` · `native-it` · `native-integration`, и форма id делает такой разнобой невозможным |
+| P3 | `id` сьютов уникальны | шаг 5 сшивает тесты со сьютом по пути и записывает id в узел — двойник сделал бы эту запись неоднозначной |
 | P4 | форма `<integration>`: `kind` из `IO_KINDS`, непустые `system` и `config`; `value` необязателен | `config` — ключ, по которому шаг 5 сшивает `<io>` модуля с системой; секрет в граф не едет, поэтому `value` не обязателен |
 | P5 | `system` интеграций уникальны | двойник расщепляет одну систему на два узла при слиянии — как двойной `id` сьюта |
 

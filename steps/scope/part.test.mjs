@@ -21,7 +21,7 @@ const SURVEY_XML = `
     <api name="GET /orders" kind="http" scope="public"/>
     <dep path="src/Model.java"/>
     <io kind="db" dir="out" system="orders-db" config="spring.datasource.url" target="orders table"/>
-    <test path="src/test/ApiTest.java" suite="unit"/>
+    <test path="src/test/ApiTest.java"/>
   </module>
   <module path="src/Model.java" deps="none" io="none" api="none" tests="none">
     <role>plain data record</role>
@@ -34,7 +34,7 @@ const spineCell = { id: "c0", kind: "spine", files: [{ path: "pom.xml" }, { path
 const SPINE_XML = `
 <part cell="c0" kind="spine">
   <suite id="unit" kind="unit" cmd="./mvnw -q test" one="./mvnw -q test -Dtest={class}" path="src/test/java"/>
-  <suite id="it" kind="component" cmd="./mvnw -q verify -Pit" one="" path="src/it"/>
+  <suite id="component-it" kind="component" cmd="./mvnw -q verify -Pit" one="" path="src/it"/>
   <integration system="orders-db" kind="db" config="spring.datasource.url" value="jdbc:postgresql://db/orders"/>
   <build cmd="./mvnw -q package"/>
   <toggles found="no"/>
@@ -50,7 +50,7 @@ test("happy survey: modules, gap and edges parsed; part is green", () => {
   assert.deepEqual(part.modules[0].deps, ["src/Model.java"])
   assert.deepEqual(part.modules[0].api, [{ name: "GET /orders", kind: "http", scope: "public" }])
   assert.equal(part.modules[0].io[0].system, "orders-db")   // the external system, not a <dep>
-  assert.deepEqual(part.modules[0].tests, [{ path: "src/test/ApiTest.java", suite: "unit" }])
+  assert.deepEqual(part.modules[0].tests, [{ path: "src/test/ApiTest.java", suite: "" }])
   assert.equal(part.modules[1].depsNone, true) // absence declared, not omitted
   assert.equal(part.modules[1].ioNone, true)   // …of every dimension: edges, external points,
   assert.equal(part.modules[1].apiNone, true)  // …and the exposed surface
@@ -64,7 +64,7 @@ test("happy survey: modules, gap and edges parsed; part is green", () => {
 
 test("happy spine: five answers, empty `one` and found=\"no\" are valid", () => {
   const part = parsePart(SPINE_XML)
-  assert.deepEqual(part.suites.map((s) => s.id), ["unit", "it"])
+  assert.deepEqual(part.suites.map((s) => s.id), ["unit", "component-it"])
   assert.equal(part.suites[1].one, "") // valid: step 15 runs the whole suite and logs that price
   assert.equal(part.answers.toggles.found, "no")
   assert.equal(part.answers.branching.commits, "conventional-commits")
@@ -168,13 +168,23 @@ test("P4/P5: an integration without its config key, with an invented kind, or de
     .some((b) => b === 'P5 c0: duplicate <integration system="orders-db">'))
 })
 
-test("P2/P3: a suite without cmd and a duplicate id are blockers", () => {
+test("P2/P3: a suite without cmd, with an invented kind, with a drifting id, or declared twice", () => {
   const broken = SPINE_XML
     .replace('cmd="./mvnw -q verify -Pit" one="" path="src/it"', 'cmd="" one="" path="src/it"')
-    .replace('id="it"', 'id="unit"')
+    .replace('id="component-it"', 'id="unit"')
   const blockers = checkPart({ part: parsePart(broken), cell: spineCell })
   assert.ok(blockers.some((b) => b === 'P2 c0: <suite id="unit"> has empty cmd'))
   assert.ok(blockers.some((b) => b === 'P3 c0: duplicate <suite id="unit">'))
+
+  // Four live runs named one suite `integ-native`, `integration`, `native-it`, `native-integration`.
+  // The kind is now a vocabulary and the id must start with it, so none of those four can recur.
+  const inventedKind = SPINE_XML.replace('kind="component"', 'kind="integration"')
+  assert.ok(checkPart({ part: parsePart(inventedKind), cell: spineCell })
+    .some((b) => b.startsWith('P2 c0: <suite kind="integration">')))
+
+  const drifting = SPINE_XML.replace('id="component-it"', 'id="native-it"')
+  assert.ok(checkPart({ part: parsePart(drifting), cell: spineCell })
+    .some((b) => b === 'P2 c0: <suite id="native-it"> must start with its kind — "component" or "component-<what tells it apart>"'))
 })
 
 // The role and its two orders are files the host reads, not code — but two of their properties can

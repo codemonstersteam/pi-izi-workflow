@@ -33,10 +33,11 @@ $START_CONSTRAINTS
   edges — `<dep path>` … or `deps="none"`;
   external points — `<io>` … or `io="none"`;
   exposed surface — `<api>` … or `api="none"`;
-  tests — `<test path suite>` … or `tests="none"`
-- `<test path="…" suite="…"/>` when a file of THIS cell tests this module, or when the module itself
-  names its test. `suite` is the id of a suite declared by the spine cell — you have not seen it, so
-  leave `suite` off rather than invent one; the module with no test you can see carries `tests="none"`
+  tests — `<test path>` … or `tests="none"`
+- `<test path="…"/>` when a file of THIS cell tests this module, or when the module itself names its
+  test. Write the PATH and nothing else: a suite id belongs to the spine cell, which is being read at
+  the same moment as yours, so you cannot know it and must not guess — step 5 binds a test to its
+  suite by path. A module with no test you can see carries `tests="none"`
 - a `<dep>` is a path INSIDE this repository; it may point outside this cell — the graph is global,
   the cell is local. Point, do not open. A library or framework import is NOT an edge: `jakarta.*`,
   `io.vertx.*`, JUnit and their kin are not written anywhere in the part
@@ -72,7 +73,7 @@ schema:
       <api name="…" kind="http" scope="public"/>
       <dep path="…"/>
       <io kind="db" dir="out" system="…" config="…" target="…"/>
-      <test path="…" suite="…"/>
+      <test path="…"/>
     </module>
     <module path="…" deps="none" io="none" api="none" tests="none"><role>…</role></module>
     <gap path="…" why="…"/>

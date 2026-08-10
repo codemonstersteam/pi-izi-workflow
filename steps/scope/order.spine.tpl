@@ -40,6 +40,12 @@ $START_CONSTRAINTS
 - list EVERY test suite you find, not the first one: unit tests next to the code, component and
   contract suites in their own folders — each with its own `cmd`, its own folder and its own
   one-file form
+- `kind` of a suite is one of `unit` · `component` · `contract` · `e2e`, and its `id` STARTS with
+  that kind: `unit`, `component`, `component-native`, `contract-pact`. Do not name a suite after the
+  profile or the tool — the id is what step 10 stitches a node's test to, so a name invented afresh
+  binds to nothing
+- `path` of a suite is the folder its tests live in — step 5 binds every `<test>` of the graph to a
+  suite by that path, so an approximate folder silently unbinds the tests it should have caught
 - `one` is the form that runs ONE file (`-Dtest={{class}}` in maven, `--tests` in gradle, a path in
   jest/pytest, `-run` in go). No such form → leave `one=""`; that is a valid answer
 - an answer you did not read is `found="no"` — never a plausible command. Absent tests do not stop
@@ -59,7 +65,7 @@ $START_OUTPUT
 path: {STAGING}
 schema:
   <part cell="{CELL}" kind="spine">
-    <suite id="…" kind="unit|component|contract" cmd="…" one="… or empty" path="…"/>
+    <suite id="…" kind="unit|component|contract|e2e" cmd="…" one="… or empty" path="…"/>
     <build cmd="…"/>
     <toggles mechanism="…"/>
     <branching branches="…" commits="…"/>

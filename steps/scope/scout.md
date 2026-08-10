@@ -82,11 +82,11 @@ key that carries the address, `target` with what the code itself shows (URL, top
 one of the two. Your own inbound HTTP is `<api>`, not `<io>`; `dir="in"` only when the external
 system initiates. Nothing external → `io="none"` (LAW 3).
 
-**Step 6 — attach the tests you can see.** `<test path="…" suite="…"/>` when a file in your cell is
-the test of a module in your cell, or when the module names its test. Do not guess a suite id you
-have not seen on a spine cell — leave `suite` off rather than invent one. A module with no test you
-can see carries `tests="none"` (LAW 3) — that is an answer, and it is what step 10 reads when it
-assembles the node's check command.
+**Step 6 — attach the tests you can see.** `<test path="…"/>` when a file in your cell is the test
+of a module in your cell, or when the module names its test. Write the PATH and nothing else: the
+suite id lives on the spine cell, which is read at the same moment as yours, so it is not knowable
+here — step 5 binds a test to its suite by path. A module with no test you can see carries
+`tests="none"` (LAW 3).
 
 **Step 7 — on a SPINE cell, answer the six questions instead.** Suites, build, toggles, branching,
 external contract, and the external systems the configuration declares (`<integration>`, or
@@ -113,7 +113,11 @@ $START_FORBIDDEN
   `kind`/`dir` come from the order's vocabulary — machine-checked as `S7`, which also refuses an
   `<io>` carrying neither `config` nor `target`.
 - Do NOT omit the test answer — machine-checked as `S8` (`<test>` or `tests="none"`, and a `<test>`
-  without a path is a blocker).
+  without a path is a blocker). `S8` also refuses a `<test suite="…">`: the id is not knowable in a
+  survey cell, and step 5 binds the test to its suite by path.
+- Do NOT name a suite after a profile or a tool — machine-checked as `P2`: `kind` comes from the
+  vocabulary and `id` starts with its kind (`component`, `component-native`), so the same suite
+  cannot be called something new on every run.
 - Do NOT omit the surface answer — machine-checked as `S9` (`<api>` or `api="none"`); `kind`, `scope`
   and the `METHOD /path` form of an http name are machine-checked as `S10`.
 - Do NOT invent an integration the configuration does not declare — machine-checked as `P4` (a
@@ -140,7 +144,7 @@ A `survey` cell:
     <api name="<entry point>" kind="http|cli|event|lib" scope="public|internal"/>
     <dep path="<path, may be outside this cell>"/>
     <io kind="http|db|queue|cache|blob|mail|rpc" dir="in|out" system="<label>" config="<key>" target="<what the code shows>"/>
-    <test path="<path>" suite="<suite id>"/>
+    <test path="<path>"/>
   </module>
   <module path="<path>" deps="none" io="none" api="none" tests="none">
     <role><one line></role>
@@ -153,7 +157,7 @@ A `spine` cell:
 
 ```xml
 <part cell="<cell id>" kind="spine">
-  <suite id="<short id>" kind="unit|component|contract" cmd="<whole-suite command>" one="<one-file form, or empty>" path="<test folder>"/>
+  <suite id="<kind, or kind-suffix>" kind="unit|component|contract|e2e" cmd="<whole-suite command>" one="<one-file form, or empty>" path="<test folder>"/>
   <build cmd="<build command>"/>
   <toggles mechanism="<how features are switched off here>"/>
   <branching branches="<naming convention>" commits="<message convention>"/>
@@ -200,7 +204,7 @@ usefully.
     <api name="build_invoice(order_id)" kind="lib" scope="internal"/>
     <dep path="billing/tax.py"/>
     <dep path="storage/ledger.py"/>
-    <test path="tests/test_invoice.py" suite="unit"/>
+    <test path="tests/test_invoice.py"/>
   </module>
   <module path="billing/http.py" deps="none" tests="none">
     <role>HTTP entry points of the billing service</role>
