@@ -106,12 +106,13 @@ test("setPending writes and clearPending removes .agent/pending.json under conte
 
 // --- promote ----------------------------------------------------------------------------------
 
-test("promote copies staging→out under context.run.cwd", () => {
+test("promote MOVES staging→out under context.run.cwd: accepted content leaves staging behind empty", () => {
   const root = tempRoot()
   mkdirSync(join(root, ".agent", "staging"), { recursive: true })
   writeFileSync(join(root, ".agent", "staging", "brd.md"), "R1 ...\n")
   promote.run({ from: ".agent/staging/brd.md", to: ".agent/brd.md" }, ctx(root))
   assert.equal(readFileSync(join(root, ".agent", "brd.md"), "utf8"), "R1 ...\n")
+  assert.equal(existsSync(join(root, ".agent", "staging", "brd.md")), false)  // staging holds only what was REJECTED
 })
 
 test("promote: missing staging at run root throws, never a silent no-op", () => {

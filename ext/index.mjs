@@ -38,6 +38,8 @@
 //               readText never throws: a missing file reads as "" — the caller decides what absence
 //               means, the same convention the donor's `cat file || true` used. checkTask/checkBrd
 //               never throw either: "the artifact is bad" is DATA (`ok:false`), not a host failure.
+//               promote MOVES: it copies staging→out and then drops the staging file, so what is
+//               left under .agent/staging after a run is exactly what a guardrail rejected.
 //               promote DOES throw on a missing staging file — that is a contract violation (the
 //               check gating this call ran against staging and found it, or should not have called
 //               promote at all), never a silent no-op success (standards/workflow.md, «step shape
@@ -70,6 +72,12 @@ import { writeAnswer } from "../bin/write-answer.mjs"
 // see izi_answer's own execute() below). Never THIS repository's directory (see Invariants above).
 const runRoot = (context) => (context && context.run && context.run.cwd) || process.cwd()
 const at = (root, p) => join(root, p)
+
+// TASK_PATH — the pipeline's ONE input, named once: checkTask reads it, checkBrd feeds it to the
+// guardrail as a source of numbers, and survey skips it (SKIP_FILES below). BUDGETS_PATH is its
+// twin and already lives in core/budgets.mjs. workflows/izi.js repeats the literal because the
+// sandbox has no import — a copy demanded by the host, not a second declaration.
+const TASK_PATH = "TASK.md"
 const readIfExists = (root, p) => (existsSync(at(root, p)) ? readFileSync(at(root, p), "utf8") : "")
 
 // parsedAnswers — one parse of .agent/answers.md shared by `answers` and `checkBrd` below, so the
@@ -118,10 +126,10 @@ export const checkTask = {
   },
   run(_input, context) {
     const root = runRoot(context)
-    if (!existsSync(at(root, "TASK.md"))) {
-      return { ok: false, why: "TASK.md не существует — вход конвейера кладёт оператор" }
+    if (!existsSync(at(root, TASK_PATH))) {
+      return { ok: false, why: `${TASK_PATH} не существует — вход конвейера кладёт оператор` }
     }
-    const r = checkTaskText(readFileSync(at(root, "TASK.md"), "utf8"))
+    const r = checkTaskText(readFileSync(at(root, TASK_PATH), "utf8"))
     return r.ok ? { ok: true, lines: r.value.lines } : { ok: false, why: r.error.detail }
   },
 }
@@ -146,7 +154,7 @@ export const checkBrd = {
       return { ok: false, blockers: `${path} не существует — роль ничего не записала по staging-пути` }
     }
     const text = readFileSync(at(root, path), "utf8")
-    const task = readIfExists(root, "TASK.md")
+    const task = readIfExists(root, TASK_PATH)
     const ans = parsedAnswers(readIfExists(root, ".agent/answers.md"))
     const answerTexts = ans.ok ? ans.value.map((a) => a.text) : []
     const r = newBrd(text, [task, ...answerTexts])
@@ -255,8 +263,18 @@ export const clearPending = {
   },
 }
 
+// promote — MOVE, not copy: the staging file is gone once its content is accepted.
+//
+// BUG_FIX_CONTEXT: живой прогон 6e3b9455-533a-4843-aee6-c4c7e96e3fbc.
+//   Было:     copyFileSync и всё.
+//   Проблема: после зелёного прогона `.agent/staging/` держал копии brd.md и обоих c*.xml —
+//             байт в байт то же, что в чистовике. Каталог не отвечал ни на один вопрос разбора:
+//             принятое и отвергнутое лежали вперемешку.
+//   Правка:   перенос. Теперь в staging остаётся РОВНО то, что гардрейл отверг: пустой
+//             staging/graph-parts/ значит «все клетки закрылись», оставшийся c3.xml называет
+//             клетку, которая не закрылась, — и это факт на диске, а не пересказ лога.
 export const promote = {
-  description: "Copy staging→out. A missing staging file is a refusal (throws), never a silent success.",
+  description: "Move staging→out: copy, then drop the staging file. What remains under .agent/staging is exactly what a guardrail REJECTED. A missing staging file is a refusal (throws), never a silent success.",
   input: {
     type: "object",
     properties: { from: { type: "string" }, to: { type: "string" } },
@@ -271,6 +289,7 @@ export const promote = {
     }
     mkdirSync(dirname(at(root, to)), { recursive: true })
     copyFileSync(at(root, from), at(root, to))
+    rmSync(at(root, from))                      // перенос: принятое живёт в чистовике, staging — только отвергнутое
     return { at: new Date().toISOString() }
   },
 }
@@ -283,7 +302,16 @@ export const promote = {
 // разведки.
 const SKIP = new Set(["workflows", "steps", "core", "bin", "ext", "prompts",
                       "node_modules", "dist", "build", "target", "coverage"]) // + любой каталог на точку
-const SKIP_FILES = new Set(["mvnw", "mvnw.cmd", "gradlew", "gradlew.bat"])    // вендоренные обёртки сборщика
+//
+// BUG_FIX_CONTEXT: живой прогон 6e3b9455-533a-4843-aee6-c4c7e96e3fbc, шаг 4 зелёный.
+//   Было:     SKIP_FILES знал только обёртки сборщика.
+//   Проблема: `.agent/graph-parts/c1.xml` вернулся с `<module path="TASK.md">` — требование
+//             оператора стало узлом графа приложения. Скаут не виноват: наряд обязывает закрыть
+//             КАЖДЫЙ файл клетки, а файл в клетку положил шаг 3.
+//   Правка:   второй класс имён — входы харнеса, которые оператор кладёт в проект. Они конвейер,
+//             а не приложение, и разведке в них делать нечего.
+const SKIP_FILES = new Set(["mvnw", "mvnw.cmd", "gradlew", "gradlew.bat",     // вендоренные обёртки сборщика
+                            TASK_PATH, BUDGETS_PATH])                          // входы харнеса: конвейер, не приложение
 const KEEP_DOTS = new Set([".github"])   // исключение из «точечные каталоги пропускаем»: там CI
 const MAX_BYTES = 512 * 1024             // файл крупнее рою не читать — он и не поедет в наряд
 
