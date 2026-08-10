@@ -26,7 +26,7 @@ These hold on every run, whatever the order says.
    did not. Silence is the one answer that cannot be merged: a file nobody mentions becomes a node
    nobody misses.
 3. **Every dimension is declared, never omitted.** A module answers all four, each with its element
-   or with the explicit "none": edges — `<dep path>` or `deps="none"`; external points — `<io>` or
+   or with the explicit "none": what it imports — `<dep path via>` or `deps="none"`; external points — `<io>` or
    `io="none"`; exposed surface — `<api>` or `api="none"`; tests — `<test>` or `tests="none"`. A
    module that simply says nothing is indistinguishable from one whose edges, external points, entry
    points or tests you forgot: step 8 cannot compute a change radius from a graph with no edges,
@@ -71,9 +71,13 @@ topic someone else publishes to; `internal` means only other modules of this rep
 `kind="http"` the name is exactly `METHOD /path` (`GET /fruits`) — uppercase method, no query string.
 A file that exposes nothing carries `api="none"`; that is an answer, not a gap (LAW 3).
 
-**Step 5 — name the edges inside the repository.** `<dep path="…"/>` for every module this file uses:
-imports of other files, injected dependencies, calls into them. A path outside your cell is fine
-(LAW 4); a library or framework is not an edge at all. No edges → `deps="none"` (LAW 3).
+**Step 5 — list what this file IMPORTS.** `<dep path="…" via="…"/>` for every file of this repository
+that this file's own text pulls in — an import, an include, a require, an injected type. `via` is
+that line, copied short and verbatim; an edge you cannot quote is an edge you did not read, and then
+you leave it out. The direction is the question itself: from the file that imports to the file
+imported. A data class that imports nothing carries `deps="none"` even if half the repository uses
+it — being USED is not an edge of yours. A path outside your cell is fine (LAW 4); a library or
+framework is not an edge at all.
 
 **Step 5a — name what reaches an external system.** `<io kind="http|db|queue|cache|blob|mail|rpc"
 dir="in|out" system="…" config="…" target="…"/>` where this file talks to a database, a broker, a
@@ -107,7 +111,10 @@ $START_FORBIDDEN
 - Do NOT skip a file silently — machine-checked as `S1` (every file of the cell must be closed by a
   `<module>` or a `<gap>`).
 - Do NOT leave a module without `<role>` — machine-checked as `S3`.
-- Do NOT omit the dependency answer — machine-checked as `S4` (`<dep>` or `deps="none"`).
+- Do NOT omit the import answer — machine-checked as `S4` (`<dep>` or `deps="none"`), and every
+  `<dep>` carries `via` — the line it was read from. An edge you cannot quote is an edge you did not
+  read: run c9580ff8 gave a POJO with no imports an edge on its own consumer, and the invented pair
+  closed a cycle step 10 cannot sort.
 - Do NOT write a `<gap>` without `why` — machine-checked as `S5`.
 - Do NOT omit the external-point answer — machine-checked as `S6` (`<io>` or `io="none"`), and its
   `kind`/`dir` come from the order's vocabulary — machine-checked as `S7`, which also refuses an
@@ -142,7 +149,7 @@ A `survey` cell:
   <module path="<path from the order>">
     <role><one line: what this file is></role>
     <api name="<entry point>" kind="http|cli|event|lib" scope="public|internal"/>
-    <dep path="<path, may be outside this cell>"/>
+    <dep path="<path, may be outside this cell>" via="<the import line>"/>
     <io kind="http|db|queue|cache|blob|mail|rpc" dir="in|out" system="<label>" config="<key>" target="<what the code shows>"/>
     <test path="<path>"/>
   </module>
@@ -202,8 +209,8 @@ usefully.
   <module path="billing/invoice.py" io="none">
     <role>invoice assembly and totals</role>
     <api name="build_invoice(order_id)" kind="lib" scope="internal"/>
-    <dep path="billing/tax.py"/>
-    <dep path="storage/ledger.py"/>
+    <dep path="billing/tax.py" via="from billing import tax"/>
+    <dep path="storage/ledger.py" via="from storage.ledger import post"/>
     <test path="tests/test_invoice.py"/>
   </module>
   <module path="billing/http.py" deps="none" tests="none">

@@ -52,7 +52,7 @@ part.test.mjs}`, `core/xml.mjs`, `ext/index.mjs::{cells, checkPart}`, четвё
 
 | `kind` | наряд просит |
 |---|---|
-| `survey` | опиши модули: роль одной строкой и ЧЕТЫРЕ измерения — **поверхность** (`api` с `kind`/`scope`), **зависимости**, **внешние точки** (`io`), **тесты** — каждое со значением или с явным `none` |
+| `survey` | опиши модули: роль одной строкой и ЧЕТЫРЕ измерения — **поверхность** (`api` с `kind`/`scope`), **импорты** (`dep` с `via`), **внешние точки** (`io`), **тесты** — каждое со значением или с явным `none` |
 | `spine` | перечисли ВСЕ сьюты (род, команда, папка, форма прогона одного файла); назови команду сборки, механизм тоглов, соглашения о ветках и коммитах, описание внешнего контракта с валидатором, **внешние системы из конфигурации** (`integration`) — **или объяви, что их нет** |
 
 Тем же приёмом на шаге 14 выбираются пять шаблонов тикета. Разбор строк («если в файле есть слово
@@ -69,12 +69,12 @@ pom…») здесь не нужен: решение уже принято и л
   <module path="src/main/java/org/acme/rest/json/FruitResource.java" io="none">
     <role>REST resource for fruits</role>
     <api name="GET /fruits" kind="http" scope="public"/>
-    <dep path="src/main/java/org/acme/rest/json/Fruit.java"/>
+    <dep path="src/main/java/org/acme/rest/json/Fruit.java" via="import org.acme.rest.json.Fruit"/>
     <test path="src/test/java/org/acme/rest/json/FruitResourceTest.java"/>
   </module>
   <module path="src/main/java/org/acme/rest/json/FruitRepository.java" api="none" tests="none">
     <role>fruit storage</role>
-    <dep path="src/main/java/org/acme/rest/json/Fruit.java"/>
+    <dep path="src/main/java/org/acme/rest/json/Fruit.java" via="import org.acme.rest.json.Fruit"/>
     <io kind="db" dir="out" system="fruit-db" config="quarkus.datasource.jdbc.url" target="fruits table"/>
   </module>
   <module path="src/main/java/org/acme/Legume.java" deps="none" io="none" api="none" tests="none">
@@ -129,7 +129,7 @@ pom…») здесь не нужен: решение уже принято и л
 | S1 | каждый файл клетки закрыт `<module path>` **или** `<gap path>` | покрытие без потерь; потерянный файл — потерянный узел графа, которого никто не хватится |
 | S2 | каждый `path` части принадлежит клетке | скаут не выбирает себе файлы; чужой файл — работа соседней клетки, и он приедет дважды |
 | S3 | у `<module>` непустой `<role>` | узел без роли неотличим от строчки в `ls` |
-| S4 | зависимости **объявлены**: ≥1 `<dep path>` либо `deps="none"`; `path` непуст и не равен своему | без рёбер неисполним шаг 8 |
+| S4 | импорты **объявлены**: ≥1 `<dep path via>` либо `deps="none"`; `path` непуст и не равен своему; `via` непуст | без рёбер неисполним шаг 8. `via` — улика, строка импорта, из которой ребро прочитано: прогон `c9580ff8` выдал POJO без единого импорта ребро на СВОЕГО потребителя, и встречная пара замкнула цикл, который шаг 10 не отсортирует. Гардрейл файлов не читает и проверяет только непустоту, но выдумать ребро становится дороже, чем его не писать |
 | S5 | `<gap>` несёт непустой `why` | «не прочитал» без причины не отличить от «поленился» |
 | S6 | внешние точки **объявлены**: ≥1 `<io>` либо `io="none"` | молчание неотличимо от «не смотрел» — та же болезнь, что лечит S4 |
 | S7 | форма `<io>`: `kind` из `IO_KINDS`, `dir` ∈ `in\|out`, непустой `system`, непусто `config` **или** `target` | точка без адреса и без ключа конфигурации — догадка, а не факт; `config` — ключ сшивки на шаге 5 |

@@ -19,7 +19,7 @@ const SURVEY_XML = `
   <module path="src/Api.java">
     <role>REST endpoint for orders</role>
     <api name="GET /orders" kind="http" scope="public"/>
-    <dep path="src/Model.java"/>
+    <dep path="src/Model.java" via="import com.acme.Model"/>
     <io kind="db" dir="out" system="orders-db" config="spring.datasource.url" target="orders table"/>
     <test path="src/test/ApiTest.java"/>
   </module>
@@ -47,7 +47,7 @@ test("happy survey: modules, gap and edges parsed; part is green", () => {
   assert.equal(part.cell, "c1")
   assert.equal(part.kind, "survey")
   assert.deepEqual(part.modules.map((m) => m.path), ["src/Api.java", "src/Model.java"])
-  assert.deepEqual(part.modules[0].deps, ["src/Model.java"])
+  assert.deepEqual(part.modules[0].deps, [{ path: "src/Model.java", via: "import com.acme.Model" }])
   assert.deepEqual(part.modules[0].api, [{ name: "GET /orders", kind: "http", scope: "public" }])
   assert.equal(part.modules[0].io[0].system, "orders-db")   // the external system, not a <dep>
   assert.deepEqual(part.modules[0].tests, [{ path: "src/test/ApiTest.java", suite: "" }])
@@ -100,9 +100,15 @@ test("S4: a module with neither <dep> nor deps=\"none\" is a blocker; deps=\"non
   assert.deepEqual(checkPart({ part: parsePart(silent), cell: surveyCell }),
     ['S4 c1: neither <dep> nor deps="none" — src/Model.java'])
 
-  const selfEdge = SURVEY_XML.replace('<dep path="src/Model.java"/>', '<dep path="src/Api.java"/>')
+  const selfEdge = SURVEY_XML.replace('<dep path="src/Model.java"', '<dep path="src/Api.java"')
   assert.ok(checkPart({ part: parsePart(selfEdge), cell: surveyCell })
     .some((b) => b === 'S4 c1: <dep> points at its own module — src/Api.java'))
+
+  // An edge with no evidence: the run c9580ff8 invented `Fruit → FruitResource` on a POJO with no
+  // imports at all, and the invented pair closed a cycle step 10 cannot topologically sort.
+  const invented = SURVEY_XML.replace(' via="import com.acme.Model"', "")
+  assert.ok(checkPart({ part: parsePart(invented), cell: surveyCell })
+    .some((b) => b.startsWith('S4 c1: <dep path="src/Model.java"> has no via')))
 })
 
 test("S6/S7: an external point is declared and its form is closed — io=\"none\" is an answer", () => {

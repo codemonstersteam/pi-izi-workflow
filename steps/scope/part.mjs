@@ -103,7 +103,7 @@ const firstAttrs = (xml, name) => {
 //   Dependencies: attrs, ATTRS, tag (core/xml.mjs)
 //   Antecedent:   any value — undefined/null/garbage read as an empty part
 //   Consequent:   success: { cell, kind, modules[], gaps[], suites[], integrations[], answers{} }
-//                          where modules = [{ path, role, api[], apiNone, deps[], depsNone, io[],
+//                          where modules = [{ path, role, api[], apiNone, deps[{path,via}], depsNone, io[],
 //                          ioNone, tests[], testsNone }] in order of appearance; `api` carries the element's
 //                          attributes ({ name, kind, scope, spec? }), not just its name — `scope` is
 //                          the answer to "what is exposed outward" and step 5 collects it;
@@ -132,7 +132,10 @@ export function parsePart(xml) {
       testsNone: a.tests === "none",
       role: text((body.match(/<role>([\s\S]*?)<\/role>/) || [])[1]),
       api: Object.freeze([...body.matchAll(tag("api"))].map((x) => Object.freeze(attrs(x[1])))),
-      deps: Object.freeze([...body.matchAll(tag("dep"))].map((x) => attrs(x[1]).path || "")),
+      deps: Object.freeze([...body.matchAll(tag("dep"))].map((x) => {
+        const d = attrs(x[1])
+        return Object.freeze({ path: d.path || "", via: text(d.via) })
+      })),
       io: Object.freeze([...body.matchAll(tag("io"))].map((x) => Object.freeze(attrs(x[1])))),
       tests: Object.freeze([...body.matchAll(tag("test"))].map((x) => {
         const t = attrs(x[1])
@@ -186,10 +189,22 @@ function checkSurvey(part, cell) {
     if (!m.role) B.push(`S3 ${cell.id}: <module> has no <role> — ${m.path || "(no path)"}`)
     // S4 — dependencies are DECLARED, never omitted: a module with no edges and a module whose
     // edges were forgotten look identical in XML, and step 8 (`ripple`) is unrunnable without edges.
+    //
+    // BUG_FIX_CONTEXT: живой прогон c9580ff8.
+    //   Было:     `<dep path>` без единого требования, откуда ребро взято.
+    //   Проблема: Fruit.java — POJO без единого импорта — получил `<dep>` на СВОЕГО потребителя
+    //             FruitResource, и вместе со встречным ребром ресурса вышел цикл Fruit ↔ Resource;
+    //             шаг 10 строит план топосортом и требует DAG. Корень не в направлении: S4 требует
+    //             ответ, и роли дешевле выдумать ребро, чем написать deps="none".
+    //   Правка:   у ребра есть УЛИКА — `via`, та строка файла, из которой ребро прочитано. Гардрейл
+    //             файлов не читает и проверяет только непустоту, но выдумать ребро становится
+    //             дороже, чем его не писать: под догадку надо подделать цитату. Тот же приём, что
+    //             «у числа в fit: есть источник» на шаге 2.
     if (!m.deps.length && !m.depsNone) B.push(`S4 ${cell.id}: neither <dep> nor deps="none" — ${m.path}`)
     for (const d of m.deps) {
-      if (!d) B.push(`S4 ${cell.id}: <dep> with an empty path — ${m.path}`)
-      else if (d === m.path) B.push(`S4 ${cell.id}: <dep> points at its own module — ${m.path}`)
+      if (!d.path) B.push(`S4 ${cell.id}: <dep> with an empty path — ${m.path}`)
+      else if (d.path === m.path) B.push(`S4 ${cell.id}: <dep> points at its own module — ${m.path}`)
+      if (!d.via) B.push(`S4 ${cell.id}: <dep path="${d.path}"> has no via — quote the import line it was read from, or drop the edge (${m.path})`)
     }
     // S6 — external points are DECLARED, never omitted, for the same reason as S4: a module that
     // touches nothing outside and a module whose external point was forgotten look identical, and

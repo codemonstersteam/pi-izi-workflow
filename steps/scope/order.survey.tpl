@@ -30,7 +30,7 @@ $START_CONSTRAINTS
 - every file above is closed by a `<module path>` or a `<gap path why>` — no file is left silent
 - `path` is copied from the list verbatim; a path outside this cell does not belong in this part
 - every `<module>` answers all FOUR dimensions, with an element or with the explicit "none":
-  edges — `<dep path>` … or `deps="none"`;
+  what it imports — `<dep path via>` … or `deps="none"`;
   external points — `<io>` … or `io="none"`;
   exposed surface — `<api>` … or `api="none"`;
   tests — `<test path>` … or `tests="none"`
@@ -38,6 +38,13 @@ $START_CONSTRAINTS
   test. Write the PATH and nothing else: a suite id belongs to the spine cell, which is being read at
   the same moment as yours, so you cannot know it and must not guess — step 5 binds a test to its
   suite by path. A module with no test you can see carries `tests="none"`
+- `<dep path="…" via="…"/>` answers ONE question: what does THIS file import? Not "what is related
+  to it", not "what uses it" — what its own text pulls in. `via` is the line you read it from
+  (`import org.acme.Fruit`, `require("./tax")`, `from .ledger import post`), copied short and
+  verbatim; an edge you cannot quote is an edge you did not read, and the right answer then is to
+  leave it out. The direction follows from the question: from the file that imports to the file
+  imported — a data class that imports nothing has `deps="none"`, even when half the repository
+  uses it
 - a `<dep>` is a path INSIDE this repository; it may point outside this cell — the graph is global,
   the cell is local. Point, do not open. A library or framework import is NOT an edge: `jakarta.*`,
   `io.vertx.*`, JUnit and their kin are not written anywhere in the part
@@ -71,7 +78,7 @@ schema:
     <module path="…">
       <role>…</role>
       <api name="…" kind="http" scope="public"/>
-      <dep path="…"/>
+      <dep path="…" via="the import line you read it from"/>
       <io kind="db" dir="out" system="…" config="…" target="…"/>
       <test path="…"/>
     </module>
