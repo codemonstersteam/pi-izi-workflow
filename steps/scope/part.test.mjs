@@ -1,7 +1,7 @@
 // Slice `scope`: the guardrail of step 4 — a PURE core; its io (ext/index.mjs::checkPart) is proven
 // by a live run, not by units (standards/code.md). Formula: 1 happy + Σ antecedent branches with a
 // DISTINGUISHABLE consequent — here, one happy path per cell kind, totality, and one unit per rule
-// that can silently degrade (S1, S2, S4, S6, S7, P1, P3, P4). Rule numbers are docs/scope.md §3.
+// that can silently degrade (S1, S2, S4, S6..S10, P1, P3, P4). Rule numbers are docs/scope.md §3.
 
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -23,7 +23,7 @@ const SURVEY_XML = `
     <io kind="db" dir="out" system="orders-db" config="spring.datasource.url" target="orders table"/>
     <test path="src/test/ApiTest.java" suite="unit"/>
   </module>
-  <module path="src/Model.java" deps="none" io="none" api="none">
+  <module path="src/Model.java" deps="none" io="none" api="none" tests="none">
     <role>plain data record</role>
   </module>
   <gap path="src/import.sql" why="not read: 480 KB of seed data, no module in it"/>
@@ -120,6 +120,12 @@ test("S6/S7: an external point is declared and its form is closed — io=\"none\
     .some((b) => b.startsWith("S7 c1: <io> has neither config nor target")))
 })
 
+test("S8: the tests are declared like every other dimension — tests=\"none\" is an answer", () => {
+  const silent = SURVEY_XML.replace(/\n    <test [^>]*\/>/, "")
+  assert.deepEqual(checkPart({ part: parsePart(silent), cell: surveyCell }),
+    ['S8 c1: neither <test> nor tests="none" — src/Api.java'])
+})
+
 test("S9/S10: the exposed surface is declared, scoped and canonically named", () => {
   const silent = SURVEY_XML.replace(/\n    <api [^>]*\/>/, "")
   assert.deepEqual(checkPart({ part: parsePart(silent), cell: surveyCell }),
@@ -195,7 +201,7 @@ test("role: scout.md names the machine check behind each of its prohibitions", (
   // The role file is named by ROLE, not by step: pi resolves `agent({role: "scout"})` by FILENAME
   // inside the declared roleDirectories (ext/index.mjs), so scope/role.md would install as "role".
   const role = readFileSync(new URL("scout.md", import.meta.url), "utf8")
-  for (const rule of ["S1", "S2", "S3", "S4", "S5", "S6", "S9", "P4"]) assert.match(role, new RegExp(`machine-checked as \`${rule}\``))
+  for (const rule of ["S1", "S2", "S3", "S4", "S5", "S6", "S8", "S9", "P4"]) assert.match(role, new RegExp(`machine-checked as \`${rule}\``))
   assert.match(role, /deps="none"/)   // the dependency answer, not silence (LAW 3)
   assert.match(role, /found="no"/)    // "not found" is an answer, not a guess (LAW 5)
 })

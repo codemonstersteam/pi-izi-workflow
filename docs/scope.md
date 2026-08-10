@@ -52,7 +52,7 @@ part.test.mjs}`, `core/xml.mjs`, `ext/index.mjs::{cells, checkPart}`, четвё
 
 | `kind` | наряд просит |
 |---|---|
-| `survey` | опиши модули: роль одной строкой, **выставленная поверхность** (`api` с `kind`/`scope`), **зависимости**, **внешние точки** (`io`), тесты — каждое измерение со значением или с явным `none` |
+| `survey` | опиши модули: роль одной строкой и ЧЕТЫРЕ измерения — **поверхность** (`api` с `kind`/`scope`), **зависимости**, **внешние точки** (`io`), **тесты** — каждое со значением или с явным `none` |
 | `spine` | перечисли ВСЕ сьюты (род, команда, папка, форма прогона одного файла); назови команду сборки, механизм тоглов, соглашения о ветках и коммитах, описание внешнего контракта с валидатором, **внешние системы из конфигурации** (`integration`) — **или объяви, что их нет** |
 
 Тем же приёмом на шаге 14 выбираются пять шаблонов тикета. Разбор строк («если в файле есть слово
@@ -72,12 +72,12 @@ pom…») здесь не нужен: решение уже принято и л
     <dep path="src/main/java/org/acme/rest/json/Fruit.java"/>
     <test path="src/test/java/org/acme/rest/json/FruitResourceTest.java" suite="unit"/>
   </module>
-  <module path="src/main/java/org/acme/rest/json/FruitRepository.java" api="none">
+  <module path="src/main/java/org/acme/rest/json/FruitRepository.java" api="none" tests="none">
     <role>fruit storage</role>
     <dep path="src/main/java/org/acme/rest/json/Fruit.java"/>
     <io kind="db" dir="out" system="fruit-db" config="quarkus.datasource.jdbc.url" target="fruits table"/>
   </module>
-  <module path="src/main/java/org/acme/Legume.java" deps="none" io="none" api="none">
+  <module path="src/main/java/org/acme/Legume.java" deps="none" io="none" api="none" tests="none">
     <role>plain data record</role>
   </module>
   <gap path="src/main/resources/import.sql" why="not read: 480 KB of seed data, no module in it"/>
@@ -133,6 +133,7 @@ pom…») здесь не нужен: решение уже принято и л
 | S5 | `<gap>` несёт непустой `why` | «не прочитал» без причины не отличить от «поленился» |
 | S6 | внешние точки **объявлены**: ≥1 `<io>` либо `io="none"` | молчание неотличимо от «не смотрел» — та же болезнь, что лечит S4 |
 | S7 | форма `<io>`: `kind` из `IO_KINDS`, `dir` ∈ `in\|out`, непустой `system`, непусто `config` **или** `target` | точка без адреса и без ключа конфигурации — догадка, а не факт; `config` — ключ сшивки на шаге 5 |
+| S8 | тесты **объявлены**: ≥1 `<test path>` либо `tests="none"`; `path` непуст | измерение, которого никто не требует, исчезает первым: прогон `03bc51ef` потерял все четыре привязки `<test>`, что были в `e51553dc` |
 | S9 | поверхность **объявлена**: ≥1 `<api>` либо `api="none"` | модуль с тремя роутами и без `<api>` был зелёным: «наружу ничего» = «не смотрел» |
 | S10 | форма `<api>`: `kind` из `API_KINDS`, `scope` ∈ `public\|internal`, непустое `name`, для `kind="http"` — канон `METHOD /path` | `scope` и есть ответ «что выставлено наружу»; канон имени даёт шагу 5 однозначную ссылку потребителя |
 

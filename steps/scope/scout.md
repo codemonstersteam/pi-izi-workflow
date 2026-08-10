@@ -25,12 +25,15 @@ These hold on every run, whatever the order says.
 2. **Every file of the order is closed** — by a `<module>` if you read it, or by a `<gap why>` if you
    did not. Silence is the one answer that cannot be merged: a file nobody mentions becomes a node
    nobody misses.
-3. **Every dimension is declared, never omitted.** A module answers all three, each with its element
+3. **Every dimension is declared, never omitted.** A module answers all four, each with its element
    or with the explicit "none": edges — `<dep path>` or `deps="none"`; external points — `<io>` or
-   `io="none"`; exposed surface — `<api>` or `api="none"`. A module that simply says nothing is
-   indistinguishable from one whose edges, external points or entry points you forgot: step 8 cannot
-   compute a change radius from a graph with no edges, and step 10 cannot tell which part of the
-   contract a delta touches from a graph with no surface.
+   `io="none"`; exposed surface — `<api>` or `api="none"`; tests — `<test>` or `tests="none"`. A
+   module that simply says nothing is indistinguishable from one whose edges, external points, entry
+   points or tests you forgot: step 8 cannot compute a change radius from a graph with no edges,
+   step 10 cannot tell which part of the contract a delta touches from a graph with no surface, and
+   it cannot assemble a node's check command from a graph with no tests. The dimension nobody
+   demands is the first one to disappear when the cell is large — that is a measured fact, not a
+   worry (run 03bc51ef lost every `<test>` the previous run had).
 4. **An edge may leave the cell, but never the repository.** `<dep path="…">` to a file you were not
    given is normal and correct — the graph is global, your cell is local. Point at it; do not open
    it. A library or framework is NOT an edge: `jakarta.*`, `io.vertx.*`, JUnit and their kin are
@@ -81,11 +84,14 @@ system initiates. Nothing external → `io="none"` (LAW 3).
 
 **Step 6 — attach the tests you can see.** `<test path="…" suite="…"/>` when a file in your cell is
 the test of a module in your cell, or when the module names its test. Do not guess a suite id you
-have not seen on a spine cell — leave `suite` off rather than invent one.
+have not seen on a spine cell — leave `suite` off rather than invent one. A module with no test you
+can see carries `tests="none"` (LAW 3) — that is an answer, and it is what step 10 reads when it
+assembles the node's check command.
 
-**Step 7 — on a SPINE cell, answer the five questions instead.** Suites, build, toggles, branching,
-external contract — each with what you read, or with `found="no"`. This is the only cell where the
-answer is about the repository as a whole rather than about modules.
+**Step 7 — on a SPINE cell, answer the six questions instead.** Suites, build, toggles, branching,
+external contract, and the external systems the configuration declares (`<integration>`, or
+`<integrations found="no"/>`) — each with what you read, or with `found="no"`. This is the only cell
+where the answer is about the repository as a whole rather than about modules.
 
 **Step 8 — if the order carries FEEDBACK, repair exactly what it names, first.** Each blocker
 carries its rule number and the path it is about. A blocker is not an invitation to rewrite the
@@ -106,6 +112,8 @@ $START_FORBIDDEN
 - Do NOT omit the external-point answer — machine-checked as `S6` (`<io>` or `io="none"`), and its
   `kind`/`dir` come from the order's vocabulary — machine-checked as `S7`, which also refuses an
   `<io>` carrying neither `config` nor `target`.
+- Do NOT omit the test answer — machine-checked as `S8` (`<test>` or `tests="none"`, and a `<test>`
+  without a path is a blocker).
 - Do NOT omit the surface answer — machine-checked as `S9` (`<api>` or `api="none"`); `kind`, `scope`
   and the `METHOD /path` form of an http name are machine-checked as `S10`.
 - Do NOT invent an integration the configuration does not declare — machine-checked as `P4` (a
@@ -134,7 +142,7 @@ A `survey` cell:
     <io kind="http|db|queue|cache|blob|mail|rpc" dir="in|out" system="<label>" config="<key>" target="<what the code shows>"/>
     <test path="<path>" suite="<suite id>"/>
   </module>
-  <module path="<path>" deps="none" io="none" api="none">
+  <module path="<path>" deps="none" io="none" api="none" tests="none">
     <role><one line></role>
   </module>
   <gap path="<path>" why="<why you could not read it>"/>
@@ -194,12 +202,12 @@ usefully.
     <dep path="storage/ledger.py"/>
     <test path="tests/test_invoice.py" suite="unit"/>
   </module>
-  <module path="billing/http.py" deps="none">
+  <module path="billing/http.py" deps="none" tests="none">
     <role>HTTP entry points of the billing service</role>
     <api name="POST /invoices" kind="http" scope="public"/>
     <io kind="http" dir="out" system="tax-service" config="TAX_SERVICE_URL" target="POST /rates"/>
   </module>
-  <module path="billing/tax.py" deps="none" io="none" api="none">
+  <module path="billing/tax.py" deps="none" io="none" api="none" tests="none">
     <role>VAT rate table lookup</role>
   </module>
   <gap path="billing/fixtures/rates_2019.csv" why="not read: 410 KB of tabular fixture data, no module in it"/>

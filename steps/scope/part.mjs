@@ -90,7 +90,7 @@ const firstAttrs = (xml, name) => {
 //   Antecedent:   any value — undefined/null/garbage read as an empty part
 //   Consequent:   success: { cell, kind, modules[], gaps[], suites[], integrations[], answers{} }
 //                          where modules = [{ path, role, api[], apiNone, deps[], depsNone, io[],
-//                          ioNone, tests[] }] in order of appearance; `api` carries the element's
+//                          ioNone, tests[], testsNone }] in order of appearance; `api` carries the element's
 //                          attributes ({ name, kind, scope, spec? }), not just its name — `scope` is
 //                          the answer to "what is exposed outward" and step 5 collects it;
 //                          a `<module>` written self-closing is
@@ -115,6 +115,7 @@ export function parsePart(xml) {
       depsNone: a.deps === "none",
       ioNone: a.io === "none",
       apiNone: a.api === "none",
+      testsNone: a.tests === "none",
       role: text((body.match(/<role>([\s\S]*?)<\/role>/) || [])[1]),
       api: Object.freeze([...body.matchAll(tag("api"))].map((x) => Object.freeze(attrs(x[1])))),
       deps: Object.freeze([...body.matchAll(tag("dep"))].map((x) => attrs(x[1]).path || "")),
@@ -132,7 +133,7 @@ export function parsePart(xml) {
     const a = attrs(m[1])
     if (seen.has(a.path)) continue
     seen.add(a.path)
-    modules.push(Object.freeze({ path: a.path || "", depsNone: a.deps === "none", ioNone: a.io === "none", apiNone: a.api === "none", role: "", api: Object.freeze([]), deps: Object.freeze([]), io: Object.freeze([]), tests: Object.freeze([]) }))
+    modules.push(Object.freeze({ path: a.path || "", depsNone: a.deps === "none", ioNone: a.io === "none", apiNone: a.api === "none", testsNone: a.tests === "none", role: "", api: Object.freeze([]), deps: Object.freeze([]), io: Object.freeze([]), tests: Object.freeze([]) }))
   }
 
   return Object.freeze({
@@ -189,6 +190,17 @@ function checkSurvey(part, cell) {
       if (!text(io.system)) B.push(`S7 ${cell.id}: <io> has no system — ${m.path}`)
       if (!text(io.config) && !text(io.target)) B.push(`S7 ${cell.id}: <io> has neither config nor target — ${where}`)
     }
+    // S8 — the tests are DECLARED, never omitted.
+    //
+    // BUG_FIX_CONTEXT: живой прогон 03bc51ef, первый после введения <io> и <api>.
+    //   Было:     <test> жил только в СХЕМЕ наряда — ни строки в CONSTRAINTS, ни одного правила.
+    //   Проблема: добавили два измерения — роль молча уронила третье: в части c1 не осталось ни
+    //             одной привязки <test>, хотя прогон e51553dc давал четыре. Ровно та же болезнь,
+    //             которую S9 вылечил у <api>: измерение, которого никто не требует, исчезает первым
+    //             под нагрузкой.
+    //   Правка:   четвёртое объявляемое измерение — <test> либо tests="none".
+    if (!m.tests.length && !m.testsNone) B.push(`S8 ${cell.id}: neither <test> nor tests="none" — ${m.path}`)
+    for (const t of m.tests) if (!text(t.path)) B.push(`S8 ${cell.id}: <test> with an empty path — ${m.path}`)
     // S9 — the exposed surface is DECLARED, never omitted. Same shape as S4 and S6, and the reason
     // is the sharpest here: a module with three routes and no <api> used to be green, so "nothing is
     // exposed" and "the scout did not look" were the same XML.

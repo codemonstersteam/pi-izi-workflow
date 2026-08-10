@@ -29,10 +29,14 @@ $END_DATA
 $START_CONSTRAINTS
 - every file above is closed by a `<module path>` or a `<gap path why>` — no file is left silent
 - `path` is copied from the list verbatim; a path outside this cell does not belong in this part
-- every `<module>` answers all THREE dimensions, with an element or with the explicit "none":
+- every `<module>` answers all FOUR dimensions, with an element or with the explicit "none":
   edges — `<dep path>` … or `deps="none"`;
   external points — `<io>` … or `io="none"`;
-  exposed surface — `<api>` … or `api="none"`
+  exposed surface — `<api>` … or `api="none"`;
+  tests — `<test path suite>` … or `tests="none"`
+- `<test path="…" suite="…"/>` when a file of THIS cell tests this module, or when the module itself
+  names its test. `suite` is the id of a suite declared by the spine cell — you have not seen it, so
+  leave `suite` off rather than invent one; the module with no test you can see carries `tests="none"`
 - a `<dep>` is a path INSIDE this repository; it may point outside this cell — the graph is global,
   the cell is local. Point, do not open. A library or framework import is NOT an edge: `jakarta.*`,
   `io.vertx.*`, JUnit and their kin are not written anywhere in the part
@@ -70,7 +74,7 @@ schema:
       <io kind="db" dir="out" system="…" config="…" target="…"/>
       <test path="…" suite="…"/>
     </module>
-    <module path="…" deps="none" io="none" api="none"><role>…</role></module>
+    <module path="…" deps="none" io="none" api="none" tests="none"><role>…</role></module>
     <gap path="…" why="…"/>
   </part>
 check: {CHECK}
