@@ -1,7 +1,7 @@
 // Slice `scope`: the guardrail of step 4 — a PURE core; its io (ext/index.mjs::checkPart) is proven
 // by a live run, not by units (standards/code.md). Formula: 1 happy + Σ antecedent branches with a
 // DISTINGUISHABLE consequent — here, one happy path per cell kind, totality, and one unit per rule
-// that can silently degrade (S1, S2, S4, P1, P3). Rule numbers are docs/scope.md §3.
+// that can silently degrade (S1, S2, S4, S6, S7, P1, P3, P4). Rule numbers are docs/scope.md §3.
 
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -18,11 +18,12 @@ const SURVEY_XML = `
 <part cell="c1" kind="survey">
   <module path="src/Api.java">
     <role>REST endpoint for orders</role>
-    <api name="GET /orders"/>
+    <api name="GET /orders" kind="http" scope="public"/>
     <dep path="src/Model.java"/>
+    <io kind="db" dir="out" system="orders-db" config="spring.datasource.url" target="orders table"/>
     <test path="src/test/ApiTest.java" suite="unit"/>
   </module>
-  <module path="src/Model.java" deps="none">
+  <module path="src/Model.java" deps="none" io="none" api="none">
     <role>plain data record</role>
   </module>
   <gap path="src/import.sql" why="not read: 480 KB of seed data, no module in it"/>
@@ -34,6 +35,7 @@ const SPINE_XML = `
 <part cell="c0" kind="spine">
   <suite id="unit" kind="unit" cmd="./mvnw -q test" one="./mvnw -q test -Dtest={class}" path="src/test/java"/>
   <suite id="it" kind="component" cmd="./mvnw -q verify -Pit" one="" path="src/it"/>
+  <integration system="orders-db" kind="db" config="spring.datasource.url" value="jdbc:postgresql://db/orders"/>
   <build cmd="./mvnw -q package"/>
   <toggles found="no"/>
   <branching branches="feature/&lt;slug&gt;" commits="conventional-commits"/>
@@ -46,9 +48,12 @@ test("happy survey: modules, gap and edges parsed; part is green", () => {
   assert.equal(part.kind, "survey")
   assert.deepEqual(part.modules.map((m) => m.path), ["src/Api.java", "src/Model.java"])
   assert.deepEqual(part.modules[0].deps, ["src/Model.java"])
-  assert.deepEqual(part.modules[0].api, ["GET /orders"])
+  assert.deepEqual(part.modules[0].api, [{ name: "GET /orders", kind: "http", scope: "public" }])
+  assert.equal(part.modules[0].io[0].system, "orders-db")   // the external system, not a <dep>
   assert.deepEqual(part.modules[0].tests, [{ path: "src/test/ApiTest.java", suite: "unit" }])
   assert.equal(part.modules[1].depsNone, true) // absence declared, not omitted
+  assert.equal(part.modules[1].ioNone, true)   // …of every dimension: edges, external points,
+  assert.equal(part.modules[1].apiNone, true)  // …and the exposed surface
   assert.equal(part.gaps[0].path, "src/import.sql")
 
   assert.deepEqual(checkPart({ part, cell: surveyCell }), [])
@@ -100,6 +105,36 @@ test("S4: a module with neither <dep> nor deps=\"none\" is a blocker; deps=\"non
     .some((b) => b === 'S4 c1: <dep> points at its own module — src/Api.java'))
 })
 
+test("S6/S7: an external point is declared and its form is closed — io=\"none\" is an answer", () => {
+  const silent = SURVEY_XML.replace(/\n    <io [^>]*\/>/, "")
+  assert.deepEqual(checkPart({ part: parsePart(silent), cell: surveyCell }),
+    ['S6 c1: neither <io> nor io="none" — src/Api.java'])
+
+  const invented = SURVEY_XML.replace('kind="db" dir="out"', 'kind="postgres" dir="both"')
+  const blockers = checkPart({ part: parsePart(invented), cell: surveyCell })
+  assert.ok(blockers.some((b) => b.startsWith('S7 c1: <io kind="postgres">')))
+  assert.ok(blockers.some((b) => b.startsWith('S7 c1: <io dir="both">')))
+
+  const homeless = SURVEY_XML.replace(' config="spring.datasource.url" target="orders table"', "")
+  assert.ok(checkPart({ part: parsePart(homeless), cell: surveyCell })
+    .some((b) => b.startsWith("S7 c1: <io> has neither config nor target")))
+})
+
+test("S9/S10: the exposed surface is declared, scoped and canonically named", () => {
+  const silent = SURVEY_XML.replace(/\n    <api [^>]*\/>/, "")
+  assert.deepEqual(checkPart({ part: parsePart(silent), cell: surveyCell }),
+    ['S9 c1: neither <api> nor api="none" — src/Api.java'])
+
+  // The whole point of `scope`: without it the graph cannot answer "what is exposed outward".
+  const unscoped = SURVEY_XML.replace(' kind="http" scope="public"', ' kind="http"')
+  assert.ok(checkPart({ part: parsePart(unscoped), cell: surveyCell })
+    .some((b) => b.startsWith('S10 c1: <api scope="">')))
+
+  const freeform = SURVEY_XML.replace('name="GET /orders"', 'name="orders endpoint"')
+  assert.ok(checkPart({ part: parsePart(freeform), cell: surveyCell })
+    .some((b) => b.startsWith('S10 c1: <api kind="http"> name must be "METHOD /path"')))
+})
+
 test("P1: a missing spine answer is a blocker; suites are answered by <suite> or found=\"no\"", () => {
   const noToggles = SPINE_XML.replace('  <toggles found="no"/>\n', "")
   assert.ok(checkPart({ part: parsePart(noToggles), cell: spineCell })
@@ -111,6 +146,20 @@ test("P1: a missing spine answer is a blocker; suites are answered by <suite> or
 
   const declaredAbsent = noSuites.replace("<build", '<suites found="no"/>\n  <build')
   assert.deepEqual(checkPart({ part: parsePart(declaredAbsent), cell: spineCell }), [])
+})
+
+test("P4/P5: an integration without its config key, with an invented kind, or declared twice", () => {
+  const noKey = SPINE_XML.replace(' config="spring.datasource.url"', "")
+  assert.ok(checkPart({ part: parsePart(noKey), cell: spineCell })
+    .some((b) => b.startsWith('P4 c0: <integration system="orders-db"> has no config')))
+
+  const invented = SPINE_XML.replace('kind="db"', 'kind="postgres"')
+  assert.ok(checkPart({ part: parsePart(invented), cell: spineCell })
+    .some((b) => b.startsWith('P4 c0: <integration system="orders-db"> kind="postgres"')))
+
+  const twice = SPINE_XML.replace("  <build", '  <integration system="orders-db" kind="db" config="spring.datasource.username"/>\n  <build')
+  assert.ok(checkPart({ part: parsePart(twice), cell: spineCell })
+    .some((b) => b === 'P5 c0: duplicate <integration system="orders-db">'))
 })
 
 test("P2/P3: a suite without cmd and a duplicate id are blockers", () => {
@@ -146,7 +195,7 @@ test("role: scout.md names the machine check behind each of its prohibitions", (
   // The role file is named by ROLE, not by step: pi resolves `agent({role: "scout"})` by FILENAME
   // inside the declared roleDirectories (ext/index.mjs), so scope/role.md would install as "role".
   const role = readFileSync(new URL("scout.md", import.meta.url), "utf8")
-  for (const rule of ["S1", "S2", "S3", "S4", "S5"]) assert.match(role, new RegExp(`machine-checked as \`${rule}\``))
+  for (const rule of ["S1", "S2", "S3", "S4", "S5", "S6", "S9", "P4"]) assert.match(role, new RegExp(`machine-checked as \`${rule}\``))
   assert.match(role, /deps="none"/)   // the dependency answer, not silence (LAW 3)
   assert.match(role, /found="no"/)    // "not found" is an answer, not a guess (LAW 5)
 })

@@ -1,7 +1,8 @@
 $START_TASK
-Answer five questions about this repository from the spine files of cell {CELL}: how it is TESTED,
-how it is BUILT, how features are SWITCHED OFF, how branches and commits are NAMED, and how its
-external contract is DESCRIBED and validated. Each answer is what you read — or `found="no"`.
+Answer six questions about this repository from the spine files of cell {CELL}: how it is TESTED,
+how it is BUILT, how features are SWITCHED OFF, how branches and commits are NAMED, how its
+external contract is DESCRIBED and validated, and which EXTERNAL SYSTEMS its configuration declares.
+Each answer is what you read — or `found="no"`.
 $END_TASK
 
 $START_DATA
@@ -28,8 +29,14 @@ $END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
-- ALL five answers are present: `<suite>` elements (or `<suites found="no"/>`), `<build>`,
-  `<toggles>`, `<branching>`, `<contract>`
+- ALL six answers are present: `<suite>` elements (or `<suites found="no"/>`), `<build>`,
+  `<toggles>`, `<branching>`, `<contract>`, `<integration>` elements (or `<integrations found="no"/>`)
+- an `<integration kind="http|db|queue|cache|blob|mail|rpc" system="…" config="…" value="…"/>` is one
+  EXTERNAL system the configuration declares: a datasource URL, a broker address, another service's
+  base URL. `config` is the configuration KEY and it is required — step 5 stitches a module's `<io>`
+  to this declaration by that key. `value` is what the file actually holds; if that is a placeholder
+  or an environment variable, write the placeholder — a secret never travels into the graph. One
+  system, one `<integration>`
 - list EVERY test suite you find, not the first one: unit tests next to the code, component and
   contract suites in their own folders — each with its own `cmd`, its own folder and its own
   one-file form
@@ -57,8 +64,10 @@ schema:
     <toggles mechanism="…"/>
     <branching branches="…" commits="…"/>
     <contract spec="…" validator="…"/>
+    <integration kind="db" system="…" config="…" value="…"/>
   </part>
-  any of the five may instead be <… found="no"/>
+  any of the six may instead be <… found="no"/> — for the two list answers that is
+  <suites found="no"/> and <integrations found="no"/>
 check: {CHECK}
 return: call workflow_result — the shape and the choice of rail are declared by your ROLE's
 OUTPUT_FORMAT

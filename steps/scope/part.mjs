@@ -17,7 +17,9 @@
 //             not restated in prose in the role or in the orders; a blocker always carries its rule
 //             number and the path it is about, because its reader is the role in FEEDBACK, not a
 //             human; the two cell kinds are dispatched by the `kind` FIELD, never by parsing text.
-// Interface:  SPINE_ANSWERS — the five questions a spine part must answer, with their value keys
+// Interface:  SPINE_ANSWERS — the six questions a spine part must answer, with their value keys
+//             IO_KINDS — the closed vocabulary of external-system kinds
+//             API_KINDS · HTTP_API_NAME — the vocabulary and canonical name of an exposed entry point
 //             parsePart(xml) -> Part
 //             checkPart({ part, cell }) -> string[]   — blockers; empty means green
 //             newPart({ xml, cell }) -> Result<Part, "invalid-part">
@@ -25,7 +27,7 @@
 import { ok, err } from "../../core/result.mjs"
 import { attrs, ATTRS, tag } from "../../core/xml.mjs"
 
-// SPINE_ANSWERS — the five questions the graph must answer (docs/concept.md, «Разведка»), as the
+// SPINE_ANSWERS — the six questions the graph must answer (docs/concept.md, «Разведка»), as the
 // elements a spine part carries. `keys` are the attributes that count as an ANSWER: at least one of
 // them non-empty. `found="no"` is an equally valid answer everywhere here — a repository may have no
 // toggle mechanism and no spec, and that is the operator's decision at step 10, not the scout's
@@ -37,7 +39,43 @@ export const SPINE_ANSWERS = Object.freeze([
   Object.freeze({ el: "toggles", keys: ["mechanism"] }),
   Object.freeze({ el: "branching", keys: ["branches", "commits"] }),
   Object.freeze({ el: "contract", keys: ["spec", "validator"] }),
+  Object.freeze({ el: "integrations", keys: [] }), // answered by <integration> elements, see checkSpine
 ])
+
+// IO_KINDS — what an external system can BE, declared here and only here; both orders substitute
+// this list instead of retyping it. A closed vocabulary for the same reason the suite id needs one:
+// two cells naming one technology differently produce two nodes at step 5, and the merge cannot
+// tell that they are the same system.
+//
+// BUG_FIX_CONTEXT: живые прогоны 6e3b9455 и e51553dc на одном и том же файле.
+//   Было:     внешней точке места в грамматике не было вовсе — только <dep path>, чей атрибут
+//             называется `path` и предназначен для пути в репозитории.
+//   Проблема: LoggingFilter получил то пять <dep> на фреймворк (jakarta.ws.rs.*, io.vertx.*), то
+//             deps="none" — два прогона, два разных графа на одном коде, и ни один не назвать
+//             неправильным. Внешняя система при этом невыразима в обоих.
+//   Правка:   <io> у модуля (сторона кода) и <integration> в хребте (сторона конфига), сшиваются
+//             на шаге 5 по ключу конфигурации. Библиотека и фреймворк не описываются вовсе.
+export const IO_KINDS = Object.freeze(["http", "db", "queue", "cache", "blob", "mail", "rpc"])
+const IO_DIRS = Object.freeze(["in", "out"])
+
+// API_KINDS / API_SCOPES / HTTP_API_NAME — the surface a module EXPOSES, with the same discipline:
+// a closed vocabulary and a canonical form, declared here and substituted into the order.
+//
+// `scope` is the whole point of this element: `public` means the entry point is reachable from
+// OUTSIDE the process (an HTTP route, a CLI command, a consumed topic), `internal` means only other
+// modules of this repository call it. Step 5 collects every public one into the graph's surface, and
+// step 10 needs exactly that list to know which part of the contract a delta touches
+// (docs/concept.md:236 — «узел спеки стоит РЕБРОМ перед узлами кода»).
+//
+// BUG_FIX_CONTEXT: живой прогон e51553dc.
+//   Было:     <api> не упомянут в CONSTRAINTS наряда и не проверялся гардрейлом ни одним правилом.
+//   Проблема: молчание было законным ответом — модуль с тремя эндпоинтами без единого <api> зелёный,
+//             `<api name="">` зелёный, форма имени не задана (роль в примере пишет и `GET /fruits`,
+//             и `build_invoice(order_id)`). «Наружу ничего не выставлено» неотличимо от «не смотрел».
+//   Правка:   kind/scope/канон имени + api="none", и правила S9/S10, судящие СОСТАВ.
+export const API_KINDS = Object.freeze(["http", "cli", "event", "lib"])
+const API_SCOPES = Object.freeze(["public", "internal"])
+export const HTTP_API_NAME = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \/\S*$/
 
 const SUITE_KEYS = ["id", "kind", "cmd", "path"] // `one` is deliberately absent: empty is valid
 const text = (s) => String(s == null ? "" : s).trim()
@@ -50,11 +88,15 @@ const firstAttrs = (xml, name) => {
 //   Input:        xml — the staged part as the role wrote it; type unconstrained
 //   Dependencies: attrs, ATTRS, tag (core/xml.mjs)
 //   Antecedent:   any value — undefined/null/garbage read as an empty part
-//   Consequent:   success: { cell, kind, modules[], gaps[], suites[], answers{} } where
-//                          modules = [{ path, role, api[], deps[], depsNone, tests[] }] in order of
-//                          appearance; a `<module>` written self-closing is still collected (so it
-//                          fails rule S3 with a diagnosis, instead of vanishing into rule S1);
-//                          answers = { <el>: attrs|null } for the five SPINE_ANSWERS elements
+//   Consequent:   success: { cell, kind, modules[], gaps[], suites[], integrations[], answers{} }
+//                          where modules = [{ path, role, api[], apiNone, deps[], depsNone, io[],
+//                          ioNone, tests[] }] in order of appearance; `api` carries the element's
+//                          attributes ({ name, kind, scope, spec? }), not just its name — `scope` is
+//                          the answer to "what is exposed outward" and step 5 collects it;
+//                          a `<module>` written self-closing is
+//                          still collected (so it fails rule S3 with a diagnosis, instead of
+//                          vanishing into rule S1);
+//                          answers = { <el>: attrs|null } for the six SPINE_ANSWERS elements
 //                 failure: none — total
 //   Purity:       pure
 //   Interface:    parsePart(xml: unknown) -> Part
@@ -71,9 +113,12 @@ export function parsePart(xml) {
     modules.push(Object.freeze({
       path: a.path || "",
       depsNone: a.deps === "none",
+      ioNone: a.io === "none",
+      apiNone: a.api === "none",
       role: text((body.match(/<role>([\s\S]*?)<\/role>/) || [])[1]),
-      api: Object.freeze([...body.matchAll(tag("api"))].map((x) => attrs(x[1]).name || "")),
+      api: Object.freeze([...body.matchAll(tag("api"))].map((x) => Object.freeze(attrs(x[1])))),
       deps: Object.freeze([...body.matchAll(tag("dep"))].map((x) => attrs(x[1]).path || "")),
+      io: Object.freeze([...body.matchAll(tag("io"))].map((x) => Object.freeze(attrs(x[1])))),
       tests: Object.freeze([...body.matchAll(tag("test"))].map((x) => {
         const t = attrs(x[1])
         return Object.freeze({ path: t.path || "", suite: t.suite || "" })
@@ -87,7 +132,7 @@ export function parsePart(xml) {
     const a = attrs(m[1])
     if (seen.has(a.path)) continue
     seen.add(a.path)
-    modules.push(Object.freeze({ path: a.path || "", depsNone: a.deps === "none", role: "", api: Object.freeze([]), deps: Object.freeze([]), tests: Object.freeze([]) }))
+    modules.push(Object.freeze({ path: a.path || "", depsNone: a.deps === "none", ioNone: a.io === "none", apiNone: a.api === "none", role: "", api: Object.freeze([]), deps: Object.freeze([]), io: Object.freeze([]), tests: Object.freeze([]) }))
   }
 
   return Object.freeze({
@@ -99,6 +144,7 @@ export function parsePart(xml) {
       return Object.freeze({ path: a.path || "", why: text(a.why) })
     })),
     suites: Object.freeze([...src.matchAll(tag("suite"))].map((s) => Object.freeze(attrs(s[1])))),
+    integrations: Object.freeze([...src.matchAll(tag("integration"))].map((i) => Object.freeze(attrs(i[1])))),
     answers: Object.freeze(Object.fromEntries(SPINE_ANSWERS.map(({ el }) => [el, firstAttrs(src, el)]))),
   })
 }
@@ -130,6 +176,34 @@ function checkSurvey(part, cell) {
       if (!d) B.push(`S4 ${cell.id}: <dep> with an empty path — ${m.path}`)
       else if (d === m.path) B.push(`S4 ${cell.id}: <dep> points at its own module — ${m.path}`)
     }
+    // S6 — external points are DECLARED, never omitted, for the same reason as S4: a module that
+    // touches nothing outside and a module whose external point was forgotten look identical, and
+    // step 8 walks nodes. A library is neither an edge nor an <io> — that rule lives in the order.
+    if (!m.io.length && !m.ioNone) B.push(`S6 ${cell.id}: neither <io> nor io="none" — ${m.path}`)
+    // S7 — form of <io>. An external point with no address and no configuration key is a guess:
+    // step 8 cannot ripple to it and step 10 cannot name it in a check command.
+    for (const io of m.io) {
+      const where = `${m.path} → system="${io.system || "?"}"`
+      if (!IO_KINDS.includes(io.kind)) B.push(`S7 ${cell.id}: <io kind="${io.kind || ""}"> is not one of ${IO_KINDS.join(" ")} — ${where}`)
+      if (!IO_DIRS.includes(io.dir)) B.push(`S7 ${cell.id}: <io dir="${io.dir || ""}"> must be in or out — ${where}`)
+      if (!text(io.system)) B.push(`S7 ${cell.id}: <io> has no system — ${m.path}`)
+      if (!text(io.config) && !text(io.target)) B.push(`S7 ${cell.id}: <io> has neither config nor target — ${where}`)
+    }
+    // S9 — the exposed surface is DECLARED, never omitted. Same shape as S4 and S6, and the reason
+    // is the sharpest here: a module with three routes and no <api> used to be green, so "nothing is
+    // exposed" and "the scout did not look" were the same XML.
+    if (!m.api.length && !m.apiNone) B.push(`S9 ${cell.id}: neither <api> nor api="none" — ${m.path}`)
+    // S10 — form of <api>. `scope` is what makes "выставлено наружу" a fact step 5 can collect; the
+    // canonical http name is what lets a consumer reference resolve to exactly one provider.
+    for (const api of m.api) {
+      const where = `${m.path} → name="${api.name || ""}"`
+      if (!API_KINDS.includes(api.kind)) B.push(`S10 ${cell.id}: <api kind="${api.kind || ""}"> is not one of ${API_KINDS.join(" ")} — ${where}`)
+      if (!API_SCOPES.includes(api.scope)) B.push(`S10 ${cell.id}: <api scope="${api.scope || ""}"> must be public or internal — ${where}`)
+      if (!text(api.name)) B.push(`S10 ${cell.id}: <api> has no name — ${m.path}`)
+      else if (api.kind === "http" && !HTTP_API_NAME.test(api.name)) {
+        B.push(`S10 ${cell.id}: <api kind="http"> name must be "METHOD /path" — ${where}`)
+      }
+    }
   }
 
   // S5 — "not read" without a reason is indistinguishable from "did not bother".
@@ -142,15 +216,19 @@ function checkSurvey(part, cell) {
 function checkSpine(part, cell) {
   const B = []
 
-  // P1 — all five answers present, each either with a value or explicitly found="no".
+  // P1 — all six answers present, each either with a value or explicitly found="no". Two of them —
+  // suites and integrations — are answered by a LIST of elements, so their "value" is the list
+  // being non-empty; the rest answer with their own attributes.
+  const LISTED = { suites: part.suites, integrations: part.integrations }
   for (const { el, keys } of SPINE_ANSWERS) {
     const a = part.answers[el]
-    const answered = el === "suites"
-      ? part.suites.length > 0 || (a && a.found === "no")
+    const listed = LISTED[el]
+    const answered = listed
+      ? listed.length > 0 || (a && a.found === "no")
       : a && (a.found === "no" || keys.some((k) => text(a[k])))
     if (!answered) {
-      B.push(el === "suites"
-        ? `P1 ${cell.id}: no <suite> and no <suites found="no"/> — the graph's test question is unanswered`
+      B.push(listed
+        ? `P1 ${cell.id}: no <${el.slice(0, -1)}> and no <${el} found="no"/> — that question of the graph is unanswered`
         : `P1 ${cell.id}: <${el}> is missing or empty — answer it with ${keys.map((k) => `${k}="…"`).join(" / ")} or with found="no"`)
     }
   }
@@ -167,6 +245,24 @@ function checkSpine(part, cell) {
   const ids = part.suites.map((s) => s.id).filter(Boolean)
   for (const id of new Set(ids.filter((id, i) => ids.indexOf(id) !== i))) {
     B.push(`P3 ${cell.id}: duplicate <suite id="${id}">`)
+  }
+
+  // P4 — form of <integration>. `config` is the JOIN KEY: step 5 stitches a module's <io config="…">
+  // to the system declared here, so a declaration without it is unreachable from the code side.
+  // `value` is deliberately optional — a repository may hold only a placeholder, and a secret never
+  // travels into the graph.
+  for (const i of part.integrations) {
+    const where = `<integration system="${i.system || "?"}">`
+    if (!IO_KINDS.includes(i.kind)) B.push(`P4 ${cell.id}: ${where} kind="${i.kind || ""}" is not one of ${IO_KINDS.join(" ")}`)
+    if (!text(i.system)) B.push(`P4 ${cell.id}: <integration> has no system`)
+    if (!text(i.config)) B.push(`P4 ${cell.id}: ${where} has no config — the key is what step 5 stitches <io> to`)
+  }
+
+  // P5 — one system, one declaration: a duplicate splits the same external system into two nodes at
+  // the merge, exactly as a duplicate suite id breaks <test suite="…">.
+  const systems = part.integrations.map((i) => i.system).filter(Boolean)
+  for (const s of new Set(systems.filter((s, i) => systems.indexOf(s) !== i))) {
+    B.push(`P5 ${cell.id}: duplicate <integration system="${s}">`)
   }
 
   return B

@@ -1,6 +1,6 @@
 $START_TASK
 Map cell {CELL} of this repository: one `<module>` per file you read, one `<gap>` per file you could
-not, and the edges between them.
+not, the edges between them, what each module EXPOSES and what it reaches OUTSIDE this repository.
 $END_TASK
 
 $START_DATA
@@ -29,9 +29,25 @@ $END_DATA
 $START_CONSTRAINTS
 - every file above is closed by a `<module path>` or a `<gap path why>` — no file is left silent
 - `path` is copied from the list verbatim; a path outside this cell does not belong in this part
-- every `<module>` carries `<role>` and its dependency answer: `<dep path>` for each edge, or
-  `deps="none"`
-- a `<dep>` may point outside this cell — the graph is global, the cell is local. Point, do not open
+- every `<module>` answers all THREE dimensions, with an element or with the explicit "none":
+  edges — `<dep path>` … or `deps="none"`;
+  external points — `<io>` … or `io="none"`;
+  exposed surface — `<api>` … or `api="none"`
+- a `<dep>` is a path INSIDE this repository; it may point outside this cell — the graph is global,
+  the cell is local. Point, do not open. A library or framework import is NOT an edge: `jakarta.*`,
+  `io.vertx.*`, JUnit and their kin are not written anywhere in the part
+- `<api kind="http|cli|event|lib" scope="public|internal" name="…">` — an entry point this file
+  offers. `scope="public"` means it is reachable from OUTSIDE the process (an HTTP route, a CLI
+  command, a consumed topic); `scope="internal"` means only other modules of this repository call it.
+  For `kind="http"` the name is exactly `METHOD /path` — `GET /fruits`, uppercase method, no query
+  string, no placeholders of your own
+- `<io kind="http|db|queue|cache|blob|mail|rpc" dir="in|out" system="…" config="…" target="…"/>` —
+  a point where this file reaches an EXTERNAL system: a database, a broker, another service. `system`
+  is a short kebab-case label; `config` is the configuration key that carries the address when the
+  address is not in the code; `target` is what you can see in the code (URL, topic, table). At least
+  one of `config`/`target` is filled — an external point with neither is a guess. Your own inbound
+  HTTP is `<api>`, not `<io>`; `dir="in"` only when the EXTERNAL system initiates (a queue consumer,
+  a webhook)
 - a raw `<` inside an attribute value is written `&lt;`
 $END_CONSTRAINTS
 
@@ -49,11 +65,12 @@ schema:
   <part cell="{CELL}" kind="survey">
     <module path="…">
       <role>…</role>
-      <api name="…"/>
+      <api name="…" kind="http" scope="public"/>
       <dep path="…"/>
+      <io kind="db" dir="out" system="…" config="…" target="…"/>
       <test path="…" suite="…"/>
     </module>
-    <module path="…" deps="none"><role>…</role></module>
+    <module path="…" deps="none" io="none" api="none"><role>…</role></module>
     <gap path="…" why="…"/>
   </part>
 check: {CHECK}

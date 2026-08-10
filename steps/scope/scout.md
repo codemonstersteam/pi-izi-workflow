@@ -25,12 +25,16 @@ These hold on every run, whatever the order says.
 2. **Every file of the order is closed** — by a `<module>` if you read it, or by a `<gap why>` if you
    did not. Silence is the one answer that cannot be merged: a file nobody mentions becomes a node
    nobody misses.
-3. **Dependencies are declared, never omitted.** A module with edges carries `<dep path>` for each;
-   a module with none carries `deps="none"`. A module that simply says nothing about its edges is
-   indistinguishable from one whose edges you forgot, and step 8 cannot compute a change radius from
-   a graph with no edges.
-4. **An edge may leave the cell.** `<dep path="…">` to a file you were not given is normal and
-   correct — the graph is global, your cell is local. Point at it; do not open it.
+3. **Every dimension is declared, never omitted.** A module answers all three, each with its element
+   or with the explicit "none": edges — `<dep path>` or `deps="none"`; external points — `<io>` or
+   `io="none"`; exposed surface — `<api>` or `api="none"`. A module that simply says nothing is
+   indistinguishable from one whose edges, external points or entry points you forgot: step 8 cannot
+   compute a change radius from a graph with no edges, and step 10 cannot tell which part of the
+   contract a delta touches from a graph with no surface.
+4. **An edge may leave the cell, but never the repository.** `<dep path="…">` to a file you were not
+   given is normal and correct — the graph is global, your cell is local. Point at it; do not open
+   it. A library or framework is NOT an edge: `jakarta.*`, `io.vertx.*`, JUnit and their kin are
+   written nowhere in the part. What crosses to another SYSTEM is `<io>`, not `<dep>`.
 5. **"Not found" is a real answer.** On a spine cell, `found="no"` for a build command, a toggle
    mechanism, a branch convention or an external contract is the truth the pipeline needs. Inventing
    any of them is worse than not finding them: the operator decides at step 10, and cannot decide
@@ -57,13 +61,23 @@ dump, a binary in disguise, something far past your context) is not a failure: c
 **Step 3 — write one `<module>` per file you read.** `path` is the file's path, verbatim from the
 order. `<role>` is one line: what this file IS, not what you think of it.
 
-**Step 4 — name the observable inputs.** `<api name="…"/>` for each entry point another module or
-the outside world can call: an HTTP route, an exported function, a CLI command, an event handler. A
-file with no entry point of its own has no `<api>` — that is not a gap.
+**Step 4 — name the surface this file exposes.** `<api name="…" kind="http|cli|event|lib"
+scope="public|internal"/>` for each entry point. `scope` is the question the graph is built to
+answer: `public` means it is reachable from OUTSIDE the process — an HTTP route, a CLI command, a
+topic someone else publishes to; `internal` means only other modules of this repository call it. For
+`kind="http"` the name is exactly `METHOD /path` (`GET /fruits`) — uppercase method, no query string.
+A file that exposes nothing carries `api="none"`; that is an answer, not a gap (LAW 3).
 
-**Step 5 — name the edges.** `<dep path="…"/>` for every module this file uses: imports, injected
-dependencies, calls into other files. A path outside your cell is fine (LAW 4). No edges at all →
-`deps="none"` on the module (LAW 3).
+**Step 5 — name the edges inside the repository.** `<dep path="…"/>` for every module this file uses:
+imports of other files, injected dependencies, calls into them. A path outside your cell is fine
+(LAW 4); a library or framework is not an edge at all. No edges → `deps="none"` (LAW 3).
+
+**Step 5a — name what reaches an external system.** `<io kind="http|db|queue|cache|blob|mail|rpc"
+dir="in|out" system="…" config="…" target="…"/>` where this file talks to a database, a broker, a
+cache or another service. `system` is a short kebab-case label; fill `config` with the configuration
+key that carries the address, `target` with what the code itself shows (URL, topic, table) — at least
+one of the two. Your own inbound HTTP is `<api>`, not `<io>`; `dir="in"` only when the external
+system initiates. Nothing external → `io="none"` (LAW 3).
 
 **Step 6 — attach the tests you can see.** `<test path="…" suite="…"/>` when a file in your cell is
 the test of a module in your cell, or when the module names its test. Do not guess a suite id you
@@ -89,6 +103,14 @@ $START_FORBIDDEN
 - Do NOT leave a module without `<role>` — machine-checked as `S3`.
 - Do NOT omit the dependency answer — machine-checked as `S4` (`<dep>` or `deps="none"`).
 - Do NOT write a `<gap>` without `why` — machine-checked as `S5`.
+- Do NOT omit the external-point answer — machine-checked as `S6` (`<io>` or `io="none"`), and its
+  `kind`/`dir` come from the order's vocabulary — machine-checked as `S7`, which also refuses an
+  `<io>` carrying neither `config` nor `target`.
+- Do NOT omit the surface answer — machine-checked as `S9` (`<api>` or `api="none"`); `kind`, `scope`
+  and the `METHOD /path` form of an http name are machine-checked as `S10`.
+- Do NOT invent an integration the configuration does not declare — machine-checked as `P4` (a
+  `<integration>` without its `config` key, or with a kind outside the vocabulary, is a blocker) and
+  `P5` (one system, one declaration).
 - Do NOT invent a test suite, a build command, a toggle mechanism, a branch convention or a spec
   that you did not read. `found="no"` is machine-accepted; a guess is not machine-detectable, which
   is exactly why it is forbidden here rather than checked later.
@@ -107,11 +129,12 @@ A `survey` cell:
 <part cell="<cell id>" kind="survey">
   <module path="<path from the order>">
     <role><one line: what this file is></role>
-    <api name="<entry point>"/>
+    <api name="<entry point>" kind="http|cli|event|lib" scope="public|internal"/>
     <dep path="<path, may be outside this cell>"/>
+    <io kind="http|db|queue|cache|blob|mail|rpc" dir="in|out" system="<label>" config="<key>" target="<what the code shows>"/>
     <test path="<path>" suite="<suite id>"/>
   </module>
-  <module path="<path>" deps="none">
+  <module path="<path>" deps="none" io="none" api="none">
     <role><one line></role>
   </module>
   <gap path="<path>" why="<why you could not read it>"/>
@@ -127,6 +150,7 @@ A `spine` cell:
   <toggles mechanism="<how features are switched off here>"/>
   <branching branches="<naming convention>" commits="<message convention>"/>
   <contract spec="<path to openapi/asyncapi/other>" validator="<command that checks it>"/>
+  <integration kind="http|db|queue|cache|blob|mail|rpc" system="<label>" config="<configuration key>" value="<what the file holds>"/>
 </part>
 ```
 
@@ -163,14 +187,19 @@ usefully.
 
 ```xml
 <part cell="c3" kind="survey">
-  <module path="billing/invoice.py">
+  <module path="billing/invoice.py" io="none">
     <role>invoice assembly and totals</role>
-    <api name="build_invoice(order_id)"/>
+    <api name="build_invoice(order_id)" kind="lib" scope="internal"/>
     <dep path="billing/tax.py"/>
     <dep path="storage/ledger.py"/>
     <test path="tests/test_invoice.py" suite="unit"/>
   </module>
-  <module path="billing/tax.py" deps="none">
+  <module path="billing/http.py" deps="none">
+    <role>HTTP entry points of the billing service</role>
+    <api name="POST /invoices" kind="http" scope="public"/>
+    <io kind="http" dir="out" system="tax-service" config="TAX_SERVICE_URL" target="POST /rates"/>
+  </module>
+  <module path="billing/tax.py" deps="none" io="none" api="none">
     <role>VAT rate table lookup</role>
   </module>
   <gap path="billing/fixtures/rates_2019.csv" why="not read: 410 KB of tabular fixture data, no module in it"/>

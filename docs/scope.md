@@ -52,8 +52,8 @@ part.test.mjs}`, `core/xml.mjs`, `ext/index.mjs::{cells, checkPart}`, четвё
 
 | `kind` | наряд просит |
 |---|---|
-| `survey` | опиши модули: роль одной строкой, наблюдаемые входы (`api`), **зависимости**, тесты |
-| `spine` | перечисли ВСЕ сьюты (род, команда, папка, форма прогона одного файла); назови команду сборки, механизм тоглов, соглашения о ветках и коммитах, описание внешнего контракта с валидатором — **или объяви, что их нет** |
+| `survey` | опиши модули: роль одной строкой, **выставленная поверхность** (`api` с `kind`/`scope`), **зависимости**, **внешние точки** (`io`), тесты — каждое измерение со значением или с явным `none` |
+| `spine` | перечисли ВСЕ сьюты (род, команда, папка, форма прогона одного файла); назови команду сборки, механизм тоглов, соглашения о ветках и коммитах, описание внешнего контракта с валидатором, **внешние системы из конфигурации** (`integration`) — **или объяви, что их нет** |
 
 Тем же приёмом на шаге 14 выбираются пять шаблонов тикета. Разбор строк («если в файле есть слово
 pom…») здесь не нужен: решение уже принято и лежит данными.
@@ -66,13 +66,18 @@ pom…») здесь не нужен: решение уже принято и л
 
 ```xml
 <part cell="c1" kind="survey">
-  <module path="src/main/java/org/acme/rest/json/FruitResource.java">
+  <module path="src/main/java/org/acme/rest/json/FruitResource.java" io="none">
     <role>REST resource for fruits</role>
-    <api name="GET /fruits"/>
+    <api name="GET /fruits" kind="http" scope="public"/>
     <dep path="src/main/java/org/acme/rest/json/Fruit.java"/>
     <test path="src/test/java/org/acme/rest/json/FruitResourceTest.java" suite="unit"/>
   </module>
-  <module path="src/main/java/org/acme/Legume.java" deps="none">
+  <module path="src/main/java/org/acme/rest/json/FruitRepository.java" api="none">
+    <role>fruit storage</role>
+    <dep path="src/main/java/org/acme/rest/json/Fruit.java"/>
+    <io kind="db" dir="out" system="fruit-db" config="quarkus.datasource.jdbc.url" target="fruits table"/>
+  </module>
+  <module path="src/main/java/org/acme/Legume.java" deps="none" io="none" api="none">
     <role>plain data record</role>
   </module>
   <gap path="src/main/resources/import.sql" why="not read: 480 KB of seed data, no module in it"/>
@@ -89,6 +94,7 @@ pom…») здесь не нужен: решение уже принято и л
   <toggles found="no"/>
   <branching branches="feature/&lt;ticket&gt;-&lt;slug&gt;" commits="conventional-commits"/>
   <contract found="no"/>
+  <integration kind="db" system="fruit-db" config="quarkus.datasource.jdbc.url" value="jdbc:postgresql://db/fruits"/>
 </part>
 ```
 
@@ -125,14 +131,20 @@ pom…») здесь не нужен: решение уже принято и л
 | S3 | у `<module>` непустой `<role>` | узел без роли неотличим от строчки в `ls` |
 | S4 | зависимости **объявлены**: ≥1 `<dep path>` либо `deps="none"`; `path` непуст и не равен своему | без рёбер неисполним шаг 8 |
 | S5 | `<gap>` несёт непустой `why` | «не прочитал» без причины не отличить от «поленился» |
+| S6 | внешние точки **объявлены**: ≥1 `<io>` либо `io="none"` | молчание неотличимо от «не смотрел» — та же болезнь, что лечит S4 |
+| S7 | форма `<io>`: `kind` из `IO_KINDS`, `dir` ∈ `in\|out`, непустой `system`, непусто `config` **или** `target` | точка без адреса и без ключа конфигурации — догадка, а не факт; `config` — ключ сшивки на шаге 5 |
+| S9 | поверхность **объявлена**: ≥1 `<api>` либо `api="none"` | модуль с тремя роутами и без `<api>` был зелёным: «наружу ничего» = «не смотрел» |
+| S10 | форма `<api>`: `kind` из `API_KINDS`, `scope` ∈ `public\|internal`, непустое `name`, для `kind="http"` — канон `METHOD /path` | `scope` и есть ответ «что выставлено наружу»; канон имени даёт шагу 5 однозначную ссылку потребителя |
 
 **`kind: "spine"`:**
 
 | # | правило | почему |
 |---|---|---|
-| P1 | присутствуют все пять ответов: сьюты (≥1 `<suite>` либо `<suites found="no"/>`), `<build>`, `<toggles>`, `<branching>`, `<contract>` — со значением или с `found="no"` | пять вопросов графа (`docs/concept.md`); молчание по любому из них встаёт шагом 5, 10 или 17 |
+| P1 | присутствуют все шесть ответов: сьюты (≥1 `<suite>` либо `<suites found="no"/>`), `<build>`, `<toggles>`, `<branching>`, `<contract>`, интеграции (≥1 `<integration>` либо `<integrations found="no"/>`) — со значением или с `found="no"` | шесть вопросов графа (`docs/concept.md`); молчание по любому из них встаёт шагом 5, 10 или 17 |
 | P2 | у `<suite>` непусты `id`, `kind`, `cmd`, `path`; `one` может быть пуст | команда без папки или без рода на шаге 10 не соберётся в команду узла |
 | P3 | `id` сьютов уникальны | `<test suite="unit">` узла обязан резолвиться в ровно один сьют |
+| P4 | форма `<integration>`: `kind` из `IO_KINDS`, непустые `system` и `config`; `value` необязателен | `config` — ключ, по которому шаг 5 сшивает `<io>` модуля с системой; секрет в граф не едет, поэтому `value` не обязателен |
+| P5 | `system` интеграций уникальны | двойник расщепляет одну систему на два узла при слиянии — как двойной `id` сьюта |
 
 Красный чек едет блокерами в `FEEDBACK` пере-делегации — тем же способом, что `newBrd` и `newDesign`:
 одной строкой через `\n  `, каждый блокер с номером правила и путём.
@@ -308,4 +320,4 @@ async function scout(cell, orderTpl, BRD) {           // одна клетка: 
    `.agent/graph-parts/` с числом файлов, равным числу клеток плана; `track:"ok"`, числа читаются из
    `journal.json`, а не из того, что напечатала модель.
 3. Шов правила S4 проверен реинтродукцией дефекта: убрать `deps="none"` из части — юнит краснеет.
-4. Часть клетки `c0` содержит все пять ответов хребта — со значениями или с `found="no"`.
+4. Часть клетки `c0` содержит все шесть ответов хребта — со значениями или с `found="no"`.
