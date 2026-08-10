@@ -48,8 +48,17 @@ export const ATTRS = '((?:"[^"<]*"|[^<>])*)'
 //                 failure: none — total
 //   Purity:       pure
 //   Interface:    attrs(tagText: unknown) -> Record<string, string>
+//
+// Entities are DECODED here, in the one place attribute values are produced. `<` must be written
+// `&lt;` inside a value (ATTRS above depends on it), so a caller that did not decode would compare a
+// role's `branches="feature/&lt;slug&gt;"` against the string a human typed and never match. The five
+// XML predefined entities are the whole set; `&amp;` is decoded LAST so `&amp;lt;` yields `&lt;`.
+const unescape = (v) => v
+  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+  .replace(/&amp;/g, "&")
+
 export const attrs = (tagText) =>
-  Object.fromEntries([...String(tagText == null ? "" : tagText).matchAll(/(\w+)="([^"]*)"/g)].map((m) => [m[1], m[2]]))
+  Object.fromEntries([...String(tagText == null ? "" : tagText).matchAll(/(\w+)="([^"]*)"/g)].map((m) => [m[1], unescape(m[2])]))
 
 // FUNCTION_CONTRACT: tag — a global matcher for one tag name
 //   Input:        name — the tag name, used verbatim in the pattern (`\b`-bounded)

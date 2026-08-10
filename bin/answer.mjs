@@ -1,33 +1,33 @@
 #!/usr/bin/env node
-// MODULE_CONTRACT: answer.mjs — записывает ответ оператора в .agent/answers.md по ключу вопроса
-// Purpose:    одно решение — answer_cmd печатает роль в своём конверте, ОТВЕЧАЕТ на него эта
-//             команда, а не оператор вручную: формат и накопление держит код, а не аккуратность
-//             человека, и правило invented-default сверяет числа именно с этим файлом
+// MODULE_CONTRACT: answer.mjs — writes the operator's answer to .agent/answers.md under the question's key
+// Purpose:    one decision — the role prints answer_cmd in its own envelope, and this command
+//             ANSWERS it, not the operator by hand: the code owns format and accumulation, not a
+//             human's care, and the invented-default rule checks numbers against exactly this file
 // io:         fs
-// Invariants: answers.md только растёт — предыдущие записи не переписываются и не теряются;
-//             одна и та же пара (вопрос, ответ) не попадает в файл дважды подряд
-// Interface:  — (нет экспорта: CLI труба, 0 токенов, io поверх bin/decisions-log.mjs)
+// Invariants: answers.md only grows — prior entries are never rewritten or lost; the same
+//             (question, answer) pair does not land in the file twice in a row
+// Interface:  — (no export: a CLI pipe, 0 tokens, io on top of bin/decisions-log.mjs)
 //
-// Перенос izi-flow-v2/bin/answer.mjs 1:1 (PLAN.md §3, задача S3), с одним отличием от донора:
-// журнал .agent/decisions.log пишется через bin/decisions-log.mjs, а не core/log.mjs — core/*.mjs
-// в этой полосе не в зоне S3 (см. bin/decisions-log.mjs MODULE_CONTRACT), а не потому что формат
-// изменился: строка журнала байт-в-байт того же вида.
+// Port of izi-flow-v2/bin/answer.mjs 1:1 (PLAN.md §3, task S3), with one difference from the donor:
+// the .agent/decisions.log journal is written through bin/decisions-log.mjs, not core/log.mjs —
+// core/*.mjs was out of scope for this slice's S3 (see bin/decisions-log.mjs MODULE_CONTRACT), not
+// because the format changed: the journal line is byte-for-byte the same shape.
 //
 //   node bin/answer.mjs --q="предел размера ответа?" --text="20"
 //
-// Команду печатает САМА роль в поле `answer_cmd` своего конверта, роутер её исполняет. Почему не
-// «оператор допишет файл руками»: формат тогда держится аккуратностью человека, связь вопрос→ответ
-// теряется, а правило `invented-default` сверяет числа именно с этим файлом — опечатка оператора
-// превращается в красный чек роли.
+// The command is printed by the role ITSELF in its envelope's `answer_cmd` field, the router
+// executes it. Why not "the operator appends the file by hand": the format would then depend on a
+// human's care, the question→answer link would be lost, and the `invented-default` rule checks
+// numbers against exactly this file — an operator's typo would turn into a red check on the role.
 //
-// Ключ `--q=` ЗДЕСЬ НЕ сверяется с заданным вопросом — эту проверку делает разбор конверта роли
-// (`answer-cmd-key-mismatch`, донор F5). Дублировать её тут значило бы держать одно требование в
-// двух местах — а они однажды разойдутся.
+// The `--q=` key is NOT checked against the asked question HERE — that check is done by the role's
+// envelope parsing (`answer-cmd-key-mismatch`, donor F5). Duplicating it here would mean keeping one
+// requirement in two places — and they would drift apart one day.
 //
-// S13: запись на диск (mkdir/read/dedupe/write) переехала в bin/write-answer.mjs — второй вызывающий
-// появился (ext/index.mjs::izi_answer, tool-вызов ассистента из фонового чекпоинта), и правило
-// «повтор того же (вопрос, ответ) не дублируется» не может жить в двух копиях. Эта команда — CLI-
-// оболочка того же правила, не вторая его реализация.
+// S13: the disk write (mkdir/read/dedupe/write) moved to bin/write-answer.mjs — a second caller
+// appeared (ext/index.mjs::izi_answer, the assistant's tool call from a background checkpoint), and
+// the "a repeat of the same (question, answer) is not duplicated" rule cannot live in two copies.
+// This command is a CLI wrapper around the same rule, not a second implementation of it.
 
 import { appendDecision } from "./decisions-log.mjs"
 import { looksLikeTemplate } from "../core/answers.mjs"
@@ -40,20 +40,22 @@ const Q = opt("q")
 const TEXT = opt("text")
 
 if (!Q || !TEXT) { console.error('usage: answer.mjs --q="<вопрос>" --text="<ответ>"'); process.exit(2) }
-// Шаблон из примера роли, попавший в файл дословно, — не ответ. Это тот же класс, что «модель
-// скопировала форму вместо значения»: дальше он молча станет источником числа для fit.
+// A template copied from the role's example verbatim into the file is not an answer. It's the same
+// class of defect as "the model copied the form instead of the value": downstream it would silently
+// become the source of a number for fit.
 if (looksLikeTemplate(TEXT)) { console.error("✗ ответ выглядит шаблоном, а не ответом оператора"); process.exit(2) }
 
-// Накопительно: ответы прошлых обменов остаются, иначе роль потеряет их при следующем вопросе.
+// Cumulative: answers from prior exchanges stay put, or the role would lose them on the next question.
 const written = writeAnswer(ROOT, { question: Q, text: TEXT })
 if (!written.written) { console.log("✓ ответ уже записан"); process.exit(0) }
 console.log(`✓ .agent/answers.md: ${written.count} ответов`)
 
-// Журнал — след, а не гейт (F2): пишем ТОЛЬКО когда ответ реально дописан — дубликат выше уже
-// остановил процесс раньше, и повторной строки в журнале не будет. "_answer" — не id шага:
-// answer_cmd протоколом несёт только вопрос и ответ, шаг, которому вопрос принадлежит, в его форме
-// не передаётся (standards/workflow.md, operator channel). actor=izi, как и в остальных точках
-// перехода — команду исполняет роутер, хоть значение и принёс оператор.
+// The journal is a trace, not a gate (F2): we write it ONLY when the answer was actually appended —
+// the duplicate check above already stopped the process earlier, and there will be no repeat line
+// in the journal. "_answer" is not a step id: the answer_cmd protocol carries only the question and
+// the answer, the step the question belongs to is not passed in its shape (standards/workflow.md,
+// operator channel). actor=izi, as at every other transition point — the router executes the
+// command, even though the operator supplied the value.
 try {
   appendDecision(ROOT, { step: "_answer", actor: "izi", note: `ответ оператора записан по ключу «${Q}»` })
-} catch { /* журнал — след, не гейт: сбой записи не должен ронять answer.mjs */ }
+} catch { /* the journal is a trace, not a gate: a write failure must not crash answer.mjs */ }

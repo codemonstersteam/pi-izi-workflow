@@ -4,7 +4,7 @@ Develop rationally and precisely according to the task. Avoid labor-intensive, a
 $end_system
 
 $start_task
-Develop step 5 'scope' of workflow in pi-extensible-workflows paradigm
+Develop step 5 'graph' of workflow in pi-extensible-workflows paradigm
 $end_task
 
 $start_context
@@ -12,7 +12,7 @@ $start_context
 Folow on the best practices at https://github.com/vekexasia/pi-extensible-workflows/tree/main
 and experience gained from the current project,
 you need to:
-develop the 4 step 'scope' of the workflow (described in `docs/workflow.md`);
+develop the 5 step 'graph' of the workflow (described in `docs/workflow.md`);
 the workflow execution order is outlined in `docs/workflow.md`,
 and the concept is described in `docs/concept.md`.
 
@@ -27,10 +27,10 @@ described in the `standards` documentation.
 $start-strategy-step-by-step
 
 1 First, analyze the data.
-2 Then, draft the concept for the third step "scope" and show the code to the operator
+2 Then, draft the concept for the third step "graph" and show the code to the operator
 (it is important to show the workflow JS code and how it integrates into `workflows/izi.js`)
 3 Once approved, 
-  3.1 create docs/scope.md concept consice overview
+  3.1 create docs/graph.md concept consice overview
   3.2 create a step-by-step backlog in `backlog.md`.
 4 Every development step must be tested.
 5 Work in small iterations with rapid feedback.

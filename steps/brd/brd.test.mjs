@@ -1,6 +1,7 @@
-// Слайс `brd`: BRD как доменное значение. Тестов на фабрику — 1 happy + число РАЗЛИЧИМЫХ исходов
-// (standards/code.md §5). Диапазон входа проверяет та фабрика, которой поле принадлежит; newBrd
-// отвечает лишь за то, что добавляет сам: собрать все блокеры разом и вынести улики на успех.
+// The `brd` slice: BRD as a domain value. One test per factory — 1 happy path + the number of
+// DISTINGUISHABLE outcomes (standards/code.md §5). The input range is checked by the factory that
+// owns the field; newBrd is responsible only for what it adds itself: collect all blockers at once
+// and carry advice forward on success.
 
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -13,191 +14,193 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const BRD = (fit) => `R1 Размер ответа ограничен\n   fit:    ${fit}\n   verify: GET /x\n\nsubjects[]: a · b · c\nopen-questions: 0\n`
 const R = (over) => ({ id: "R1", statement: "Размер ответа ограничен", fit: "20 записей", verify: "GET /x", line: 1, ...over })
 
-// --- newFit: 1 happy + 2 различимых исхода ---------------------------------------------------------
-// invented-default — смысл существования шага: он ловит число, взятое моделью из головы.
-// S16: правило «fit обязан нести измеримый токен» снято решением оператора — предикатный критерий
-// («регистронезависимое вхождение подстроки») машиной проверяем, а токена не несёт, и живой прогон
-// ed1d4094 сжёг на этом все три пере-делегации.
+// --- newFit: 1 happy + 2 distinguishable outcomes ---------------------------------------------------------
+// invented-default — the reason this step exists: it catches a number the model made up.
+// S16: the rule "fit must carry a measurable token" was dropped by operator decision — a predicate
+// criterion ("case-insensitive substring match") is machine-checkable yet carries no token, and live
+// run ed1d4094 burned all three redelegations on exactly this.
 
-test("критерий строится", () => {
+test("criterion builds", () => {
   assert.equal(newFit("20 записей", null).ok, true)
 })
 
-test("предикатный критерий без числа строится — судить прозу гардрейлу нечем", () => {
+test("predicate criterion without a number builds — the guardrail has no prose to judge", () => {
   assert.equal(newFit("регистронезависимое вхождение подстроки", null).ok, true)
 })
 
-test("нет fit — требования без критерия приёмки не бывает", () => {
+test("no fit — there is no requirement without an acceptance criterion", () => {
   assert.equal(newFit("", null).error.cls, "no-fit")
 })
 
-test("число, которого нет в источниках, — умолчание подставлено, а не спрошено", () => {
+test("a number absent from the sources — a default was substituted, not asked", () => {
   const known = new Set([...numbersIn("Нужно ограничение на размер")])
   assert.equal(newFit("20 записей", known).error.cls, "invented-default")
 })
 
-test("число из ответа оператора легально", () => {
+test("a number from the operator's answer is legal", () => {
   const known = new Set([...numbersIn("- вопрос: предел?\n  ответ: 20")])
   assert.equal(newFit("20 записей", known).ok, true)
 })
 
-// Спросил про дефолт, но максимум подставил сам — ловится: сверяется КАЖДОЕ число.
-test("частично подтверждённые числа не спасают выдуманное", () => {
+// Asked about the default but invented the maximum itself — caught: EVERY number is checked.
+test("partially confirmed numbers don't save the invented one", () => {
   const known = new Set([...numbersIn("ответ: 20")])
   assert.match(newFit("20 по умолчанию, 100 максимум", known).error.detail, /100/)
 })
 
-// «Источников нет» — это НЕ «нарушений нет»: правило молчит, потому что сверять не с чем.
-test("источников нет — правило молчит, а не обвиняет наугад", () => {
+// "No sources" is NOT "no violations": the rule stays silent because there is nothing to check against.
+test("no sources — the rule stays silent, not accuses at random", () => {
   assert.equal(newFit("20 записей", null).ok, true)
 })
 
-// Нормализация: ведущие нули срезаются, запятая приводится к точке. Утверждение взято из прежнего
-// теста дословно — оно было верным, а моя первая версия («20.0 → 20») выдавала желаемое за факт.
-test("десятичные и ведущие нули нормализуются", () => {
+// Normalization: leading zeros are stripped, comma is converted to a dot. The assertion is taken
+// verbatim from the previous test — it was correct, and my first version ("20.0 → 20") mistook a wish for a fact.
+test("decimals and leading zeros are normalized", () => {
   assert.deepEqual([...numbersIn("0.5 · 007 · 1,5")].sort(), ["0.5", "1.5", "7"])
 })
 
-// --- numbersIn: обозначение формата vs число-величина (README «Долги», снято этой правкой) --------
+// --- numbersIn: format designation vs number-magnitude (README "Debts", closed by this change) --------
 //
-// НАЙДЕНО ЖИВЫМ ПРОГОНОМ S11 (booking-задача): `fit: … (ISO-8601)` читало `8601` как число-величину,
-// требовало источника, которого нет ни в задаче, ни в ответах, и роль получала `invented-default` за
-// формат, который сама не выдумывала. Таблица ниже — оба знака правила разом: обозначения не дают
-// числа, величины дают, и присутствие обозначения РЯДОМ не прячет настоящую величину.
+// FOUND BY LIVE RUN S11 (booking task): `fit: … (ISO-8601)` read `8601` as a number-magnitude,
+// demanded a source that exists neither in the task nor in the answers, and the role got
+// `invented-default` for a format it never invented. The table below is both edges of the rule at
+// once: designations don't yield numbers, magnitudes do, and a designation NEARBY does not hide a
+// real magnitude.
 
-test("обозначения формата — не числа-величины", () => {
+test("format designations are not number-magnitudes", () => {
   for (const s of ["ISO-8601", "UTF-8", "SHA-256", "RFC 3339", "base64", "p95"]) {
     assert.deepEqual([...numbersIn(s)], [], `${s} не должен дать число`)
   }
 })
 
-test("числа-величины остаются числами рядом с любыми словами", () => {
+test("number-magnitudes remain numbers next to any words", () => {
   assert.deepEqual([...numbersIn("20")], ["20"])
   assert.deepEqual([...numbersIn("90 дней")], ["90"])
   assert.deepEqual([...numbersIn("1..100")].sort(), ["1", "100"])
   assert.deepEqual([...numbersIn("не более 20")], ["20"])
-  assert.deepEqual([...numbersIn("300ms")], ["300"]) // суффикс единицы ПОСЛЕ числа не примыкание
+  assert.deepEqual([...numbersIn("300ms")], ["300"]) // a unit suffix AFTER the number is not adjacency
 })
 
-// Шов: обозначение рядом с настоящей величиной не глушит invented-default на этой величине —
-// правило различает оба числа в одной строке, а не только числа по отдельности.
-test("обозначение формата в fit не глушит invented-default на соседней величине", () => {
+// Seam: a designation next to a real magnitude does not mute invented-default on that magnitude —
+// the rule distinguishes both numbers on one line, not just numbers in isolation.
+test("a format designation in fit does not mute invented-default on a neighboring magnitude", () => {
   const known = new Set([...numbersIn("ответ: 20")])
   const r = newFit("формат ISO-8601, лимит 100 записей", known)
   assert.equal(r.error.cls, "invented-default")
   assert.match(r.error.detail, /100/)
 })
 
-// Дефект наоборот: подставленное число НЕ должно перестать краснеть из-за того, что рядом стоит
-// обозначение формата — проверка возвратом дефекта (закомментируй "if (isDesignationDigit...) continue"
-// в numbersIn, чтобы увидеть первый тест этого блока красным; закомментируй сам вызов numbersIn-фильтра
-// величин, чтобы увидеть этот тест красным на отсутствии invented-default).
-test("100, ничем не подтверждённое, краснеет и в присутствии ISO-8601", () => {
+// The reverse defect: an invented number must NOT stop failing just because a format designation
+// stands next to it — verified by reintroducing the defect (comment out "if (isDesignationDigit...) continue"
+// in numbersIn to see the first test of this block go red; comment out the numbersIn magnitude filter
+// call itself to see this test go red on a missing invented-default).
+test("100, confirmed by nothing, fails even in the presence of ISO-8601", () => {
   const known = new Set([...numbersIn("TASK.md: тайм-аут ISO-8601, дней: 20")])
   assert.equal(newFit("100", known).error.cls, "invented-default")
 })
 
-// --- newRequirement: 1 happy + 2 своих исхода ------------------------------------------------------
-// Отказ newFit пробрасывается — проверяется, что он не теряется, а не заново весь его набор.
+// --- newRequirement: 1 happy + 2 of its own outcomes ------------------------------------------------
+// newFit's rejection is propagated — this checks that it isn't lost, not the whole set again.
 
-test("требование строится", () => {
+test("requirement builds", () => {
   assert.equal(newRequirement(R(), null).ok, true)
 })
 
-test("пустая формулировка — требования нет", () => {
+test("empty statement — there is no requirement", () => {
   assert.match(newRequirement(R({ statement: "" }), null).error.detail, /формулировка пуста/)
 })
 
-test("требование без способа проверки — утверждение, а не требование", () => {
+test("a requirement without a way to verify — a statement, not a requirement", () => {
   assert.match(newRequirement(R({ verify: "" }), null).error.detail, /нет способа проверки/)
 })
 
-test("отказ критерия пробрасывается с именем требования", () => {
+test("the criterion's rejection is propagated with the requirement's name", () => {
   assert.match(newRequirement(R({ fit: "" }), null).error.detail, /R1: нет fit-критерия/)
 })
 
-// --- newSubjects: 1 happy + 3 исхода ---------------------------------------------------------------
+// --- newSubjects: 1 happy + 3 outcomes ---------------------------------------------------------------
 
-test("якоря строятся", () => {
+test("anchors build", () => {
   assert.equal(newSubjects(["a", "b", "c"]).ok, true)
 })
 
-test("якорей меньше минимума", () => {
+test("fewer anchors than the minimum", () => {
   assert.match(newSubjects(["a"]).error.detail, /допустимо/)
 })
 
-// ЖИВОЙ ПРОГОН 01.08: якорь — это ОДНО слово. Правило «subject обязан встречаться в тексте R» было
-// неверным и заставляло роль портить корректный артефакт, подгоняя якоря под язык требования.
-test("фраза с пробелом — не якорь", () => {
+// LIVE RUN 01.08: an anchor is ONE word. The rule "subject must occur in the text of R" was
+// wrong and forced the role to corrupt a correct artifact by fitting anchors to the requirement's language.
+test("a phrase with a space is not an anchor", () => {
   assert.match(newSubjects(["поиск фруктов", "b", "c"]).error.detail, /фраза, а не якорь/)
 })
 
-test("повтор якоря", () => {
+test("duplicate anchor", () => {
   assert.match(newSubjects(["a", "b", "a"]).error.detail, /повторяется/)
 })
 
-// --- adviceFor: улики, которые НЕ роняют приёмку ---------------------------------------------------
+// --- adviceFor: advice that does NOT fail acceptance ---------------------------------------------------
 
-test("желание без измеримого рядом — улика", () => {
+test("a wish without anything measurable nearby — advice", () => {
   const a = adviceFor(R({ statement: "Ответ должен быть быстрым", fit: "быстро" }))
   assert.equal(a[0].code, "wish-not-requirement")
 })
 
-// ЖИВОЙ ПРОГОН 04: правило валило «limit (default 20, VALID range 1..100)» — слово-желание стояло
-// рядом с точным диапазоном. Желание — это ОТСУТСТВИЕ критерия, а не наличие слова.
-test("желание рядом с измеримым уликой не является", () => {
+// LIVE RUN 04: the rule failed "limit (default 20, VALID range 1..100)" — a wish-word stood next
+// to a precise range. A wish is the ABSENCE of a criterion, not the presence of a word.
+test("a wish next to something measurable is not advice", () => {
   assert.deepEqual(adviceFor(R({ statement: "valid range", fit: "1..100" })), [])
 })
 
-test("путь в формулировке — улика про механизм", () => {
+test("a path in the statement — advice about mechanism", () => {
   const a = adviceFor(R({ statement: "Реализация в src/handlers/limit.go" }))
   assert.equal(a[0].code, "design-leak")
 })
 
-// --- newBrd: 1 happy + свои исходы -----------------------------------------------------------------
+// --- newBrd: 1 happy + its own outcomes -----------------------------------------------------------------
 
-test("BRD строится и несёт требования и якоря", () => {
+test("BRD builds and carries requirements and anchors", () => {
   assert.equal(newBrd(BRD("20 записей")).value.requirements.length, 1)
 })
 
-test("без единого R не сдаётся", () => {
+test("with not a single R it does not pass", () => {
   assert.match(newBrd("subjects[]: a · b · c\nopen-questions: 0\n").error.detail, /нет ни одного требования/)
 })
 
-test("открытый вопрос не сдаётся", () => {
+test("an open question does not pass", () => {
   const t = BRD("20 записей").replace("open-questions: 0", "open-questions: 1")
   assert.match(newBrd(t).error.detail, /не сдаётся с открытыми вопросами/)
 })
 
-test("строки open-questions нет вовсе", () => {
+test("the open-questions line is missing entirely", () => {
   const t = BRD("20 записей").replace("\nopen-questions: 0\n", "\n")
   assert.match(newBrd(t).error.detail, /обязан её нести/)
 })
 
-test("строки subjects нет вовсе", () => {
+test("the subjects line is missing entirely", () => {
   const t = BRD("20 записей").replace(/subjects\[\].*\n/, "")
   assert.match(newBrd(t).error.detail, /нечем грепать/)
 })
 
-// То, ради чего блокеры собираются, а не отдаются по одному: BRD чинит МОДЕЛЬ, и каждый ретрай —
-// это вызов. Отдать ей один блокер из трёх значит заплатить тремя вызовами за одно сообщение.
-test("все блокеры отдаются разом, а не первый", () => {
+// This is why blockers are collected instead of handed out one at a time: a MODEL fixes the BRD,
+// and every retry is a call. Handing it one blocker out of three means paying three calls for one message.
+test("all blockers are handed out at once, not just the first", () => {
   const t = "R1 Пусто\n   fit:\n   verify:\n\nopen-questions: 1\n"
   assert.ok(newBrd(t).error.detail.split("\n").length >= 2)
 })
 
-// Улика едет на УСПЕХЕ: правило-суждение не имеет права ронять приёмку и командовать
-// пере-делегированием владельца артефакта.
-test("улика не роняет приёмку, а едет вместе с построенным BRD", () => {
+// Advice rides on SUCCESS: a judgment rule has no authority to fail acceptance and command a
+// redelegation to the artifact's owner.
+test("advice does not fail acceptance, it rides along with the built BRD", () => {
   const t = "R1 Реализация в src/x.go\n   fit:    20 записей\n   verify: GET /x\n\nsubjects[]: a · b · c\nopen-questions: 0\n"
   const b = newBrd(t)
   assert.equal(b.ok && b.value.advice[0].code, "design-leak")
 })
 
-// Корпусный, S16: артефакт живого прогона ed1d4094 дословно. Он трижды получил один и тот же красный
-// (`R1 fit не несёт измеримого токена`) и сжёг весь бюджет пере-делегаций, хотя критерий предикатный
-// и его verify машиной исполним. Теперь он обязан быть зелёным — это шов снятого правила.
-test("предикатный fit живого прогона ed1d4094 больше не краснеет", () => {
+// Corpus test, S16: the ed1d4094 live-run artifact, verbatim. It got the same red three times in a
+// row (`R1 fit carries no measurable token`) and burned the whole redelegation budget, even though the
+// criterion is predicative and its verify is machine-executable. Now it must be green — this is the
+// seam of the dropped rule.
+test("the predicate fit from live run ed1d4094 no longer fails", () => {
   const t = "R1 Поиск фруктов по части имени (регистронезависимо)\n"
     + "   fit:    регистронезависимое вхождение подстроки\n"
     + '   verify: GET /fruits?name=an возвращает фрукты, содержащие "an" в имени (вкл. "An", "AN")\n\n'
@@ -210,63 +213,63 @@ test("предикатный fit живого прогона ed1d4094 больш
   assert.equal(r.value.requirements.length, 2)
 })
 
-// --- реестр и роль не разошлись --------------------------------------------------------------------
+// --- the registry and the role have not drifted apart --------------------------------------------------------------------
 
-// izi-pi-v2 (S9): роль живёт рядом с ядром среза, как у донора izi-flow-v2 — steps/brd/, а не
-// отдельный каталог roles/ (docs/workflow.md §1). S11: файл роли называется по имени РОЛИ,
-// steps/brd/gilb.md, а не steps/brd/role.md — расширение объявляет steps/brd/ как roleDirectories
-// (ext/index.mjs), и pi-extensible-workflows резолвит роль по имени файла (<role>.md), не по
-// каталогу шага; role.md было бы установлено как роль «role», не «gilb».
+// izi-pi-v2 (S9): the role lives next to the slice's core, as in donor izi-flow-v2 — steps/brd/, not
+// a separate roles/ directory (docs/workflow.md §1). S11: the role file is named after the ROLE,
+// steps/brd/gilb.md, not steps/brd/role.md — the extension declares steps/brd/ as roleDirectories
+// (ext/index.mjs), and pi-extensible-workflows resolves the role by the file name (<role>.md), not by
+// the step directory; role.md would install as the role "role", not "gilb".
 const ROLE_PATH = join(HERE, "gilb.md")
-test("роль знает про invented-default", () => {
+test("the role knows about invented-default", () => {
   assert.match(readFileSync(ROLE_PATH, "utf8"), /invented-default/)
 })
 
-// F17 (run-5) как корпусный тест: число ИЗ ОТВЕТА оператора остаётся законным, число из списка
-// альтернатив его же вопроса — нет. Обе стороны нужны: правило, которое краснеет на всём, роль
-// заставит портить корректный артефакт.
-test("число из ответа оператора законно, число из альтернатив вопроса — нет", () => {
+// F17 (run-5) as a corpus test: a number FROM the operator's ANSWER stays legal, a number from the
+// list of alternatives in the same question does not. Both sides are needed: a rule that fails on
+// everything forces the role to corrupt a correct artifact.
+test("a number from the operator's answer is legal, a number from the question's alternatives is not", () => {
   const known = new Set([...numbersIn("20")])
   assert.equal(newFit("20 records by default", known).ok, true)
   assert.equal(newFit("20 records by default, 100 maximum", known).error.cls, "invented-default")
 })
 
-// --- languageDrifted: 1 happy + 4 различимых исхода ------------------------------------------------
+// --- languageDrifted: 1 happy + 4 distinguishable outcomes ------------------------------------------------
 //
-// F20 (run-6) и F16 (run-5): при русской задаче формулировки требований приходили русскими, а
-// критерии — английскими. Артефакт производится наполовину из промпта, и для человека, который его
-// принимает, это документ на двух языках; для приёмки — неразличимо.
+// F20 (run-6) and F16 (run-5): on a Russian task, requirement statements came out Russian while
+// criteria came out English. The artifact is half-produced from the prompt, and to the human who
+// accepts it, it's a document in two languages; acceptance could not tell the difference.
 
 const RU = "нужен поиск по части имени с ограничением размера ответа"
 const EN = "search users by partial name with a response size limit"
 
-test("русский вход, английский критерий — дрейф", () => {
+test("Russian input, English criterion — drift", () => {
   assert.equal(languageDrifted("match = substring at any position, case folded", RU), true)
 })
 
-test("правило работает в обе стороны — английский вход, русский критерий", () => {
+test("the rule works both ways — English input, Russian criterion", () => {
   assert.equal(languageDrifted("подстрока в любой позиции имени", EN), true)
 })
 
-// Ниже порога букв текст языка не несёт: судить `≤ 200 мс` не по чему.
-test("критерий без букв языком не обладает", () => {
+// Below the letter threshold text carries no language: there is nothing to judge `≤ 200 ms` by.
+test("a criterion without letters has no language", () => {
   assert.equal(languageDrifted("≤ 200", RU), false)
 })
 
-// Источника нет — сверять не с чем, и молчание честнее обвинения наугад (правило invented-default
-// молчит по тому же основанию).
-test("источник не подан — правило молчит", () => {
+// No source — nothing to check against, and silence is more honest than a random accusation (the
+// invented-default rule stays silent on the same grounds).
+test("no source given — the rule stays silent", () => {
   assert.equal(languageDrifted("response time ≤ 200 ms", ""), false)
 })
 
-test("смешанный источник не решает ничего — правило молчит", () => {
+test("a mixed source decides nothing — the rule stays silent", () => {
   assert.equal(languageDrifted("response time ≤ 200 ms", "search по name, limit 20, response не больше 200 ms"), false)
 })
 
-// Корпусный: артефакт run-6 дословно. Он прошёл приёмку зелёным, и это ровно тот двуязычный
-// документ, ради которого правило заведено — теперь он обязан краснеть, а диагноз обязан называть
-// требование и код.
-test("артефакт run-6 краснеет на дрейфе языка, а не проходит зелёным", () => {
+// Corpus test: the run-6 artifact, verbatim. It passed acceptance green, and it's exactly the
+// bilingual document this rule was introduced for — now it must fail, and the diagnosis must name
+// the requirement and the code.
+test("the run-6 artifact fails on language drift instead of passing green", () => {
   const t = "R1 Пользователи ищутся по подстроке в имени/фамилии, без учёта регистра\n"
     + "   fit:    match = substring at any position in name/surname, case folded; result true | false\n"
     + "   verify: search query with partial name returns matching users\n\n"
@@ -275,9 +278,9 @@ test("артефакт run-6 краснеет на дрейфе языка, а �
   assert.match(r.error.detail, /R1 \[language-drift\]/)
 })
 
-// `verify` объявлен ролью и нарядом как «команда | артефакт» и английский по природе: правило,
-// краснеющее на верно исполненной форме, отправляет роль портить корректный артефакт.
-test("verify языком не судится — он команда, а не проза", () => {
+// `verify` is declared by the role and the order as "command | artifact" and is English by nature:
+// a rule that fails a correctly executed form sends the role to corrupt a correct artifact.
+test("verify is not judged by language — it is a command, not prose", () => {
   const t = "R1 Пользователи ищутся по подстроке в имени\n"
     + "   fit:    подстрока в любой позиции, без учёта регистра; результат — да | нет\n"
     + "   verify: GET /users?q=part returns matching users\n\n"

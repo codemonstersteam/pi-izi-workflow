@@ -17,7 +17,8 @@
 //             not restated in prose in the role or in the orders; a blocker always carries its rule
 //             number and the path it is about, because its reader is the role in FEEDBACK, not a
 //             human; the two cell kinds are dispatched by the `kind` FIELD, never by parsing text.
-// Interface:  SPINE_ANSWERS — the six questions a spine part must answer, with their value keys
+// Interface:  GRAMMAR_VERSION — the version of the part grammar, the cache's third key
+//             SPINE_ANSWERS — the six questions a spine part must answer, with their value keys
 //             IO_KINDS — the closed vocabulary of external-system kinds
 //             API_KINDS · HTTP_API_NAME — the vocabulary and canonical name of an exposed entry point
 //             parsePart(xml) -> Part
@@ -27,7 +28,17 @@
 import { ok, err } from "../../core/result.mjs"
 import { attrs, ATTRS, tag } from "../../core/xml.mjs"
 
-// SPINE_ANSWERS — the six questions the graph must answer (docs/concept.md, «Разведка»), as the
+// GRAMMAR_VERSION — what a part of this shape MEANS. It is the third key of the step-4 cache
+// (steps/scope/cache.mjs): a part accepted under an older grammar is not re-judged, it is
+// recomputed — otherwise the cache silently hands the new guardrail an artifact the old one wrote.
+// Raise it in the SAME change that adds, removes or re-numbers a rule, never afterwards.
+//
+// 1 — the swarm's first grammar: `<dep path via>` written by the role (rules S1..S10, P1..P5).
+// 2 — edges left the role for the script (backlog W4a/W4b): `<dep>` is now a BLOCKER in a part and
+//     lives in `.agent/graph-computed.xml`; cells became subtrees with path-derived ids (W2).
+export const GRAMMAR_VERSION = "2"
+
+// SPINE_ANSWERS — the six questions the graph must answer (docs/concept.md, "Survey"), as the
 // elements a spine part carries. `keys` are the attributes that count as an ANSWER: at least one of
 // them non-empty. `found="no"` is an equally valid answer everywhere here — a repository may have no
 // toggle mechanism and no spec, and that is the operator's decision at step 10, not the scout's
@@ -47,14 +58,14 @@ export const SPINE_ANSWERS = Object.freeze([
 // two cells naming one technology differently produce two nodes at step 5, and the merge cannot
 // tell that they are the same system.
 //
-// BUG_FIX_CONTEXT: живые прогоны 6e3b9455 и e51553dc на одном и том же файле.
-//   Было:     внешней точке места в грамматике не было вовсе — только <dep path>, чей атрибут
-//             называется `path` и предназначен для пути в репозитории.
-//   Проблема: LoggingFilter получил то пять <dep> на фреймворк (jakarta.ws.rs.*, io.vertx.*), то
-//             deps="none" — два прогона, два разных графа на одном коде, и ни один не назвать
-//             неправильным. Внешняя система при этом невыразима в обоих.
-//   Правка:   <io> у модуля (сторона кода) и <integration> в хребте (сторона конфига), сшиваются
-//             на шаге 5 по ключу конфигурации. Библиотека и фреймворк не описываются вовсе.
+// BUG_FIX_CONTEXT: live runs 6e3b9455 and e51553dc, on the very same file.
+//   Previous: the grammar had no place for an external point at all — only <dep path>, whose
+//             attribute is called `path` and means a path inside this repository.
+//   Problem:  LoggingFilter came back once with five <dep> onto the framework (jakarta.ws.rs.*,
+//             io.vertx.*) and once with deps="none" — two runs, two graphs on one file, and neither
+//             can be called wrong. The external system was inexpressible in both.
+//   Fix:      <io> on a module (the code side) and <integration> on the spine (the config side),
+//             stitched at step 5 by the configuration key. A library or framework is not described.
 export const IO_KINDS = Object.freeze(["http", "db", "queue", "cache", "blob", "mail", "rpc"])
 const IO_DIRS = Object.freeze(["in", "out"])
 
@@ -65,14 +76,15 @@ const IO_DIRS = Object.freeze(["in", "out"])
 // OUTSIDE the process (an HTTP route, a CLI command, a consumed topic), `internal` means only other
 // modules of this repository call it. Step 5 collects every public one into the graph's surface, and
 // step 10 needs exactly that list to know which part of the contract a delta touches
-// (docs/concept.md:236 — «узел спеки стоит РЕБРОМ перед узлами кода»).
+// (docs/concept.md — the spec node stands as an EDGE in front of the code nodes).
 //
-// BUG_FIX_CONTEXT: живой прогон e51553dc.
-//   Было:     <api> не упомянут в CONSTRAINTS наряда и не проверялся гардрейлом ни одним правилом.
-//   Проблема: молчание было законным ответом — модуль с тремя эндпоинтами без единого <api> зелёный,
-//             `<api name="">` зелёный, форма имени не задана (роль в примере пишет и `GET /fruits`,
-//             и `build_invoice(order_id)`). «Наружу ничего не выставлено» неотличимо от «не смотрел».
-//   Правка:   kind/scope/канон имени + api="none", и правила S9/S10, судящие СОСТАВ.
+// BUG_FIX_CONTEXT: live run e51553dc.
+//   Previous: <api> was named in no order's CONSTRAINTS and checked by no rule of the guardrail.
+//   Problem:  silence was a legal answer — a module with three endpoints and no <api> was green,
+//             `<api name="">` was green, and the shape of a name was undefined (the role's own
+//             example writes both `GET /fruits` and `build_invoice(order_id)`). "Nothing is exposed"
+//             was indistinguishable from "the scout did not look".
+//   Fix:      kind/scope/a canonical name plus api="none", and rules S9/S10 judging COMPOSITION.
 export const API_KINDS = Object.freeze(["http", "cli", "event", "lib"])
 const API_SCOPES = Object.freeze(["public", "internal"])
 export const HTTP_API_NAME = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \/\S*$/
@@ -81,15 +93,15 @@ const SUITE_KEYS = ["id", "kind", "cmd", "path"] // `one` is deliberately absent
 
 // SUITE_KINDS / suiteId — the vocabulary of test suites and the shape of their id.
 //
-// BUG_FIX_CONTEXT: четыре живых прогона подряд назвали ОДИН И ТОТ ЖЕ сьют по-разному —
+// BUG_FIX_CONTEXT: four live runs in a row named ONE AND THE SAME suite differently —
 //   `integ-native` (dee73d00), `integration` (e51553dc), `native-it` (03bc51ef),
-//   `native-integration` (8f0e03fc). `kind` при этом проехал как `integration` (e51553dc), которого
-//   в словаре наряда нет вовсе: P2 проверял непустоту, но не принадлежность.
-//   Проблема: имя, которое каждый прогон новое, невозможно ни с чем сшить — ни `<test suite="…">`
-//             узла, ни план шага 10, который собирает из сьюта команду проверки.
-//   Правка:   `kind` из закрытого словаря, а `id` обязан НАЧИНАТЬСЯ со своего рода:
-//             `unit`, `component`, `component-native`, `contract-pact`. Разнобой становится
-//             невозможен по форме, а два сьюта одного рода по-прежнему выразимы.
+//   `native-integration` (8f0e03fc). `kind` meanwhile travelled as `integration` (e51553dc), a word
+//   the order's vocabulary does not hold: P2 checked non-emptiness but not membership.
+//   Problem:  a name that is new every run can be stitched to nothing — neither to a node's
+//             `<test suite="…">`, nor to step 10's plan, which builds a check command out of a suite.
+//   Fix:      `kind` from a closed vocabulary, and `id` must START with its kind: `unit`,
+//             `component`, `component-native`, `contract-pact`. Drift becomes impossible by shape,
+//             while two suites of one kind stay expressible.
 export const SUITE_KINDS = Object.freeze(["unit", "component", "contract", "e2e"])
 const suiteId = (kind) => new RegExp(`^${kind}(-[a-z0-9]+)*$`)
 const text = (s) => String(s == null ? "" : s).trim()
@@ -187,24 +199,24 @@ function checkSurvey(part, cell) {
   for (const m of part.modules) {
     // S3 — a node without a role is indistinguishable from a line of `ls`.
     if (!m.role) B.push(`S3 ${cell.id}: <module> has no <role> — ${m.path || "(no path)"}`)
-    // S4 — dependencies are DECLARED, never omitted: a module with no edges and a module whose
-    // edges were forgotten look identical in XML, and step 8 (`ripple`) is unrunnable without edges.
+    // S4 — edges are NOT the role's answer any more. The rule keeps its number and changes its
+    // owner: a `<dep>` or a `deps="none"` in a part is now a blocker, because the edges of this
+    // repository are computed by a script (steps/scope/edges.mjs) into
+    // `.agent/graph-computed.xml`, and a second, hand-written source of edges is exactly how the
+    // merge at step 5 gets two answers to one question with no way to tell them apart.
     //
-    // BUG_FIX_CONTEXT: живой прогон c9580ff8.
-    //   Было:     `<dep path>` без единого требования, откуда ребро взято.
-    //   Проблема: Fruit.java — POJO без единого импорта — получил `<dep>` на СВОЕГО потребителя
-    //             FruitResource, и вместе со встречным ребром ресурса вышел цикл Fruit ↔ Resource;
-    //             шаг 10 строит план топосортом и требует DAG. Корень не в направлении: S4 требует
-    //             ответ, и роли дешевле выдумать ребро, чем написать deps="none".
-    //   Правка:   у ребра есть УЛИКА — `via`, та строка файла, из которой ребро прочитано. Гардрейл
-    //             файлов не читает и проверяет только непустоту, но выдумать ребро становится
-    //             дороже, чем его не писать: под догадку надо подделать цитату. Тот же приём, что
-    //             «у числа в fit: есть источник» на шаге 2.
-    if (!m.deps.length && !m.depsNone) B.push(`S4 ${cell.id}: neither <dep> nor deps="none" — ${m.path}`)
-    for (const d of m.deps) {
-      if (!d.path) B.push(`S4 ${cell.id}: <dep> with an empty path — ${m.path}`)
-      else if (d.path === m.path) B.push(`S4 ${cell.id}: <dep> points at its own module — ${m.path}`)
-      if (!d.via) B.push(`S4 ${cell.id}: <dep path="${d.path}"> has no via — quote the import line it was read from, or drop the edge (${m.path})`)
+    // BUG_FIX_CONTEXT: three live runs of one dimension, and every fix only changed WHICH answer
+    //   was cheapest for the role.
+    //   6e3b9455: framework imports became edges (`jakarta.*`, `io.vertx.*`).
+    //   c9580ff8: a POJO with no imports at all got a `<dep>` onto its own CONSUMER — the cycle
+    //             Fruit <-> FruitResource, while step 10 builds its plan by topological sort.
+    //   337b957f: demanding the evidence `via` made an edge dearer than silence — all 17 modules
+    //             came back with `deps="none"`, zero edges, and the run was formally green.
+    //   Lesson:  every demand on a role changes its economics, and a role takes the cheapest green
+    //             answer. Direction, evidence and membership of this repository are COMPUTABLE, so
+    //             they are computed (backlog W4a/W4b). The role keeps what has no cheap answer.
+    if (m.deps.length || m.depsNone) {
+      B.push(`S4 ${cell.id}: edges are computed by the script, not written here — drop <dep> and deps="none" (${m.path})`)
     }
     // S6 — external points are DECLARED, never omitted, for the same reason as S4: a module that
     // touches nothing outside and a module whose external point was forgotten look identical, and
@@ -221,13 +233,12 @@ function checkSurvey(part, cell) {
     }
     // S8 — the tests are DECLARED, never omitted.
     //
-    // BUG_FIX_CONTEXT: живой прогон 03bc51ef, первый после введения <io> и <api>.
-    //   Было:     <test> жил только в СХЕМЕ наряда — ни строки в CONSTRAINTS, ни одного правила.
-    //   Проблема: добавили два измерения — роль молча уронила третье: в части c1 не осталось ни
-    //             одной привязки <test>, хотя прогон e51553dc давал четыре. Ровно та же болезнь,
-    //             которую S9 вылечил у <api>: измерение, которого никто не требует, исчезает первым
-    //             под нагрузкой.
-    //   Правка:   четвёртое объявляемое измерение — <test> либо tests="none".
+    // BUG_FIX_CONTEXT: live run 03bc51ef, the first after <io> and <api> were introduced.
+    //   Previous: <test> lived only in the order's SCHEMA — not a line in CONSTRAINTS, not one rule.
+    //   Problem:  two dimensions were added and the role silently dropped a third: part c1 came back
+    //             with no <test> binding at all, where run e51553dc had four. Exactly the disease S9
+    //             cured for <api>: the dimension nobody demands is the first to go under load.
+    //   Fix:      a declared dimension of its own — <test> or tests="none".
     if (!m.tests.length && !m.testsNone) B.push(`S8 ${cell.id}: neither <test> nor tests="none" — ${m.path}`)
     for (const t of m.tests) {
       if (!text(t.path)) B.push(`S8 ${cell.id}: <test> with an empty path — ${m.path}`)
@@ -242,7 +253,7 @@ function checkSurvey(part, cell) {
     // is the sharpest here: a module with three routes and no <api> used to be green, so "nothing is
     // exposed" and "the scout did not look" were the same XML.
     if (!m.api.length && !m.apiNone) B.push(`S9 ${cell.id}: neither <api> nor api="none" — ${m.path}`)
-    // S10 — form of <api>. `scope` is what makes "выставлено наружу" a fact step 5 can collect; the
+    // S10 — form of <api>. `scope` is what makes "exposed outward" a fact step 5 can collect; the
     // canonical http name is what lets a consumer reference resolve to exactly one provider.
     for (const api of m.api) {
       const where = `${m.path} → name="${api.name || ""}"`

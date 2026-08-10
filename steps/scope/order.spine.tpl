@@ -7,8 +7,16 @@ $END_TASK
 
 $START_DATA
 $START_DOCUMENT
-files of cell {CELL} — build manifests, CI, configuration, README/CONTRIBUTING. Read these paths,
-and only these
+files of cell {CELL} — build manifests, CI, configuration, README/CONTRIBUTING. These paths, and
+only these.
+
+They arrive as a digest line each: path, size and — for a language the script can read — its
+declarations. A build manifest is not such a language, so most of these lines say `no digest`: that
+is expected here, and reading the files themselves with `read(path)` is the work of this cell.
+
+Paths are relative to the run's root, and you are already in it. Copy them verbatim from the list;
+never prefix them with a directory of your own — run `dc415b95` spent two calls on
+`.private/tmp/<project>/README.md` before reading `README.md`.
 $END_DOCUMENT
 $START_CONTENT
 {FILES}

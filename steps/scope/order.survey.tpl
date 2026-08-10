@@ -1,11 +1,20 @@
 $START_TASK
-Map cell {CELL} of this repository: one `<module>` per file you read, one `<gap>` per file you could
-not, the edges between them, what each module EXPOSES and what it reaches OUTSIDE this repository.
+Map cell {CELL} of this repository: one `<module>` per file, one `<gap>` per file that is genuinely
+unreadable, what each module IS, what it EXPOSES and what it reaches OUTSIDE this repository.
+Edges are already computed — you do not write them.
 $END_TASK
 
 $START_DATA
 $START_DOCUMENT
-files of cell {CELL} — the whole world of this run: read these paths, and only these
+files of cell {CELL} — the whole world of this run: these paths, and only these.
+
+Each file appears as a DIGEST, not as its text: size and language, `package`, the imports a script
+resolved inside this repository, the routes and drivers it read out of annotations and imports, then
+one line per declaration (`+` public, `-` internal). Lines marked `(computed)` are facts — use them,
+do not restate them.
+
+Paths are relative to the run's root, and you are already in it. Copy them verbatim from the list;
+never prefix them with a directory of your own.
 $END_DOCUMENT
 $START_CONTENT
 {FILES}
@@ -27,10 +36,13 @@ $END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
+- the digest IS the file for `<role>`, `<api>` and `<test>`. Open a file ONLY when its line says
+  `no digest` or `NOT COMPUTED`, or when the declarations genuinely do not tell you what the file is.
+  A `read` of a file the digest already answered is this run's budget spent on nothing — measured:
+  run `615192d7` opened all 17 files of this cell and learned nothing the order had not printed
 - every file above is closed by a `<module path>` or a `<gap path why>` — no file is left silent
 - `path` is copied from the list verbatim; a path outside this cell does not belong in this part
-- every `<module>` answers all FOUR dimensions, with an element or with the explicit "none":
-  what it imports — `<dep path via>` … or `deps="none"`;
+- every `<module>` answers all THREE dimensions, with an element or with the explicit "none":
   external points — `<io>` … or `io="none"`;
   exposed surface — `<api>` … or `api="none"`;
   tests — `<test path>` … or `tests="none"`
@@ -38,28 +50,25 @@ $START_CONSTRAINTS
   test. Write the PATH and nothing else: a suite id belongs to the spine cell, which is being read at
   the same moment as yours, so you cannot know it and must not guess — step 5 binds a test to its
   suite by path. A module with no test you can see carries `tests="none"`
-- `<dep path="…" via="…"/>` answers ONE question: what does THIS file import? Not "what is related
-  to it", not "what uses it" — what its own text pulls in. `via` is the line you read it from
-  (`import org.acme.Fruit`, `require("./tax")`, `from .ledger import post`), copied short and
-  verbatim; an edge you cannot quote is an edge you did not read, and the right answer then is to
-  leave it out. The direction follows from the question: from the file that imports to the file
-  imported — a data class that imports nothing has `deps="none"`, even when half the repository
-  uses it
-- a `<dep>` is a path INSIDE this repository; it may point outside this cell — the graph is global,
-  the cell is local. Point, do not open. A library or framework import is NOT an edge: `jakarta.*`,
-  `io.vertx.*`, JUnit and their kin are not written anywhere in the part
+- edges are NOT yours: a `<dep>` or a `deps="none"` anywhere in the part is a blocker. What this file
+  imports inside the repository is printed above as `imports (computed)`, with the line it was read
+  from; a script owns that measurement now. A library or framework is not an edge either way, and
+  what crosses to another SYSTEM is `<io>`, not an import
 - `<api kind="http|cli|event|lib" scope="public|internal" name="…">` — an entry point this file
   offers. `scope="public"` means it is reachable from OUTSIDE the process (an HTTP route, a CLI
   command, a consumed topic); `scope="internal"` means only other modules of this repository call it.
   For `kind="http"` the name is exactly `METHOD /path` — `GET /fruits`, uppercase method, no query
-  string, no placeholders of your own
+  string, no placeholders of your own. A `route (computed)` line above is already in that form — copy
+  it. Routes registered by CALLS in the body (a router's `Handle("/x", …)`) are not computable and are
+  yours to find
 - `<io kind="http|db|queue|cache|blob|mail|rpc" dir="in|out" system="…" config="…" target="…"/>` —
   a point where this file reaches an EXTERNAL system: a database, a broker, another service. `system`
   is a short kebab-case label; `config` is the configuration key that carries the address when the
   address is not in the code; `target` is what you can see in the code (URL, topic, table). At least
   one of `config`/`target` is filled — an external point with neither is a guess. Your own inbound
   HTTP is `<api>`, not `<io>`; `dir="in"` only when the EXTERNAL system initiates (a queue consumer,
-  a webhook)
+  a webhook). A `driver (computed)` line names the KIND only — an import cannot carry `system` or
+  `config`, so completing the `<io>` from the file is yours
 - a raw `<` inside an attribute value is written `&lt;`
 $END_CONSTRAINTS
 
@@ -78,11 +87,10 @@ schema:
     <module path="…">
       <role>…</role>
       <api name="…" kind="http" scope="public"/>
-      <dep path="…" via="the import line you read it from"/>
       <io kind="db" dir="out" system="…" config="…" target="…"/>
       <test path="…"/>
     </module>
-    <module path="…" deps="none" io="none" api="none" tests="none"><role>…</role></module>
+    <module path="…" io="none" api="none" tests="none"><role>…</role></module>
     <gap path="…" why="…"/>
   </part>
 check: {CHECK}

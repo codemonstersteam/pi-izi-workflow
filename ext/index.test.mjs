@@ -8,7 +8,7 @@
 // temp root here carries something else, e.g. fruit), so a function that falls back to reading
 // the repo instead of context.run.cwd fails LOUDLY on wrong content, not by lucky coincidence.
 //
-// Manually verified as the seam it claims to be (standards/code.md, «тест без шва — не тест»):
+// Manually verified as the seam it claims to be (standards/code.md: a test with no seam is a comment):
 // reverting `at`/`readIfExists` in ext/index.mjs to the old REPO_ROOT-anchored form turns every
 // test below red; restoring the context.run.cwd anchor turns them green again.
 

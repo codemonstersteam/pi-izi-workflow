@@ -1,33 +1,37 @@
 #!/usr/bin/env node
-// MODULE_CONTRACT: install — ставит харнес в каталог проекта копированием, ничего не удаляя
-// Purpose:    одно решение спрятано здесь: ЧТО составляет харнес на стороне проекта — четыре
-//             каталога (workflows, steps, core, bin) и запись в .gitignore. Расширение и шаблон
-//             /izi ставятся один раз на машину через `pi install ./ext` и сюда не входят.
+// MODULE_CONTRACT: install — installs the harness into a project directory by copying, deleting nothing
+// Purpose:    one decision is hidden here: WHAT makes up the harness on the project side — four
+//             directories (workflows, steps, core, bin) and two .gitignore entries. The extension and
+//             the /izi template are installed once per machine via `pi install ./ext` and are not part
+//             of this.
 // io:         fs
-// Invariants: установка НИЧЕГО не удаляет — ни целевого каталога, ни файлов проекта вне списка
-//             PARTS; существующий файл харнеса перезаписывается, чужой файл не трогается никогда.
-//             Целевой каталог обязан существовать: создавать проект — не работа установщика.
-// Interface:  PARTS — каталоги харнеса; installTo(root) -> {copied, gitignore, task}
+// Invariants: the install deletes NOTHING — neither the target directory nor project files outside
+//             the PARTS list; an existing harness file is overwritten, a foreign file is never touched.
+//             The target directory must already exist: creating the project is not the installer's job.
+// Interface:  PARTS — harness directories; installTo(root) -> {copied, gitignore, task}
 //
 //   node bin/install.mjs --to=/путь/к/проекту
 //
-// Перед первой установкой на машине: cd ext && npm install && pi install ./
-// (расширение несёт функции хоста, роль gilb и шаблон /izi — они глобальные, не проектные).
+// Before the first install on a machine: cd ext && npm install && pi install ./
+// (the extension carries the host functions, the gilb role and the /izi template — they are global,
+// not per-project).
 
 import { cpSync, existsSync, mkdirSync, readFileSync, appendFileSync, statSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-// Каталоги, которые прогон читает по путям относительно cwd: воркфлоу, срезы, общие ядра и канал
-// ответа оператора. Список объявлен ЗДЕСЬ и только здесь — второй экземпляр в README разошёлся бы.
+// Directories the run reads by paths relative to cwd: workflows, slices, shared cores and the
+// operator's answer channel. The list is declared HERE and only here — a second copy in README
+// would drift.
 export const PARTS = ["workflows", "steps", "core", "bin"]
 
 const HARNESS = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
-// FUNCTION_CONTRACT: installTo — разложить харнес по каталогу проекта
-//   Antecedent:   root существует и является каталогом; не совпадает с каталогом самого харнеса
-//   Consequent:   success: каждый каталог из PARTS скопирован в root, .agent/ объявлен в .gitignore
-//                 failure: бросает Error с диагнозом — нет каталога, либо установка в саму себя
+// FUNCTION_CONTRACT: installTo — lay the harness out into a project directory
+//   Antecedent:   root exists and is a directory; does not coincide with the harness's own directory
+//   Consequent:   success: every directory from PARTS is copied into root, .agent/ and .izi/ are
+//                          declared in .gitignore (run state and part cache — nothing to commit)
+//                 failure: throws Error with a diagnosis — no directory, or installing into itself
 //   Purity:       io (fs)
 //   Interface:    installTo(root: string) -> { copied: string[], gitignore: "added"|"present", task: boolean }
 export function installTo(root) {
@@ -37,15 +41,21 @@ export function installTo(root) {
 
   const copied = []
   for (const part of PARTS) {
-    cpSync(join(HARNESS, part), join(dst, part), { recursive: true })   // перезапись своих, чужое рядом не трогается
+    cpSync(join(HARNESS, part), join(dst, part), { recursive: true })   // overwrite our own, leave neighboring foreign files alone
     copied.push(part)
   }
 
+  // Two directories, and they differ in nature. `.agent/` is the state of ONE run. `.izi/` is the
+  // cache of graph parts that outlives runs (steps/scope/cache.mjs): it speeds up a repeat, but it
+  // must not be committed — a part that arrived from someone else's commit answers a question about
+  // SOMEONE ELSE'S tree. The guardrail catches this (`reuse` re-checks a part before promoting it),
+  // but there is no reason to pay for someone else's garbage in git history.
   const ignore = join(dst, ".gitignore")
-  const has = existsSync(ignore) && /^\.agent\/?\s*$/m.test(readFileSync(ignore, "utf8"))
-  if (!has) appendFileSync(ignore, "\n# izi harness — состояние прогона\n.agent/\n")
+  const text = existsSync(ignore) ? readFileSync(ignore, "utf8") : ""
+  const missing = [".agent/", ".izi/"].filter((d) => !new RegExp(`^${d.replace(".", "\\.").replace("/", "\\/?")}\\s*$`, "m").test(text))
+  if (missing.length) appendFileSync(ignore, `\n# izi harness — состояние прогона и кэш частей\n${missing.join("\n")}\n`)
 
-  return { copied, gitignore: has ? "present" : "added", task: existsSync(join(dst, "TASK.md")) }
+  return { copied, gitignore: missing.length ? "added" : "present", task: existsSync(join(dst, "TASK.md")) }
 }
 
 const arg = process.argv.slice(2).find((a) => a.startsWith("--to=")) || process.argv[2]
@@ -55,7 +65,7 @@ if (arg) {
     const r = installTo(root)
     console.log(`✓ харнес установлен в ${resolve(root)}`)
     console.log(`  каталоги: ${r.copied.join(", ")}`)
-    console.log(`  .gitignore: .agent/ ${r.gitignore === "added" ? "добавлен" : "уже был"}`)
+    console.log(`  .gitignore: .agent/ и .izi/ ${r.gitignore === "added" ? "дописаны" : "уже были"}`)
     console.log(r.task ? "  TASK.md: на месте" : "  TASK.md: НЕТ — положите требование, это вход конвейера")
     console.log(`\n  запуск:  cd ${resolve(root)} && pi --model anthropic/claude-haiku-4-5   → /izi`)
     if (!existsSync(join(HARNESS, "ext", "node_modules"))) {

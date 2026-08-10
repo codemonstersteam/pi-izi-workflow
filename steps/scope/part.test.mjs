@@ -7,32 +7,32 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { parsePart, checkPart, newPart } from "./part.mjs"
+import { SPINE_CELL } from "../survey-plan/plan.mjs"
 
 const surveyCell = {
-  id: "c1",
+  id: "src",
   kind: "survey",
   files: [{ path: "src/Api.java" }, { path: "src/Model.java" }, { path: "src/import.sql" }],
 }
 
 const SURVEY_XML = `
-<part cell="c1" kind="survey">
+<part cell="src" kind="survey">
   <module path="src/Api.java">
     <role>REST endpoint for orders</role>
     <api name="GET /orders" kind="http" scope="public"/>
-    <dep path="src/Model.java" via="import com.acme.Model"/>
     <io kind="db" dir="out" system="orders-db" config="spring.datasource.url" target="orders table"/>
     <test path="src/test/ApiTest.java"/>
   </module>
-  <module path="src/Model.java" deps="none" io="none" api="none" tests="none">
+  <module path="src/Model.java" io="none" api="none" tests="none">
     <role>plain data record</role>
   </module>
   <gap path="src/import.sql" why="not read: 480 KB of seed data, no module in it"/>
 </part>`
 
-const spineCell = { id: "c0", kind: "spine", files: [{ path: "pom.xml" }, { path: "README.md" }] }
+const spineCell = { id: SPINE_CELL, kind: "spine", files: [{ path: "pom.xml" }, { path: "README.md" }] }
 
 const SPINE_XML = `
-<part cell="c0" kind="spine">
+<part cell="${SPINE_CELL}" kind="spine">
   <suite id="unit" kind="unit" cmd="./mvnw -q test" one="./mvnw -q test -Dtest={class}" path="src/test/java"/>
   <suite id="component-it" kind="component" cmd="./mvnw -q verify -Pit" one="" path="src/it"/>
   <integration system="orders-db" kind="db" config="spring.datasource.url" value="jdbc:postgresql://db/orders"/>
@@ -42,18 +42,18 @@ const SPINE_XML = `
   <contract found="no"/>
 </part>`
 
-test("happy survey: modules, gap and edges parsed; part is green", () => {
+test("happy survey: modules and gap parsed; part is green — and it carries NO edges", () => {
   const part = parsePart(SURVEY_XML)
-  assert.equal(part.cell, "c1")
+  assert.equal(part.cell, "src")
   assert.equal(part.kind, "survey")
   assert.deepEqual(part.modules.map((m) => m.path), ["src/Api.java", "src/Model.java"])
-  assert.deepEqual(part.modules[0].deps, [{ path: "src/Model.java", via: "import com.acme.Model" }])
+  assert.deepEqual(part.modules[0].deps, [])   // the script owns edges: a part neither has nor may have them
   assert.deepEqual(part.modules[0].api, [{ name: "GET /orders", kind: "http", scope: "public" }])
   assert.equal(part.modules[0].io[0].system, "orders-db")   // the external system, not a <dep>
   assert.deepEqual(part.modules[0].tests, [{ path: "src/test/ApiTest.java", suite: "" }])
-  assert.equal(part.modules[1].depsNone, true) // absence declared, not omitted
-  assert.equal(part.modules[1].ioNone, true)   // …of every dimension: edges, external points,
+  assert.equal(part.modules[1].ioNone, true)   // absence DECLARED, not omitted — external points…
   assert.equal(part.modules[1].apiNone, true)  // …and the exposed surface
+  assert.equal(part.modules[1].testsNone, true)
   assert.equal(part.gaps[0].path, "src/import.sql")
 
   assert.deepEqual(checkPart({ part, cell: surveyCell }), [])
@@ -80,81 +80,80 @@ test("totality: garbage parses to an empty part, and C1 refuses it — never a t
   const r = newPart({ xml: "not xml at all", cell: surveyCell })
   assert.equal(r.ok, false)
   assert.equal(r.error.cls, "invalid-part")
-  assert.match(r.error.detail, /^C1 c1:/)
+  assert.match(r.error.detail, /^C1 src:/)
 })
 
 test("S1: a cell file closed by neither <module> nor <gap> is a blocker", () => {
   const xml = SURVEY_XML.replace(/  <gap[^>]*\/>\n/, "")
   const blockers = checkPart({ part: parsePart(xml), cell: surveyCell })
-  assert.deepEqual(blockers, ["S1 c1: file is closed by neither <module> nor <gap> — src/import.sql"])
+  assert.deepEqual(blockers, ["S1 src: file is closed by neither <module> nor <gap> — src/import.sql"])
 })
 
 test("S2: a path outside the cell is a blocker — the scout does not pick its own files", () => {
-  const xml = SURVEY_XML.replace("src/Model.java\" deps", "src/Other.java\" deps")
+  const xml = SURVEY_XML.replace('path="src/Model.java" io="none"', 'path="src/Other.java" io="none"')
   const blockers = checkPart({ part: parsePart(xml), cell: surveyCell })
-  assert.ok(blockers.some((b) => b.startsWith("S2 c1: path does not belong to this cell — src/Other.java")))
+  assert.ok(blockers.some((b) => b.startsWith("S2 src: path does not belong to this cell — src/Other.java")))
 })
 
-test("S4: a module with neither <dep> nor deps=\"none\" is a blocker; deps=\"none\" is an answer", () => {
-  const silent = SURVEY_XML.replace(' deps="none"', "")
+test("S4: edges are no longer the role's answer — <dep> and deps=\"none\" in a part are blockers", () => {
+  // Three runs in a row produced three different defects of ONE dimension: framework imports as edges
+  // (6e3b9455) → a backwards edge closing a cycle (c9580ff8) → zero edges (337b957f). Direction,
+  // evidence and membership are computable, so steps/scope/edges.mjs computes them and a part has one
+  // owner of edges: the script. Step 5 could not tell a second, hand-written source apart.
+  const written = SURVEY_XML.replace("<role>REST endpoint for orders</role>",
+    '<role>REST endpoint for orders</role>\n    <dep path="src/Model.java" via="import com.acme.Model"/>')
+  assert.deepEqual(checkPart({ part: parsePart(written), cell: surveyCell }),
+    ['S4 src: edges are computed by the script, not written here — drop <dep> and deps="none" (src/Api.java)'])
+
+  const silent = SURVEY_XML.replace('<module path="src/Model.java" io="none"', '<module path="src/Model.java" deps="none" io="none"')
   assert.deepEqual(checkPart({ part: parsePart(silent), cell: surveyCell }),
-    ['S4 c1: neither <dep> nor deps="none" — src/Model.java'])
-
-  const selfEdge = SURVEY_XML.replace('<dep path="src/Model.java"', '<dep path="src/Api.java"')
-  assert.ok(checkPart({ part: parsePart(selfEdge), cell: surveyCell })
-    .some((b) => b === 'S4 c1: <dep> points at its own module — src/Api.java'))
-
-  // An edge with no evidence: the run c9580ff8 invented `Fruit → FruitResource` on a POJO with no
-  // imports at all, and the invented pair closed a cycle step 10 cannot topologically sort.
-  const invented = SURVEY_XML.replace(' via="import com.acme.Model"', "")
-  assert.ok(checkPart({ part: parsePart(invented), cell: surveyCell })
-    .some((b) => b.startsWith('S4 c1: <dep path="src/Model.java"> has no via')))
+    ['S4 src: edges are computed by the script, not written here — drop <dep> and deps="none" (src/Model.java)'])
 })
 
 test("S6/S7: an external point is declared and its form is closed — io=\"none\" is an answer", () => {
   const silent = SURVEY_XML.replace(/\n    <io [^>]*\/>/, "")
   assert.deepEqual(checkPart({ part: parsePart(silent), cell: surveyCell }),
-    ['S6 c1: neither <io> nor io="none" — src/Api.java'])
+    ['S6 src: neither <io> nor io="none" — src/Api.java'])
 
   const invented = SURVEY_XML.replace('kind="db" dir="out"', 'kind="postgres" dir="both"')
   const blockers = checkPart({ part: parsePart(invented), cell: surveyCell })
-  assert.ok(blockers.some((b) => b.startsWith('S7 c1: <io kind="postgres">')))
-  assert.ok(blockers.some((b) => b.startsWith('S7 c1: <io dir="both">')))
+  assert.ok(blockers.some((b) => b.startsWith('S7 src: <io kind="postgres">')))
+  assert.ok(blockers.some((b) => b.startsWith('S7 src: <io dir="both">')))
 
   const homeless = SURVEY_XML.replace(' config="spring.datasource.url" target="orders table"', "")
   assert.ok(checkPart({ part: parsePart(homeless), cell: surveyCell })
-    .some((b) => b.startsWith("S7 c1: <io> has neither config nor target")))
+    .some((b) => b.startsWith("S7 src: <io> has neither config nor target")))
 })
 
 test("S8: the tests are declared like every other dimension — tests=\"none\" is an answer", () => {
   const silent = SURVEY_XML.replace(/\n    <test [^>]*\/>/, "")
   assert.deepEqual(checkPart({ part: parsePart(silent), cell: surveyCell }),
-    ['S8 c1: neither <test> nor tests="none" — src/Api.java'])
+    ['S8 src: neither <test> nor tests="none" — src/Api.java'])
 })
 
 test("S9/S10: the exposed surface is declared, scoped and canonically named", () => {
   const silent = SURVEY_XML.replace(/\n    <api [^>]*\/>/, "")
   assert.deepEqual(checkPart({ part: parsePart(silent), cell: surveyCell }),
-    ['S9 c1: neither <api> nor api="none" — src/Api.java'])
+    ['S9 src: neither <api> nor api="none" — src/Api.java'])
 
   // The whole point of `scope`: without it the graph cannot answer "what is exposed outward".
   const unscoped = SURVEY_XML.replace(' kind="http" scope="public"', ' kind="http"')
   assert.ok(checkPart({ part: parsePart(unscoped), cell: surveyCell })
-    .some((b) => b.startsWith('S10 c1: <api scope="">')))
+    .some((b) => b.startsWith('S10 src: <api scope="">')))
 
   const freeform = SURVEY_XML.replace('name="GET /orders"', 'name="orders endpoint"')
   assert.ok(checkPart({ part: parsePart(freeform), cell: surveyCell })
-    .some((b) => b.startsWith('S10 c1: <api kind="http"> name must be "METHOD /path"')))
+    .some((b) => b.startsWith('S10 src: <api kind="http"> name must be "METHOD /path"')))
 })
 
 test("P1: a missing spine answer is a blocker; suites are answered by <suite> or found=\"no\"", () => {
   const noToggles = SPINE_XML.replace('  <toggles found="no"/>\n', "")
   assert.ok(checkPart({ part: parsePart(noToggles), cell: spineCell })
-    .some((b) => b.startsWith("P1 c0: <toggles> is missing or empty")))
+    .some((b) => b.startsWith("P1 spine: <toggles> is missing or empty")))
 
   const noSuites = SPINE_XML.replace(/  <suite [^>]*\/>\n/g, "")
   assert.ok(checkPart({ part: parsePart(noSuites), cell: spineCell })
-    .some((b) => b.startsWith("P1 c0: no <suite> and no <suites")))
+    .some((b) => b.startsWith("P1 spine: no <suite> and no <suites")))
 
   const declaredAbsent = noSuites.replace("<build", '<suites found="no"/>\n  <build')
   assert.deepEqual(checkPart({ part: parsePart(declaredAbsent), cell: spineCell }), [])
@@ -163,15 +162,15 @@ test("P1: a missing spine answer is a blocker; suites are answered by <suite> or
 test("P4/P5: an integration without its config key, with an invented kind, or declared twice", () => {
   const noKey = SPINE_XML.replace(' config="spring.datasource.url"', "")
   assert.ok(checkPart({ part: parsePart(noKey), cell: spineCell })
-    .some((b) => b.startsWith('P4 c0: <integration system="orders-db"> has no config')))
+    .some((b) => b.startsWith('P4 spine: <integration system="orders-db"> has no config')))
 
   const invented = SPINE_XML.replace('kind="db"', 'kind="postgres"')
   assert.ok(checkPart({ part: parsePart(invented), cell: spineCell })
-    .some((b) => b.startsWith('P4 c0: <integration system="orders-db"> kind="postgres"')))
+    .some((b) => b.startsWith('P4 spine: <integration system="orders-db"> kind="postgres"')))
 
   const twice = SPINE_XML.replace("  <build", '  <integration system="orders-db" kind="db" config="spring.datasource.username"/>\n  <build')
   assert.ok(checkPart({ part: parsePart(twice), cell: spineCell })
-    .some((b) => b === 'P5 c0: duplicate <integration system="orders-db">'))
+    .some((b) => b === 'P5 spine: duplicate <integration system="orders-db">'))
 })
 
 test("P2/P3: a suite without cmd, with an invented kind, with a drifting id, or declared twice", () => {
@@ -179,18 +178,18 @@ test("P2/P3: a suite without cmd, with an invented kind, with a drifting id, or 
     .replace('cmd="./mvnw -q verify -Pit" one="" path="src/it"', 'cmd="" one="" path="src/it"')
     .replace('id="component-it"', 'id="unit"')
   const blockers = checkPart({ part: parsePart(broken), cell: spineCell })
-  assert.ok(blockers.some((b) => b === 'P2 c0: <suite id="unit"> has empty cmd'))
-  assert.ok(blockers.some((b) => b === 'P3 c0: duplicate <suite id="unit">'))
+  assert.ok(blockers.some((b) => b === 'P2 spine: <suite id="unit"> has empty cmd'))
+  assert.ok(blockers.some((b) => b === 'P3 spine: duplicate <suite id="unit">'))
 
   // Four live runs named one suite `integ-native`, `integration`, `native-it`, `native-integration`.
   // The kind is now a vocabulary and the id must start with it, so none of those four can recur.
   const inventedKind = SPINE_XML.replace('kind="component"', 'kind="integration"')
   assert.ok(checkPart({ part: parsePart(inventedKind), cell: spineCell })
-    .some((b) => b.startsWith('P2 c0: <suite kind="integration">')))
+    .some((b) => b.startsWith('P2 spine: <suite kind="integration">')))
 
   const drifting = SPINE_XML.replace('id="component-it"', 'id="native-it"')
   assert.ok(checkPart({ part: parsePart(drifting), cell: spineCell })
-    .some((b) => b === 'P2 c0: <suite id="native-it"> must start with its kind — "component" or "component-<what tells it apart>"'))
+    .some((b) => b === 'P2 spine: <suite id="native-it"> must start with its kind — "component" or "component-<what tells it apart>"'))
 })
 
 // The role and its two orders are files the host reads, not code — but two of their properties can
@@ -218,6 +217,6 @@ test("role: scout.md names the machine check behind each of its prohibitions", (
   // inside the declared roleDirectories (ext/index.mjs), so scope/role.md would install as "role".
   const role = readFileSync(new URL("scout.md", import.meta.url), "utf8")
   for (const rule of ["S1", "S2", "S3", "S4", "S5", "S6", "S8", "S9", "P4"]) assert.match(role, new RegExp(`machine-checked as \`${rule}\``))
-  assert.match(role, /deps="none"/)   // the dependency answer, not silence (LAW 3)
+  assert.match(role, /deps="none"/)   // named ONLY to forbid it: the script owns edges now (LAW 4)
   assert.match(role, /found="no"/)    // "not found" is an answer, not a guess (LAW 5)
 })

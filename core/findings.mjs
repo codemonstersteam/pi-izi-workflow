@@ -1,73 +1,77 @@
-// MODULE_CONTRACT: findings — классифицирует код находки валидатора: роняет приёмку или уходит уликой оператору
-// Purpose:    одно решение — какие коды находок ИМЕЮТ РЕЗОЛВЕР ИСТИНЫ вне текста (судят сами, blocker)
-//             и какие кодируют суждение о смысле фразы естественного языка (судить не могут, advice).
-//             Решение спрятано за одним множеством ADVICE_CODES и одной функцией сверки с ним —
-//             остальной код репозитория запрашивает вердикт здесь, а не хранит список кодов сам.
+// MODULE_CONTRACT: findings — classifies a validator's finding code: does it fail acceptance, or does
+//               it travel to the operator as evidence
+// Purpose:    one decision — which finding codes HAVE A RESOLVER OF TRUTH outside the text (they can
+//             judge on their own: blocker) and which encode a judgement about the MEANING of a
+//             natural-language phrase (they cannot judge: advice). The decision hides behind one set,
+//             ADVICE_CODES, and one function that consults it — the rest of the repository asks for a
+//             verdict here instead of keeping a list of codes of its own.
 // io:         none
-// Invariants: severityOf — тотальная функция: для ЛЮБОГО code (включая новый/неизвестный, включая
-//             falsy) результат определён и равен "blocker", если code не перечислен явно в ADVICE_CODES
-//             (deny-safe дефолт: новый код без явного попадания в ADVICE_CODES не может тихо стать
-//             advice). blockersOf и adviceOf над одним findings — разбиение без потерь и без
-//             дублей: каждый элемент входного массива достаётся ровно одному из двух выходов,
-//             потому что оба фильтруют один и тот же массив одним и тем же предикатом severityOf.
-// Interface:  ADVICE_CODES — Set<string>, реестр кодов без резолвера истины (константа, не функция)
+// Invariants: severityOf is a total function: for ANY code (including a new or unknown one, including
+//             a falsy one) the result is defined and equals "blocker" unless the code is listed
+//             explicitly in ADVICE_CODES (a deny-safe default: a new code cannot quietly become
+//             advice without being added). blockersOf and adviceOf over one findings array were a
+//             lossless partition — every element reached exactly one of the two outputs, because both
+//             filtered the same array with the same severityOf predicate.
+// Interface:  ADVICE_CODES — Set<string>, the registry of codes with no resolver of truth (a
+//             constant, not a function)
 //             severityOf(code) -> "blocker" | "advice"
-//             adviceLines(text) -> string[] — улики, напечатанные гардрейлом, из его вывода
+//             adviceLines(text) -> string[] — the evidence a guardrail printed, out of its output
 //
-// Конвейер отображает «красный чек → пере-делегировать владельца артефакта». Значит цена НЕВЕРНОГО
-// правила выше красной лампы: оно ПРИКАЗЫВАЕТ роли испортить корректный артефакт, подгоняя его под
-// правило. Живой прогон 01.08 показал это дословно (F1): роль пошла переписывать корректный BRD.
+// The pipeline maps "a red check" onto "redelegate the artifact's owner". So the price of a WRONG
+// rule is higher than a red lamp: it ORDERS the role to spoil a correct artifact in order to fit the
+// rule. A live run on 01.08 showed exactly that (F1): the role went off to rewrite a correct BRD.
 //
-// Отсюда разделение. Правило, у которого есть РЕЗОЛВЕР ИСТИНЫ вне текста — файл существует, число
-// равно числу, id есть в множестве, — судит само: ложному срабатыванию неоткуда взяться. Правило,
-// которое кодирует СУЖДЕНИЕ О СМЫСЛЕ ФРАЗЫ, судить не может ни при какой регулярке: конечный список
-// слов над естественным языком либо переловит домен, либо пропустит нестандартную формулировку. Это
-// предел выразимости, а не недоработка.
+// Hence the split. A rule with a RESOLVER OF TRUTH outside the text — the file exists, the number
+// equals the number, the id is in the set — judges on its own: a false positive has nowhere to come
+// from. A rule that encodes a JUDGEMENT ABOUT THE MEANING of a phrase cannot judge under any regex: a
+// finite list of words over natural language will either over-catch the domain or miss an unusual
+// wording. That is a limit of expressiveness, not an unfinished job.
 //
-// Такие правила понижены с судьи до СБОРЩИКА УЛИК: находка несёт фразу, но не роняет приёмку и не
-// вызывает делегацию — она уходит оператору в бриф GATE #1. Блокирующей её делает человек, а не греп.
+// Such rules are demoted from judge to COLLECTOR OF EVIDENCE: the finding carries its phrase but
+// neither fails acceptance nor triggers a delegation — it travels to the operator in the GATE #1
+// brief. A human makes it blocking, not a grep.
 export const ADVICE_CODES = new Set([
-  // «желание, а не критерий»: список слов-желаний против естественного языка. F19 — «valid range
-  // 1..100» посчитано желанием при точном диапазоне рядом.
+  // "a wish, not a criterion": a list of wish-words against natural language. F19 — "valid range
+  // 1..100" was counted a wish with an exact range sitting right beside it.
   "wish-not-requirement",
-  // «в требовании назван механизм»: regex на путь/класс/импорт ловит бизнес-лексику — «класс
-  // обслуживания», «импорт данных из legacy».
+  // "the requirement names a mechanism": a regex over path/class/import catches business vocabulary —
+  // "service class", "importing data from legacy".
   "design-leak",
-  // «пункт DoD не называет артефакта»: корпус реальных нарядов (прогон 03) даёт 7 срабатываний на
-  // безупречных пунктах вида «Limit defaults to 20 when ?limit is absent» — проверяемое утверждение
-  // о поведении не обязано нести путь или команду.
+  // "a DoD item names no artifact": the corpus of real orders (run 03) gives 7 hits on impeccable
+  // items of the form "Limit defaults to 20 when ?limit is absent" — a checkable statement about
+  // behaviour is not obliged to carry a path or a command.
   "dod-without-artifact",
 ])
 
-// FUNCTION_CONTRACT: severityOf — судит один код находки: роняет приёмку или уходит уликой
-//   Input:        code — kebab-case литерал находки (коды объявляют фабрики слайса)
+// FUNCTION_CONTRACT: severityOf — judges one finding code: fail acceptance, or travel as evidence
+//   Input:        code — the finding's kebab-case literal (a slice's factories declare the codes)
 //   Dependencies: —
-//   Antecedent:   любое значение — не обязано быть строкой и не обязано входить в ADVICE_CODES;
-//                 falsy/undefined допустимы (Set.has не бросает ни для какого типа)
-//   Consequent:   success: "advice", если code ∈ ADVICE_CODES — только правила без резолвера истины
-//                          над естественным языком (см. шапку файла): находка не роняет чек и не
-//                          вызывает пере-делегацию; иначе "blocker", включая falsy/undefined и любой
-//                          код, которого ADVICE_CODES не знает — дефолт deny-safe: новый код без
-//                          явного добавления в ADVICE_CODES не может тихо начать пропускать приёмку
-//                 failure: нет — тотальна для любого code
+//   Antecedent:   any value — need not be a string and need not be in ADVICE_CODES; falsy/undefined
+//                 are allowed (Set.has throws for no type)
+//   Consequent:   success: "advice" when code ∈ ADVICE_CODES — only the rules with no resolver of
+//                          truth over natural language (see the header): such a finding neither fails
+//                          the check nor triggers a redelegation; otherwise "blocker", including for
+//                          falsy/undefined and any code ADVICE_CODES does not know — a deny-safe
+//                          default: a new code cannot silently start letting acceptance through
+//                 failure: none — total for any code
 export const severityOf = (code) => (ADVICE_CODES.has(code) ? "advice" : "blocker")
 
-// FUNCTION_CONTRACT: adviceLines — улики, напечатанные гардрейлом, из его вывода
-//   Input:        text — stdout+stderr исполненного чека; тип не ограничен
+// FUNCTION_CONTRACT: adviceLines — the evidence a guardrail printed, out of its output
+//   Input:        text — the stdout+stderr of an executed check; type unconstrained
 //   Dependencies: —
-//   Antecedent:   любое значение; чек мог не вывести ничего
-//   Consequent:   success: строки вида `⚠ [код] …` без окружающих пробелов, в порядке вывода;
-//                          строк такой формы нет → []
-//                 failure: нет — тотальна
-// СОГЛАШЕНИЕ ВЫВОДА: улику гардрейл печатает как `⚠ [<код>] <сообщение>`. Скобки в фильтре не
-// украшение — `bin/run-script.mjs` и steps/scope/validate-graph.mjs печатают `⚠ <текст>` без кода
-// (пробелы графа), и без скобок пробел разведки уехал бы в квитанцию уликой, которой он не является.
+//   Antecedent:   any value; the check may have printed nothing
+//   Consequent:   success: lines shaped `⚠ [code] …`, trimmed, in output order; no such lines → []
+//                 failure: none — total
+// OUTPUT CONVENTION: a guardrail prints evidence as `⚠ [<code>] <message>`. The bracket in the filter
+// is not decoration — `bin/run-script.mjs` and the graph validator print `⚠ <text>` with no code (the
+// graph's gaps), and without the bracket a survey gap would travel into the receipt as evidence it is
+// not.
 //
-// Зачем вообще: улику печатает валидатор на ЗЕЛЁНОМ чеке, а bin/accept.mjs захватывал его вывод в
-// checkOut и использовал только в ветке отказа — на успехе улика умирала внутри приёмки. Правило,
-// адресат которого не получает находку, есть пожелание: шаг `gate1`, куда улики адресованы
-// (arch/slices.md), в текущей полосе ещё не существует, поэтому адресат сегодня — оператор
-// (stderr) и квитанция (диск).
+// Why this exists at all: a validator prints evidence on a GREEN check, and bin/accept.mjs captured
+// that output into checkOut and used it only on the failure branch — on success the evidence died
+// inside acceptance. A rule whose addressee never receives the finding is a wish: step `gate1`, where
+// the evidence is addressed, does not exist in this line yet, so today's addressee is the operator
+// (stderr) and the receipt (disk).
 export function adviceLines(text) {
   return String(text || "")
     .split("\n")
@@ -75,7 +79,7 @@ export function adviceLines(text) {
     .filter((l) => /^⚠\s*\[/.test(l))
 }
 
-// blockersOf и adviceOf удалены: фаза 8 сделала их мёртвыми. Улики теперь едут на ПОСТРОЕННОМ BRD
-// (steps/brd/brd.mjs::newBrd отдаёт их полем advice), а блокеры собирает сама фабрика — фильтровать
-// общий список находок больше некому и незачем. Мёртвый экспорт хуже отсутствующего: он обещает
-// механизм, которого в конвейере уже нет.
+// blockersOf and adviceOf were removed: phase 8 made them dead. Evidence now travels on the BUILT BRD
+// (steps/brd/brd.mjs::newBrd returns it in the `advice` field) and the factory collects the blockers
+// itself — there is nobody left to filter a common findings list, and no reason to. A dead export is
+// worse than a missing one: it promises a mechanism the pipeline no longer has.

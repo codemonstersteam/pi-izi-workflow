@@ -43,26 +43,32 @@
 //               promote DOES throw on a missing staging file — that is a contract violation (the
 //               check gating this call ran against staging and found it, or should not have called
 //               promote at all), never a silent no-op success (standards/workflow.md, «step shape
-//               закрывает шаг»: staging→out precedes any "done" fact, and a promote that quietly did
+//               closes a step): staging→out precedes any "done" fact, and a promote that quietly did
 //               nothing would let a run claim a fact that never happened). izi_answer follows the
 //               same discipline: no .agent/pending.json means no open question, and the tool THROWS
 //               rather than writing an answer nobody asked for or silently doing nothing.
 // Interface:    default export — extension(pi): registers the izi_answer tool on pi AND calls
 //               registerWorkflowExtension (pi-extensible-workflows contract) for the sandbox
 //               functions and role directories. readText/answers/checkTask/checkBrd/promote/
-//               setPending/clearPending/survey/cells/checkPart are ALSO named exports — pi-extensible-workflows never
+//               setPending/clearPending/survey/cells/digest/reuse/remember/checkPart are ALSO named exports — pi-extensible-workflows never
 //               exercises run(input, context) itself (it is the caller, not test scaffolding), so
 //               ext/index.test.mjs imports these directly and calls run() with a fabricated
 //               { run: { cwd } } context to prove the anchor without a live pi/workflow harness.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, rmSync, readdirSync, statSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { dirname, join } from "node:path"
 import { Type } from "typebox"
 import { registerWorkflowExtension, herdrAvailable, herdrPaneId, loadSettings } from "pi-extensible-workflows"
 import { checkTaskText } from "../steps/task/task.mjs"
 import { newBrd, parseBrd } from "../steps/brd/brd.mjs"
 import { newPlan } from "../steps/survey-plan/plan.mjs"
-import { newPart } from "../steps/scope/part.mjs"
+import { skipDir, skipFile } from "../steps/survey-plan/skip.mjs"
+import { newPart, GRAMMAR_VERSION } from "../steps/scope/part.mjs"
+import { readSource } from "../steps/scope/source.mjs"
+import { newComputed, computedXml, parseComputed } from "../steps/scope/computed.mjs"
+import { newDigest } from "../steps/scope/digest.mjs"
+import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate } from "../core/answers.mjs"
 import { newBudgets, BUDGETS_PATH } from "../core/budgets.mjs"
 import { writeAnswer } from "../bin/write-answer.mjs"
@@ -194,16 +200,16 @@ export const budgets = {
   },
 }
 
-// herdrStatus — наблюдаем ли прогон в herdr. Правило доступности НЕ пересказано здесь: оно
-// подставлено из хоста (`herdrAvailable`/`herdrPaneId`, pi-extensible-workflows/src/herdr.ts —
-// HERDR_ENV=1 И HERDR_PANE_ID И HERDR_SOCKET_PATH в окружении процесса pi), а режим
-// fully-inspectable — из того же файла настроек, что читает сам @piewf/herdr (`loadSettings()`,
+// herdrStatus — is this run observable in herdr? The availability RULE is not restated here: it is
+// substituted from the host (`herdrAvailable`/`herdrPaneId`, pi-extensible-workflows/src/herdr.ts —
+// HERDR_ENV=1 AND HERDR_PANE_ID AND HERDR_SOCKET_PATH in pi's own environment), and fully-inspectable
+// mode comes from the same settings file @piewf/herdr itself reads (`loadSettings()`,
 // ~/.pi/agent/pi-extensible-workflows/settings.json).
 //
-// Зачем это существует: herdr-расширение при недоступном herdr не регистрируется ВООБЩЕ
-// (`registerHerdrExtension` возвращает false и молчит), поэтому прогон, запущенный из обычного
-// терминала, идёт полностью вслепую и выглядит точно так же, как сломанная интеграция. Один
-// печатный факт в начале прогона отличает «herdr выключен» от «herdr не работает».
+// Why this exists: with herdr unavailable the herdr extension does not register AT ALL
+// (`registerHerdrExtension` returns false and stays silent), so a run launched from an ordinary
+// terminal goes entirely blind and looks exactly like a broken integration. One printed fact at the
+// start of a run separates "herdr is off" from "herdr is broken".
 export const herdrStatus = {
   description: "Is this run observable in herdr? Reports the host's own herdrAvailable() verdict, the pane id and whether fully-inspectable mode is on. Never fails the run — an unobserved run is still a run.",
   input: { type: "object", properties: {}, additionalProperties: false },
@@ -265,14 +271,14 @@ export const clearPending = {
 
 // promote — MOVE, not copy: the staging file is gone once its content is accepted.
 //
-// BUG_FIX_CONTEXT: живой прогон 6e3b9455-533a-4843-aee6-c4c7e96e3fbc.
-//   Было:     copyFileSync и всё.
-//   Проблема: после зелёного прогона `.agent/staging/` держал копии brd.md и обоих c*.xml —
-//             байт в байт то же, что в чистовике. Каталог не отвечал ни на один вопрос разбора:
-//             принятое и отвергнутое лежали вперемешку.
-//   Правка:   перенос. Теперь в staging остаётся РОВНО то, что гардрейл отверг: пустой
-//             staging/graph-parts/ значит «все клетки закрылись», оставшийся c3.xml называет
-//             клетку, которая не закрылась, — и это факт на диске, а не пересказ лога.
+// BUG_FIX_CONTEXT: live run 6e3b9455-533a-4843-aee6-c4c7e96e3fbc.
+//   Previous: copyFileSync, and nothing else.
+//   Problem:  after a green run `.agent/staging/` still held copies of brd.md and both parts — byte
+//             for byte what the final directory held. The directory answered no question of a
+//             post-mortem: accepted and rejected lay side by side.
+//   Fix:      a MOVE. What stays under staging is now EXACTLY what a guardrail rejected: an empty
+//             staging/graph-parts/ means every cell closed, a leftover file names the cell that did
+//             not — and that is a fact on disk, not a retelling of the log.
 export const promote = {
   description: "Move staging→out: copy, then drop the staging file. What remains under .agent/staging is exactly what a guardrail REJECTED. A missing staging file is a refusal (throws), never a silent success.",
   input: {
@@ -289,75 +295,99 @@ export const promote = {
     }
     mkdirSync(dirname(at(root, to)), { recursive: true })
     copyFileSync(at(root, from), at(root, to))
-    rmSync(at(root, from))                      // перенос: принятое живёт в чистовике, staging — только отвергнутое
+    rmSync(at(root, from))                      // a MOVE: accepted work lives in the final directory, staging keeps only rejected
     return { at: new Date().toISOString() }
   },
 }
 
-// --- survey: дерево прогона → .agent/survey-plan.json ---------------------------------------------
+// --- survey: the run's tree → .agent/survey-plan.json ---------------------------------------------
 //
-// SKIP — граница обхода вместо каталога app/ (docs/survey-plan.md §1). Первые шесть имён — сам
-// харнес: install.mjs копирует его В проект, поэтому там они принадлежат конвейеру, а не приложению.
-// Принятая цена названа вслух: проект, у которого СВОЙ каталог зовётся так же, потеряет его из
-// разведки.
-const SKIP = new Set(["workflows", "steps", "core", "bin", "ext", "prompts",
-                      "node_modules", "dist", "build", "target", "coverage"]) // + любой каталог на точку
+// The border of the walk is declared ONCE, and not here: steps/survey-plan/skip.mjs is a pure
+// predicate with units of its own. Its own contract names the reason for the move: a live run on the
+// quarkus form turns red on none of the skip rules, because that form holds no `vendor/`, no
+// `.min.js` and no built frontend (backlog W1). What stays here is only what the predicate cannot
+// know — THE HARNESS INPUTS the operator places in the project.
 //
-// BUG_FIX_CONTEXT: живой прогон 6e3b9455-533a-4843-aee6-c4c7e96e3fbc, шаг 4 зелёный.
-//   Было:     SKIP_FILES знал только обёртки сборщика.
-//   Проблема: `.agent/graph-parts/c1.xml` вернулся с `<module path="TASK.md">` — требование
-//             оператора стало узлом графа приложения. Скаут не виноват: наряд обязывает закрыть
-//             КАЖДЫЙ файл клетки, а файл в клетку положил шаг 3.
-//   Правка:   второй класс имён — входы харнеса, которые оператор кладёт в проект. Они конвейер,
-//             а не приложение, и разведке в них делать нечего.
-const SKIP_FILES = new Set(["mvnw", "mvnw.cmd", "gradlew", "gradlew.bat",     // вендоренные обёртки сборщика
-                            TASK_PATH, BUDGETS_PATH])                          // входы харнеса: конвейер, не приложение
-const KEEP_DOTS = new Set([".github"])   // исключение из «точечные каталоги пропускаем»: там CI
-const MAX_BYTES = 512 * 1024             // файл крупнее рою не читать — он и не поедет в наряд
+// BUG_FIX_CONTEXT: live run 6e3b9455-533a-4843-aee6-c4c7e96e3fbc, step 4 green.
+//   Previous: the skip list knew only the build wrappers.
+//   Problem:  a part came back carrying `<module path="TASK.md">` — the operator's requirement became
+//             a node of the application graph. The scout is not at fault: the order obliges it to
+//             close EVERY file of the cell, and step 3 is what put the file there.
+//   Fix:      a second class of names — the harness inputs. They are the pipeline, not the app.
+const HARNESS_FILES = new Set([TASK_PATH, BUDGETS_PATH])
 
-// SPINE — хребет: где живут ответы на вопросы графа, кроме тех, что видны только в коде
-// (docs/survey-plan.md §1 — как тестировать, как менять, как выключают, как ветвятся, чем описан
-// внешний контракт и какие ВНЕШНИЕ СИСТЕМЫ объявлены конфигурацией: последний ответ и есть причина,
-// по которой в списке стоят `resources/application.*`, `.env` и `config/`).
-// Имена ЭКОСИСТЕМ, не раскладка конкретного репозитория.
-// Ни одно не совпало → клетки c0 нет, и это ДАННЫЕ, а не отказ: список — ускоритель, а не условие.
+// MAX_BYTES — the ceiling on READING a file at step 3.
+//
+// BUG_FIX_CONTEXT: backlog W5. It used to be 512 KB, and a larger file fell out of the plan ENTIRELY
+//   — the node was lost in silence (10 files of eddi went that way). The ceiling existed because the
+//   whole text of a file travelled into the order; now a DIGEST travels instead
+//   (steps/scope/digest.mjs), and a large file's cost in an order is no longer proportional to its
+//   size. The ceiling is now only the border of reading the disk, and everything above it is
+//   DECLARED in the plan (`skipped`) instead of vanishing.
+const MAX_BYTES = 4 * 1024 * 1024
+
+// SPINE — the backbone: where the graph's answers live, except the ones only the code shows
+// (docs/survey-plan.md §1 — how it is tested, changed, switched off, branched, how its external
+// contract is described, and which EXTERNAL SYSTEMS the configuration declares: that last answer is
+// exactly why `resources/application.*`, `.env` and `config/` are on this list).
+// Names of ECOSYSTEMS, not the layout of one repository.
+// Nothing matched → there is no spine cell, and that is DATA, not a refusal: the list is an
+// accelerator, never a condition.
 const SPINE = [/^pom\.xml$/, /^build\.gradle(\.kts)?$/, /^settings\.gradle(\.kts)?$/, /^gradle\.properties$/,
                /^package\.json$/, /^go\.mod$/, /^Makefile$/, /^pyproject\.toml$/,
                /resources\/application\.[^/]+$/, /(^|\/)\.env/, /(^|\/)config\//,
                /^\.github\/workflows\//, /^\.gitlab-ci\.yml$/, /^Jenkinsfile$/,
                /^README/i, /^CONTRIBUTING/i]
 
-// walk/hitsFor — io-обвязка, юнитами не покрывается (standards/code.md: io-трубу доказывает живой
-// прогон слайса). walk идёт от корня ПРОГОНА и отдаёт пути со слэшем, относительные к нему.
-function walk(root, rel, out) {
+// walk — io plumbing, not unit-tested (standards/code.md: a live run of the slice proves an io pipe);
+// the skip RULE, by contrast, is covered — steps/survey-plan/skip.mjs. walk starts at the RUN's root
+// and yields "/"-separated paths relative to it. A file larger than MAX_BYTES is not dropped in
+// silence: it travels into `skipped` with its reason.
+function walk(root, rel, out, skipped) {
   for (const e of readdirSync(at(root, rel), { withFileTypes: true })) {
     const path = rel ? `${rel}/${e.name}` : e.name
     if (e.isDirectory()) {
-      if (SKIP.has(e.name)) continue
-      if (e.name.startsWith(".") && !KEEP_DOTS.has(e.name)) continue
-      walk(root, path, out)
+      if (skipDir(e.name)) continue
+      walk(root, path, out, skipped)
       continue
     }
-    if (!e.isFile()) continue                                   // симлинк/сокет — не файл проекта
-    if (SKIP_FILES.has(e.name)) continue
+    if (!e.isFile()) continue                                   // a symlink or socket is not a project file
+    if (skipFile(path, HARNESS_FILES)) continue
     const bytes = statSync(join(root, path)).size
-    if (bytes > MAX_BYTES) continue
+    if (bytes > MAX_BYTES) { skipped.push(`${path} (${bytes} b > ${MAX_BYTES})`); continue }
     out.push({ path, bytes })
   }
   return out
 }
 
-// Якорь ПОМЕЧАЕТ файл, а не фильтрует его: подстрока без учёта регистра, по пути И по тексту.
-// Матч по границе слова проверен и отвергнут фактом — он теряет `fruits` при якоре `fruit` и
-// `FruitResourceIT` целиком (docs/survey-plan.md §1).
-function hitsFor(root, file, anchors) {
+// An anchor MARKS a file, it never filters it: a case-insensitive substring, over the path AND the
+// text. Word-boundary matching was tried and refuted by fact — it loses `fruits` for the anchor
+// `fruit`, and `FruitResourceIT` entirely (docs/survey-plan.md §1).
+function hitsFor(path, text, anchors) {
   if (!anchors.length) return []
-  const hay = `${file.path}\n${readFileSync(at(root, file.path), "utf8")}`.toLowerCase()
+  const hay = `${path}\n${text}`.toLowerCase()
   return anchors.filter((a) => hay.includes(String(a).toLowerCase()))
 }
 
+// goModuleOf — `module` from go.mod. The only thing that turns a go import path into a directory of
+// THIS repository (steps/scope/edges.mjs); its absence is DECLARED as
+// `<lang id="go" edges="no-rules">` instead of staying silent.
+const goModuleOf = (root) => ((readIfExists(root, "go.mod").match(/^module[ \t]+(\S+)/m) || [])[1] || "")
+
+const sha1 = (text) => createHash("sha1").update(text).digest("hex")
+
+// COMPUTED_PATH — what the script computed, as a SEPARATE artifact beside the roles' parts.
+//
+// The backlog W4a decision, recorded here and in docs/scope.md §2b: edges are not patched into a
+// part. A part stays exactly what the role produced; the computed facts live in their own file, each
+// with its own evidence, and step 5 merges them. Between "the script computed the edges" and "the
+// edges are in the graph" there is otherwise nothing: neither checkPart nor promote mutates a part,
+// and a mutating host function would make `.agent/graph-parts/` unarguable — "what the model said"
+// and "what the script computed" would stop being distinguishable.
+const COMPUTED_PATH = ".agent/graph-computed.xml"
+
 export const survey = {
-  description: "Build .agent/survey-plan.json: the run's whole file tree minus the skip list, cut into scout cells. Anchors from .agent/brd.md annotate files; they never filter them.",
+  description: "Build .agent/survey-plan.json (the run's file tree minus the skip list, cut into subtree cells with sha1 per file) and .agent/graph-computed.xml (edges, routes and drivers a script can read). Anchors from .agent/brd.md annotate files; they never filter them.",
   input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
   output: {
     type: "object",
@@ -367,26 +397,46 @@ export const survey = {
       files: { type: "number" },
       bytes: { type: "number" },
       cells: { type: "number" },
+      edges: { type: "number" },
+      langs: { type: "array", items: { type: "string" } },
       gaps: { type: "array", items: { type: "string" } },
+      skipped: { type: "array", items: { type: "string" } },
       at: { type: "string" },
     },
     required: ["ok"],
     additionalProperties: false,
   },
   run({ path }, context) {
-    const root = runRoot(context)                                     // cwd ПРОГОНА, не этого репозитория
-    const anchors = parseBrd(readIfExists(root, ".agent/brd.md")).subjects || []  // разбор один, из steps/brd
-    const scanned = walk(root, "", [])
+    const root = runRoot(context)                                     // the RUN's cwd, not this repository's
+    const anchors = parseBrd(readIfExists(root, ".agent/brd.md")).subjects || []  // one parser, from steps/brd
+    const skipped = []
+    const scanned = walk(root, "", [], skipped)
+
+    // One pass over the disk feeds THREE consumers: the anchors, the cache key and the computed
+    // facts. A file's text does not survive its iteration — only the facts squeezed out of it do.
+    const sources = []
+    const files = scanned.map((f) => {
+      let text = ""
+      try { text = readFileSync(at(root, f.path), "utf8") } catch { text = "" }  // a binary reads as garbage, not as a failure
+      sources.push(readSource({ path: f.path, text }))
+      return { path: f.path, bytes: f.bytes, sha1: sha1(text), subjects: hitsFor(f.path, text, anchors) }
+    })
+
     const isSpine = (p) => SPINE.some((re) => re.test(p))
-    const spine = scanned.filter((f) => isSpine(f.path)).map((f) => ({ path: f.path, bytes: f.bytes, subjects: [] }))
-    const files = scanned.map((f) => ({ path: f.path, bytes: f.bytes, subjects: hitsFor(root, f, anchors) }))
+    const byPath = new Map(files.map((f) => [f.path, f]))
+    const spine = scanned.filter((f) => isSpine(f.path)).map((f) => ({ path: f.path, bytes: f.bytes, sha1: byPath.get(f.path).sha1, subjects: [] }))
 
     const r = newPlan({ files, spine, subjects: anchors })
-    if (!r.ok) return { ok: false, why: r.error.detail }               // единственный отказ — no-files
-    mkdirSync(dirname(at(root, path)), { recursive: true })            // пишем ПОСЛЕ решения принять
-    writeFileSync(at(root, path), JSON.stringify(r.value, null, 2))
+    if (!r.ok) return { ok: false, why: r.error.detail }               // the only refusal is no-files
+
+    const computed = newComputed({ sources, paths: scanned.map((f) => f.path), goModule: goModuleOf(root) })
+    mkdirSync(dirname(at(root, path)), { recursive: true })            // written AFTER the decision to accept
+    writeFileSync(at(root, path), JSON.stringify({ ...r.value, skipped }, null, 2))
+    writeFileSync(at(root, COMPUTED_PATH), computedXml(computed))
     return { ok: true, files: r.value.files, bytes: r.value.bytes, cells: r.value.cells.length,
-             gaps: [...r.value.gaps], at: new Date().toISOString() }
+             edges: computed.edges.length,
+             langs: computed.langs.map((l) => `${l.lang}:${l.rules ? "edges" : "no-rules"}:${l.files}`),
+             gaps: [...r.value.gaps], skipped, at: new Date().toISOString() }
   },
 }
 
@@ -501,6 +551,103 @@ export const checkPart = {
   },
 }
 
+// digest — the {FILES} block of one cell's order: a SUMMARY of every file plus the facts step 3
+// already computed about it, instead of a bare list of paths the role then opens one by one.
+//
+// Why it is a host function and not a field of `cells`: the digest of a whole repository is the same
+// order of magnitude as the repository (java: 27% of it), and `cells` returns EVERY cell at once. The
+// sandbox would hold the entire digest of the run in memory to use one cell of it.
+export const digest = {
+  description: "The {FILES} block of one cell's order: per file — size, language, package, the imports/routes/drivers a script computed, and the declarations with their visibility. The scout reads a file itself only when this is not enough.",
+  input: { type: "object", properties: { cell: { type: "string" } }, required: ["cell"], additionalProperties: false },
+  output: {
+    type: "object",
+    properties: { ok: { type: "boolean" }, why: { type: "string" }, files: { type: "string" } },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ cell }, context) {
+    const root = runRoot(context)
+    const plan = readPlanCells(root)
+    if (!plan.ok) return { ok: false, why: plan.why }
+    const target = plan.cells.find((c) => c.id === cell)
+    if (!target) return { ok: false, why: `cell ${cell} is not in ${PLAN_PATH}` }
+
+    const computed = parseComputed(readIfExists(root, COMPUTED_PATH))
+    const files = (target.files || []).map((f) => {
+      let text = ""
+      try { text = readFileSync(at(root, f.path), "utf8") } catch { text = "" }
+      return { path: f.path, bytes: f.bytes, source: readSource({ path: f.path, text }) }
+    })
+    return { ok: true, files: newDigest({ files, computed }) }
+  },
+}
+
+// --- the part cache: .izi/, a PROJECT artifact that outlives a run -------------------------------
+//
+// A file per cell, not one shared index: cells run in batches of eight in parallel, and a
+// read-modify-write of a single JSON would be a race — eight scouts finishing at once would
+// overwrite each other's entries.
+const CACHE_DIR = ".izi/parts"
+const cachedXml = (id) => `${CACHE_DIR}/${id}.xml`
+const cachedKey = (id) => `${CACHE_DIR}/${id}.json`
+
+export const reuse = {
+  description: "Reuse the cached part of a cell instead of calling a scout — only when composition, sha1 and grammar version all match AND the cached part passes checkPart NOW. Returns ok:false with a reason otherwise; that reason is DATA, not a failure.",
+  input: { type: "object", properties: { cell: { type: "string" } }, required: ["cell"], additionalProperties: false },
+  output: {
+    type: "object",
+    properties: { ok: { type: "boolean" }, why: { type: "string" }, modules: { type: "number" }, gaps: { type: "number" } },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ cell }, context) {
+    const root = runRoot(context)
+    const plan = readPlanCells(root)
+    if (!plan.ok) return { ok: false, why: plan.why }
+    const target = plan.cells.find((c) => c.id === cell)
+    if (!target) return { ok: false, why: `cell ${cell} is not in ${PLAN_PATH}` }
+
+    let stored = null
+    const raw = readIfExists(root, cachedKey(cell))
+    if (raw.trim()) { try { stored = JSON.parse(raw) } catch { stored = null } }
+    const verdict = decide({ cell: target, stored, grammar: GRAMMAR_VERSION })
+    if (!verdict.reuse) return { ok: false, why: verdict.why }
+
+    // Matching hashes are NOT enough. The cache may have arrived from somebody else's commit or from
+    // another branch of the rules, and the only thing that closes a step is a green guardrail NOW —
+    // the very same one that judges a scout.
+    const xml = readIfExists(root, cachedXml(cell))
+    if (!xml.trim()) return { ok: false, why: "no-part" }
+    const r = newPart({ xml, cell: target })
+    if (!r.ok) return { ok: false, why: `stale-part: ${r.error.detail.split("\n")[0]}` }
+
+    mkdirSync(dirname(at(root, `.agent/graph-parts/${cell}.xml`)), { recursive: true })
+    writeFileSync(at(root, `.agent/graph-parts/${cell}.xml`), xml)
+    return { ok: true, why: "hit", modules: r.value.modules.length, gaps: r.value.gaps.length }
+  },
+}
+
+export const remember = {
+  description: "Store a cell's ACCEPTED part in .izi/parts/ together with the composition, sha1 set and grammar version it was accepted under. Called after promote, never before: only a green part is worth remembering.",
+  input: { type: "object", properties: { cell: { type: "string" } }, required: ["cell"], additionalProperties: false },
+  output: { type: "object", properties: { ok: { type: "boolean" }, why: { type: "string" } }, required: ["ok"], additionalProperties: false },
+  run({ cell }, context) {
+    const root = runRoot(context)
+    const plan = readPlanCells(root)
+    if (!plan.ok) return { ok: false, why: plan.why }
+    const target = plan.cells.find((c) => c.id === cell)
+    if (!target) return { ok: false, why: `cell ${cell} is not in ${PLAN_PATH}` }
+    const from = at(root, `.agent/graph-parts/${cell}.xml`)
+    if (!existsSync(from)) return { ok: false, why: `.agent/graph-parts/${cell}.xml не существует — запоминать нечего` }
+
+    mkdirSync(at(root, CACHE_DIR), { recursive: true })
+    copyFileSync(from, at(root, cachedXml(cell)))
+    writeFileSync(at(root, cachedKey(cell)), JSON.stringify(entryFor(target, GRAMMAR_VERSION), null, 2))
+    return { ok: true }
+  },
+}
+
 // izi_answer — an ordinary pi TOOL (not a workflow sandbox function: this one is called by the
 // INTERACTIVE session's own model, reacting to the checkpoint follow-up message that
 // workflows/izi.js's askOperator() delivers into this same chat). It takes exactly one parameter,
@@ -548,10 +695,10 @@ const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.5.0",
+    version: "1.6.0",
     headline: "izi: task → brd → survey-plan → scope host functions",
-    description: "readText/answers/budgets/herdrStatus/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/checkPart, plus the gilb and scout role directories (steps/brd/, steps/scope/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, budgets, herdrStatus, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, checkPart },
+    description: "readText/answers/budgets/herdrStatus/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart, plus the gilb and scout role directories (steps/brd/, steps/scope/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, budgets, herdrStatus, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart },
     // steps/brd/ carries gilb.md and steps/scope/ carries scout.md (role files, named by ROLE not by
     // step — see steps/brd/gilb.md's own header) alongside their cores/orders/tests;
     // pi-extensible-workflows scans a role directory for *.md files only (validation.js

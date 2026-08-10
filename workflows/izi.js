@@ -2,14 +2,15 @@
 // Purpose:      one decision — the ORDER of the pipeline, and it lives here as CODE. A phase is a
 //               named function, not a manifest entry: with four steps, three hand-written calls are
 //               cheaper than a pipeline.json plus a dispatcher plus their tests (docs/workflow.md
-//               §1-§2, docs/concept.md «Что отложено и почему»). The rule returns when the cost of
+//               §1-§2, docs/concept.md, "What is deferred and why"). The rule returns when the cost of
 //               listing phases by hand exceeds the cost of policy-as-data — not before.
 // io:           none directly. This file runs in a vm sandbox with NO import, NO fs, NO network and
 //               NO timers (pi-extensible-workflows/packages/core/src/execution.ts) — every byte it
 //               reads or writes goes through a host function listed below.
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
 //               GLOBALS — readText · answers · budgets · herdrStatus · checkTask · checkBrd ·
-//               promote · setPending · clearPending · survey · cells · checkPart. They are not
+//               promote · setPending · clearPending · survey · cells · digest · reuse · remember ·
+//               checkPart. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -41,7 +42,7 @@
 // Interface:    the workflow's own result — { track: "ok"|"err", code, ... } returned to the host.
 
 // Budgets are assigned ONCE, before any phase. A budget that could change mid-run would make
-// "цикл исчерпан за N попыток" a statement about nothing.
+// "the loop is exhausted after N attempts" a statement about nothing.
 let LOOPS;              // gilb/scout redelegations after a RED guardrail check, NOT questions
 let QUESTIONS;          // operator exchanges allowed in one run
 let CHECKPOINT_RETRIES; // re-pauses on the SAME question when no matching answer showed up
@@ -176,7 +177,7 @@ async function askOperator(env, n) {
 // Two budgets, never mixed: a question does not spend LOOPS (it costs the operator's time, not the
 // model's), and a red check does not spend QUESTIONS. Both counters are data, not prose.
 //
-// BUG_FIX_CONTEXT: S14 — the exhaustion exit used to say "повторы исчерпаны" and nothing else.
+// BUG_FIX_CONTEXT: S14 — the exhaustion exit used to say "retries exhausted" and nothing else.
 //   Problem:  it threw away the only useful thing the run knew: WHY the check was red. The operator
 //             got a count instead of a diagnosis the guardrail had already written.
 //   Fix:      `feedback` here IS check.blockers from the last red iteration, so the exit carries it.
@@ -214,10 +215,13 @@ async function brd() {
 
 // FUNCTION_CONTRACT: surveyPlan — step 3: the run's file tree → swarm cells
 //   Input:        —
-//   Dependencies: EXTERNAL — survey (ext/index.mjs → steps/survey-plan/plan.mjs::newPlan)
+//   Dependencies: EXTERNAL — survey (ext/index.mjs → steps/survey-plan/plan.mjs::newPlan,
+//                 steps/scope/computed.mjs::newComputed)
 //   Antecedent:   .agent/brd.md exists (its subjects[] annotate files; they never select them)
-//   Consequent:   success: RETURNS with .agent/survey-plan.json written; the cost of the swarm
-//                          (files, bytes, cells) is LOGGED before step 4 spends a single token
+//   Consequent:   success: RETURNS with .agent/survey-plan.json AND .agent/graph-computed.xml
+//                          written; the cost of the swarm (files, bytes, cells) is LOGGED before
+//                          step 4 spends a single token, and so are the BORDERS of what the script
+//                          could compute — a language with no edge rules is named, never silent
 //                 failure: exits with err("blocked") — the only refusal is no-files: an empty
 //                          repository has nothing to map
 //   Purity:       io (through the host)
@@ -228,17 +232,19 @@ async function surveyPlan() {
   const PLAN = ".agent/survey-plan.json";
   const p = await survey({ path: PLAN });
   if (!p.ok) exit(err("blocked", { subject: p.why }));
-  log(`survey-plan: files=${p.files} bytes=${p.bytes} cells=${p.cells}`);
+  log(`survey-plan: files=${p.files} bytes=${p.bytes} cells=${p.cells} edges=${p.edges} [${p.langs.join(" ")}]`);
+  if (p.skipped.length) log(`survey-plan: не прочитано (крупнее потолка): ${p.skipped.join(", ")}`);
 }
 
 // FUNCTION_CONTRACT: scout — one plan cell → one fragment of the application graph
 //   Input:        cell — { id, kind, subjects[], files[{path,bytes}] } from .agent/survey-plan.json;
 //                 orderTpl — the order text, chosen by the caller from the cell's KIND field;
 //                 BRD — the text of .agent/brd.md, context for the scout, never a file selector
-//   Dependencies: EXTERNAL — prompt, agent(role "scout"), checkPart, promote
+//   Dependencies: EXTERNAL — prompt, agent(role "scout"), reuse, digest, checkPart, promote, remember
 //   Antecedent:   the cell came from step 3; orderTpl is non-empty; LOOPS ≥ 1
-//   Consequent:   success: { ok: true, modules, gaps } and .agent/graph-parts/<id>.xml exists,
-//                          promoted only after a GREEN checkPart against the staging path
+//   Consequent:   success: { ok: true, modules, gaps, hit } and .agent/graph-parts/<id>.xml exists,
+//                          promoted only after a GREEN checkPart against the staging path — or
+//                          copied from the cache, which is gated by the SAME guardrail
 //                 failure: { ok: false, why } — RETURNED AS A VALUE, never thrown
 //   Purity:       io (through the host)
 //
@@ -254,6 +260,20 @@ async function scout(cell, orderTpl, BRD) {
   const CHECK = "checkPart({path, cell}) — steps/scope/part.mjs::newPart; the cell's file list is read from .agent/survey-plan.json, not from your part";
   let feedback = "(none — first attempt)";
 
+  // The cache is asked FIRST, before a single token is spent. It answers "yes" only when composition,
+  // sha1 and grammar version all match AND the stored part passes the guardrail NOW (ext/index.mjs::
+  // reuse) — a cached part that would not close the step today does not close it because it once did.
+  const cached = await reuse({ cell: cell.id });
+  if (cached.ok) {
+    log(`scope: ${cell.id} — из кэша (.izi/parts), скаут не звался`);
+    return { ok: true, modules: cached.modules, gaps: cached.gaps, hit: true };
+  }
+
+  // The order carries a DIGEST, not the file list: path, language, computed imports/routes/drivers
+  // and the declarations of every file. The role opens a file only where the digest is not enough.
+  const files = await digest({ cell: cell.id });
+  if (!files.ok) return { ok: false, why: `${cell.id}: ${files.why}` };
+
   for (let attempt = 0; attempt < LOOPS; attempt++) {
     const order = prompt(orderTpl, {
       CELL: cell.id,
@@ -262,7 +282,7 @@ async function scout(cell, orderTpl, BRD) {
       CHECK,
       FEEDBACK: feedback,
       SUBJECTS: cell.subjects.length ? cell.subjects.join(" · ") : "(no anchors matched this cell)",
-      FILES: cell.files.map((f) => `- ${f.path} (${f.bytes} b)`).join("\n"),
+      FILES: files.files,
     });
     const env = await agent(order, { role: "scout", outputSchema: ENVELOPE });
     // There is no question rail at this step (docs/scope.md §6): what the scout could not read is a
@@ -272,7 +292,8 @@ async function scout(cell, orderTpl, BRD) {
     const check = await checkPart({ path: STAGING, cell: cell.id }); // check ON STAGING, before promote
     if (check.ok) {
       await promote({ from: STAGING, to: `.agent/graph-parts/${cell.id}.xml` });
-      return { ok: true, modules: check.modules, gaps: check.gaps };
+      await remember({ cell: cell.id });   // only a PROMOTED part is worth remembering
+      return { ok: true, modules: check.modules, gaps: check.gaps, hit: false };
     }
     feedback = check.blockers;
   }
@@ -343,7 +364,7 @@ async function scope() {
   };
 
   const width = Math.min(MAX_PARALLEL, SWARM_WIDTH);
-  let modules = 0, gaps = 0;
+  let modules = 0, gaps = 0, hits = 0;
   for (let i = 0; i < plan.cells.length; i += width) {
     const batch = plan.cells.slice(i, i + width);
     log(`scope: батч ${batch.map((c) => c.id).join(" ")}`);
@@ -362,11 +383,11 @@ async function scope() {
     const results = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"].map((k) => done[k]).filter((r) => r);
     const bad = results.filter((r) => !r.ok);
     if (bad.length) exit(err("blocked", { subject: bad.map((r) => r.why).join("\n  ") }));
-    for (const r of results) { modules += r.modules; gaps += r.gaps; }
+    for (const r of results) { modules += r.modules; gaps += r.gaps; if (r.hit) hits += 1; }
   }
 
-  log(`scope: cells=${plan.cells.length} modules=${modules} gaps=${gaps}`);
-  exit(ok({ artifact: ".agent/graph-parts/", cells: plan.cells.length, modules, gaps }));
+  log(`scope: cells=${plan.cells.length} modules=${modules} gaps=${gaps} cache-hit=${hits}`);
+  exit(ok({ artifact: ".agent/graph-parts/", cells: plan.cells.length, modules, gaps, hits }));
 }
 
 log("izi: start");
