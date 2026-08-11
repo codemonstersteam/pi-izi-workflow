@@ -8,7 +8,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { newFit, newRequirement, newSubjects, adviceFor, newBrd, numbersIn, languageDrifted } from "./brd.mjs"
+import { newFit, newRequirement, newSubjects, adviceFor, newBrd, numbersIn, languageDrifted, BRD_FORM } from "./brd.mjs"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BRD = (fit) => `R1 Размер ответа ограничен\n   fit:    ${fit}\n   verify: GET /x\n\nsubjects[]: a · b · c\nopen-questions: 0\n`
@@ -223,6 +223,38 @@ test("the predicate fit from live run ed1d4094 no longer fails", () => {
 const ROLE_PATH = join(HERE, "gilb.md")
 test("the role knows about invented-default", () => {
   assert.match(readFileSync(ROLE_PATH, "utf8"), /invented-default/)
+})
+
+// G9 — the seam the live runs demanded, and it is instant. Two runs on ONE TASK.md produced
+// `fruit · search · filter · limit · backward · compatibility` and
+// `fruit · search · partial-match · limit · backward-compatibility`: half the anchors matched no file
+// at all. The cause is not the model — it is THIS FILE. The example's task text says «старые записи»,
+// while its answer said `subjects[]: audit · retention · rotation`: `retention` is a category LABEL
+// its author invented, so the example taught labelling instead of translating (standards/role.md
+// warns the example is recognised and completed from). The guardrail cannot catch it — `newSubjects`
+// judges composition (3..7, no space, no duplicates), and judging MEANING would cost what run
+// ed1d4094 cost: three redelegations on a correct artifact. So the example carries the burden, and
+// this test is what keeps it carrying it.
+test("G9: the example teaches TRANSLATION, not labelling — no invented category word in it", () => {
+  const role = readFileSync(ROLE_PATH, "utf8")
+  assert.doesNotMatch(role, /retention/i)              // the label; the task text says «записи» → `record`
+  assert.match(role, /subjects\[\]: audit · record · rotation/)
+  // …and the prohibition names the machine check that catches it, as every prohibition here must.
+  assert.match(role, /hitsFor/)
+})
+
+// The order is a file the host reads, not code, and two of its properties degrade silently — each at
+// the cost of a live run. 1: prompt() demands an EXACT bidirectional match between placeholders and
+// the values workflows/izi.js passes (execution.ts throws "Missing prompt value"/"Unused prompt
+// value" at LAUNCH). 2: G9e — a rule copied into the template instead of substituted is a second
+// text of one requirement, and the guardrail refuses in the words of the REGISTRY, not of the copy.
+const ORDER_KEYS = ["TASK", "ANSWERS", "FEEDBACK", "STAGING", "CHECK", "SUBJECTS_MIN", "SUBJECTS_MAX", "SUBJECT_RULE"]
+
+test("order.tpl: exactly the keys the workflow passes, and the anchor rule is SUBSTITUTED not copied", () => {
+  const tpl = readFileSync(join(HERE, "order.tpl"), "utf8")
+  const placeholders = [...tpl.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
+  assert.deepEqual([...new Set(placeholders)].sort(), [...ORDER_KEYS].sort())
+  assert.ok(!tpl.includes(BRD_FORM.subjectRule), "the rule must arrive by substitution, not as a copy")
 })
 
 // F17 (run-5) as a corpus test: a number FROM the operator's ANSWER stays legal, a number from the

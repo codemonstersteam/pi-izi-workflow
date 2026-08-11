@@ -1,6 +1,6 @@
-// MODULE_CONTRACT: workflows/izi.js — the pipeline's own program: task → brd → survey-plan → scope
+// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph
 // Purpose:      one decision — the ORDER of the pipeline, and it lives here as CODE. A phase is a
-//               named function, not a manifest entry: with four steps, three hand-written calls are
+//               named function, not a manifest entry: with five steps, five hand-written calls are
 //               cheaper than a pipeline.json plus a dispatcher plus their tests (docs/workflow.md
 //               §1-§2, docs/concept.md, "What is deferred and why"). The rule returns when the cost of
 //               listing phases by hand exceeds the cost of policy-as-data — not before.
@@ -8,9 +8,9 @@
 //               NO timers (pi-extensible-workflows/packages/core/src/execution.ts) — every byte it
 //               reads or writes goes through a host function listed below.
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
-//               GLOBALS — readText · answers · budgets · herdrStatus · checkTask · checkBrd ·
+//               GLOBALS — readText · answers · brdForm · budgets · herdrStatus · checkTask · checkBrd ·
 //               promote · setPending · clearPending · survey · cells · digest · reuse · remember ·
-//               checkPart. They are not
+//               checkPart · buildGraph. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -186,12 +186,25 @@ async function brd() {
   const TASK = await readText({ path: "TASK.md" });
   const STAGING = ".agent/staging/brd.md";
   const CHECK = "checkBrd({path}) — steps/brd/brd.mjs::newBrd, numbers from TASK.md + operator answer values";
+  // The anchor rule and the 3..7 range are SUBSTITUTED from core/form.mjs, never retyped here or in
+  // the template: the guardrail quotes that same registry in its refusal, and two texts of one rule
+  // drift apart in silence (backlog G9e, standards/code.md §1).
+  const FORM = await brdForm({});
   let feedback = "(none — first attempt)", attempt = 0, asked = 0;
 
   while (attempt < LOOPS) {
     const seen = await answers({});
-    const ANSWERS = seen.length ? seen.map((a) => `- вопрос: ${a.question}\n  ответ: ${a.text}`).join("\n") : "(no operator answers yet)";
-    const order = prompt(orderTpl, { TASK, ANSWERS, FEEDBACK: feedback, STAGING, CHECK });
+    const ANSWERS = seen.length ? seen.map((a) => `- вопрос: ${a.question}\n  ответ: ${a.text}`).join("\n") : FORM.absentDoc;
+    const order = prompt(orderTpl, {
+      TASK,
+      ANSWERS,
+      FEEDBACK: feedback,
+      STAGING,
+      CHECK,
+      SUBJECTS_MIN: FORM.subjectsMin,
+      SUBJECTS_MAX: FORM.subjectsMax,
+      SUBJECT_RULE: FORM.subjectRule,
+    });
     const env = await agent(order, { role: "gilb", outputSchema: ENVELOPE });
 
     if (env.track === "err" && env.kind === "question") {
@@ -233,6 +246,12 @@ async function surveyPlan() {
   const p = await survey({ path: PLAN });
   if (!p.ok) exit(err("blocked", { subject: p.why }));
   log(`survey-plan: files=${p.files} bytes=${p.bytes} cells=${p.cells} edges=${p.edges} [${p.langs.join(" ")}]`);
+  // The anchors that matched NO file, said out loud and never as a blocker. This is the pipeline's
+  // only cheap measurement of step 2's translation into the repository's words: an anchor invented as
+  // a category label ("retention", "compatibility") lands here every time (backlog G9f). A miss costs
+  // nothing by design — the anchor MARKS a file, it never selects one — so this is a number to read,
+  // not a rail to stop on.
+  if (p.gaps.length) log(`survey-plan: якорей без единого файла — ${p.gaps.length} из ${p.subjects}: ${p.gaps.join(" · ")}`);
   if (p.skipped.length) log(`survey-plan: не прочитано (крупнее потолка): ${p.skipped.join(", ")}`);
 }
 
@@ -305,8 +324,8 @@ async function scout(cell, orderTpl, BRD) {
 //   Dependencies: EXTERNAL — cells, readText, parallel; scout
 //   Antecedent:   step 3 wrote .agent/survey-plan.json; MAX_PARALLEL ≥ 1; both order templates exist
 //   Consequent:   success: exits with ok — one .agent/graph-parts/<cell>.xml per plan cell, and the
-//                          totals (cells, modules, gaps) logged. This is the end of the run today;
-//                          step 5 (`graph`) will turn it into a return, exactly as S15 did to brd()
+//                          totals (cells, modules, gaps) logged, and RETURNS — since step 5 exists,
+//                          this is no longer the end of the run, exactly as S15 did to brd()
 //                 failure: exits with err("blocked") naming EVERY cell that failed in the batch —
 //                          a lost cell is a lost graph node, so no cell is skipped "to salvage the
 //                          rest"; the operator sees all of them at once, not the first one
@@ -387,7 +406,36 @@ async function scope() {
   }
 
   log(`scope: cells=${plan.cells.length} modules=${modules} gaps=${gaps} cache-hit=${hits}`);
-  exit(ok({ artifact: ".agent/graph-parts/", cells: plan.cells.length, modules, gaps, hits }));
+}
+
+// FUNCTION_CONTRACT: graph — step 5: the swarm's parts + the script's facts → one map
+//   Input:        —
+//   Dependencies: EXTERNAL — buildGraph (ext/index.mjs → steps/graph/graph.mjs::newGraph)
+//   Antecedent:   step 4 promoted a part for EVERY cell of .agent/survey-plan.json
+//   Consequent:   success: exits ok with .agent/appgraph.xml — the first artifact that knows the
+//                          repository. The merge is a commutative monoid over the node path, so the
+//                          order the scouts finished in cannot change the result and no batch order
+//                          is replayed here
+//                 failure: exits err("blocked"). Only ONE of the refusals is about the repository
+//                          itself — "no test suite", which a human fixes with a separate task; the
+//                          others mean an invariant of steps 3-4 broke (docs/graph.md §5). There is
+//                          no role at this step, so no refusal has a repair rail: everything a
+//                          redelegation could not have fixed is DECLARED in the artifact instead
+//   Purity:       io (through the host)
+//
+// A SCRIPT step, like surveyPlan: no role, no model call, no operator, no staging. What is computable
+// is computed for 0 tokens (docs/concept.md, rule 3) — and here that includes the whole architecture:
+// components, levels and coupling come out of edges the script already had (docs/graph.md §2).
+async function graph() {
+  const g = await buildGraph({ path: ".agent/appgraph.xml" });
+  if (!g.ok) exit(err("blocked", { subject: g.why }));
+  log(`graph: modules=${g.modules} components=${g.components} isolated=${g.isolated} levels=${g.levels} edges=${g.edges} suites=${g.suites} surface=${g.surface}`);
+  // What the repository did NOT answer is printed BEFORE step 10 turns it into a question: a
+  // found="no" that stays inside the artifact is indistinguishable from a step that never ran.
+  if (g.unanswered.length) log(`graph: не найдено в репозитории — ${g.unanswered.join(", ")} (вопрос оператору на шаге 10)`);
+  if (g.gaps) log(`graph: пробелов ${g.gaps} — непрочитанное, вход нечитаем, тест без сьюта`);
+  if (g.cycles) log(`graph: циклов ${g.cycles} — топосорт шага 10 их не переживёт, см. <cycle> в артефакте`);
+  exit(ok({ artifact: ".agent/appgraph.xml", modules: g.modules, components: g.components, gaps: g.gaps }));
 }
 
 log("izi: start");
@@ -409,7 +457,8 @@ try {
   phase("brd"); await brd();
   phase("survey-plan"); await surveyPlan();
   phase("scope"); await scope();
-  return ok({}); // unreachable — scope() always exits — kept as the fall-through for a fifth phase
+  phase("graph"); await graph();
+  return ok({}); // unreachable — graph() always exits — kept as the fall-through for a sixth phase
 } catch (e) {
   if (e instanceof Exit) return e.result;
   const msg = String((e && e.message) || e);

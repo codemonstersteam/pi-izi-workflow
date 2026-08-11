@@ -116,10 +116,11 @@ suite id lives on the spine cell, which is read at the same moment as yours, so 
 here — step 5 binds a test to its suite by path. A module with no test you can see carries
 `tests="none"` (LAW 3).
 
-**Step 7 — on a SPINE cell, answer the six questions instead.** Suites, build, toggles, branching,
-external contract, and the external systems the configuration declares (`<integration>`, or
-`<integrations found="no"/>`) — each with what you read, or with `found="no"`. This is the only cell
-where the answer is about the repository as a whole rather than about modules.
+**Step 7 — on a SPINE cell, answer the seven questions instead.** The artifact this repository
+builds, suites, build, toggles, branching, external contract, and the external systems the
+configuration declares (`<integration>`, or `<integrations found="no"/>`) — each with what you read,
+or with `found="no"`. This is the only cell where the answer is about the repository as a whole
+rather than about modules.
 
 **Step 8 — if the order carries FEEDBACK, repair exactly what it names, first.** Each blocker
 carries its rule number and the path it is about. A blocker is not an invitation to rewrite the
@@ -149,13 +150,17 @@ $START_FORBIDDEN
 - Do NOT name a suite after a profile or a tool — machine-checked as `P2`: `kind` comes from the
   vocabulary and `id` starts with its kind (`component`, `component-native`), so the same suite
   cannot be called something new on every run.
+- Do NOT leave two suites of ONE folder without a discriminator — machine-checked as `P6`: each of
+  them carries `match`, the file-name pattern its runner picks up. Read it from the build manifest;
+  binding by folder alone sends an integration test to the unit command, which runs nothing and
+  reports green.
 - Do NOT omit the surface answer — machine-checked as `S9` (`<api>` or `api="none"`); `kind`, `scope`
   and the `METHOD /path` form of an http name are machine-checked as `S10`.
 - Do NOT invent an integration the configuration does not declare — machine-checked as `P4` (a
   `<integration>` without its `config` key, or with a kind outside the vocabulary, is a blocker) and
   `P5` (one system, one declaration).
-- Do NOT invent a test suite, a build command, a toggle mechanism, a branch convention or a spec
-  that you did not read. `found="no"` is machine-accepted; a guess is not machine-detectable, which
+- Do NOT invent an artifact name, a test suite, a build command, a toggle mechanism, a branch
+  convention or a spec that you did not read. `found="no"` is machine-accepted; a guess is not machine-detectable, which
   is exactly why it is forbidden here rather than checked later.
 - Do NOT write prose: no summaries, no advice, no assessment of code quality. What does not fit into
   a module, an edge, a gap or a spine answer is not yours to say.
@@ -187,7 +192,8 @@ A `spine` cell:
 
 ```xml
 <part cell="<cell id>" kind="spine">
-  <suite id="<kind, or kind-suffix>" kind="unit|component|contract|e2e" cmd="<whole-suite command>" one="<one-file form, or empty>" path="<test folder>"/>
+  <artifact name="<what the build manifest names>" root="<directory of that manifest, or .>"/>
+  <suite id="<kind, or kind-suffix>" kind="unit|component|contract|e2e" cmd="<whole-suite command>" one="<one-file form, or empty>" path="<test folder>" match="<file-name pattern, when two suites share a folder>"/>
   <build cmd="<build command>"/>
   <toggles mechanism="<how features are switched off here>"/>
   <branching branches="<naming convention>" commits="<message convention>"/>
@@ -196,9 +202,11 @@ A `spine` cell:
 </part>
 ```
 
-Any of the five spine answers may instead be written as `<build found="no"/>`, `<toggles
-found="no"/>`, `<branching found="no"/>`, `<contract found="no"/>`, `<suites found="no"/>`. `one` may
-be empty — a suite with no one-file form is normal, and the pipeline then runs the whole suite.
+Any of the seven spine answers may instead be written as `<artifact found="no"/>`, `<build
+found="no"/>`, `<toggles found="no"/>`, `<branching found="no"/>`, `<contract found="no"/>`,
+`<suites found="no"/>`, `<integrations found="no"/>`. `one` may be empty — a suite with no one-file
+form is normal, and the pipeline then runs the whole suite. `match` is needed only where two suites
+share one folder.
 
 A raw `<` inside an attribute value must be written `&lt;` — `branches="feature/&lt;ticket&gt;"`.
 

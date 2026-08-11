@@ -76,6 +76,11 @@ $START_FORBIDDEN
 - Do NOT ask what the answers block already answers — not even reworded ("response size limit?"
   and "limit on the response size?" are the same question, and the second one wastes an exchange).
 - Do NOT copy the request into the BRD. A requirement is a statement with a criterion, not a quote.
+- Do NOT anchor a requirement with an EVALUATION of it (`compatibility`, `correctness`,
+  `partial-match`) when the request names a concrete noun — anchor the noun (`record`, `export`).
+  Machine-checked at step 3: every anchor is grepped over the repository (`hitsFor`), and a word the
+  code does not carry comes back `found="no"` — the requirement then reaches step 6 with no file to
+  land on.
 - Do NOT decide the change weight and do NOT route. The pipeline routes.
 - Do NOT split the task yourself. Two independent results in one request is a question to the
   operator, not a verb of yours.
@@ -129,7 +134,7 @@ Order carries `TASK.md`:
 > Аудит-лог растёт бесконечно и переполняет диск. Нужна ротация: старые записи убирать,
 > недавние держать. Существующие выгрузки не ломать.
 
-Step 2: retention window, rotation trigger, backward compatibility.
+Step 2: log growth, old records, existing exports — the NOUNS the request itself carries.
 Step 3: "старые записи" — no number. Call `workflow_result` with:
 
 ```json
@@ -146,7 +151,7 @@ The key in `--q=` is the subject VERBATIM. Note also: the alternatives you list 
 the operator's — a number from them is not a source. Only what the operator answers is.
 
 Next call carries the answers block: `- вопрос: срок хранения записей — 90 дней по умолчанию (альтернативы: 30, 180)?  ответ: 90`.
-Step 4: fold into R1. Step 5: `subjects[]: audit · retention · rotation`. Step 6: no FEEDBACK — this
+Step 4: fold into R1. Step 5: `subjects[]: audit · record · rotation`. Step 6: no FEEDBACK — this
 is the first attempt, nothing to repair. Step 7 writes `.agent/staging/brd.md`:
 
 ```
@@ -162,7 +167,7 @@ R3 Существующие выгрузки не ломаются
    fit:    формат ответа GET /audit — unchanged | changed, обязан быть unchanged
    verify: существующий контрактный тест остаётся зелёным
 
-subjects[]: audit · retention · rotation
+subjects[]: audit · record · rotation
 open-questions: 0
 ```
 

@@ -18,7 +18,7 @@ cd ext && npm install && cd ..
 pi install ./ext
 ```
 
-`ext/` — pi-extension: двенадцать функций хоста для воркфлоу-песочницы (`readText`, `answers`, `budgets`,
+`ext/` — pi-extension: функции хоста для воркфлоу-песочницы (`readText`, `answers`, `brdForm`, `budgets`,
 `herdrStatus`, `checkTask`, `checkBrd`, `promote`, `setPending`, `clearPending`, `survey`, `cells`,
 `checkPart`), `roleDirectories: [steps/brd/, steps/scope/]`,
 откуда pi резолвит роли `gilb` и `scout` по именам файлов `gilb.md` и `scout.md`, и (S13) tool `izi_answer`, зарегистрированный

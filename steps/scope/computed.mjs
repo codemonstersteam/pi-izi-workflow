@@ -10,17 +10,22 @@
 //             `pkg`, `literals`).
 // EXTERNAL_DEPENDENCY: steps/scope/part.mjs::HTTP_API_NAME — the canonical form of an http name is
 //             declared THERE because it is judged there; here it is only applied.
+// EXTERNAL_DEPENDENCY: core/xml.mjs — `esc` encodes what `attrs` decodes; both live there so a value
+//             cannot survive one round trip of this grammar and not the next.
 // Invariants: newComputed is total; every fact carries `at` (the file) and `via` (the line it was
 //             read from) — a computed fact must be as checkable as a declared one; a route is derived
 //             ONLY from an annotation, never from a method name; a language with no routing rules is
 //             declared in `<lang>` instead of staying silent.
+// EXTERNAL_DEPENDENCY: steps/scope/source.mjs::DECL_KINDS — the per-language capability that
+//             `<lang decls="…">` publishes; declared there because the readers live there.
 // Interface:  ROUTE_RULES — the annotations an http route is read from
 //             newComputed({ sources, paths, goModule }) -> Computed
 //             computedXml(computed) -> string
 //             parseComputed(xml) -> Computed
 
 import { newEdges } from "./edges.mjs"
-import { attrs, tag } from "../../core/xml.mjs"
+import { DECL_KINDS } from "./source.mjs"
+import { attrs, tag, esc } from "../../core/xml.mjs"
 import { HTTP_API_NAME } from "./part.mjs"
 
 // ROUTE_RULES — the annotations an http route is computable from. JAX-RS (`@GET` + `@Path`) and
@@ -37,8 +42,19 @@ export const ROUTE_RULES = Object.freeze({
   OPTIONS: [/^@OPTIONS\b/],
 })
 
-const esc = (s) => String(s == null ? "" : s)
-  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+// NAMESPACED — the languages whose `package` clause is a FULLY QUALIFIED name, and therefore an
+// identity a merge can group by.
+//
+// BUG_FIX_CONTEXT: caught while writing this step's unit, before any live run.
+//   Previous plan: emit `<pkg>` for every file whose `package` clause source.mjs could read.
+//   Problem:  Go's clause is a SHORT name — `internal/store/s.go` and `vendor/b/store/s.go` both say
+//             `package store`. Step 5 groups modules by `pkg` when it is present, so two unrelated
+//             directories would have merged into one module, and the graph would claim a cohesion the
+//             repository never declared. Python has no clause at all; ts/js none either.
+//   Fix:      only java/kotlin/scala declare a namespace here. Everywhere else the DIRECTORY is the
+//             package identity (in Go literally so), and step 5 groups by directory — which is the
+//             correct rule for those languages, not a fallback.
+const NAMESPACED = new Set(["java", "kotlin", "scala"])
 
 // pathOf — the path inside an annotation: `@Path("/fruits")`, `@GetMapping("/fruits")`,
 // `@RequestMapping(value = "/fruits")`. An annotation with no string argument yields an empty path,
@@ -83,7 +99,22 @@ function routesOf(src) {
 //   Input:        { sources, paths, goModule } — as for newEdges
 //   Dependencies: newEdges, routesOf, EXTERNAL steps/scope/source.mjs (the Source shape)
 //   Antecedent:   any values; missing ones read as empty
-//   Consequent:   success: { edges, langs, ambiguous, api, use, drivers, routed }
+//   Consequent:   success: { edges, langs, ambiguous, api, use, drivers, routed, pkgs, decls,
+//                          declKinds }
+//                          decls — [{ at, kind, name, sig }] the PUBLIC declarations of a file, `sig`
+//                                being the declaration line verbatim: what a module offers whoever
+//                                calls it. Only public — an internal declaration crosses no boundary;
+//                          declKinds — [{ lang, kinds }] which KINDS of declaration that language's
+//                                reader can see at all, so "the rule is missing" and "the file has
+//                                none" stay distinguishable (source.mjs::DECL_KINDS);
+//                          pkgs — [{ at, name }] the NAMESPACE a file declares about itself, and only
+//                                for the languages where that is a fully qualified name (NAMESPACED
+//                                below). It is the address of a module, never a module (a package has
+//                                no single entry and no single function — docs/graph.md §1); step 5
+//                                carries it onto the node as `pkg` and groups by the DIRECTORY where
+//                                it is absent. Nothing is computed here that source.mjs did not
+//                                already read — the point of G1 is that this fact stops being lost
+//                                between the disk and the graph, not that it is derived twice;
 //                          api — [{ at, name, kind, scope, via }] only the entry points visible in an
 //                                ANNOTATION; use — [{ at, path, via }] a file naming the PATH of
 //                                somebody else's route (the consumer, not the provider); drivers —
@@ -134,15 +165,42 @@ export function newComputed({ sources = [], paths = [], goModule = "" } = {}) {
       use.push({ at: src.path, path: lit.value, via: lit.via })
     }
   }
+  // <decl> — the module's own entry points, as the SIGNATURE LINE the file carries, verbatim.
+  //
+  // BUG_FIX_CONTEXT: live run c4fde2f3 (backlog G8). `<api>` came back `none` from 13 modules of 15,
+  //   and two of those had incoming edges — they are called, and they declare no entry. That is not
+  //   negligence: checkPart reads no files, so `api="none"` is UNFALSIFIABLE and therefore always the
+  //   cheapest green answer (the same economics that emptied the edges in 337b957f). A rule cannot
+  //   fix it. A script can: the visibility of a declaration is computable, so it is computed.
+  //
+  // Why the raw line and not a parsed in/out: `<contract in out>` at step 9 is a token of a DATA FLOW
+  // compared by string equality between neighbours (docs/data-flow.md §6, rule 4) — a signature is
+  // not that token, it is the SOURCE a role reads to write one. Parsing it into parts would also
+  // demand a parser per language (Go returns `(T, error)`, python annotations are optional, generics
+  // carry commas), and the shape would be guessed for step 9, which does not exist yet.
+  //
+  // PUBLIC only: an internal declaration does not cross the module's boundary, so it can be nobody's
+  // in or out. That is a principle, not a size threshold.
+  const decls = []
+  for (const src of sources) {
+    for (const d of src.decls || []) {
+      if (d.visibility !== "public") continue
+      decls.push({ at: src.path, kind: d.kind, name: d.name, sig: d.line })
+    }
+  }
+
   // Routes are read from annotations only — so they exist only where annotations do.
   const ROUTED = new Set(["java", "kotlin"])
   return {
+    decls,
+    declKinds: langs.map((l) => ({ lang: l.lang, kinds: DECL_KINDS[l.lang] || "" })),
     edges,
     langs,
     ambiguous,
     api,
     use,
     drivers,
+    pkgs: sources.filter((s) => s.pkg && NAMESPACED.has(s.lang)).map((s) => ({ at: s.path, name: s.pkg })),
     routed: langs.map((l) => ({ lang: l.lang, rules: ROUTED.has(l.lang) })),
   }
 }
@@ -163,8 +221,11 @@ export function computedXml(computed) {
   L.push('<computed by="script">')
   for (const l of c.langs || []) {
     const routed = (c.routed || []).find((r) => r.lang === l.lang)
-    L.push(`  <lang id="${esc(l.lang)}" files="${l.files}" edges="${l.rules ? "yes" : "no-rules"}" routes="${routed && routed.rules ? "yes" : "no-rules"}"/>`)
+    const kinds = (c.declKinds || []).find((d) => d.lang === l.lang)
+    L.push(`  <lang id="${esc(l.lang)}" files="${l.files}" edges="${l.rules ? "yes" : "no-rules"}" routes="${routed && routed.rules ? "yes" : "no-rules"}" decls="${esc(kinds && kinds.kinds ? kinds.kinds : "no-rules")}"/>`)
   }
+  for (const p of c.pkgs || []) L.push(`  <pkg at="${esc(p.at)}" name="${esc(p.name)}"/>`)
+  for (const d of c.decls || []) L.push(`  <decl at="${esc(d.at)}" kind="${esc(d.kind)}" name="${esc(d.name)}" sig="${esc(d.sig)}"/>`)
   for (const e of c.edges || []) L.push(`  <edge from="${esc(e.from)}" to="${esc(e.to)}" via="${esc(e.via)}"/>`)
   for (const a of c.api || []) L.push(`  <api at="${esc(a.at)}" name="${esc(a.name)}" kind="${esc(a.kind)}" scope="${esc(a.scope)}" via="${esc(a.via)}"/>`)
   for (const u of c.use || []) L.push(`  <use at="${esc(u.at)}" path="${esc(u.path)}" via="${esc(u.via)}"/>`)
@@ -178,7 +239,7 @@ export function computedXml(computed) {
 //   Input:        xml — the text of `.agent/graph-computed.xml`; type unconstrained
 //   Dependencies: attrs, tag (core/xml.mjs — the same scanner the parts are read with)
 //   Antecedent:   any value; undefined/garbage read as an empty set of facts
-//   Consequent:   success: { edges, api, use, drivers, langs, ambiguous } in newComputed's own shape
+//   Consequent:   success: { edges, api, use, drivers, langs, ambiguous, pkgs, decls, declKinds }
 //                 failure: none — total
 //   Purity:       pure
 //   Interface:    parseComputed(xml: unknown) -> Computed
@@ -192,6 +253,9 @@ export function parseComputed(xml) {
   return {
     langs: list("lang").map((a) => ({ lang: a.id || "", files: Number(a.files || 0), rules: a.edges === "yes" })),
     routed: list("lang").map((a) => ({ lang: a.id || "", rules: a.routes === "yes" })),
+    pkgs: list("pkg").map((a) => ({ at: a.at || "", name: a.name || "" })),
+    decls: list("decl").map((a) => ({ at: a.at || "", kind: a.kind || "", name: a.name || "", sig: a.sig || "" })),
+    declKinds: list("lang").map((a) => ({ lang: a.id || "", kinds: a.decls === "no-rules" ? "" : (a.decls || "") })),
     edges: list("edge").map((a) => ({ from: a.from || "", to: a.to || "", via: a.via || "" })),
     api: list("api").map((a) => ({ at: a.at || "", name: a.name || "", kind: a.kind || "", scope: a.scope || "", via: a.via || "" })),
     use: list("use").map((u) => ({ at: u.at || "", path: u.path || "", via: u.via || "" })),
