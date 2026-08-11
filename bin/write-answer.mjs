@@ -1,4 +1,4 @@
-// MODULE_CONTRACT: write-answer — appends one operator answer to <root>/.agent/answers.md
+// MODULE_CONTRACT: write-answer — appends one exchange to <root>/.agent/answers.md
 // Purpose:      one decision — the "append, or skip an exact duplicate" rule for answers.md lives in
 //               exactly one place, so the two humans-facing entry points that write it —
 //               bin/answer.mjs (operator types a shell command) and ext/index.mjs's izi_answer tool
@@ -7,35 +7,36 @@
 //               pulled out here because a second caller arrived, not because bin/answer.mjs itself
 //               changed shape.
 // io:           fs
-// Invariants:   answers.md only grows — a byte-identical (question, text) pair already present is not
-//               appended twice; the .agent directory is created if absent
-// Interface:    writeAnswer(root, { question, text }) -> { written: boolean, count: number }
+// Invariants:   answers.md only grows — a byte-identical exchange already present is not appended
+//               twice; the .agent directory is created if absent; nothing is written when the format
+//               refuses the value (newExchange), so a mis-parsing file cannot be produced here
+// Interface:    writeAnswer(root, pairs) -> { written: boolean, count: number, why?: string }
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
 import { join } from "node:path"
-import { answerEntry } from "../core/answers.mjs"
+import { newExchange, newAnswers } from "../core/answers.mjs"
 
-// FUNCTION_CONTRACT: writeAnswer — appends one answer entry to <root>/.agent/answers.md
-//   Input:        root — absolute path to the run root; raw — { question, text }
-//   Dependencies: fs (mkdir/read/write)
-//   Antecedent:   root — non-empty string; question and text — non-empty single-line strings
-//                 (answerEntry's own antecedent — the caller validates emptiness/shape before this,
-//                 the same division bin/answer.mjs already made)
-//   Consequent:   success: { written: true, count } when the entry was appended (count = total
-//                          question records in the file after this write, including this one);
-//                          { written: false, count } when the exact (question, text) pair was already
-//                          present — count is the total unchanged; directory created if absent either
-//                          way
-//                 failure: throws — none of its own; propagates fs errors (disk full, permissions) —
-//                          the caller has no better diagnosis to substitute
-export function writeAnswer(root, { question, text }) {
+// FUNCTION_CONTRACT: writeAnswer — appends one exchange to <root>/.agent/answers.md
+//   Input:        root — absolute path to the run root; pairs — [{ n, question, text }]
+//   Dependencies: newExchange (the format and its refusals), newAnswers (counting), fs
+//   Antecedent:   root — non-empty string; pairs — whatever the caller collected: this function does
+//                 NOT trust it, newExchange judges it (S21: an antecedent that nothing checks is a
+//                 comment, and this one cost live run 46edab60)
+//   Consequent:   success: { written: true, count } when the exchange was appended (count = answered
+//                          questions in the file after this write); { written: false, count } when a
+//                          byte-identical exchange was already present
+//                 failure: { written: false, count: 0, why } — the format refused the value; nothing
+//                          was written. The caller owns the diagnosis for its own audience
+export function writeAnswer(root, pairs) {
+  const block = newExchange(pairs)
+  if (!block.ok) return { written: false, count: 0, why: block.error.detail }
+
   const agentDir = join(root, ".agent")
   const out = join(agentDir, "answers.md")
   mkdirSync(agentDir, { recursive: true })
   const prev = existsSync(out) ? readFileSync(out, "utf8") : ""
-  const entry = answerEntry({ question, text })
-  const priorCount = prev.split("- вопрос:").length - 1
-  if (prev.includes(entry)) return { written: false, count: priorCount }
-  writeFileSync(out, prev + entry)
-  return { written: true, count: priorCount + 1 }
+  const priorCount = (newAnswers(prev).value || []).length
+  if (prev.includes(block.value)) return { written: false, count: priorCount }
+  writeFileSync(out, prev + block.value)
+  return { written: true, count: priorCount + pairs.length }
 }

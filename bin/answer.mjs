@@ -46,7 +46,10 @@ if (!Q || !TEXT) { console.error('usage: answer.mjs --q="<вопрос>" --text=
 if (looksLikeTemplate(TEXT)) { console.error("✗ ответ выглядит шаблоном, а не ответом оператора"); process.exit(2) }
 
 // Cumulative: answers from prior exchanges stay put, or the role would lose them on the next question.
-const written = writeAnswer(ROOT, { question: Q, text: TEXT })
+// One question per CLI call — the batch path is the chat tool (ext/index.mjs::izi_answer), which
+// takes the numbering from .agent/pending.json; here the exchange is a single pair, numbered 1.
+const written = writeAnswer(ROOT, [{ n: 1, question: Q, text: TEXT }])
+if (written.why) { console.error(`✗ ${written.why}`); process.exit(2) }
 if (!written.written) { console.log("✓ ответ уже записан"); process.exit(0) }
 console.log(`✓ .agent/answers.md: ${written.count} ответов`)
 

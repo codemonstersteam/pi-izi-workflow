@@ -107,8 +107,9 @@ export function expand(nodes, routes) {
 
 // FUNCTION_CONTRACT: checkDesign — alignment of the two projections
 //   Input:        { nodes, routes, frd }
-//                 frd — { scenarios: string[], touched: string[] } from step 6; parsing `.agent/frd.md`
-//                       belongs to the intake slice, here it is a DEPENDENCY, not a concern
+//                 frd — { scenarios: string[], touched: string[] } from step 6; parsing
+//                       `.agent/frd.xml` belongs to the intake slice (steps/intake/frd.mjs::parseFrd),
+//                       here it is a DEPENDENCY, not a concern
 //   Dependencies: —
 //   Antecedent:   nodes — parseDesign's Map; routes — its array; frd — an object with two arrays
 //                 (missing fields are read as empty)

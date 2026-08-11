@@ -20,8 +20,8 @@ test("the answer lands in .agent/answers.md together with the question", () => {
   const d = mkdtempSync(join(tmpdir(), "ans-"))
   assert.equal(run(d, "предел размера?", "20").code, 0)
   const t = readFileSync(join(d, ".agent", "answers.md"), "utf8")
-  assert.match(t, /предел размера\?/)
-  assert.match(t, /ответ: 20/)
+  assert.match(t, /<question_1>предел размера\?<\/question_1>/)
+  assert.match(t, /<answer_1>20<\/answer_1>/)
 })
 
 test("cumulative: a second answer does not overwrite the first", () => {
@@ -29,15 +29,15 @@ test("cumulative: a second answer does not overwrite the first", () => {
   run(d, "первый?", "1")
   run(d, "второй?", "2")
   const t = readFileSync(join(d, ".agent", "answers.md"), "utf8")
-  assert.match(t, /ответ: 1/)
-  assert.match(t, /ответ: 2/)
+  assert.match(t, /<answer_1>1<\/answer_1>/)
+  assert.match(t, /<answer_1>2<\/answer_1>/)
 })
 
 test("a repeat of the same answer does not duplicate the entry", () => {
   const d = mkdtempSync(join(tmpdir(), "ans-"))
   run(d, "q?", "20")
   run(d, "q?", "20")
-  assert.equal(readFileSync(join(d, ".agent", "answers.md"), "utf8").split("- вопрос:").length - 1, 1)
+  assert.equal(readFileSync(join(d, ".agent", "answers.md"), "utf8").split("<exchange>").length - 1, 1)
 })
 
 test("a template in place of an answer is rejected", () => {

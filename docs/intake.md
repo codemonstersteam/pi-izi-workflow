@@ -1,0 +1,93 @@
+# Шаг 6 `intake` — требование × реальность → FRD
+
+Место шага в полосе — `docs/workflow.md` §3.6, обоснования — `docs/concept.md`. Здесь: вход, выход,
+грамматика артефакта, правила приёмки и канал вопросов, как они реализованы.
+
+## 1. Вход, выход, участники
+
+| | |
+|---|---|
+| вход | `.agent/brd.md`, ответы оператора, `.agent/appgraph.xml` целиком |
+| выход | `.agent/frd.xml`, промоутом из `.agent/staging/frd.xml` по зелёному чеку |
+| роль | `intake` — `steps/intake/intake.md`, наряд `steps/intake/order.tpl` |
+| гардрейл | `checkFrd({path})` → `steps/intake/frd.mjs::newFrd` |
+| бюджеты | `loops` — пере-делегации по красному чеку; `questions` и `questionRounds` — вопросы и круги |
+| содержание роли | навык `requirements-intake` (`izi-flow/skills/lib/requirements-intake/SKILL.md`) |
+
+## 2. Карта в окно
+
+`appgraph.xml` едет роли ЦЕЛИКОМ. Потолок чтения — `MAP_CAP_BYTES` (`steps/intake/map.mjs`), 115 КБ
+= 32К токенов ≈ 306 узлов при 417 Б/узел (`docs/graph.md` §7). Выше потолка `graphMap` отказывает,
+шаг встаёт `blocked` с числом байт и узлов. Индексной формы карты этот срез не строит.
+
+## 3. Грамматика `.agent/frd.xml` (версия 1)
+
+```xml
+<frd grammar="1" goal="одна фраза: что должна делать система">
+  <actor name="UI" kind="human" via="HTTP GET /fruits"/>
+
+  <usecase id="UC1" actor="UI" goal="найти фрукт по части имени">
+    <pre>список фруктов непуст</pre>
+    <post>вернулись только совпавшие записи</post>
+    <step n="1">клиент шлёт GET /fruits?search=appl</step>
+    <ext id="1a" error="SEARCH_EMPTY" outcome="пустой массив, статус 200"/>
+  </usecase>
+
+  <field name="search" in="GET /fruits" type="string" domain="подстрока name"
+         required="no" error="SEARCH_EMPTY" source="TASK.md"/>
+  <failure code="SEARCH_EMPTY" status="200" client="показать «ничего не найдено»" operator="—" from="UC1/1a"/>
+  <failures found="no" why="…"/>            <!-- вместо строк <failure>, если отказов нет -->
+
+  <delta op="GET /fruits" form="Changed" node="src/.../FruitResource.java" from="list()" to="list(search)"/>
+  <scenario id="S1" uc="UC1" before="…" after="…" nodes="src/.../FruitResource.java"/>
+  <touched path="src/.../FruitResource.java"/>
+  <nfr subject="response-size" fit="≤ 10 записей" source="answers.md"/>
+  <question subject="…" why="…"/>
+</frd>
+```
+
+`node` и `path` — репо-относительный путь, ключ узла карты. `<` внутри значения атрибута пишется
+`&lt;` (`core/xml.mjs::ATTRS`).
+
+## 4. Правила приёмки — `steps/intake/frd.mjs::checkFrd`
+
+Все семь — блокеры; красный чек едет в `FEEDBACK` пере-делегации.
+
+| # | правило |
+|---|---|
+| **F1** | `goal` непуст; есть хотя бы один `<usecase>`, у каждого — `actor`, `<post>`, хотя бы один `<step>` |
+| **F2** | каждый `<touched path>` резолвится в узел карты и не является тестом (`kind="test"`) |
+| **F3** | `form ∈ Added \| Changed \| Removed \| Unknown`; `Unknown` несёт `why`; прочие несут `node`, который есть в карте, не является тестом и объявлен `<touched>` |
+| **F4** | есть хотя бы один `<scenario>`; у каждого `uc` существует, `before` и `after` непусты и различны |
+| **F5** | у `<field>` и `<nfr>` — `source` из словаря `TASK.md \| answers.md \| brd.md \| appgraph.xml`; каждое число в `domain`/`fit` встречается в этих источниках (`numbersIn` из `steps/brd/brd.mjs`) |
+| **F6** | есть `<failure>` ИЛИ `<failures found="no" why="…"/>` с непустым `why`; где коды есть — `<ext error>` и `<failure code>` совпадают 1:1 в обе стороны |
+| **F7** | есть хотя бы одна `<delta>` |
+
+Числа считаются только в `<field domain>` и `<nfr fit>`: `status`, `step n`, `grammar` величинами
+требования не являются. Артефакт с `Unknown` СДАЁТСЯ — на нём отказывает шаг 7.
+
+Тест дельтой не бывает: **тест это `<dod>` изменения, а не изменение**. Карта уже связывает модуль с
+его тестом (`<test path suite>`), оттуда шаг 10 берёт и файл, и команду проверки, и оба приезжают в
+ОДИН тикет — иначе тест и код писали бы разные исполнители.
+
+## 5. Вопросы оператору
+
+Пакетом: роль возвращает `items[]` — вопросы списком, без нумерации в тексте.
+
+1. `setPending` нумерует их и пишет `.agent/pending.json`: `{subject, evidence, items:[{n, text}]}`.
+2. Пауза приходит в чат обычным сообщением; пакет в 1024 байта не влезает, поэтому сообщение
+   отсылает к `pending.json`.
+3. Чат-модель зовёт `izi_answer({exchange})` — блок `<question_N>`/`<answer_N>`. Тул сверяет номера
+   с `pending.json`, требует ответ на каждый, отвергает шаблон-плейсхолдер и возвращает разложение
+   «номер → вопрос → ответ» для оператора.
+4. `.agent/answers.md` накапливает блоки `<exchange>`; формат — `core/answers.mjs`.
+5. `askOperator` пропускает шаг дальше, только когда ответ есть у КАЖДОГО вопроса; иначе переспрос
+   (`checkpointRetries`), и диагноз называет номера без ответа.
+
+Вопрос не тратит `loops`, красный чек не тратит `questions` — счётчики разные.
+
+## 6. Чего шаг не делает
+
+Не проектирует модули и не пишет код (шаги 9 и 15). Не считает вес (7) и рябь (8). Не строит индекс
+карты. Не правит BRD: расхождение требования с кодом — это `Unknown`, `<question>` или вопрос
+оператору.

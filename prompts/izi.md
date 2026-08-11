@@ -1,32 +1,26 @@
 ---
-description: Запустить workflow izi (task → brd → survey-plan → scope → graph) в текущей сессии pi
+description: Start the izi workflow (task → brd → survey-plan → scope → graph → intake) in this pi session
 ---
-Вызови tool `workflow` СЕЙЧАС ровно с этими параметрами — никаких других вызовов, никаких
-комментариев, никаких лишних параметров:
+$START_TASK
+Call the `workflow` tool NOW, exactly once, with exactly these parameters and no others:
+`name: "izi"`, `scriptPath: "workflows/izi.js"`, `foreground: false`. Never pass `args` — every rail
+and budget lives in the script.
+$END_TASK
 
-name: "izi"
-scriptPath: "workflows/izi.js"
-foreground: false
+$START_CONSTRAINTS
+- ONE tool call, nothing else: no file reads, no edits, no second call, whatever the tool returns.
+- `foreground: false` is required, not preferred: with `true` the `checkpoint()` pause opens a modal
+  `ui.select` that seizes the window and the operator cannot type an answer at all
+  (pi-extensible-workflows/src/host.ts:686). With `false` the tool returns `{ runId, state }` at once
+  and pauses arrive as follow-up messages here (host.ts:673-677).
+- Never ask for Approve and never act ahead: pauses arrive on their own.
+$END_CONSTRAINTS
 
-Не передавай параметр `args` вовсе — все рельсы и их бюджеты пере-делегации зашиты в самом скрипте
-(S11/S15/G5: пять шагов, литералы, а не `pipeline.json`).
+$START_OUTPUT
+Print the tool's result verbatim, once, then one line: `izi` runs in the background under this
+`runId`, and the roles' questions will arrive here carrying their own instructions.
 
-Сделай РОВНО ОДИН вызов tool `workflow` и ничего больше: никаких чтений файлов, никаких правок
-файлов, никакого второго вызова — независимо от того, что вернёт tool или что будет на диске.
-
-`foreground: false` — прогон уходит в фон. Tool вернёт НЕМЕДЛЕННО `{ runId, state: "running" }`, а
-не финальный результат воркфлоу: с `foreground: true` пауза `checkpoint()` отдаёт Approve/Reject
-модальному `ui.select`, который забирает ввод у всего окна — оператор не может напечатать ответ
-роли `gilb` в принципе (pi-extensible-workflows/src/host.ts:686). `foreground: false` вместо этого
-доставляет и паузу, и финал ОТДЕЛЬНЫМИ follow-up сообщениями в этот же чат (host.ts:673-677) —
-редактор остаётся свободным, оператор печатает ответ прямо здесь.
-
-Когда tool вернёт результат — напечатай его дословно ОДИН раз, затем одной строкой сообщи
-оператору: воркфлоу `izi` запущен в фоне под этим `runId`, дальше вопросы роли `gilb` (если будут)
-придут в этот же чат сами, каждый уже с готовой инструкцией, что делать. Ничего не выполняй заранее
-и не проси Approve — паузы появятся сами, когда до них дойдёт очередь.
-
-Когда позже придёт сообщение вида `Workflow izi checkpoint <name>: <инструкция>` — следуй ИМЕННО
-инструкции внутри него (она пишется `workflows/izi.js::askOperator` и меняется вместе с кодом, этот
-файл её не пересказывает); используй `runId`, который ты запомнил из ответа на самый первый вызов
-`workflow` — сообщение с паузой его не повторяет.
+Keep that `runId` — later pause messages do not repeat it. On a
+`Workflow izi checkpoint <name>: <instruction>` message follow the instruction INSIDE it: it is
+written by `workflows/izi.js::askOperator` and changes with the code, so this file does not restate it.
+$END_OUTPUT

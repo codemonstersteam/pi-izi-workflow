@@ -23,6 +23,9 @@ $START_CONSTRAINTS
 - subjects[]: {SUBJECTS_MIN}..{SUBJECTS_MAX} of them; each one — {SUBJECT_RULE}
 - an anchor is a NOUN from the request, not your evaluation of it: `record`, not `retention` —
   step 3 greps it over the repository, and an evaluation matches no file
+- `verify:` of a restriction checks the call the restriction APPLIES TO. If another `R` forbids
+  changing that same call, the two contradict: the restriction's scope is wrong or unstated, and
+  an unstated scope is a question, never your choice
 $END_CONSTRAINTS
 
 $START_FEEDBACK

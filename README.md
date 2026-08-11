@@ -1,13 +1,18 @@
 # izi-pi-v2
 
-Первые четыре шага конвейера `izi-flow-v2` (`task → brd → survey-plan → scope`), перенесённые на
-`pi-extensible-workflows` (pi v5.1.1) и переписанные на функции расширения (S11, S15, S17). Порядок шагов
+Первые шесть шагов конвейера `izi-flow-v2` (`task → brd → survey-plan → scope → graph → intake`),
+перенесённые на `pi-extensible-workflows` (pi v5.1.1) и переписанные на функции расширения
+(S11, S15, S17, S20, S21). Порядок шагов
 — код `workflows/izi.js`, а не манифест; бюджеты прогона с S16 поднимаются файлом проекта
 `izi.config.json` (см. ниже). Роль `gilb` превращает сырое требование оператора
 в BRD, который можно принять; шаг `survey-plan` — чистый скрипт без роли и без оператора: он режет дерево
 репозитория на клетки, которые скаут шага 4 физически способен прочесть (`docs/survey-plan.md`);
 шаг `scope` — рой: роль `scout` по клетке в батче, два наряда по роду клетки, гардрейл `checkPart`
-судит СОСТАВ части, а не формулировки (`docs/scope.md`).
+судит СОСТАВ части, а не формулировки (`docs/scope.md`); шаг `graph` сливает части в
+`.agent/appgraph.xml` — скриптом, за 0 токенов (`docs/graph.md`); шаг `intake` прожаривает
+требование против этой карты в `.agent/frd.xml` — сценарии использования, словарь данных, карта
+режимов отказа и дельта контракта по узлам карты, с вопросом оператору вместо умолчания
+(`docs/intake.md`).
 Подробности программы — `docs/workflow.md`; принципы и что из них отложено на двух шагах —
 `docs/concept.md`.
 
@@ -18,10 +23,12 @@ cd ext && npm install && cd ..
 pi install ./ext
 ```
 
-`ext/` — pi-extension: функции хоста для воркфлоу-песочницы (`readText`, `answers`, `brdForm`, `budgets`,
-`herdrStatus`, `checkTask`, `checkBrd`, `promote`, `setPending`, `clearPending`, `survey`, `cells`,
-`checkPart`), `roleDirectories: [steps/brd/, steps/scope/]`,
-откуда pi резолвит роли `gilb` и `scout` по именам файлов `gilb.md` и `scout.md`, и (S13) tool `izi_answer`, зарегистрированный
+`ext/` — pi-extension: функции хоста для воркфлоу-песочницы (`readText`, `answers`, `brdForm`,
+`frdForm`, `budgets`, `herdrStatus`, `checkTask`, `checkBrd`, `promote`, `setPending`,
+`clearPending`, `survey`, `cells`, `digest`, `reuse`, `remember`, `checkPart`, `buildGraph`,
+`graphMap`, `checkFrd`), `roleDirectories: [steps/brd/, steps/scope/, steps/intake/]`,
+откуда pi резолвит роли `gilb`, `scout` и `intake` по именам файлов `gilb.md`, `scout.md` и
+`intake.md`, и (S13) tool `izi_answer`, зарегистрированный
 на самой ИНТЕРАКТИВНОЙ сессии через `pi.registerTool` — не на песочнице воркфлоу, а на модели,
 которая читает этот README прямо сейчас. `export default function extension(pi)` в `ext/index.mjs`
 делает оба вызова разом: `pi.registerTool(...)` (обычный контракт pi-расширения,
@@ -103,11 +110,14 @@ workflows/izi.js — Approve сам по себе не факт: answers({}) д�
 основной путь — печатать ответ прямо в окне pi.
 
 **Reject** на любой паузе — вопрос уходит человеку эскалацией (`kind: escalate`), прогон
-останавливается терминально. Бюджет вопросов на весь прогон — `questions` (по умолчанию 3);
-исчерпан → терминальный `err(question)` с диагнозом, а не `escalate`: роль не отказывалась и не
-получала плохого ответа, оператор просто не ответил вовремя. `loops` и `questions` — разные
-счётчики: пере-делегация тратит `loops` (оплаченный вызов `agent()` по красному чеку гардрейла),
-обмен с оператором — `questions`, и виток «Approve подтверждён» не трогает `loops` вовсе.
+останавливается терминально. Бюджетов вопросов **два, и они считают разное** (S21): `questions` —
+сколько ВОПРОСОВ можно задать за прогон (по умолчанию 60), `questionRounds` — сколько раз роль
+вообще выходит к оператору (по умолчанию 3). Шаг 6 `intake` задаёт вопросы **пакетом**: прожарка
+требования на живом проекте — это 25–30 вопросов, и дорог не вопрос, а круг (роль перечитывает BRD и
+карту целиком на каждом). Любой исчерпан → терминальный `err(question)` с диагнозом, а не
+`escalate`: роль не отказывалась и не получала плохого ответа, оператор просто не ответил вовремя.
+`loops` от них независим: пере-делегация тратит `loops` (оплаченный вызов `agent()` по красному чеку
+гардрейла), обмен с оператором — нет, и виток «Approve подтверждён» не трогает `loops` вовсе.
 
 ## Наблюдаемость в herdr — три переменные окружения, а не настройка (S16)
 
@@ -219,19 +229,32 @@ steps/scope/order.spine.tpl    наряд клетки kind="spine" — пять
 steps/scope/part.mjs           ЧИСТОЕ ядро: parsePart · checkPart · newPart; правила C1·S1..S5·P1..P3
 steps/scope/part.test.mjs      тест по формуле + швы наряда (плейсхолдеры) и роли (запрет = проверка)
 
+steps/graph/graph.mjs          ЧИСТОЕ слияние частей и вычисленного в карту (S20); levels.mjs —
+                                компоненты, слои Кана, циклы; роли у шага нет
+steps/intake/intake.md         роль шага 6 (S21): прожарка требования против карты; содержание — навык
+                                requirements-intake из izi-flow, вопрос оператору вместо умолчания
+steps/intake/order.tpl         наряд: BRD/MAP/ANSWERS/FEEDBACK/STAGING/CHECK + словари подстановкой
+steps/intake/frd.mjs           ЧИСТОЕ ядро: parseFrd · checkFrd · newFrd; правила F1..F7
+steps/intake/map.mjs           ЧИСТОЕ чтение карты: parseMap (ключи узлов) · mapMeasure (цена, потолок)
+steps/intake/{frd,map}.test.mjs тесты по формуле + швы наряда и роли
+
 prompts/izi.md                 pi prompt template — источник /izi; foreground: false (S13);
                                 устанавливается вместе с ext/ (pi.prompts в ext/package.json)
 
-core/answers.mjs               разбор .agent/answers.md в значения {question, text};
+core/answers.mjs               ФОРМАТ .agent/answers.md: newExchange (запись, с отказом на том, что
+                                формат не переживёт) + newAnswers (разбор в {n, question, text});
+                                S21: элемент на вопрос и на ответ — многострочный пакет двухстрочная
+                                запись теряла (живой прогон 46edab60);
                                 looksLikeTemplate(text) — общая проверка на шаблон-плейсхолдер
-                                (S13: один правило, два вызывающих — bin/answer.mjs и izi_answer)
+                                (S13: одно правило, два вызывающих — bin/answer.mjs и izi_answer)
 core/form.mjs                  реестр формы BRD и слоёв промпта — наряд/роль подставляют, не пересказывают
 core/findings.mjs              severityOf: находка роняет приёмку (blocker) или едет уликой (advice)
 core/budgets.mjs               ЧИСТОЕ чтение izi.config.json: DEFAULT_BUDGETS + newBudgets(raw)
 core/result.mjs                Result<T,E> — общий конверт фабрик
 
-bin/answer.mjs                 CLI-обёртка: записывает ответ оператора в .agent/answers.md по ключу
-                                вопроса — запасной вход помимо чата (izi_answer — основной, S13)
+bin/answer.mjs                 CLI-обёртка: записывает ОДИН ответ оператора в .agent/answers.md —
+                                запасной вход помимо чата (izi_answer — основной, S13; пакет вопросов
+                                отвечается только через него, по номерам из pending.json)
 bin/write-answer.mjs           S13: общая io-запись answers.md (mkdir/read/dedupe/write) — используют
                                 И bin/answer.mjs, И ext/index.mjs::izi_answer, не два раза одна логика
 bin/cli-entry.mjs               isMain(): guard `main()` в bin/answer.mjs

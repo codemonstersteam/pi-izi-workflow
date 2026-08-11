@@ -16,15 +16,24 @@
 
 import { ok, err } from "./result.mjs"
 
-// loops — redelegations of a role after a RED guardrail check; questions — operator exchanges per
-// run; checkpointRetries — re-asks of ONE question when no answer showed up in answers.md. Three
-// distinct counters, never to be confused: a question does not spend loops (workflows/izi.js::brd).
+// loops — redelegations of a role after a RED guardrail check; questions — QUESTIONS per run, not
+// exchanges; questionRounds — how many times a role may come out to the operator at all;
+// checkpointRetries — re-asks of one pause when no answer showed up in answers.md. Four distinct
+// counters, never to be confused: a question does not spend loops (workflows/izi.js::brd).
+//
+// WHY QUESTIONS AND ROUNDS ARE TWO NUMBERS (S21, the operator's decision). Frying a requirement on a
+// real project is a grilling session of 25-30 questions, and asking them ONE PER EXCHANGE makes the
+// role re-read the BRD and the map on every one of them — the round, not the question, is what costs
+// context. So `intake` asks them in ONE BATCH, and the two limits mean different things: 60 questions
+// is how much may be asked, 3 rounds is how many times the pipeline may come back for more. With a
+// single counter of 60 the role could take sixty round trips — exactly the price the batch exists to
+// remove.
 //
 // maxParallel — the BATCH size of the swarm (step 4 `scope`), not a cap on the number of cells. It
 // exists because the workflow sandbox has no limiter at all: `parallel` is `Promise.all`
 // (pi-extensible-workflows/packages/core/src/execution.ts:245-266), so a hundred cells would go to
 // the model at once. The default 8 is pi's own concurrency ceiling.
-export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, questions: 3, checkpointRetries: 2, maxParallel: 8 })
+export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, questions: 60, questionRounds: 3, checkpointRetries: 2, maxParallel: 8 })
 export const BUDGETS_PATH = "izi.config.json"
 
 const KEYS = Object.keys(DEFAULT_BUDGETS)
