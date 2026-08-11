@@ -16,6 +16,7 @@
 // Interface:  ATTRS — the attribute-body sub-pattern, for callers building their own regexes
 //             attrs(tagText) -> Record<string, string>
 //             tag(name, tail?) -> RegExp — global, one match per occurrence
+//             esc(value) -> string — an attribute value, entity-encoded
 
 // ATTRS — the body of a tag: quote-aware, and bounded by the tag it belongs to.
 //
@@ -59,6 +60,22 @@ const unescape = (v) => v
 
 export const attrs = (tagText) =>
   Object.fromEntries([...String(tagText == null ? "" : tagText).matchAll(/(\w+)="([^"]*)"/g)].map((m) => [m[1], unescape(m[2])]))
+
+// FUNCTION_CONTRACT: esc — a value, safe inside an attribute
+//   Input:        v — any value; null/undefined read as ""
+//   Dependencies: —
+//   Antecedent:   any value
+//   Consequent:   success: the five XML predefined entities encoded, `&` FIRST so an already-encoded
+//                          `&lt;` does not become `&amp;lt;` on a round trip
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    esc(v: unknown) -> string
+//
+// It lives beside `attrs`, which DECODES, because the two are one rule read in two directions: every
+// writer of this grammar (steps/scope/computed.mjs, steps/graph/graph.mjs) must encode exactly what
+// `attrs` decodes, or a value survives one round trip and not the next.
+export const esc = (v) => String(v == null ? "" : v)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 
 // FUNCTION_CONTRACT: tag — a global matcher for one tag name
 //   Input:        name — the tag name, used verbatim in the pattern (`\b`-bounded)

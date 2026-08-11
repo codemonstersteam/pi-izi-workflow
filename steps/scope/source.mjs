@@ -16,6 +16,7 @@
 //             Nothing here decides anything about the graph; these are facts, and their consumers
 //             own the decisions.
 // Interface:  LANGS — extension → language id, the declared coverage of this module
+//             DECL_KINDS — language id → the KINDS of declaration its reader can see
 //             DRIVERS — import substring → io kind, the closed table of external-system drivers
 //             ROUTE_LITERAL — the shape of a string literal that could name a route path
 //             readSource({ path, text }) -> Source
@@ -186,6 +187,21 @@ const javaDecls = (text) => {
     // is what keeps `public Fruit()` from being reported as internal.
     out.push(decl("method", `${m[3]}(${m[4].trim()})`, /\bpublic\b/.test(`${m[1]} ${m[2]}`) ? "public" : "internal", m[0].trim(), annotationsBefore(text, m.index)))
   }
+  // FIELDS. A public field IS an entry point of its module — for a POJO it is the whole contract.
+  //
+  // BUG_FIX_CONTEXT: live run c4fde2f3 (backlog G8a). `Fruit.java` is `public String name;` plus
+  //   `public String description;` and two constructors. This function returned the class and the
+  //   constructors and NOTHING about the fields, so step 5 could only say the node is called by
+  //   somebody and declares no entry — while its entry is exactly those two fields, and the delta
+  //   "search by part of the name" touches `Fruit.name`.
+  //
+  // The rule is EXACT, not a heuristic: a Java local variable cannot carry an access modifier, so a
+  // line that has one is a field by the language's own grammar. Types are matched without `(`, which
+  // keeps methods and constructors out; the initialiser may contain anything, so `private Set<Fruit>
+  // fruits = Collections.newSetFromMap(…)` is read as a field and dropped later as internal.
+  for (const m of text.matchAll(/^[ \t]*((?:public|protected|private)(?:[ \t]+(?:static|final|volatile|transient))*)[ \t]+([\w<>\[\],. ]+?)[ \t]+(\w+)[ \t]*(?:=[^\n;]*)?;/gm)) {
+    out.push(decl("field", m[3], /\bpublic\b/.test(m[1]) ? "public" : "internal", m[0].trim().replace(/;$/, ""), annotationsBefore(text, m.index)))
+  }
   return out
 }
 
@@ -196,6 +212,17 @@ const goDecls = (text) => {
   }
   for (const m of text.matchAll(/^[ \t]*type[ \t]+(\w+)[ \t]+(struct|interface|[\w.\[\]*]+)/gm)) {
     out.push(decl("type", m[1], /^[A-Z]/.test(m[1]) ? "public" : "internal", m[0].trim()))
+  }
+  // Struct FIELDS, for the same reason as java's (backlog G8a): in Go a struct's exported fields are
+  // its contract, and a JSON body is usually exactly them. gofmt puts the closing brace of a
+  // top-level type at column 0, which is what makes the block delimitable without a parser — and a
+  // file that is not gofmt'ed simply yields no fields here rather than wrong ones.
+  for (const block of text.matchAll(/^type[ \t]+\w+[ \t]+struct[ \t]*\{\n([\s\S]*?)\n\}/gm)) {
+    for (const line of block[1].split("\n")) {
+      const f = line.match(/^[ \t]+([A-Za-z_]\w*)[ \t]+([\w.\[\]*<>{}]+)/)
+      if (!f) continue
+      out.push(decl("field", f[1], /^[A-Z]/.test(f[1]) ? "public" : "internal", line.trim()))
+    }
   }
   return out
 }
@@ -218,6 +245,24 @@ const pyDecls = (text) => {
 }
 
 const DECLS = { java: javaDecls, kotlin: javaDecls, go: goDecls, ts: tsDecls, py: pyDecls }
+
+// DECL_KINDS — what each reader CAN see, declared as the list of kinds rather than as a yes/no.
+//
+// A boolean would over-claim. `decls="yes"` for Go while struct fields were unread means a struct
+// with exported fields reads as "this module exposes nothing" — exactly the silence this repository
+// forbids ("no rules" and "nothing found" must not look the same, run 337b957f). The list makes the
+// border self-describing: a reader of `<lang id="ts" decls="class,function,interface,type,const,enum">`
+// sees for itself that no field-level detail was ever looked for in TypeScript.
+//
+// It is the RULE's capability, not a count of what this repository happened to contain — otherwise
+// "the rule is missing" and "the repository has none" collapse into one number again.
+export const DECL_KINDS = Object.freeze({
+  java: "class,interface,enum,record,method,field",
+  kotlin: "class,interface,enum,record,method,field",
+  go: "func,type,field",
+  ts: "class,function,interface,type,const,enum",   // no field-level detail: members of an interface
+  py: "class,def",                                   // and attributes of a dataclass are unread
+})
 
 // FUNCTION_CONTRACT: readSource — the computable facts of one source file
 //   Input:        { path, text } — the file's path relative to the run's cwd and its whole text

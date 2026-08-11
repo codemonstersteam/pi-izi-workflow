@@ -21,12 +21,23 @@ role is written).
 $END_CONTEXT
 
 $START_RUN
+**THE RUNBOOK IS A FILE, AND IT IS NOT IN THIS REPOSITORY — READ IT BEFORE PREPARING ANY LIVE RUN:**
+`~/IdeaProjects/codemonstersdev/sandbox/pi-runbox.md`. It carries what only live runs taught: the
+MASTER form (`sandbox/quarkus-rest-json-app-v2-t1-3`, never run in — copied to `/tmp` and run there),
+the three preconditions before every launch (restart pi; no `*.md` under
+`~/.pi/agent/pi-extensible-workflows/roles/`, which silently OVERRIDES this repo's role; start `pi`
+FROM the run directory), why herdr panes are off-limits until the transport is fixed, and the log
+this form is expected to print. Do not reconstruct any of that from memory or from this file.
+
 ```bash
-cd ext && npm install && pi install ./      # once per machine: functions, role, /izi template
-node bin/install.mjs --to=<project>         # copies workflows/ steps/ core/ bin/ into a project
-cd <project> && pi                          # then type /izi
 node --test                                 # the whole line, before any live run
+node bin/install.mjs --to=<master form>     # copies workflows/ steps/ core/ bin/ into a project
+cp -R <master form> /tmp/ && cd /tmp/<form> && pi     # then type /izi
 ```
+
+`pi install ./ext` is NOT part of this: the extension is wired BY PATH in
+`~/.pi/agent/settings.json` (`packages`), so an edit under `ext/` is live after a session restart —
+and only after one.
 
 The operator answers the role's question **in the chat** — the run is launched with
 `foreground: false`, so the pause arrives as a message and the editor stays free.

@@ -18,7 +18,7 @@
 //             number and the path it is about, because its reader is the role in FEEDBACK, not a
 //             human; the two cell kinds are dispatched by the `kind` FIELD, never by parsing text.
 // Interface:  GRAMMAR_VERSION — the version of the part grammar, the cache's third key
-//             SPINE_ANSWERS — the six questions a spine part must answer, with their value keys
+//             SPINE_ANSWERS — the seven questions a spine part must answer, with their value keys
 //             IO_KINDS — the closed vocabulary of external-system kinds
 //             API_KINDS · HTTP_API_NAME — the vocabulary and canonical name of an exposed entry point
 //             parsePart(xml) -> Part
@@ -36,15 +36,24 @@ import { attrs, ATTRS, tag } from "../../core/xml.mjs"
 // 1 — the swarm's first grammar: `<dep path via>` written by the role (rules S1..S10, P1..P5).
 // 2 — edges left the role for the script (backlog W4a/W4b): `<dep>` is now a BLOCKER in a part and
 //     lives in `.agent/graph-computed.xml`; cells became subtrees with path-derived ids (W2).
-export const GRAMMAR_VERSION = "2"
+// 3 — step 5's two missing facts (backlog G0): `<artifact>` — what is BUILT here, the level above a
+//     module that no question used to ask for; and `match` on a suite — the file-name pattern that
+//     tells two suites of ONE folder apart (rule P6).
+export const GRAMMAR_VERSION = "3"
 
-// SPINE_ANSWERS — the six questions the graph must answer (docs/concept.md, "Survey"), as the
-// elements a spine part carries. `keys` are the attributes that count as an ANSWER: at least one of
-// them non-empty. `found="no"` is an equally valid answer everywhere here — a repository may have no
-// toggle mechanism and no spec, and that is the operator's decision at step 10, not the scout's
-// guess. The one exception is not expressed here: "no <suite> at all" stops the pipeline at STEP 5,
-// which sees all the parts; this step must only report the truth.
+// SPINE_ANSWERS — the seven questions the graph must answer (docs/concept.md, "Survey"; the seventh
+// is docs/graph.md §1), as the elements a spine part carries. `keys` are the attributes that count as
+// an ANSWER: at least one of them non-empty. `found="no"` is an equally valid answer everywhere here
+// — a repository may have no toggle mechanism and no spec, and that is the operator's decision at
+// step 10, not the scout's guess. The one exception is not expressed here: "no <suite> at all" stops
+// the pipeline at STEP 5, which sees all the parts; this step must only report the truth.
+//
+// `artifact` is the DEPLOYABLE unit — the pom's artifactId, go.mod's module, package.json's name —
+// and it is the only address level a repository declares about itself. It is not a module: it has no
+// single entry point and no single function (docs/graph.md §1). Step 10 needs it to know which
+// artifact a delta touches, and a monorepo needs it to keep another artifact's suites out of step 16.
 export const SPINE_ANSWERS = Object.freeze([
+  Object.freeze({ el: "artifact", keys: ["name"] }),
   Object.freeze({ el: "suites", keys: [] }), // answered by <suite> elements, see checkSpine
   Object.freeze({ el: "build", keys: ["cmd"] }),
   Object.freeze({ el: "toggles", keys: ["mechanism"] }),
@@ -328,6 +337,34 @@ function checkSpine(part, cell) {
   const systems = part.integrations.map((i) => i.system).filter(Boolean)
   for (const s of new Set(systems.filter((s, i) => systems.indexOf(s) !== i))) {
     B.push(`P5 ${cell.id}: duplicate <integration system="${s}">`)
+  }
+
+  // P6 — two suites over ONE folder must be told apart by the file NAME, because step 5 binds a
+  // `<test>` to its suite by path and nothing else.
+  //
+  // BUG_FIX_CONTEXT: live run of step 4 in /tmp/quarkus-rest-json-app-v2-t1-3 (.agent/graph-parts/
+  //   spine.xml). The spine came back with `unit` (cmd `mvn test`) and `component-native` (cmd
+  //   `mvn verify -Pnative`) carrying the SAME path="src/test/java", where four test files live.
+  //   Problem:  binding by path alone gives two candidates per file and silently takes the first, so
+  //             FruitResourceIT binds to `unit`, step 10 builds `mvn test -Dtest=FruitResourceIT`, and
+  //             surefire does not pick that file up at all — a GREEN run that executed zero tests.
+  //             Worse than a red check, because nothing about it looks wrong.
+  //   Fix:      `match` — the pattern the suite's own runner uses (surefire `*Test.java`, failsafe
+  //             `*IT.java`), READ from the build manifest, not invented. Required only where the
+  //             ambiguity exists: one suite over a folder needs no discriminator.
+  const byPath = new Map()
+  for (const s of part.suites) {
+    if (s.found === "no" || !text(s.path)) continue
+    if (!byPath.has(s.path)) byPath.set(s.path, [])
+    byPath.get(s.path).push(s)
+  }
+  for (const [path, sharing] of byPath) {
+    if (sharing.length < 2) continue
+    for (const s of sharing) {
+      if (!text(s.match)) {
+        B.push(`P6 ${cell.id}: <suite id="${s.id || "?"}"> shares path="${path}" with another suite — add match="…", the file-name pattern its runner picks up (surefire *Test.java, failsafe *IT.java), read from the build manifest`)
+      }
+    }
   }
 
   return B

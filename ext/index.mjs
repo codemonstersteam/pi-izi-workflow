@@ -1,5 +1,5 @@
-// MODULE_CONTRACT: ext/index.mjs — pi-extensible-workflows extension: host functions for izi's three
-//               steps (task, brd, survey-plan), replacing the bin/*.mjs + shell() harness (S11), plus
+// MODULE_CONTRACT: ext/index.mjs — pi-extensible-workflows extension: host functions for izi's five
+//               steps (task, brd, survey-plan, scope, graph), replacing the bin/*.mjs + shell() harness (S11), plus
 //               (S13) the izi_answer tool that lets the OPERATOR window itself carry the
 //               question→answer exchange
 // Purpose:      one decision — the workflow sandbox has no fs/import at all ("Workflow JavaScript
@@ -49,8 +49,8 @@
 //               rather than writing an answer nobody asked for or silently doing nothing.
 // Interface:    default export — extension(pi): registers the izi_answer tool on pi AND calls
 //               registerWorkflowExtension (pi-extensible-workflows contract) for the sandbox
-//               functions and role directories. readText/answers/checkTask/checkBrd/promote/
-//               setPending/clearPending/survey/cells/digest/reuse/remember/checkPart are ALSO named exports — pi-extensible-workflows never
+//               functions and role directories. readText/answers/brdForm/checkTask/checkBrd/promote/
+//               setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph are ALSO named exports — pi-extensible-workflows never
 //               exercises run(input, context) itself (it is the caller, not test scaffolding), so
 //               ext/index.test.mjs imports these directly and calls run() with a fabricated
 //               { run: { cwd } } context to prove the anchor without a live pi/workflow harness.
@@ -68,9 +68,11 @@ import { newPart, GRAMMAR_VERSION } from "../steps/scope/part.mjs"
 import { readSource } from "../steps/scope/source.mjs"
 import { newComputed, computedXml, parseComputed } from "../steps/scope/computed.mjs"
 import { newDigest } from "../steps/scope/digest.mjs"
+import { newGraph, graphXml } from "../steps/graph/graph.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate } from "../core/answers.mjs"
 import { newBudgets, BUDGETS_PATH } from "../core/budgets.mjs"
+import { BRD_FORM, ABSENT_DOC } from "../core/form.mjs"
 import { writeAnswer } from "../bin/write-answer.mjs"
 
 // runRoot — the anchor itself: context.run.cwd for sandbox functions, process.cwd() for izi_answer
@@ -166,6 +168,38 @@ export const checkBrd = {
     const r = newBrd(text, [task, ...answerTexts])
     if (!r.ok) return { ok: false, blockers: r.error.detail }
     return { ok: true, requirements: r.value.requirements.length, advice: r.value.advice.map((a) => `[${a.code}] ${a.message}`) }
+  },
+}
+
+// brdForm — the FORM of the BRD as data, so the order can substitute it instead of restating it.
+//
+// BUG_FIX_CONTEXT: backlog G9e. `steps/brd/order.tpl` carried a word-for-word copy of
+//   `core/form.mjs::BRD_FORM.subjectRule` and of the 3..7 range, while the registry's own comment
+//   promised the order would SUBSTITUTE it. Two texts of one rule drift apart silently — and the
+//   guardrail quotes the registry's text in its refusal, so a role told the OLD wording gets a
+//   diagnosis in words its order never used. The sandbox has no import, so the only way the workflow
+//   can reach a constant of this repository is a host function: this one.
+export const brdForm = {
+  description: "The BRD's form as data (subjectsMin, subjectsMax, subjectRule, absentDoc) from core/form.mjs — the order SUBSTITUTES these, it does not restate them.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      subjectsMin: { type: "number" },
+      subjectsMax: { type: "number" },
+      subjectRule: { type: "string" },
+      absentDoc: { type: "string" },
+    },
+    required: ["subjectsMin", "subjectsMax", "subjectRule", "absentDoc"],
+    additionalProperties: false,
+  },
+  run() {
+    return {
+      subjectsMin: BRD_FORM.subjectsMin,
+      subjectsMax: BRD_FORM.subjectsMax,
+      subjectRule: BRD_FORM.subjectRule,
+      absentDoc: ABSENT_DOC,
+    }
   },
 }
 
@@ -399,6 +433,7 @@ export const survey = {
       cells: { type: "number" },
       edges: { type: "number" },
       langs: { type: "array", items: { type: "string" } },
+      subjects: { type: "number" },
       gaps: { type: "array", items: { type: "string" } },
       skipped: { type: "array", items: { type: "string" } },
       at: { type: "string" },
@@ -436,7 +471,11 @@ export const survey = {
     return { ok: true, files: r.value.files, bytes: r.value.bytes, cells: r.value.cells.length,
              edges: computed.edges.length,
              langs: computed.langs.map((l) => `${l.lang}:${l.rules ? "edges" : "no-rules"}:${l.files}`),
-             gaps: [...r.value.gaps], skipped, at: new Date().toISOString() }
+             // `subjects` next to `gaps` so the caller can state the SHARE that matched nothing: it
+             // is the only cheap measurement of how well step 2 translated the request into the
+             // repository's own words (backlog G9f). It never blocks — an anchor MARKS, it does not
+             // select.
+             subjects: anchors.length, gaps: [...r.value.gaps], skipped, at: new Date().toISOString() }
   },
 }
 
@@ -464,7 +503,7 @@ function readPlanCells(root) {
   if (!plan || !Array.isArray(plan.cells) || !plan.cells.length) {
     return { ok: false, why: `${PLAN_PATH} не несёт ни одной клетки — картировать нечего` }
   }
-  return { ok: true, cells: plan.cells }
+  return { ok: true, cells: plan.cells, plan }
 }
 
 export const cells = {
@@ -648,6 +687,75 @@ export const remember = {
   },
 }
 
+// --- graph: the parts and the computed facts → .agent/appgraph.xml ------------------------------
+//
+// The parts are read BY THE PLAN, never by listing `.agent/graph-parts/`: a cell whose part is
+// missing is a lost subtree, and a directory listing would simply not contain it — the graph would
+// come out smaller and green. The plan is the authority on what the swarm owed.
+const GRAPH_PATH = ".agent/appgraph.xml"
+
+export const buildGraph = {
+  description: "Merge every graph part and the script's computed facts into .agent/appgraph.xml — steps/graph/graph.mjs::newGraph wired to disk. Parts are read by the PLAN, so a missing one is named instead of silently shrinking the graph. Written only after a green merge.",
+  input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      modules: { type: "number" },
+      components: { type: "number" },
+      isolated: { type: "number" },
+      levels: { type: "number" },
+      edges: { type: "number" },
+      suites: { type: "number" },
+      gaps: { type: "number" },
+      cycles: { type: "number" },
+      surface: { type: "number" },
+      systems: { type: "number" },
+      unanswered: { type: "array", items: { type: "string" } },
+      at: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ path }, context) {
+    const root = runRoot(context)
+    const p = readPlanCells(root)
+    if (!p.ok) return { ok: false, why: p.why }
+
+    const parts = []
+    for (const c of p.cells) {
+      const from = `.agent/graph-parts/${c.id}.xml`
+      if (!existsSync(at(root, from))) {
+        return { ok: false, why: `${from} не существует — клетка ${c.id} плана не закрыта частью, поддерево потеряно` }
+      }
+      parts.push({ id: c.id, kind: c.kind, xml: readFileSync(at(root, from), "utf8") })
+    }
+
+    const r = newGraph({ parts, computedXml: readIfExists(root, COMPUTED_PATH), plan: p.plan })
+    if (!r.ok) return { ok: false, why: r.error.detail }
+
+    const g = r.value
+    mkdirSync(dirname(at(root, path)), { recursive: true })   // written AFTER the decision to accept
+    writeFileSync(at(root, path), graphXml(g))
+    return {
+      ok: true,
+      modules: g.modules.length,
+      components: g.components.length,
+      isolated: g.isolated.length,
+      levels: g.modules.reduce((n, m) => Math.max(n, m.level), 0),
+      edges: g.edges.length,
+      suites: g.suites.length,
+      gaps: g.gaps.length,
+      cycles: g.cycle.length,
+      surface: g.surface.length,
+      systems: g.systems.length,
+      unanswered: [...g.unanswered],
+      at: new Date().toISOString(),
+    }
+  },
+}
+
 // izi_answer — an ordinary pi TOOL (not a workflow sandbox function: this one is called by the
 // INTERACTIVE session's own model, reacting to the checkpoint follow-up message that
 // workflows/izi.js's askOperator() delivers into this same chat). It takes exactly one parameter,
@@ -695,10 +803,10 @@ const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.6.0",
-    headline: "izi: task → brd → survey-plan → scope host functions",
-    description: "readText/answers/budgets/herdrStatus/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart, plus the gilb and scout role directories (steps/brd/, steps/scope/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, budgets, herdrStatus, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart },
+    version: "1.8.0",
+    headline: "izi: task → brd → survey-plan → scope → graph host functions",
+    description: "readText/answers/brdForm/budgets/herdrStatus/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph, plus the gilb and scout role directories (steps/brd/, steps/scope/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, budgets, herdrStatus, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph },
     // steps/brd/ carries gilb.md and steps/scope/ carries scout.md (role files, named by ROLE not by
     // step — see steps/brd/gilb.md's own header) alongside their cores/orders/tests;
     // pi-extensible-workflows scans a role directory for *.md files only (validation.js

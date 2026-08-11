@@ -33,6 +33,7 @@ const spineCell = { id: SPINE_CELL, kind: "spine", files: [{ path: "pom.xml" }, 
 
 const SPINE_XML = `
 <part cell="${SPINE_CELL}" kind="spine">
+  <artifact name="orders-service" root="."/>
   <suite id="unit" kind="unit" cmd="./mvnw -q test" one="./mvnw -q test -Dtest={class}" path="src/test/java"/>
   <suite id="component-it" kind="component" cmd="./mvnw -q verify -Pit" one="" path="src/it"/>
   <integration system="orders-db" kind="db" config="spring.datasource.url" value="jdbc:postgresql://db/orders"/>
@@ -62,10 +63,11 @@ test("happy survey: modules and gap parsed; part is green — and it carries NO 
   assert.equal(r.value.modules.length, 2)
 })
 
-test("happy spine: five answers, empty `one` and found=\"no\" are valid", () => {
+test("happy spine: seven answers, empty `one` and found=\"no\" are valid", () => {
   const part = parsePart(SPINE_XML)
   assert.deepEqual(part.suites.map((s) => s.id), ["unit", "component-it"])
   assert.equal(part.suites[1].one, "") // valid: step 15 runs the whole suite and logs that price
+  assert.equal(part.answers.artifact.name, "orders-service") // the deployable unit — step 5's address level
   assert.equal(part.answers.toggles.found, "no")
   assert.equal(part.answers.branching.commits, "conventional-commits")
   assert.deepEqual(checkPart({ part, cell: spineCell }), [])
@@ -151,6 +153,12 @@ test("P1: a missing spine answer is a blocker; suites are answered by <suite> or
   assert.ok(checkPart({ part: parsePart(noToggles), cell: spineCell })
     .some((b) => b.startsWith("P1 spine: <toggles> is missing or empty")))
 
+  // The seventh question (grammar 3): what this repository BUILDS. Silence used to be legal here
+  // simply because nobody asked — and step 5 then had no address level above a module at all.
+  const noArtifact = SPINE_XML.replace(/  <artifact [^>]*\/>\n/, "")
+  assert.ok(checkPart({ part: parsePart(noArtifact), cell: spineCell })
+    .some((b) => b.startsWith("P1 spine: <artifact> is missing or empty")))
+
   const noSuites = SPINE_XML.replace(/  <suite [^>]*\/>\n/g, "")
   assert.ok(checkPart({ part: parsePart(noSuites), cell: spineCell })
     .some((b) => b.startsWith("P1 spine: no <suite> and no <suites")))
@@ -192,6 +200,25 @@ test("P2/P3: a suite without cmd, with an invented kind, with a drifting id, or 
     .some((b) => b === 'P2 spine: <suite id="native-it"> must start with its kind — "component" or "component-<what tells it apart>"'))
 })
 
+test("P6: two suites over one folder must be told apart by file name, or step 5 binds the wrong one", () => {
+  // The live spine of /tmp/quarkus-rest-json-app-v2-t1-3: `unit` (mvn test) and `component-native`
+  // (mvn verify -Pnative) BOTH on src/test/java. Binding by path alone takes the first candidate, so
+  // FruitResourceIT would get `unit`, step 10 would build `mvn test -Dtest=FruitResourceIT`, and
+  // surefire does not pick that file up — a green run that executed nothing.
+  const shared = SPINE_XML.replace('one="" path="src/it"', 'one="" path="src/test/java"')
+  const blockers = checkPart({ part: parsePart(shared), cell: spineCell })
+  assert.equal(blockers.length, 2, "both claimants of the folder are named, not just the second")
+  assert.ok(blockers.every((b) => b.startsWith("P6 spine: <suite id=")))
+  assert.ok(blockers.some((b) => b.includes('id="unit"')) && blockers.some((b) => b.includes('id="component-it"')))
+
+  // Discriminated: green again. `match` is required by the AMBIGUITY, not by the element — one suite
+  // over a folder needs none, which is why the happy spine above carries no `match` at all.
+  const told = shared
+    .replace('path="src/test/java"/>\n  <suite id="component-it"', 'path="src/test/java" match="*Test.java"/>\n  <suite id="component-it"')
+    .replace('one="" path="src/test/java"', 'one="" path="src/test/java" match="*IT.java"')
+  assert.deepEqual(checkPart({ part: parsePart(told), cell: spineCell }), [])
+})
+
 // The role and its two orders are files the host reads, not code — but two of their properties can
 // degrade silently and cost a live run each, so they carry a seam here.
 //
@@ -212,11 +239,30 @@ test("orders: both templates use exactly the keys the workflow passes", () => {
   }
 })
 
+// A file-name pattern written anywhere in the spine order is copied into `match`, and `match` is
+// judged by step 5 against the file NAME — extension included.
+//
+// BUG_FIX_CONTEXT: two runs of step 4 on one and the same pom.xml.
+//   Previous: the `one` bullet listed the single-file form per TOOL and named the runners by their
+//             patterns — "maven surefire (`mvn test`, `*Test`)", "failsafe (`mvn verify`, `*IT`)".
+//   Problem:  run 899494cc came back with `match="*Test"` and `match="*IT"` instead of the previous
+//             `*Test.java`/`*IT.java`, taken from the NEARER example rather than from the `match`
+//             bullet below it. suiteFor matches `^.*Test$` against `FruitResourceTest.java`, so all
+//             four test files ended up `suite=""` — unbound, in a GREEN run.
+//   Fix:      the `one` bullet states the TASK ("what to add to this suite's own cmd") and names no
+//             tool and no pattern at all; patterns live in the `match` bullet, with `.java` on them.
+//             This assertion is the seam: a unit cannot judge what the role writes, only whether the
+//             order still carries a pattern the role can copy into the wrong attribute.
+test("order.spine.tpl carries no bare file-name pattern — a pattern here lands in match", () => {
+  const tpl = readFileSync(new URL("order.spine.tpl", import.meta.url), "utf8")
+  assert.doesNotMatch(tpl, /\*(Test|IT)(?!\.java)/)
+})
+
 test("role: scout.md names the machine check behind each of its prohibitions", () => {
   // The role file is named by ROLE, not by step: pi resolves `agent({role: "scout"})` by FILENAME
   // inside the declared roleDirectories (ext/index.mjs), so scope/role.md would install as "role".
   const role = readFileSync(new URL("scout.md", import.meta.url), "utf8")
-  for (const rule of ["S1", "S2", "S3", "S4", "S5", "S6", "S8", "S9", "P4"]) assert.match(role, new RegExp(`machine-checked as \`${rule}\``))
+  for (const rule of ["S1", "S2", "S3", "S4", "S5", "S6", "S8", "S9", "P4", "P6"]) assert.match(role, new RegExp(`machine-checked as \`${rule}\``))
   assert.match(role, /deps="none"/)   // named ONLY to forbid it: the script owns edges now (LAW 4)
   assert.match(role, /found="no"/)    // "not found" is an answer, not a guess (LAW 5)
 })

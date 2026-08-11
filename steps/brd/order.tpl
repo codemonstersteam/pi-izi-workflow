@@ -20,8 +20,9 @@ $END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
-- subjects[]: 3..7 of them; each one — greppable: one word, not a phrase; in the language of the
-  repository, not of the request
+- subjects[]: {SUBJECTS_MIN}..{SUBJECTS_MAX} of them; each one — {SUBJECT_RULE}
+- an anchor is a NOUN from the request, not your evaluation of it: `record`, not `retention` —
+  step 3 greps it over the repository, and an evaluation matches no file
 $END_CONSTRAINTS
 
 $START_FEEDBACK

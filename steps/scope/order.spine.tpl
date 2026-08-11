@@ -1,8 +1,8 @@
 $START_TASK
-Answer six questions about this repository from the spine files of cell {CELL}: how it is TESTED,
-how it is BUILT, how features are SWITCHED OFF, how branches and commits are NAMED, how its
-external contract is DESCRIBED and validated, and which EXTERNAL SYSTEMS its configuration declares.
-Each answer is what you read — or `found="no"`.
+Answer seven questions about this repository from the spine files of cell {CELL}: WHAT it builds,
+how it is TESTED, how it is BUILT, how features are SWITCHED OFF, how branches and commits are
+NAMED, how its external contract is DESCRIBED and validated, and which EXTERNAL SYSTEMS its
+configuration declares. Each answer is what you read — or `found="no"`.
 $END_TASK
 
 $START_DATA
@@ -37,8 +37,13 @@ $END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
-- ALL six answers are present: `<suite>` elements (or `<suites found="no"/>`), `<build>`,
-  `<toggles>`, `<branching>`, `<contract>`, `<integration>` elements (or `<integrations found="no"/>`)
+- ALL seven answers are present: `<artifact>`, `<suite>` elements (or `<suites found="no"/>`),
+  `<build>`, `<toggles>`, `<branching>`, `<contract>`, `<integration>` elements (or
+  `<integrations found="no"/>`)
+- `<artifact name="…" root="…"/>` is the DEPLOYABLE unit this repository builds, named where the
+  build manifest names it: `artifactId` in a pom, `module` in go.mod, `name` in package.json,
+  `[package] name` in Cargo.toml. `root` is the directory that manifest sits in — `.` for a single
+  artifact. A monorepo declares one `<artifact>` per manifest you actually read
 - an `<integration kind="http|db|queue|cache|blob|mail|rpc" system="…" config="…" value="…"/>` is one
   EXTERNAL system the configuration declares: a datasource URL, a broker address, another service's
   base URL. `config` is the configuration KEY and it is required — step 5 stitches a module's `<io>`
@@ -54,8 +59,16 @@ $START_CONSTRAINTS
   binds to nothing
 - `path` of a suite is the folder its tests live in — step 5 binds every `<test>` of the graph to a
   suite by that path, so an approximate folder silently unbinds the tests it should have caught
-- `one` is the form that runs ONE file (`-Dtest={{class}}` in maven, `--tests` in gradle, a path in
-  jest/pytest, `-run` in go). No such form → leave `one=""`; that is a valid answer
+- when TWO suites live in the SAME folder, each must carry `match="…"` — the file-name pattern its
+  own runner picks up, read from the build manifest: maven surefire takes `*Test.java`, failsafe
+  takes `*IT.java`; gradle and jest declare theirs in the build file. Without it step 5 has two
+  candidates per test file and binds the integration test to the unit command, which then runs
+  nothing and reports green. One suite over a folder needs no `match`
+- `one` is what has to be ADDED to THIS suite's own `cmd` to run ONE test file instead of the whole
+  suite. Read it where this suite's runner is configured — the build manifest, the task or profile
+  that defines the suite, that runner's own flag. Write `{{class}}` where the file or class name
+  goes. Each suite is answered on its own, even when one tool runs them all. `one=""` only when that
+  runner has no such way at all — without `one`, closing a single node costs a run of the whole suite
 - an answer you did not read is `found="no"` — never a plausible command. Absent tests do not stop
   you here; the pipeline decides what that means one step later
 - a raw `<` inside an attribute value is written `&lt;`
@@ -73,14 +86,15 @@ $START_OUTPUT
 path: {STAGING}
 schema:
   <part cell="{CELL}" kind="spine">
-    <suite id="…" kind="unit|component|contract|e2e" cmd="…" one="… or empty" path="…"/>
+    <artifact name="…" root="…"/>
+    <suite id="…" kind="unit|component|contract|e2e" cmd="…" one="… or empty" path="…" match="… when two suites share a folder"/>
     <build cmd="…"/>
     <toggles mechanism="…"/>
     <branching branches="…" commits="…"/>
     <contract spec="…" validator="…"/>
     <integration kind="db" system="…" config="…" value="…"/>
   </part>
-  any of the six may instead be <… found="no"/> — for the two list answers that is
+  any of the seven may instead be <… found="no"/> — for the two list answers that is
   <suites found="no"/> and <integrations found="no"/>
 check: {CHECK}
 return: call workflow_result — the shape and the choice of rail are declared by your ROLE's
