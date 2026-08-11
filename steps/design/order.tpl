@@ -5,7 +5,7 @@ $END_TASK
 
 $START_DATA
 $START_DOCUMENT
-path: .agent/frd.md
+path: .agent/frd.xml
 the delta, its scenarios and its touched nodes — what must change
 $END_DOCUMENT
 $START_CONTENT

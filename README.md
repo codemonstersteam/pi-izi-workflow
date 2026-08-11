@@ -1,8 +1,8 @@
 # izi-pi-v2
 
-Первые шесть шагов конвейера `izi-flow-v2` (`task → brd → survey-plan → scope → graph → intake`),
-перенесённые на `pi-extensible-workflows` (pi v5.1.1) и переписанные на функции расширения
-(S11, S15, S17, S20, S21). Порядок шагов
+Первые семь шагов конвейера `izi-flow-v2` (`task → brd → survey-plan → scope → graph → intake →
+weight`), перенесённые на `pi-extensible-workflows` (pi v5.1.1) и переписанные на функции расширения
+(S11, S15, S17, S20, S21, S22). Порядок шагов
 — код `workflows/izi.js`, а не манифест; бюджеты прогона с S16 поднимаются файлом проекта
 `izi.config.json` (см. ниже). Роль `gilb` превращает сырое требование оператора
 в BRD, который можно принять; шаг `survey-plan` — чистый скрипт без роли и без оператора: он режет дерево
@@ -12,7 +12,9 @@
 `.agent/appgraph.xml` — скриптом, за 0 токенов (`docs/graph.md`); шаг `intake` прожаривает
 требование против этой карты в `.agent/frd.xml` — сценарии использования, словарь данных, карта
 режимов отказа и дельта контракта по узлам карты, с вопросом оператору вместо умолчания
-(`docs/intake.md`).
+(`docs/intake.md`); шаг `weight` — снова чистый скрипт: он складывает ФОРМЫ дельт в одно слово
+`.agent/mode` (`patch | minor | major`), а дельта, которую роль не смогла классифицировать,
+останавливает полосу вместо тихого умолчания (`docs/weight.md`).
 Подробности программы — `docs/workflow.md`; принципы и что из них отложено на двух шагах —
 `docs/concept.md`.
 
@@ -26,7 +28,7 @@ pi install ./ext
 `ext/` — pi-extension: функции хоста для воркфлоу-песочницы (`readText`, `answers`, `brdForm`,
 `frdForm`, `budgets`, `herdrStatus`, `checkTask`, `checkBrd`, `promote`, `setPending`,
 `clearPending`, `survey`, `cells`, `digest`, `reuse`, `remember`, `checkPart`, `buildGraph`,
-`graphMap`, `checkFrd`), `roleDirectories: [steps/brd/, steps/scope/, steps/intake/]`,
+`graphMap`, `checkFrd`, `weight`), `roleDirectories: [steps/brd/, steps/scope/, steps/intake/]`,
 откуда pi резолвит роли `gilb`, `scout` и `intake` по именам файлов `gilb.md`, `scout.md` и
 `intake.md`, и (S13) tool `izi_answer`, зарегистрированный
 на самой ИНТЕРАКТИВНОЙ сессии через `pi.registerTool` — не на песочнице воркфлоу, а на модели,
@@ -237,6 +239,9 @@ steps/intake/order.tpl         наряд: BRD/MAP/ANSWERS/FEEDBACK/STAGING/CHEC
 steps/intake/frd.mjs           ЧИСТОЕ ядро: parseFrd · checkFrd · newFrd; правила F1..F7
 steps/intake/map.mjs           ЧИСТОЕ чтение карты: parseMap (ключи узлов) · mapMeasure (цена, потолок)
 steps/intake/{frd,map}.test.mjs тесты по формуле + швы наряда и роли
+steps/weight/weight.mjs        ЧИСТОЕ ядро шага 7 (S22): MODE_TABLE (форма → вес) · newMode — максимум
+                                по формам дельт; словарь форм берётся из steps/intake/frd.mjs
+steps/weight/weight.test.mjs   тест по формуле + шов «каждая форма словаря имеет вес»
 
 prompts/izi.md                 pi prompt template — источник /izi; foreground: false (S13);
                                 устанавливается вместе с ext/ (pi.prompts в ext/package.json)

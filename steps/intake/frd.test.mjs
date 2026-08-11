@@ -88,6 +88,10 @@ test("F3: an invented form, an Unknown without why, a node outside the map and o
   assert.match(blockersOf(FRD.replace('node="src/ParcelRepo.java"', 'node="src/Invented.java"')).join("\n"), /F3 findByTrack: узла «src\/Invented\.java» нет в карте/)
   // In the map, but never declared touched — step 8 would not reach it when computing the ripple.
   assert.match(blockersOf(FRD.replace('node="src/ParcelRepo.java"', 'node="src/Parcel.java"')).join("\n"), /не объявлен <touched>/)
+  // `Fixed` is a form like the other three — it carries a node and passes. Without it a
+  // contract-stable bug fix would have to be declared `Changed`, and step 7 could never weigh a
+  // `patch` (docs/weight.md §3).
+  assert.deepEqual(blockersOf(FRD.replace('form="Added"', 'form="Fixed"')), [])
 })
 
 // Live run 1d804798: beside the delta on FruitResource.java the artifact carried one on
@@ -204,7 +208,14 @@ test("role and order: questions travel in a BATCH, not one per exchange", () => 
 
 test("the form the order substitutes is the SAME data the guardrail judges by", () => {
   const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
-  assert.doesNotMatch(tpl, /Added \| Changed \| Removed \| Unknown/)   // substituted, never retyped
-  assert.deepEqual([...FRD_FORM.deltaForms], ["Added", "Changed", "Removed", "Unknown"])
+  assert.doesNotMatch(tpl, /Added \| Changed \| Removed/)              // substituted, never retyped
+  assert.deepEqual([...FRD_FORM.deltaForms], ["Added", "Changed", "Removed", "Fixed", "Unknown"])
   assert.ok(FRD_FORM.sources.includes("appgraph.xml"))
+  // The forms are chosen by the EFFECT ON AN EXISTING CALL, and that definition lives in the role —
+  // not in the order and not in this pipeline's prose (docs/weight.md §3). Without it `Fixed` is a
+  // word without a rule, and the live run S21 defect (an additive change declared `Changed`, weighing
+  // major for one node) comes straight back.
+  const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
+  assert.match(role, /`Fixed` — the contract does not move/)
+  assert.match(role, /what happens to a call that exists TODAY/)
 })

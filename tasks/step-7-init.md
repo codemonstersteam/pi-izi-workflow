@@ -6,7 +6,7 @@ $end_system
 $start_task
 Before starting development step 7, 
 the task is to analyze the results of step 7 (docs/workflow.md), 
-analyze the artifacts from the test run (/tmp/quarkus-rest-json-app-v2-t1-3),
+analyze the artifacts from the test run (sandbox/runbox/quarkus-rest-json-app-v2-t1-3),
 and determine whether everything is sufficient for step 7(weight).
 If there are discrepancies, suggest the minimum steps to get the concept of step 7.
 write the concept to docs/weight.md

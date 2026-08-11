@@ -1,6 +1,6 @@
-// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph
+// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph → intake → weight
 // Purpose:      one decision — the ORDER of the pipeline, and it lives here as CODE. A phase is a
-//               named function, not a manifest entry: with five steps, five hand-written calls are
+//               named function, not a manifest entry: with seven steps, seven hand-written calls are
 //               cheaper than a pipeline.json plus a dispatcher plus their tests (docs/workflow.md
 //               §1-§2, docs/concept.md, "What is deferred and why"). The rule returns when the cost of
 //               listing phases by hand exceeds the cost of policy-as-data — not before.
@@ -10,7 +10,7 @@
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
 //               GLOBALS — readText · answers · brdForm · frdForm · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · cells · digest · reuse ·
-//               remember · checkPart · buildGraph · graphMap · checkFrd. They are not
+//               remember · checkPart · buildGraph · graphMap · checkFrd · weight. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -521,7 +521,7 @@ async function graph() {
 //                 promote, prompt; askOperator
 //   Antecedent:   step 5 wrote .agent/appgraph.xml; steps/intake/order.tpl exists in the run's cwd;
 //                 LOOPS ≥ 1
-//   Consequent:   success: exits ok with .agent/frd.xml promoted from staging after a GREEN checkFrd
+//   Consequent:   success: RETURNS with .agent/frd.xml promoted from staging after a GREEN checkFrd
 //                 failure: exits — err("blocked") when the map cannot be read or is above the
 //                          reading ceiling (docs/intake.md §3), err(kind) on a role error rail,
 //                          err("escalate") when LOOPS redelegations were spent, carrying the LAST
@@ -594,14 +594,36 @@ async function intake() {
       log(`intake: deltas=${check.deltas} unknown=${check.unknown} scenarios=${check.scenarios} touched=${check.touched}`);
       // An Unknown is a legal artifact and a REFUSAL of step 7: said out loud here, where the run is
       // still green, rather than discovered later as a missing .agent/mode.
-      if (check.unknown) log(`intake: ${check.unknown} дельт не классифицированы — шаг 7 веса не выведет, вопрос оператору`);
+      if (check.unknown) log(`intake: ${check.unknown} дельт не классифицированы — шаг 7 веса не выведет, полоса встанет`);
       if (check.questions) log(`intake: открытых вопросов в артефакте — ${check.questions}`);
-      exit(ok({ artifact: ".agent/frd.xml", deltas: check.deltas, scenarios: check.scenarios, unknown: check.unknown }));
+      return; // S22: intake is no longer the end of the run — the weight is weighed next
     }
     feedback = check.blockers;
     attempt++;
   }
   exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
+}
+
+// FUNCTION_CONTRACT: weigh — step 7: the forms of the FRD's deltas → one word of SemVer
+//   Input:        —
+//   Dependencies: EXTERNAL — weight (the host function; the local name differs because a sandbox
+//                 global cannot be shadowed by the function that calls it)
+//   Antecedent:   step 6 promoted .agent/frd.xml
+//   Consequent:   success: exits ok with .agent/mode written — one word, the end of today's stripe
+//                 failure: exits err("blocked") — an Unknown delta, no delta, or a form outside the
+//                          vocabulary; .agent/mode does NOT exist after it (the host erases a stale
+//                          one, docs/weight.md §4), so step 8 can never read a previous run's weight
+//   Purity:       io (through the host)
+//
+// No role, no operator, no token: the judgement was made at step 6 (what a delta does to a call that
+// exists today) and this step only folds it. A refusal is terminal — a step without a role does not
+// open a checkpoint, and the answer to an Unknown can only be applied by the intake role rewriting
+// the FRD (docs/weight.md §5).
+async function weigh() {
+  const w = await weight({});
+  if (!w.ok) exit(err("blocked", { subject: w.why, evidence: ".agent/mode не написан" }));
+  log(`weight: mode=${w.mode} из ${w.earned} (дельт ${w.deltas})`);
+  exit(ok({ artifact: ".agent/mode", mode: w.mode, earned: w.earned }));
 }
 
 log("izi: start");
@@ -635,7 +657,8 @@ try {
   phase("scope"); await scope();
   phase("graph"); await graph();
   phase("intake"); await intake();
-  return ok({}); // unreachable — intake() always exits — kept as the fall-through for a seventh phase
+  phase("weight"); await weigh();
+  return ok({}); // unreachable — weigh() always exits — kept as the fall-through for an eighth phase
 } catch (e) {
   if (e instanceof Exit) return e.result;
   const msg = String((e && e.message) || e);

@@ -35,7 +35,7 @@ These hold on every run, whatever the order says.
 $END_LAW
 
 $START_INPUT
-The order carries `.agent/frd.md` (the delta, its scenarios and its touched nodes) and
+The order carries `.agent/frd.xml` (the delta, its scenarios and its touched nodes) and
 `.agent/ripple.xml` (the subgraph reachable from the touched nodes — module paths, roles and `dep`
 edges as the survey found them).
 

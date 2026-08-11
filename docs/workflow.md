@@ -18,7 +18,8 @@ headless-раннер (`bin/run.mjs`) — упразднены целиком, �
 ext/
   index.mjs         pi-extension: readText · answers · checkTask · checkBrd · brdForm · promote · setPending ·
                      clearPending · survey (S15) · budgets · herdrStatus (S16) · cells · digest · reuse ·
-                     remember · checkPart (S17) · buildGraph (S20) · graphMap · checkFrd · frdForm (S21)
+                     remember · checkPart (S17) · buildGraph (S20) · graphMap · checkFrd · frdForm (S21) ·
+                     weight (S22)
                      — глобалы izi.js (roleDirectories → steps/brd/, steps/scope/, steps/intake/);
                      ПЛЮС (S13) tool izi_answer, зарегистрированный через pi.registerTool на самой
                      интерактивной сессии — export default function extension(pi) одновременно
@@ -58,6 +59,11 @@ steps/intake/       (S21) шаг 6: роль intake, рельса вопросо
   frd.mjs            ЧИСТОЕ ядро: parseFrd · checkFrd · newFrd; правила F1..F7 (docs/intake.md §5)
   map.mjs            ЧИСТОЕ: parseMap (ключи узлов) · mapMeasure (цена карты); индекса НЕТ — §3 там же
   frd.test.mjs · map.test.mjs   тесты по формуле + швы наряда и роли
+
+steps/weight/       (S22) шаг 7 — шаг-СКРИПТ: ни роли, ни оператора, ни токена
+  weight.mjs         ЧИСТОЕ ядро: MODE_TABLE (форма → вес) · newMode({deltas}) — максимум по формам;
+                      словарь форм НЕ дублируется, он берётся из steps/intake/frd.mjs
+  weight.test.mjs    тест по формуле + шов «каждая форма словаря имеет вес» против расхождения слоёв
 
 steps/scope/        (S17) шаг-РОЙ: роль scout, ДВА наряда (по полю kind клетки), одно ядро
   scout.md           роль (имя файла = имя роли; roleDirectories += steps/scope/)
@@ -103,7 +109,7 @@ pi install ./ext
 
 ## 2. Программа
 
-`workflows/izi.js` целиком — шесть фаз, `ok`/`err`/`exit`, бюджеты из `izi.config.json` вместо
+`workflows/izi.js` целиком — семь фаз, `ok`/`err`/`exit`, бюджеты из `izi.config.json` вместо
 `pipeline.json` (`LOOPS` тратят `brd`, `scope` и `intake`; `QUESTIONS` — `brd` и `intake`, см.
 `docs/concept.md`, раздел «Что отложено и почему»):
 
@@ -148,28 +154,36 @@ async function surveyPlan() {                              // S15: шаг-СКР
   log(`survey-plan: files=${p.files} bytes=${p.bytes} cells=${p.cells}`);   // стоимость роя ДО роя
 }
 
+async function weigh() {                                   // S22: шаг 7 — весь шаг в пять строк
+  const w = await weight({});                              // имя локальное ≠ имя глобала хоста
+  if (!w.ok) exit(err("blocked", { subject: w.why }));      // Unknown / нет дельт / форма вне словаря:
+  log(`weight: mode=${w.mode} из ${w.earned}`);             //   .agent/mode стёрт функцией хоста
+  exit(ok({ artifact: ".agent/mode", mode: w.mode }));      // конец сегодняшней полосы
+}
+
 async function intake() {                                  // S21: шаг 6 — форма brd(), но вход другой
   const map = await graphMap({});                          // карта целиком ИЛИ отказ с числом байт:
   if (!map.ok) exit(err("blocked", { subject: map.why }));  //   индексной формы этот срез не строит
   // цикл до LOOPS: agent(order, { role: "intake" }) с {MAP} и ДВУМЯ словарями из frdForm();
   // на вопросе — askOperator(env, asked, "intake", "intake") — та же рельса, свой префикс чекпойнта;
-  // на ok — checkFrd({ path: STAGING }) ПО STAGING, зелёный → promote → exit(ok), красный → feedback
+  // на ok — checkFrd({ path: STAGING }) ПО STAGING, зелёный → promote → return, красный → feedback
 }
 
 try { phase("task"); await task(); phase("brd"); await brd();
       phase("survey-plan"); await surveyPlan(); phase("scope"); await scope();
-      phase("graph"); await graph(); phase("intake"); await intake(); }
+      phase("graph"); await graph(); phase("intake"); await intake();
+      phase("weight"); await weigh(); }
 catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: String(e?.message ?? e) }); }
 ```
 
-Порядок остаётся КОДОМ, а не `pipeline.json`: шестая фаза — ещё одна именованная функция. Решение
+Порядок остаётся КОДОМ, а не `pipeline.json`: седьмая фаза — ещё одна именованная функция. Решение
 принято с фактами шести шагов на руках (`docs/survey-plan.md` §5): ручные вызовы подряд всё ещё
 дешевле, чем манифест плюс диспетчер плюс их тесты.
 
 Полный файл — `workflows/izi.js`. Никакого `shell()`, `JSON.parse` или кода возврата процесса —
 воркфлоу-скрипт не знает о процессах вообще, только о функциях хоста (`readText`, `answers`,
 `checkTask`, `checkBrd`, `brdForm`, `frdForm`, `promote`, `setPending`, `clearPending`, `survey`,
-`cells`, `digest`, `reuse`, `remember`, `checkPart`, `buildGraph`, `graphMap`, `checkFrd`,
+`cells`, `digest`, `reuse`, `remember`, `checkPart`, `buildGraph`, `graphMap`, `checkFrd`, `weight`,
 `budgets`, `herdrStatus`) и о встроенных глобалах pi
 (`agent`, `checkpoint`, `prompt`, `log`, `phase`). `izi_answer` НЕ входит в этот список — это tool
 интерактивной сессии (`pi.registerTool`, `ext/index.mjs`), а не функция песочницы воркфлоу; внутри
@@ -346,16 +360,35 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   пиши код» стоит в `$START_FORBIDDEN` роли
 - **здесь же выполнимость:** первый шаг, у которого есть оба операнда — чего хотят и что есть
 
-### 7. `weight` — вес по SemVer · script · **новое**
-- **вход:** `.agent/frd.md`
-- **выход:** `.agent/mode` (`patch | minor | major`)
-- **проверка:** вес выведен таблицей из формы дельты; хоть одна дельта `Unknown` → **файла нет**
-- **оператор:** `Unknown` — вопрос ему с `why` из FRD, а не тихий default
+### 7. `weight` — вес по SemVer · script · **есть** (S22)
+Полная карточка — `docs/weight.md`; здесь только место шага в полосе.
+- **вход:** `.agent/frd.xml` — только элементы `<delta form>`; прозу `from`/`to` шаг не читает
+- **выход:** `.agent/mode` (`patch | minor | major`) — одно слово
+- **проверка:** `weight({})` → `steps/weight/weight.mjs::newMode` — вес есть **максимум по формам**
+  (`Added → minor`, `Changed`/`Removed` → `major`, `Fixed → patch`), свёртка коммутативна, поэтому
+  порядок дельт в артефакте на результат не влияет
+- **форма выбирается по эффекту для СУЩЕСТВУЮЩЕГО вызова**, а не по грамматике фразы — определения
+  живут один раз, в роли шага 6 (`steps/intake/intake.md`, STRATEGY §8). Пятая форма `Fixed`
+  (контракт не двигается, поведение `wrong → right`) введена S22: без неё исправление дефекта
+  попадает под `Changed` и весит `major`, то есть `patch` недостижим никогда, а ветка «одноузловой
+  `patch` дизайна не требует» ниже — мёртвый код (`docs/weight.md` §2-§3)
+- **`Unknown` → веса нет:** терминальный `blocked`, названа КАЖДАЯ неклассифицированная операция со
+  своим `why`. Стоявший с прошлого прогона `.agent/mode` при этом **стирается**: `newRun` уносит в
+  `.agent/prev` состояние прогона, но не артефакты, и шаг 8 прочитал бы вчерашний вес
+- **оператор:** внутри шага нет — шаг без роли не открывает `checkpoint`, как `task`, `survey-plan` и
+  `graph`. Ответ на `Unknown` применить некому: переписать FRD может только роль `intake`, поэтому
+  оператор кладёт ответ обычным каналом и перезапускает прогон
 - **следствие веса:** `minor` (аддитивно) тянет за собой узел тогла в плане — способность едет
   ВЫКЛЮЧЕННОЙ. Это выводится из веса, а не решается отдельно на шаге 10
+- **живое доказательство (S22, форма `runbox/quarkus-rest-json-app-v2-t1-3`, прогон
+  `682b6a71-8b8b-442f-8a1f-6e02ab2effb2`):** `track:"ok"`, `.agent/mode` = `minor`,
+  `function/weight/1` → `{ mode: "minor", earned: "GET /fruits (Added)", deltas: 1 }`. На ТОМ ЖЕ
+  `TASK.md`, где прогон S21 дал `form="Changed"` и, значит, `major`, роль под новыми определениями
+  написала `form="Added"` — расхождение A закрыто определениями форм, а не арифметикой ядра. Шаг 7 —
+  0 токенов; весь прогон 5 запусков ролей и 170 347 токенов
 
 ### 8. `ripple` — подграф изменения и нужен ли дизайн · script · **новое**
-- **вход:** `.agent/appgraph.xml`, `.agent/frd.md`, `.agent/mode`
+- **вход:** `.agent/appgraph.xml`, `.agent/frd.xml`, `.agent/mode`
 - **выход:** `.agent/design` (`needed | skip`) и `.agent/ripple.xml` — сам подграф замыкания
 - **проверка:** радиус достижимости по рёбрам графа из узлов дельты — вычислимо, роль не зовём;
   `needed`, если замыкание больше одного узла ИЛИ `mode == major`. Одноузловой `patch` дизайна не
@@ -367,7 +400,7 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
 - **условие:** `.agent/design == "needed"`. Отдельной квитанции пропуска НЕ существует: маркером
   служит сам файл `.agent/design`, который пишет шаг 8 — `skip` в нём и есть «решено пропустить»,
   отсутствие файла — «шаг 8 ещё не отработал». Различимость держится этим, а не вторым артефактом
-- **вход:** `.agent/frd.md`, `.agent/ripple.xml` (подграф ряби, не весь граф)
+- **вход:** `.agent/frd.xml`, `.agent/ripple.xml` (подграф ряби, не весь граф)
 - **выход роли:** `.agent/staging/design-graph.xml` — узлы с `delta` и `<contract in out>` в
   грамматике `appgraph.xml`, плюс **маршруты** сценариев (`<route scenario steps>`: путь узла и
   номер альтернативы его `out`)
@@ -380,7 +413,7 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
 - **срез:** `steps/design/{designer.md, order.tpl, design.mjs, design.test.mjs}`
 
 ### 10. `plan` — план работ · script · **новое**
-- **вход:** `.agent/design-graph.xml` либо `.agent/frd.md`, `.agent/mode`, `.agent/appgraph.xml`
+- **вход:** `.agent/design-graph.xml` либо `.agent/frd.xml`, `.agent/mode`, `.agent/appgraph.xml`
 - **выход:** `.agent/plan-index.json` — DAG узлов, у каждого `kind`, плюс **имя ветки с базой**
   (свежий транк, Git-TBD) и при `minor`/незавершённой части — **узел тогла** со стейтом OFF
 - **`kind` узла назначается здесь, из решений шагов 6–7:** дельта контракта → `code`; тронутый
@@ -407,7 +440,7 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   навыка → `skill`, иначе текст-пример. Содержимое ответа считается в бюджет окна узла
 
 ### 11. `review` — критик судит план · role `critic` · цикл починки · **новое**
-- **вход:** `.agent/plan-index.json`, `.agent/frd.md`
+- **вход:** `.agent/plan-index.json`, `.agent/frd.xml`
 - **выход:** `.agent/review.md` — `Pass | Reject(Blocker[])`
 - **проверка:** каждый блокер назван с уликой (узел, файл, команда)
 - **цикл:** `until(pass, fix)` до K раундов, дальше — оператору. Отрицательный вердикт есть данные:
@@ -447,7 +480,7 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   равен голове удалённого транка ⇒ отказ» краснеет
 
 ### 14. `tickets` — наряды исполнителям по узлам плана · script · **новое**
-- **вход:** `.agent/plan-index.json`, `.agent/frd.md`, `.agent/appgraph.xml`, `.agent/branch.json`,
+- **вход:** `.agent/plan-index.json`, `.agent/frd.xml`, `.agent/appgraph.xml`, `.agent/branch.json`,
   `.agent/design-graph.xml` и `.agent/data-flow.md` (если шаг 9 отработал)
 - **выход:** `.agent/tickets/<узел>.md` — по одному на узел плана; порядок исполнения не изобретается,
   это топосорт, уже лежащий в плане

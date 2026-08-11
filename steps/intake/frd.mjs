@@ -31,10 +31,21 @@ import { numbersIn } from "../brd/brd.mjs"
 // the same device as brdForm — see its BUG_FIX_CONTEXT G9e).
 export const FRD_FORM = Object.freeze({
   grammar: 1,
-  // The four forms of a delta. `Unknown` is not decoration: it is the ONLY way "could not classify"
-  // reaches the operator, and step 7 refuses to write `.agent/mode` while one is present
-  // (docs/concept.md, "Прожарка и оценка change").
-  deltaForms: Object.freeze(["Added", "Changed", "Removed", "Unknown"]),
+  // The forms of a delta. They are defined by the EFFECT ON AN EXISTING CALL, not by the grammar of a
+  // sentence — the definitions live once, in the role's STRATEGY §8 (steps/intake/intake.md), and the
+  // mapping form → weight lives once, in steps/weight/weight.mjs. Neither is restated here.
+  //
+  // `Unknown` is not decoration: it is the ONLY way "could not classify" reaches the operator, and
+  // step 7 refuses to write `.agent/mode` while one is present (docs/concept.md, "Прожарка и оценка
+  // change").
+  //
+  // BUG_FIX_CONTEXT: live run S21 (sandbox/runbox/quarkus-rest-json-app-v2-t1-3) — a backward
+  //   compatible addition to an existing operation (an optional query param) was declared `Changed`,
+  //   which weighs `major` and orders step 9's designer for a one-node change. Two fixes, both here:
+  //   the forms got their definitions (the role file), and `Fixed` was added — without it a
+  //   contract-stable bug fix falls under `Changed` too, so `patch` would be unreachable for the whole
+  //   pipeline while step 8 keeps a branch for it (docs/weight.md §2-§3).
+  deltaForms: Object.freeze(["Added", "Changed", "Removed", "Fixed", "Unknown"]),
   // A closed vocabulary of provenance. `appgraph.xml` is here because step 6 is the first one holding
   // BOTH operands: a number read off the map (a status from an annotation, a limit from a signature)
   // is a fact of the repository, not an invented default.
