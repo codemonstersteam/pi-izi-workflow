@@ -1,19 +1,20 @@
-// MODULE_CONTRACT: brd — фронт-дор конвейера: единственное место, где решается, сдан ли BRD
-// Purpose:    одно решение — состав правил приёмки BRD (обязательные поля R, происхождение чисел
-//             критерия, желание-не-требование, дизайн-течь в формулировке, грепабельность
-//             subjects, закрытые open-questions) собран в одном списке проверок, а не разбросан
-//             прозой по роли и наряду — самосертификация снята: «agent-ready» решает скрипт, а не
-//             роль о себе. S16: проверка «fit измерим токеном» снята решением оператора — см.
-//             newFit ниже, живой прогон ed1d4094.
+// MODULE_CONTRACT: brd — the pipeline's front door: the one place that decides whether a BRD is done
+// Purpose:    one decision — the set of BRD acceptance rules (an R's mandatory fields, where a
+//             criterion's numbers came from, wish-not-requirement, a design leak in the wording, the
+//             greppability of subjects, closed open-questions) is gathered in one list of checks
+//             instead of being scattered as prose across the role and the order — self-certification
+//             is gone: "agent-ready" is decided by a script, not by the role about itself. S16: the
+//             check "a fit is measurable by a token" was removed by the operator's decision — see
+//             newFit below and live run ed1d4094.
 // io:         none
-// Invariants: WISH_WORDS и DESIGN_MARKS — константы модуля, зафиксированы при загрузке, не меняются
-//             исполнением; SUBJECTS_MIN/SUBJECTS_MAX — снимок BRD_FORM.subjectsMin/subjectsMax на
-//             момент загрузки модуля, не пересчитывается на каждый вызов; parseBrd и validateBrd —
-//             чистые функции без состояния, результат зависит только от переданных text/opts, не от
-//             истории или порядка предыдущих вызовов.
-// Interface:  BRD_FORM — реестр формы BRD
-//             SUBJECTS_MIN — нижняя граница числа якорей
-//             SUBJECTS_MAX — верхняя граница числа якорей
+// Invariants: WISH_WORDS and DESIGN_MARKS are module constants, fixed at load and unchanged at run
+//             time; SUBJECTS_MIN/SUBJECTS_MAX are a snapshot of BRD_FORM.subjectsMin/subjectsMax
+//             taken at module load, not recomputed per call; parseBrd and validateBrd are pure
+//             stateless functions whose result depends on the given text/opts alone, never on history
+//             or on the order of previous calls.
+// Interface:  BRD_FORM — the registry of the BRD's form
+//             SUBJECTS_MIN — the lower bound on the number of anchors
+//             SUBJECTS_MAX — the upper bound on the number of anchors
 //             numbersIn(text) -> Set<string>
 //             parseBrd(text) -> { requirements, subjects, openQuestions }
 //             newFit(raw, known) -> Result<Fit, "no-fit" | "invented-default">
@@ -23,20 +24,22 @@
 //             languageDrifted(fit, source) -> boolean
 //             newBrd(text, sources) -> Result<Brd, "invalid-brd">
 
-// Приёмка BRD фронт-дора (B1-S). ЧИСТОЕ — без node:fs.
+// The front door's BRD acceptance (B1-S). PURE — no node:fs.
 //
-// Самосертификация снята: «agent-ready» решает скрипт, а не роль о себе. Проверяем ровно то, что
-// объявлено законом роли: у каждого R есть fit и verify; вопросов не осталось; subjects[] — якоря
-// грепа, а не литература; решение не спроектировано.
+// Self-certification is gone: "agent-ready" is decided by a script, not by the role about itself. We
+// check exactly what the role's law declares: every R has a fit and a verify; no questions are left;
+// subjects[] are grep anchors rather than literature; the solution is not designed here.
 
-// Формулировки-желания. Именно они и есть то, что фронт-дор существует остановить: у них нет ни
-// шкалы, ни способа проверки, а выглядят они как требование.
+// Wish-wordings. They are precisely what the front door exists to stop: they have neither a scale nor
+// a way to be checked, and they look like a requirement. The words themselves stay in both languages:
+// they are DOMAIN DATA matched against a BRD, which speaks the language of the operator's task.
 const WISH_WORDS = [
   "быстро", "быстрый", "валидн", "корректн", "правильн", "как обычно", "обычная ошибка", "удобн",
   "надёжн", "надежн", "оптимальн", "хорош", "адекватн",
   "fast", "quick", "valid", "correct", "proper", "the usual", "as usual", "reliable", "optimal", "nice",
 ]
-// Следы решения в требовании: путь, аннотация, импорт, класс-с-точкой. «Что», а не «как» (Jackson).
+// Traces of a solution inside a requirement: a path, an annotation, an import, a dotted class name.
+// "What", not "how" (Jackson).
 const DESIGN_MARKS = [
   /(^|\s)[\w./-]*src\//i, /(^|\s)@[A-Z]\w+/, /\b\w+\.(java|go|ts|js|py|kt|rb|cs)\b/i,
   /\bимпорт\b|\bimport\b/i, /\bкласс\s+[A-Z]\w+|\bclass\s+[A-Z]\w+/,
@@ -44,44 +47,46 @@ const DESIGN_MARKS = [
 
 import { ok, err } from "../../core/result.mjs"
 import { severityOf } from "../../core/findings.mjs"
-// Что от BRD требуется — объявлено РЕЕСТРОМ формы (B20-S1/S6). Правило «subject обязан встречаться
-// в тексте R» из кода удалено (живой прогон 01.08: BRD по-русски с английскими якорями корректен, а
-// правило валило его целиком), но в прозе шаблонов оно осталось — и роль исполняла несуществующее
-// правило. Реестр объявляет намерение один раз: проверяемое и заказываемое — одна запись.
+// What is demanded OF a BRD is declared by the FORM REGISTRY (B20-S1/S6). The rule "a subject must
+// occur in R's text" was deleted from the code (live run 01.08: a Russian BRD with English anchors is
+// correct, and the rule failed it entirely), but it lived on in the templates' prose — and the role
+// dutifully enforced a rule that no longer existed. The registry declares the intent once: what is
+// checked and what is ordered are one entry.
 import { BRD_FORM, cyrillicRatio } from "../../core/form.mjs"
 
 export const SUBJECTS_MIN = BRD_FORM.subjectsMin
 export const SUBJECTS_MAX = BRD_FORM.subjectsMax
 export { BRD_FORM }
 
-// H1. ЧИСЛО В КРИТЕРИИ ОБЯЗАНО ИМЕТЬ ИСТОЧНИК.
+// H1. A NUMBER IN A CRITERION MUST HAVE A SOURCE.
 //
-// Главный отказ фронт-дора — подставить умолчание вместо вопроса оператору. У этого отказа есть
-// точный резолвер: число, которого нет ни в задаче, ни в ответах оператора, взялось из головы
-// модели. Проверяем ровно это и ничего сверх: смысл критерия машина не судит, происхождение числа —
-// судит.
+// The front door's main failure is substituting a default for a question to the operator. That
+// failure has an exact resolver: a number that is in neither the task nor the operator's answers came
+// out of the model's head. We check exactly that and nothing beyond it: a machine does not judge a
+// criterion's meaning, but it does judge a number's provenance.
 //
-// Считаем только числовые литералы `fit:`. Формулировку требования не трогаем: там числа бывают
-// пересказом («не более двадцати»), а критерий обязан быть машинным.
+// Only the numeric literals of `fit:` are counted. The requirement's wording is left alone: there,
+// numbers may be spelled out in words, while a criterion must be machine-readable.
 //
-// НАЙДЕНО ЖИВЫМ ПРОГОНОМ (README «Долги», снято этой правкой): `numbersIn` не отличала число-
-// величину от цифры внутри ОБОЗНАЧЕНИЯ формата — `ISO-8601` в `fit:` читалось как число `8601`,
-// требовало источника, которого нет ни в задаче, ни в ответах, и роль получала `invented-default`
-// за формат, который сама не выдумывала. Резолвер: обозначение стандарта — не подставленная
-// величина, `invented-default` ловит именно вторую.
+// FOUND BY A LIVE RUN (README "Debts", closed by this change): `numbersIn` did not tell a number-as-
+// quantity from a digit inside a FORMAT DESIGNATION — `ISO-8601` in a `fit:` read as the number 8601,
+// demanded a source that exists in neither the task nor the answers, and the role was handed an
+// `invented-default` for a format it never invented. The resolver: a standard's designation is not a
+// substituted quantity, and `invented-default` is about the second kind.
 //
-// ПРАВИЛО ОДНОЙ ФРАЗОЙ: число считается величиной, только если оно стоит самостоятельным токеном —
-// не примыкает к букве через дефис/слэш/непосредственно (без пробела) и не следует единственным
-// пробелом за словом ИЗ ОДних ЗАГЛАВНЫХ букв (обозначение стандарта: `RFC 3339`, `ISO 8601`), —
-// суффикс единицы измерения ПОСЛЕ числа (`300ms`) число не портит: примыкание судится только слева.
+// THE RULE IN ONE SENTENCE: a number counts as a quantity only when it stands as a token of its own —
+// it does not abut a letter directly or through a hyphen/slash, and it does not follow a word of ALL
+// CAPITALS after exactly one space (a standard's designation: `RFC 3339`, `ISO 8601`). A unit suffix
+// AFTER the number (`300ms`) does not spoil it: abutment is judged on the left only.
 function isLetterCh(ch) {
   return !!ch && /\p{L}/u.test(ch)
 }
-// isDesignationDigit — цифра, начинающая совпадение numbersIn, примыкает слева к обозначению, а не
-// стоит самостоятельным токеном. Три формы примыкания: непосредственно к букве («base64», «p95»),
-// через дефис/слэш к букве («ISO-8601», «UTF-8», «SHA-256», «HTTP/2»), через РОВНО один пробел к
-// слову из одних заглавных букв («RFC 3339») — несколько пробелов (`fit:    90 дней`) этой формой не
-// считаются: между словом и числом обязан стоять один-единственный разделитель, а не поле формы.
+// isDesignationDigit — the digit that starts a numbersIn match abuts a designation on its left rather
+// than standing as a token of its own. Three shapes of abutment: directly against a letter ("base64",
+// "p95"); through a hyphen or slash against a letter ("ISO-8601", "UTF-8", "SHA-256", "HTTP/2"); and
+// through EXACTLY one space against a word of all capitals ("RFC 3339") — several spaces
+// (`fit:    90 days`) do not count as this shape: between the word and the number there must be one
+// single separator, not a form field.
 function isDesignationDigit(s, start) {
   const before = s[start - 1]
   if (isLetterCh(before)) return true
@@ -94,25 +99,25 @@ function isDesignationDigit(s, start) {
   }
   return false
 }
-// FUNCTION_CONTRACT: numbersIn — числа-величины текста, нормализованные для сравнения происхождения
-//   Input:        text — сырой текст (BRD, задача или ответ оператора), в котором ищутся числа
+// FUNCTION_CONTRACT: numbersIn — a text's numbers-as-quantities, normalised for comparing provenance
+//   Input:        text — raw text (a BRD, the task or an operator's answer) to find numbers in
 //   Dependencies: —
-//   Antecedent:   ЛЮБОЕ значение — приводится к строке через String(text || ""); диапазон не сужен,
-//                 функция тотальна на входе (сама природа задачи — искать числа в чём угодно, включая
-//                 отсутствующий текст)
-//   Consequent:   success: Set<string> — каждое совпадение /\d+(?:[.,]\d+)?/ из текста, ЗА ВЫЧЕТОМ
-//                          совпадений, примыкающих слева к обозначению (isDesignationDigit — буква
-//                          вплотную, буква через дефис/слэш, ЗАГЛАВНОЕ слово через один пробел);
-//                          запятая заменена на точку, ведущие нули перед значащей цифрой срезаны;
-//                          повтор одного и того же нормализованного числа схлопывается — Set, не
-//                          массив. text пуст/undefined/null → String(text || "") = "" → пустой Set.
-//                          "007" → "7" (ведущие нули срезаны), "0.5" не тронуто (ведущий ноль не
-//                          перед цифрой — перед точкой), "1,5" → "1.5" (запятая — десятичный
-//                          разделитель, не тысячный); "ISO-8601"/"UTF-8"/"SHA-256"/"HTTP/2"/"base64"/
-//                          "RFC 3339" → число НЕ извлекается (обозначение); "300ms" → "300" остаётся
-//                          (суффикс единицы после числа — не примыкание слева)
-//                 failure: нет — тотальна на любом входе (String() не бросает ни на каком входе,
-//                          matchAll не бросает при отсутствии совпадений)
+//   Antecedent:   ANY value — coerced with String(text || ""); the range is not narrowed, the function
+//                 is total on its input (the nature of the job is to find numbers in anything at all,
+//                 including absent text)
+//   Consequent:   success: Set<string> — every match of /\d+(?:[.,]\d+)?/ in the text, MINUS the
+//                          matches abutting a designation on the left (isDesignationDigit — a letter
+//                          directly, a letter through a hyphen/slash, an ALL-CAPS word through one
+//                          space); a comma is replaced by a dot and leading zeros before a significant
+//                          digit are stripped; a repeat of the same normalised number collapses — a
+//                          Set, not an array. text empty/undefined/null → String(text || "") = "" → an
+//                          empty Set. "007" → "7" (leading zeros stripped), "0.5" untouched (the
+//                          leading zero is before a dot, not a digit), "1,5" → "1.5" (a comma is a
+//                          decimal separator, not a thousands one); "ISO-8601"/"UTF-8"/"SHA-256"/
+//                          "HTTP/2"/"base64"/"RFC 3339" → NO number is extracted (a designation);
+//                          "300ms" → "300" survives (a unit suffix after a number is not a left abutment)
+//                 failure: none — total on any input (String() throws for no input, and matchAll does
+//                          not throw when there are no matches)
 export function numbersIn(text) {
   const s = String(text || "")
   const out = new Set()
@@ -123,39 +128,38 @@ export function numbersIn(text) {
   return out
 }
 
-// FUNCTION_CONTRACT: parseBrd — разбирает сырой текст BRD в требования, subjects и open-questions
-//   Input:        text — сырой текст BRD-документа
+// FUNCTION_CONTRACT: parseBrd — parses a raw BRD text into requirements, subjects and open-questions
+//   Input:        text — the raw text of a BRD document
 //   Dependencies: —
-//   Antecedent:   ЛЮБОЕ значение — приводится к строке через String(text || "") и делится на строки;
-//                 диапазон не сужен, функция тотальна. Формат, который парсер РАСПОЗНАЁТ (не требует —
-//                 распознаёт): построчный, `R<n> …` открывает требование, `fit:`/`verify:` (или
-//                 `проверка:`) заполняют поля ТЕКУЩЕГО требования, `subjects[]: …` и
-//                 `open-questions: …` — служебные строки вне требований
-//   Consequent:   success: { requirements: Array<{id, statement, fit, verify, line}>,
-//                          subjects: string[] | null, openQuestions: string | null }; line — номер
-//                          строки (1-based) заголовка `R<n>`.
-//                          · text пуст/undefined/null → requirements=[], subjects=null,
-//                            openQuestions=null — строк для разбора нет вовсе, а не ошибка.
-//                          · строка `R<n>` заводит новое требование с fit=null, verify=null и делает
-//                            его ТЕКУЩИМ — поля `fit:`/`verify:` заполняют именно его, до следующей
-//                            `R<n>` или конца текста.
-//                          · `fit:`/`verify:` (`проверка:`) без предшествующего `R<n>` (cur=null)
-//                            молча игнорируются — поле, к которому некуда писать, теряется, а не
-//                            бросает и не пишет мимо.
-//                          · строка, не начавшая требование и не совпавшая ни с одним служебным
-//                            префиксом, ДОПИСЫВАЕТСЯ к statement ТЕКУЩЕГО требования через пробел,
-//                            пока его `fit` ещё не заполнен — многострочная формулировка собирается
-//                            построчно до первой `fit:`. Требует существующего cur: та же строка до
-//                            первой `R<n>` (cur=null), как и осиротевшие `fit:`/`verify:`, молча
-//                            теряется.
-//                          · `subjects[]: …` разбит по `·`/`,`/`;`, каждый элемент обрезан пробелами,
-//                            пустые отфильтрованы; строка встретилась НИ РАЗУ → subjects=null
-//                            (а не []) — «нет строки» и «строка с пустым списком» различимы.
-//                          · `open-questions: …` не встретилась ни разу → openQuestions=null;
-//                            встретилась → её обрезанное значение как есть, без проверки формы (это
-//                            дело validateBrd).
-//                 failure: нет — тотальна на любом входе, решение всегда объект, исключения не
-//                          бросаются
+//   Antecedent:   ANY value — coerced with String(text || "") and split into lines; the range is not
+//                 narrowed, the function is total. The format the parser RECOGNISES (it does not
+//                 demand it — it recognises it): line-based, `R<n> …` opens a requirement,
+//                 `fit:`/`verify:` (or `проверка:`) fill the CURRENT requirement's fields, and
+//                 `subjects[]: …` and `open-questions: …` are service lines outside requirements
+//   Consequent:   success: { requirements: [{ id, statement, fit, verify, line }],
+//                          subjects: string[] | null, openQuestions: string | null }; `line` is the
+//                          1-based line number of the `R<n>` header.
+//                          · text empty/undefined/null → requirements=[], subjects=null,
+//                            openQuestions=null — there are no lines to parse at all, not an error.
+//                          · an `R<n>` line opens a new requirement with fit=null, verify=null and
+//                            makes it CURRENT — the `fit:`/`verify:` fields fill that one, until the
+//                            next `R<n>` or the end of the text.
+//                          · `fit:`/`verify:` with no preceding `R<n>` (cur=null) are silently
+//                            ignored — a field with nowhere to be written is lost rather than
+//                            throwing or being written into the wrong place.
+//                          · a line that neither opened a requirement nor matched a service prefix is
+//                            APPENDED to the CURRENT requirement's statement with a space, as long as
+//                            its `fit` is not filled yet — a multi-line wording is assembled line by
+//                            line up to the first `fit:`. This requires an existing cur: the same line
+//                            before the first `R<n>` (cur=null), like an orphaned `fit:`/`verify:`, is
+//                            silently lost.
+//                          · `subjects[]: …` is split on `·`/`,`/`;`, each item is trimmed and empties
+//                            are filtered out; the line never occurred → subjects=null (not []) —
+//                            "no line" and "a line with an empty list" stay distinguishable.
+//                          · `open-questions: …` never occurred → openQuestions=null; occurred → its
+//                            trimmed value as it stands, with no check of its shape (validateBrd's job).
+//                 failure: none — total on any input; the result is always an object and nothing is
+//                          thrown
 export function parseBrd(text) {
   const lines = String(text || "").split("\n")
   const requirements = []
@@ -173,7 +177,7 @@ export function parseBrd(text) {
     if (sub) { subjects = sub[1].split(/[·,;]/).map((s) => s.trim()).filter(Boolean); return }
     const oq = /^\s*open-questions\s*:\s*(.*)$/i.exec(line)
     if (oq) { openQuestions = oq[1].trim(); return }
-    // продолжение формулировки требования (перенос строки), пока не начались fit/verify
+    // a continuation of the requirement's wording (a wrapped line), until fit/verify begin
     if (cur && !cur.fit && line.trim() && !/^\s*(R\d+|subjects|open-questions)/i.test(line)) {
       cur.statement = (cur.statement + " " + line.trim()).trim()
     }
@@ -181,45 +185,34 @@ export function parseBrd(text) {
   return { requirements, subjects, openQuestions }
 }
 
-// opts.sources — тексты, откуда числа критерия ИМЕЮТ право взяться: TASK.md и ответы
-// оператора. Не передали ни одного — правило молчит: судить происхождение не по чему.
-// --- BRD как доменное значение --------------------------------------------------------------------
+// opts.sources — the texts a criterion's numbers are ALLOWED to come from: TASK.md and the operator's
+// answers. None given → the rule stays silent: there is nothing to judge provenance against.
+// --- The BRD as a domain value --------------------------------------------------------------------
 //
-// Раньше здесь был validateBrd — агрегатор на 12 кодов: он возвращал СПИСОК находок, и невалидный
-// BRD существовал как значение, которое кто-то мог прочитать дальше. Теперь он не строится.
+// This used to hold validateBrd — an aggregator over 12 codes: it returned a LIST of findings, and an
+// invalid BRD existed as a value somebody downstream could read. It is no longer built.
 //
-// ДВА ОГРАНИЧЕНИЯ, под которые спроектировано, и оба существенны.
+// TWO CONSTRAINTS this is designed under, and both are essential.
 //
-// 1. ADVICE НЕ РОНЯЕТ ПРИЁМКУ. Правило без резолвера истины (похоже на желание, похоже на механизм)
-//    судить формулировку естественного языка не может ни при какой регулярке — оно понижено до
-//    сборщика улик (core/findings.mjs). Улики едут НА УСПЕХЕ, вместе с построенным BRD, и уходят
-//    оператору. Сделать их классом отказа значило бы вернуть роли право портить корректный
-//    артефакт, подгоняя его под неверное правило — ровно то, что стоило прогона 01.08.
+// 1. ADVICE DOES NOT FAIL ACCEPTANCE. A rule with no resolver of truth (looks like a wish, looks like
+//    a mechanism) cannot judge a natural-language wording under any regex — it is demoted to a
+//    collector of evidence (core/findings.mjs). The evidence travels ON SUCCESS, together with the
+//    built BRD, and goes to the operator. Making it a failure class would hand the role back the
+//    right to spoil a correct artifact to fit a wrong rule — exactly what cost the run of 01.08.
 //
-// 2. БЛОКЕРЫ СОБИРАЮТСЯ ВСЕ, А НЕ ПЕРВЫЙ. Объявление шага чинит человек, и первого отказа ему
-//    хватает. BRD чинит МОДЕЛЬ, и каждый ретрай — это вызов: отдать ей один блокер из пяти значит
-//    заплатить пятью вызовами за то, что сообщается одним. Поэтому detail несёт весь список.
-//    Значение при этом всё равно не строится — представимость невалидного BRD закрыта.
+// 2. EVERY BLOCKER IS COLLECTED, NOT THE FIRST. A step's declaration is fixed by a human, and the
+//    first refusal is enough for them. A BRD is fixed by a MODEL, and every retry is a call: handing
+//    it one blocker out of five means paying five calls for what one message could say. So `detail`
+//    carries the whole list. The value is still not built — an invalid BRD stays unrepresentable.
 
-// FUNCTION_CONTRACT: newFit — критерий требования
-//   Input:        raw — строка поля fit
-//   Dependencies: known — множество чисел, встречающихся в источниках (задача, ответы оператора),
-//                 либо null, если источники не поданы
-//   Antecedent:   непустая строка и — когда источники известны — ни одного числа, которого в них нет
-//   Consequent:   success: критерий
-//                 failure: "no-fit" — требования без критерия не бывает
-//                          "invented-default" — умолчание подставлено, а не спрошено
-// invented-default — смысл существования этого шага: он ловит число, взятое моделью из головы.
-// known === null значит «источники не поданы», и это НЕ «нарушений нет»: правило молчит, потому
-// что сверять не с чем, а не потому, что сверка прошла.
-//
-// S16, РЕШЕНИЕ ОПЕРАТОРА: правило «fit обязан нести измеримый токен» (`fit-not-measurable`,
-// словарь MEASURABLE_TOKENS) СНЯТО. Живой прогон ed1d4094 опроверг заявление словаря «ложных
-// срабатываний нет»: `fit: регистронезависимое вхождение подстроки` — предикат, проверяемый
-// машиной (его `verify` это и делает), но ни числа, ни диапазона, ни `|`, ни сравнения, ни слова
-// «формат» в нём нет. Три пере-делегации подряд получили один и тот же красный, и роль ходила
-// спрашивать оператора вместо починки. Осталось то, у чего есть резолвер истины: fit ЕСТЬ,
-// verify ЕСТЬ, число в fit имеет ИСТОЧНИК. Качество формулировки судит человек на приёмке BRD.
+// FUNCTION_CONTRACT: newFit — a requirement's criterion
+//   Input:        raw — the text of the fit field
+//   Dependencies: known — the set of numbers occurring in the sources (the task, the operator's
+//                 answers), or null when no sources were supplied
+//   Antecedent:   a non-empty string and — when the sources are known — not one number absent from them
+//   Consequent:   success: the criterion
+//                 failure: "no-fit" — there is no such thing as a requirement without a criterion
+//                          "invented-default" — a default was substituted instead of asked for
 export function newFit(raw, known) {
   if (!raw) return err("no-fit", "нет fit-критерия — требование без критерия приёмки не сдано")
   if (known) {
@@ -231,13 +224,13 @@ export function newFit(raw, known) {
   return ok(raw)
 }
 
-// FUNCTION_CONTRACT: newRequirement — требование, из которого можно строить
-//   Input:        raw — { id, statement, fit, verify, line } из parseBrd
-//   Dependencies: known — множество чисел источников либо null
-//   Antecedent:   непустая формулировка, строящийся fit (newFit) и непустой verify
-//   Consequent:   success: замороженное требование
-//                 failure: "invalid-requirement" — detail называет id и причину
-// Требование без способа проверки — это утверждение, а не требование: его нечем закрыть.
+// FUNCTION_CONTRACT: newRequirement — a requirement one can build from
+//   Input:        raw — { id, statement, fit, verify, line } from parseBrd
+//   Dependencies: known — the set of the sources' numbers, or null
+//   Antecedent:   a non-empty wording, a buildable fit (newFit) and a non-empty verify
+//   Consequent:   success: a frozen requirement
+//                 failure: "invalid-requirement" — the detail names the id and the reason
+// A requirement with no way to check it is a statement, not a requirement: there is nothing to close it with.
 export function newRequirement(raw, known) {
   const at = raw.id || "R?"
   if (!raw.statement) return err("invalid-requirement", `${at}: формулировка пуста`)
@@ -247,17 +240,18 @@ export function newRequirement(raw, known) {
   return ok(Object.freeze({ id: raw.id, statement: raw.statement, fit: fit.value, verify: raw.verify, line: raw.line }))
 }
 
-// FUNCTION_CONTRACT: newSubjects — якоря грепа по репозиторию
-//   Input:        list — массив терминов из строки subjects[]
+// FUNCTION_CONTRACT: newSubjects — grep anchors over the repository
+//   Input:        list — the array of terms from the subjects[] line
 //   Dependencies: —
-//   Antecedent:   от SUBJECTS_MIN до SUBJECTS_MAX терминов, каждый — ОДНО слово (грепабельный
-//                 якорь, а не фраза), повторов нет
-//   Consequent:   success: замороженный список
-//                 failure: "invalid-subjects" — detail называет причину
-// ЖИВОЙ ПРОГОН 01.08: здесь стояло правило «subject обязан встречаться в тексте R». Оно неверно по
-// существу: subjects[] — якоря грепа по РЕПОЗИТОРИЮ, а репозиторий английский, тогда как требование
-// пишется на языке оператора. Правило валило корректный BRD и заставляло роль ПОРТИТЬ артефакт,
-// подгоняя якоря под язык требования. Проверяется то, что действительно делает термин якорем.
+//   Antecedent:   between SUBJECTS_MIN and SUBJECTS_MAX terms, each ONE word (a greppable anchor, not
+//                 a phrase), with no repeats
+//   Consequent:   success: a frozen list
+//                 failure: "invalid-subjects" — the detail names the reason
+// LIVE RUN 01.08: this used to hold the rule "a subject must occur in R's text". It is wrong in
+// substance: subjects[] are grep anchors over the REPOSITORY, and the repository is English, while a
+// requirement is written in the operator's language. The rule failed a correct BRD and made the role
+// SPOIL the artifact by bending its anchors to the requirement's language. What is checked now is
+// what actually makes a term an anchor.
 export function newSubjects(list) {
   if (list.length < SUBJECTS_MIN || list.length > SUBJECTS_MAX) {
     return err("invalid-subjects", `subjects[] = ${list.length}; допустимо ${SUBJECTS_MIN}..${SUBJECTS_MAX}`)
@@ -269,16 +263,16 @@ export function newSubjects(list) {
   return ok(Object.freeze([...list]))
 }
 
-// FUNCTION_CONTRACT: adviceFor — улики, которые НЕ роняют приёмку
-//   Input:        r — построенное требование
+// FUNCTION_CONTRACT: adviceFor — evidence that does NOT fail acceptance
+//   Input:        r — a built requirement
 //   Dependencies: —
-//   Antecedent:   требование построено
-//   Consequent:   success: массив находок-улик; пустой, если формулировка ни на что не похожа
-//                 failure: нет — тотальна
-// Улика несёт ФРАЗУ, на которой сработало правило: оператор смотрит не на код, а на текст, который
-// правило сочло подозрительным. ЖИВОЙ ПРОГОН 04: правило про желание валило «limit (default 20,
-// VALID range 1..100)» — слово-желание стояло рядом с точным диапазоном. Желание — это ОТСУТСТВИЕ
-// критерия, а не наличие слова, поэтому улика ставится, только когда измеримого рядом НЕТ.
+//   Antecedent:   the requirement is built
+//   Consequent:   success: an array of evidence findings; empty when the wording resembles nothing
+//                 failure: none — total
+// A piece of evidence carries the PHRASE the rule fired on: the operator looks not at code but at the
+// text the rule found suspicious. LIVE RUN 04: the wish rule failed "limit (default 20, VALID range
+// 1..100)" — a wish-word stood right beside an exact range. A wish is the ABSENCE of a criterion, not
+// the presence of a word, so the evidence is raised only when nothing measurable stands nearby.
 export function adviceFor(r) {
   const out = []
   const hay = `${r.statement} ${r.fit}`.toLowerCase()
@@ -296,37 +290,40 @@ export function adviceFor(r) {
   return out
 }
 
-// Ниже порога букв текст языка не несёт вовсе: `fit: ≤ 200 мс` — это два-три знака алфавита при
-// числе и знаке сравнения, и судить его язык не по чему. Порог именно об этом, и НЕ является защитой
-// от формул: `format: ISO-8601 | null` даёт 13 букв и правилом судится (см. FUNCTION_CONTRACT ниже).
+// Below the letter threshold a text carries no language at all: `fit: ≤ 200 мс` is two or three
+// alphabet characters beside a number and a comparison sign, and there is nothing to judge. That is
+// what the threshold is about, and it is NOT a defence against formulas: `format: ISO-8601 | null`
+// gives 13 letters and IS judged by the rule (see the FUNCTION_CONTRACT below).
 const MIN_LETTERS = 6
 
-// FUNCTION_CONTRACT: languageDrifted — написан ли критерий не на языке источника
-//   Input:        fit — формулировка fit одного требования; тип не ограничен
-//   Dependencies: source — текст, задающий язык артефакта (задача плюс ответы оператора); пусто →
-//                 правило молчит: сверять не с чем, а молчать честнее, чем обвинять наугад
-//   Antecedent:   любые значения, оба приводятся к строке
-//   Consequent:   success: true, когда источник решительно на одном алфавите (доля кириллицы > 0.5
-//                          либо < 0.1), а fit — решительно на другом, И в fit не меньше MIN_LETTERS
-//                          букв; во всех прочих случаях false — смешанный источник, короткий fit
-//                          и пустой source судить не по чему
-//                 failure: нет — тотальна
-// F20 (run-6) и F16 (run-5): при русской задаче формулировки требований приходили русскими, а
-// `fit`/`verify` — английскими, потому что роль берёт форму из примера, а содержание из входа.
-// Артефакт производится наполовину из промпта; для человека, который его принимает, это документ
-// на двух языках, а для приёмки — неразличимо.
+// FUNCTION_CONTRACT: languageDrifted — is the criterion written in a language other than the source's
+//   Input:        fit — one requirement's fit wording; type unconstrained
+//   Dependencies: source — the text that sets the artifact's language (the task plus the operator's
+//                 answers); empty → the rule stays silent: there is nothing to compare against, and
+//                 silence is more honest than accusing at random
+//   Antecedent:   any values, both coerced to strings
+//   Consequent:   success: true when the source is decidedly in one alphabet (a Cyrillic share > 0.5
+//                          or < 0.1) and the fit decidedly in the other, AND the fit holds at least
+//                          MIN_LETTERS letters; false in every other case — a mixed source, a short
+//                          fit and an empty source are not judgeable
+//                 failure: none — total
+// F20 (run-6) and F16 (run-5): with a Russian task, the requirements' wordings came back in Russian
+// while `fit`/`verify` came back in English, because a role takes its FORM from the example and its
+// CONTENT from the input. The artifact is produced half out of the prompt; to the human accepting it
+// that is a document in two languages, and to acceptance it was indistinguishable.
 //
-// СУДИТСЯ ТОЛЬКО `fit`. `verify` объявлен как «команда | артефакт» (роль, наряд), и он английский по
-// природе — краснеть на верно исполненной форме правило не вправе. `subjects[]` исключены реестром:
-// BRD_FORM.subjectRule прямо предписывает якорям язык РЕПОЗИТОРИЯ, а не запроса.
+// ONLY `fit` IS JUDGED. `verify` is declared as "a command | an artifact" (the role, the order), and
+// it is English by nature — a rule has no right to turn red on a correctly executed form.
+// `subjects[]` are excluded by the registry: BRD_FORM.subjectRule explicitly prescribes the
+// REPOSITORY's language for anchors, not the request's.
 //
-// ЧЕСТНАЯ ГРАНИЦА: подсчётом букв нельзя отличить `fit` из одной формулы (`format: ISO-8601 | null`)
-// от английской прозы — ложные срабатывания на таких критериях есть, и порог букв их не снимает.
-// Цена принята сознательно: исполнение стоит роли одного слова (`формат: ISO-8601 | null` — значение
-// и токен нетронуты), в отличие от снятого 01.08 правила про язык subjects[], где исполнение ЛОМАЛО
-// артефакт (якорь обязан совпадать с идентификатором репозитория). Разные породы: там правило
-// приказывало испортить, здесь — перевести прозу вокруг значения. Запас на ложный красный дан
-// повтором: LOOPS = 3 (workflows/izi.js, литерал S11 — было pipeline.json.loops.brd).
+// AN HONEST BORDER: counting letters cannot tell a `fit` made of one formula
+// (`format: ISO-8601 | null`) from English prose — false positives on such criteria exist, and a
+// letter threshold does not remove them. The price is accepted deliberately: complying costs the role
+// one word (`формат: ISO-8601 | null` — the value and the token untouched), unlike the subjects[]
+// language rule removed on 01.08, where complying BROKE the artifact (an anchor must match a
+// repository identifier). Different breeds: there the rule ordered a spoiling, here a translation of
+// the prose around a value. The slack for a false red is the retry budget: LOOPS = 3.
 export function languageDrifted(fit, source) {
   const src = String(source || "")
   if (!src.trim()) return false
@@ -339,14 +336,15 @@ export function languageDrifted(fit, source) {
   return false
 }
 
-// FUNCTION_CONTRACT: newBrd — сдаваемый BRD
-//   Input:        text — байты .agent/brd.md
-//   Dependencies: sources — тексты, из которых роль вправе брать числа (задача, ответы оператора);
-//                 пустой массив значит «источники не поданы», и правило invented-default молчит
-//   Antecedent:   хотя бы одно требование, каждое строится, subjects[] строятся, строка
-//                 open-questions есть и равна объявленному реестром значению
-//   Consequent:   success: замороженный BRD плюс улики (advice), которые приёмку НЕ роняют
-//                 failure: "invalid-brd" — detail несёт ВСЕ блокеры разом, по строке на каждый
+// FUNCTION_CONTRACT: newBrd — a BRD fit to be handed in
+//   Input:        text — the bytes of .agent/brd.md
+//   Dependencies: sources — the texts a role may take numbers from (the task, the operator's
+//                 answers); an empty array means "no sources supplied", and the invented-default rule
+//                 stays silent
+//   Antecedent:   at least one requirement, each of them buildable, buildable subjects[], and an
+//                 open-questions line equal to the value the registry declares
+//   Consequent:   success: a frozen BRD plus the evidence (advice) that does NOT fail acceptance
+//                 failure: "invalid-brd" — the detail carries EVERY blocker at once, one per line
 export function newBrd(text, sources = []) {
   const { requirements, subjects, openQuestions } = parseBrd(text)
   const blockers = []
@@ -363,9 +361,8 @@ export function newBrd(text, sources = []) {
     else blockers.push(r.error.detail)
   }
 
-  // Язык артефакта — свойство ВХОДА, а не роли: правило объявлено ролью ($START_LAW), а исполняется
-  // здесь. Судится на построенных требованиях, потому что до построения `fit` ещё не отделён от
-  // текста. Источник склеен: задача и ЗНАЧЕНИЯ ответов оператора — оба написаны его языком.
+  // The artifact's language is a property of the INPUT, not of the role: the rule is declared by the
+  // role ($START_LAW) and enforced here, against the task and the operator's answers.
   const source = src.join("\n")
   for (const r of built) {
     if (languageDrifted(r.fit, source)) {

@@ -1,14 +1,15 @@
-// Срез `design`: две проекции изменения — ЧИСТОЕ ядро, io держит ext/index.mjs (standards/code.md:
-// io-трубу юнитами не покрываем). Формула §5: 1 happy + Σ ветвей антецедента с РАЗЛИЧИМЫМ
-// следствием. Ветви — пять правил docs/data-flow.md §6 плюс «ни одного <module>»; каждая заведена
-// РЕИНТРОДУКЦИЕЙ дефекта в зелёную фикстуру, чтобы шов был доказан, а не заявлен.
+// Slice `design`: the two projections of a change — a PURE core; its io lives in ext/index.mjs
+// (standards/code.md: an io pipe is not unit-tested). Formula: 1 happy + Σ antecedent branches with a
+// DISTINGUISHABLE consequent. The branches are the five rules of docs/data-flow.md §6 plus "not one
+// <module>"; each was built by REINTRODUCING the defect into a green fixture, so the seam is proven
+// rather than claimed.
 
 import test from "node:test"
 import assert from "node:assert/strict"
 import { newDesign, parseDesign, parseRoutes, expand, checkDesign } from "./design.mjs"
 
-// Фикстура: бронь занятого слота (S1 → 409) и успешная бронь (S2 → 201). Возврат разматывается по
-// тем же рёбрам назад — поэтому правило 3 и проверяет ребро НЕНАПРАВЛЕННО.
+// Fixture: booking a taken slot (S1 → 409) and a successful booking (S2 → 201). The return unwinds
+// along the same edges backwards — which is why rule 3 checks an edge UNDIRECTED.
 const GRAPH = `<design mode="major" base=".agent/appgraph.xml">
   <module path="src/BookingResource.java" delta="change">
     <contract in="POST /bookings {slotId,userId} | Booked(bookingId) | Conflict(slotId)"
@@ -38,7 +39,7 @@ const FRD = {
 
 const blockersOf = (xml, frd = FRD) => checkDesign({ nodes: parseDesign(xml), routes: parseRoutes(xml), frd })
 
-test("happy: обе проекции сходятся, поток развёрнут ИЗ контрактов", () => {
+test("happy: both projections agree, and the flow is expanded OUT of the contracts", () => {
   const r = newDesign({ xml: GRAPH, frd: FRD })
   assert.equal(r.ok, true)
 
@@ -46,7 +47,7 @@ test("happy: обе проекции сходятся, поток развёрн
   assert.equal(nodes.size, 4)
   assert.deepEqual(routes.map((x) => x.scenario), ["S1", "S2"])
 
-  // Значения в потоке — копия контрактов, а не набор роли: маршрут нёс только `path#alt`.
+  // The values in the flow are a copy of the contracts, not the role's own: a route carried only `path#alt`.
   assert.match(flow, /\$START_FLOW id="S1"/)
   assert.match(flow, /^3\. src\/SlotLock\.java : lock\(slotId,ttl\) -> Taken$/m)
   assert.match(flow, /^5\. src\/BookingResource\.java : Conflict\(slotId\) -> 409 \{conflict\}$/m)
@@ -54,14 +55,14 @@ test("happy: обе проекции сходятся, поток развёрн
   assert.equal(flow.match(/\$END_FLOW/g).length, 2)
 })
 
-test("ни одного <module> — картировать изменение нечем", () => {
+test("not one <module> — there is nothing to map the change onto", () => {
   const r = newDesign({ xml: "<design></design>", frd: FRD })
   assert.equal(r.ok, false)
   assert.equal(r.error.cls, "invalid-design")
   assert.match(r.error.detail, /ни одного <module>/)
 })
 
-test("правило 1: выдуманный модуль — один блокер, остальные проверки пары закорочены", () => {
+test("rule 1: a made-up module — one blocker, the rest of the pair's checks are short-circuited", () => {
   const xml = GRAPH.replace('src/BookingService.java#1 -> src/SlotLock.java#1', 'src/Nope.java#1')
   const b = blockersOf(xml)
   assert.equal(b.filter((x) => x.startsWith("1 ")).length, 1)
@@ -69,13 +70,13 @@ test("правило 1: выдуманный модуль — один блок�
   assert.equal(b.filter((x) => x.startsWith("3 ") || x.startsWith("4 ")).length, 0)
 })
 
-test("правило 1: альтернативы #alt у узла нет", () => {
+test("rule 1: the node has no #alt alternative", () => {
   const b = blockersOf(GRAPH.replace("src/SlotLock.java#1 ->", "src/SlotLock.java#9 ->"))
   assert.equal(b.length, 1)
   assert.match(b[0], /нет альтернативы #9 в out/)
 })
 
-test("правило 2: узел с дельтой, которого не проходит ни один маршрут", () => {
+test("rule 2: a node with a delta that no route passes through", () => {
   const xml = GRAPH.replace("<route", `<module path="src/AuditLog.java" delta="add">
     <contract in="Booked(bookingId)" out="ok"/>
   </module>
@@ -85,9 +86,9 @@ test("правило 2: узел с дельтой, которого не про
   assert.match(b[0], /2 узел с delta="add" не встречен ни в одном маршруте — src\/AuditLog\.java/)
 })
 
-test("правило 3: ребра <dep> между соседями маршрута нет", () => {
-  // Токены стыкуются (Booked(bookingId) — законный вход Notifier), а ребра нет: правило 4 молчит,
-  // краснеет ровно правило 3.
+test("rule 3: no <dep> edge between the route's neighbors", () => {
+  // Tokens join up (Booked(bookingId) is a legitimate input for Notifier), but there is no edge:
+  // rule 4 stays silent, exactly rule 3 goes red.
   const xml = GRAPH
     .replace("<route", `<module path="src/Notifier.java" delta="add">
     <contract in="Booked(bookingId)" out="sent"/>
@@ -99,13 +100,13 @@ test("правило 3: ребра <dep> между соседями маршр�
   assert.match(b[0], /3 S2#6: нет ребра <dep> между src\/BookingService\.java и src\/Notifier\.java/)
 })
 
-test("шов правила 4: контракты соседей разошлись — единственное место с ручным вводом роли", () => {
+test("rule 4's seam: neighboring contracts diverged — the only place with manual role input", () => {
   const b = blockersOf(GRAPH.replace('out="Taken |', 'out="Occupied |'))
   assert.equal(b.length, 1)
   assert.match(b[0], /4 S1#3: out «Occupied» не среди in узла src\/BookingService\.java/)
 })
 
-test("правило 5: сценарий FRD без маршрута и touched вне маршрутов", () => {
+test("rule 5: an FRD scenario without a route, and touched outside all routes", () => {
   const b = blockersOf(GRAPH, { scenarios: ["S1", "S2", "S3"], touched: [...FRD.touched, "src/Mailer.java"] })
   assert.deepEqual(b, [
     "5 у сценария FRD S3 нет маршрута",
@@ -113,7 +114,7 @@ test("правило 5: сценарий FRD без маршрута и touched 
   ])
 })
 
-test("тотальность разбора: мусор и undefined читаются как пустой граф, а не бросают", () => {
+test("totality of parsing: garbage and undefined are read as an empty graph, not thrown", () => {
   assert.equal(parseDesign(undefined).size, 0)
   assert.deepEqual(parseRoutes(null), [])
   assert.equal(expand(parseDesign(GRAPH), []), "")

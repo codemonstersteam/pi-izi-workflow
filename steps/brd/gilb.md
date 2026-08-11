@@ -73,8 +73,8 @@ $START_FORBIDDEN
   (LAW 4). `verify:` is a command or an artifact and is judged by no language rule.
 - Do NOT design: no paths, classes, annotations, frameworks, file names.
 - Do NOT ask open questions ("how do you see it?"), never two per exchange.
-- Do NOT ask what the answers block already answers — not even reworded ("предел размера ответа?"
-  and "лимит на размер ответа?" are the same question, and the second one wastes an exchange).
+- Do NOT ask what the answers block already answers — not even reworded ("response size limit?"
+  and "limit on the response size?" are the same question, and the second one wastes an exchange).
 - Do NOT copy the request into the BRD. A requirement is a statement with a criterion, not a quote.
 - Do NOT decide the change weight and do NOT route. The pipeline routes.
 - Do NOT split the task yourself. Two independent results in one request is a question to the

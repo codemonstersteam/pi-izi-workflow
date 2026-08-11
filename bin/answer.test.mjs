@@ -1,6 +1,6 @@
-// Канал ответа оператора: команду печатает роль, исполняет роутер.
-// Порт izi-flow-v2/bin/answer.test.mjs 1:1 (PLAN.md §3, задача S3) — поведение CLI не изменилось,
-// только журнал внутри answer.mjs пишется через bin/decisions-log.mjs (см. answer.mjs MODULE_CONTRACT).
+// The operator's answer channel: the role prints the command, the router executes it.
+// Port of izi-flow-v2/bin/answer.test.mjs 1:1 (PLAN.md §3, task S3) — CLI behavior unchanged, only
+// the journal inside answer.mjs is now written through bin/decisions-log.mjs (see answer.mjs MODULE_CONTRACT).
 
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -16,7 +16,7 @@ const run = (root, q, text) => {
   catch (e) { return { code: e.status, out: `${e.stdout || ""}${e.stderr || ""}` } }
 }
 
-test("ответ ложится в .agent/answers.md вместе с вопросом", () => {
+test("the answer lands in .agent/answers.md together with the question", () => {
   const d = mkdtempSync(join(tmpdir(), "ans-"))
   assert.equal(run(d, "предел размера?", "20").code, 0)
   const t = readFileSync(join(d, ".agent", "answers.md"), "utf8")
@@ -24,7 +24,7 @@ test("ответ ложится в .agent/answers.md вместе с вопро�
   assert.match(t, /ответ: 20/)
 })
 
-test("накопительно: второй ответ не затирает первый", () => {
+test("cumulative: a second answer does not overwrite the first", () => {
   const d = mkdtempSync(join(tmpdir(), "ans-"))
   run(d, "первый?", "1")
   run(d, "второй?", "2")
@@ -33,21 +33,21 @@ test("накопительно: второй ответ не затирает п
   assert.match(t, /ответ: 2/)
 })
 
-test("повтор того же ответа не дублирует запись", () => {
+test("a repeat of the same answer does not duplicate the entry", () => {
   const d = mkdtempSync(join(tmpdir(), "ans-"))
   run(d, "q?", "20")
   run(d, "q?", "20")
   assert.equal(readFileSync(join(d, ".agent", "answers.md"), "utf8").split("- вопрос:").length - 1, 1)
 })
 
-test("шаблон вместо ответа отбивается", () => {
+test("a template in place of an answer is rejected", () => {
   const d = mkdtempSync(join(tmpdir(), "ans-"))
   const r = run(d, "q?", "<operator answer>")
   assert.equal(r.code, 2)
   assert.match(r.out, /шаблон/)
 })
 
-test("ответ дописывает строку в .agent/decisions.log — журнал пишет харнес, а не модель (F2)", () => {
+test("an answer appends a line to .agent/decisions.log — the harness writes the journal, not the model (F2)", () => {
   const d = mkdtempSync(join(tmpdir(), "ans-"))
   run(d, "предел?", "20")
   const log = readFileSync(join(d, ".agent", "decisions.log"), "utf8")
