@@ -17,7 +17,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, weight, iziAnswer } from "./index.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
 const ctx = (cwd) => ({ run: { cwd } })
@@ -206,6 +206,46 @@ test("the defect this closes: a number answered in a DEAD run no longer passes i
   const r = checkBrd.run({ path: ".agent/staging/brd.md" }, ctx(root))
   assert.equal(r.ok, false)
   assert.match(r.blockers, /50/)
+})
+
+// --- weight: "no weight" must mean "no file" ---------------------------------------------------
+//
+// S22. newRun carries the run's STATE into .agent/prev and leaves the ARTIFACTS alone by design (the
+// test above), so `.agent/mode` from a previous run outlives today's refusal unless this function
+// removes it. Step 8 reads that file and has no way to tell yesterday's weight from today's — the
+// seam is proven by reintroducing the defect: drop the `drop()` calls in ext/index.mjs::weight and
+// the second test below goes red while everything else stays green (docs/weight.md §4).
+const FRD = (form) => `<frd grammar="1" goal="искать посылку">\n  <delta op="GET /parcels" form="${form}" node="src/ParcelResource.java" from="list()" to="list(track)"/>\n</frd>\n`
+const frdAt = (root, form) => {
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "frd.xml"), FRD(form))
+  return root
+}
+
+test("weight writes .agent/mode under context.run.cwd — one word, from the RUN's frd.xml", () => {
+  const root = frdAt(tempRoot(), "Added")
+  const r = weight.run({}, ctx(root))
+  assert.deepEqual(r, { ok: true, mode: "minor", earned: "GET /parcels (Added)", deltas: 1 })
+  assert.equal(readFileSync(join(root, ".agent", "mode"), "utf8"), "minor")   // no newline, no JSON
+})
+
+test("an Unknown delta: ok:false AND the previous run's .agent/mode is ERASED", () => {
+  const root = frdAt(tempRoot(), "Unknown")
+  writeFileSync(join(root, ".agent", "mode"), "major")                        // yesterday's weight
+  const r = weight.run({}, ctx(root))
+  assert.equal(r.ok, false)
+  assert.match(r.why, /unknown-delta/)
+  assert.equal(existsSync(join(root, ".agent", "mode")), false)
+})
+
+test("no .agent/frd.xml at the run root: refusal naming step 6, and no mode left behind", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "mode"), "patch")
+  const r = weight.run({}, ctx(root))
+  assert.equal(r.ok, false)
+  assert.match(r.why, /шаг 6 intake не отработал/)
+  assert.equal(existsSync(join(root, ".agent", "mode")), false)
 })
 
 // --- izi_answer: the operator's numbering does not reach the VALUES -----------------------------

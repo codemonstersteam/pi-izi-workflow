@@ -6,7 +6,7 @@ $end_system
 $start_task
 Before starting development step [9], 
 the task is to analyze the results of step [9] (docs/workflow.md), 
-analyze the artifacts from the test run (/tmp/quarkus-rest-json-app-v2-t1-3),
+analyze the artifacts from the test run (sandbox/runbox/quarkus-rest-json-app-v2-t1-3),
 and determine whether everything is sufficient for step 9[design].
 If there are discrepancies, suggest the minimum steps to get the concept of step 9.
 write the concept to docs/design.md

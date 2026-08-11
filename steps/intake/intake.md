@@ -53,10 +53,20 @@ $START_STRATEGY
 6. Data dictionary: per field — type, valid domain, required, failure code, `source`.
 7. Failure-mode map: one `<failure>` per code raised by an `<ext>`. No failure modes in this
    repository at all → one line `<failures found="no" why="…"/>`, never an empty section.
-8. Delta: `Added` | `Changed` | `Removed` with the node, or `Unknown` with the reason. Declare every
-   node you named as `<touched>`. The delta names the MODULE that changes; a test file is never a
-   delta and never `touched` — a test is the DoD of the change, not a change of its own. The map
-   already binds it to its module (`<test path suite>`), and both reach one ticket together.
+8. Delta: a form from the order's list with the node, or `Unknown` with the reason. A form is chosen
+   by ONE question — what happens to a call that exists TODAY:
+   - `Added` — the call that exists behaves exactly as before; the contract only grew (a new
+     operation, an OPTIONAL field on an existing one, a new failure code);
+   - `Changed` — an element that exists changes FOR THAT CALL: its signature, its domain, the shape
+     of its answer, or its meaning;
+   - `Removed` — an element of the contract is gone;
+   - `Fixed` — the contract does not move at all; the existing call stops being wrong and starts
+     being right.
+
+   "The sentence says изменить" is not the question; the existing call is. Declare every node you
+   named as `<touched>`. The delta names the MODULE that changes; a test file is never a delta and
+   never `touched` — a test is the DoD of the change, not a change of its own. The map already binds
+   it to its module (`<test path suite>`), and both reach one ticket together.
 9. Scenarios: one per use case the change alters, stating before and after.
 10. NFR with sources; anything still open — `<question>`.
 11. With FEEDBACK, repair exactly the rule and element it names before anything else.

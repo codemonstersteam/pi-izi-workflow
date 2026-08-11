@@ -1,5 +1,5 @@
 // MODULE_CONTRACT: ext/index.mjs — pi-extensible-workflows extension: host functions for izi's five
-//               steps (task, brd, survey-plan, scope, graph), replacing the bin/*.mjs + shell() harness (S11), plus
+//               steps (task, brd, survey-plan, scope, graph, intake, weight), replacing the bin/*.mjs + shell() harness (S11), plus
 //               (S13) the izi_answer tool that lets the OPERATOR window itself carry the
 //               question→answer exchange
 // Purpose:      one decision — the workflow sandbox has no fs/import at all ("Workflow JavaScript
@@ -69,7 +69,8 @@ import { readSource } from "../steps/scope/source.mjs"
 import { newComputed, computedXml, parseComputed } from "../steps/scope/computed.mjs"
 import { newDigest } from "../steps/scope/digest.mjs"
 import { newGraph, graphXml } from "../steps/graph/graph.mjs"
-import { newFrd, FRD_FORM } from "../steps/intake/frd.mjs"
+import { newFrd, parseFrd, FRD_FORM } from "../steps/intake/frd.mjs"
+import { newMode } from "../steps/weight/weight.mjs"
 import { parseMap, mapMeasure, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
@@ -816,6 +817,10 @@ export const remember = {
 // missing is a lost subtree, and a directory listing would simply not contain it — the graph would
 // come out smaller and green. The plan is the authority on what the swarm owed.
 const GRAPH_PATH = ".agent/appgraph.xml"
+// Step 6's artifact and step 7's, named once each. `.agent/mode` holds ONE word and nothing else: its
+// readers are scripts (steps 8 and 10), and a word is the smallest thing that cannot be misparsed.
+const FRD_PATH = ".agent/frd.xml"
+const MODE_PATH = ".agent/mode"
 
 export const buildGraph = {
   description: "Merge every graph part and the script's computed facts into .agent/appgraph.xml — steps/graph/graph.mjs::newGraph wired to disk. Parts are read by the PLAN, so a missing one is named instead of silently shrinking the graph. Written only after a green merge.",
@@ -955,6 +960,49 @@ export const checkFrd = {
   },
 }
 
+// --- weight: the forms of the FRD's deltas → one word of SemVer ---------------------------------
+//
+// The whole of step 7: no role, no operator, no token. The judgement it folds was made at step 6 —
+// what a delta does to a call that exists today — and the fold itself is steps/weight/weight.mjs.
+//
+// ERASING is half the contract, not housekeeping. "No weight" must mean "no file": newRun carries the
+// run's STATE into .agent/prev but leaves the artifacts where they are, so yesterday's `.agent/mode`
+// would survive today's refusal and step 8 would read it without ever noticing (docs/weight.md §4).
+export const weight = {
+  description: "Weigh the change by the FORMS of the deltas in .agent/frd.xml (steps/weight/weight.mjs::newMode) and write the one word of .agent/mode. An Unknown delta, no delta or a form outside the vocabulary is ok:false — and then .agent/mode is REMOVED, so that step 8 can never read a previous run's weight.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      mode: { type: "string" },
+      earned: { type: "string" },
+      deltas: { type: "number" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_input, context) {
+    const root = runRoot(context)
+    const drop = () => { if (existsSync(at(root, MODE_PATH))) rmSync(at(root, MODE_PATH)) }
+
+    if (!existsSync(at(root, FRD_PATH))) {
+      drop()
+      return { ok: false, why: `${FRD_PATH} не существует — шаг 6 intake не отработал, взвешивать нечего` }
+    }
+    const deltas = parseFrd(readFileSync(at(root, FRD_PATH), "utf8")).deltas
+    const r = newMode({ deltas })
+    if (!r.ok) {
+      drop()
+      return { ok: false, why: `${r.error.cls}:\n  ${r.error.detail}`, deltas: deltas.length }
+    }
+    mkdirSync(dirname(at(root, MODE_PATH)), { recursive: true })   // written AFTER the decision to accept
+    writeFileSync(at(root, MODE_PATH), r.value.mode)               // one word, no trailing newline
+    return { ok: true, mode: r.value.mode, earned: r.value.why.join(", "), deltas: deltas.length }
+  },
+}
+
 // izi_answer — an ordinary pi TOOL (not a workflow sandbox function: this one is called by the
 // INTERACTIVE session's own model, reacting to the checkpoint follow-up message that
 // workflows/izi.js's askOperator() delivers into this same chat). The question TEXT is never a model
@@ -1052,9 +1100,9 @@ export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
     version: "1.10.0",
-    headline: "izi: task → brd → survey-plan → scope → graph → intake host functions",
-    description: "readText/answers/brdForm/frdForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd, plus the gilb, scout and intake role directories (steps/brd/, steps/scope/, steps/intake/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd },
+    headline: "izi: task → brd → survey-plan → scope → graph → intake → weight host functions",
+    description: "readText/answers/brdForm/frdForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight, plus the gilb, scout and intake role directories (steps/brd/, steps/scope/, steps/intake/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md and steps/intake/ carries intake.md
     // (role files, named by ROLE not by step — see steps/brd/gilb.md's own header) alongside their
     // cores/orders/tests;
