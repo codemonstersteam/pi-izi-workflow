@@ -78,7 +78,13 @@ $START_CONSTRAINTS
 5. **A negative verdict is data.** The reviewer that found a blocker succeeded.
 6. **The artifact is written only after the decision to accept it.** Otherwise a broken file closes
    the step.
-7. **Machines read English, the operator reads Russian.** Code, comments, contracts, role files,
+7. **A checkable antecedent is checked BY CODE.** If a factory can tell a bad input apart — a newline
+   in a one-line field, an empty string, a number outside the range, a text carrying its own format's
+   closing tag — it returns `err`, it does not write and hope. An antecedent that nothing checks is a
+   comment, and a comment does not stop the caller. Live cost: run `46edab60`. `answerEntry` declared
+   "no newlines: each field is one line", a batch of six questions arrived multi-line anyway, the
+   file parsed back into a stump, and an operator who HAD answered was re-asked twice.
+8. **Machines read English, the operator reads Russian.** Code, comments, contracts, role files,
    order templates, host-function descriptions and test names are English — a model reads them.
    Russian stays where the operator reads: the `subject` of a question, a `blocked` diagnosis,
    `log()`, `docs/*.md`, `backlog.md`. This says nothing about artifacts: a role's LAW "the artifact
@@ -96,6 +102,12 @@ N_units(pure module) = 1 happy path + Σ antecedent branches with a DISTINGUISHA
 - A new rule needs a **seam**: a lint or test that turns red when the rule is broken. Prove the seam
   by reintroducing the defect, watching it go red, then restoring it.
 - A test that no code change can turn red is a comment. Do not write it.
+- **Touch a FORMAT — leave a round-trip unit on its hardest legal value.** A format is a file this
+  repository both writes and reads (`.agent/answers.md`, the graph and part XML, `frd.xml`). The unit
+  is `parse(write(x)) === x` where `x` carries what the format is hardest on: several lines, Cyrillic,
+  angle brackets, a blank line. When the writer lives in an io module, its pure part comes out into a
+  core module — otherwise the format is untestable by construction and its first proof is a live run.
+  This is not a licence to sweep every existing format; it binds whoever changes one.
 $END_TESTS
 
 $START_FORBIDDEN

@@ -23,7 +23,8 @@ $END_CONTEXT
 $START_RUN
 **THE RUNBOOK IS A FILE, AND IT IS NOT IN THIS REPOSITORY — READ IT BEFORE PREPARING ANY LIVE RUN:**
 `~/IdeaProjects/codemonstersdev/sandbox/pi-runbox.md`. It carries what only live runs taught: the
-MASTER form (`sandbox/quarkus-rest-json-app-v2-t1-3`, never run in — copied to `/tmp` and run there),
+MASTER form (`sandbox/quarkus-rest-json-app-v2-t1-3`, never run in — copied to `sandbox/runbox/` and
+run there),
 the three preconditions before every launch (restart pi; no `*.md` under
 `~/.pi/agent/pi-extensible-workflows/roles/`, which silently OVERRIDES this repo's role; start `pi`
 FROM the run directory), why herdr panes are off-limits until the transport is fixed, and the log
@@ -32,7 +33,7 @@ this form is expected to print. Do not reconstruct any of that from memory or fr
 ```bash
 node --test                                 # the whole line, before any live run
 node bin/install.mjs --to=<master form>     # copies workflows/ steps/ core/ bin/ into a project
-cp -R <master form> /tmp/ && cd /tmp/<form> && pi     # then type /izi
+cp -R <master form> ~/IdeaProjects/codemonstersdev/sandbox/runbox/ && cd <runbox>/<form> && pi   # then /izi
 ```
 
 `pi install ./ext` is NOT part of this: the extension is wired BY PATH in
@@ -53,10 +54,15 @@ $START_CONSTRAINTS
 3. **A number in `fit:` must have a source** — the task or an operator's answer value. Anything else
    is `invented-default`.
 4. **The question key is copied by the machine**, not retyped by a human or recalled by a model:
-   the workflow writes `.agent/pending.json`, `izi_answer` reads the key from there.
-5. **Paths resolve against the run's cwd** (`context.run.cwd`), never against this repository.
+   the workflow writes `.agent/pending.json`, `izi_answer` reads the questions and their NUMBERS from
+   there and answers by number.
+5. **Widening the SHAPE of a value is a change to every consumer of it.** One line → many, one → a
+   list, required → optional: walk the consumers, read their antecedents, and name them in the task.
+   A widening with no consumer named is unfinished work — that is the price of run `46edab60`, where a
+   question grew into a batch and the file format that carried it stayed two lines long.
+6. **Paths resolve against the run's cwd** (`context.run.cwd`), never against this repository.
    Proven by a live defect: the installed project read this repo's `TASK.md` for three redelegations.
-6. **Verify in a project other than this one.** Everything green here can still be broken there.
+7. **Verify in a project other than this one.** Everything green here can still be broken there.
 $END_CONSTRAINTS
 
 $START_FORBIDDEN

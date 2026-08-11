@@ -17,8 +17,9 @@ headless-раннер (`bin/run.mjs`) — упразднены целиком, �
 ```
 ext/
   index.mjs         pi-extension: readText · answers · checkTask · checkBrd · brdForm · promote · setPending ·
-                     clearPending · survey (S15) · budgets · herdrStatus (S16) — глобалы izi.js
-                     (roleDirectories → steps/brd/);
+                     clearPending · survey (S15) · budgets · herdrStatus (S16) · cells · digest · reuse ·
+                     remember · checkPart (S17) · buildGraph (S20) · graphMap · checkFrd · frdForm (S21)
+                     — глобалы izi.js (roleDirectories → steps/brd/, steps/scope/, steps/intake/);
                      ПЛЮС (S13) tool izi_answer, зарегистрированный через pi.registerTool на самой
                      интерактивной сессии — export default function extension(pi) одновременно
                      обычный ExtensionFactory pi (`(pi: ExtensionAPI) => void`,
@@ -48,6 +49,15 @@ steps/design/       шаг 9: две проекции изменения. Сре
   order.tpl          наряд: {FRD}, {RIPPLE}, {MODE}, {FEEDBACK}, {STAGING}, {CHECK}
   design.mjs         ЧИСТОЕ ядро: parseDesign · parseRoutes · expand · checkDesign · newDesign
   design.test.mjs    happy + пять правил + «ни одного <module>» + тотальность разбора
+
+steps/intake/       (S21) шаг 6: роль intake, рельса вопросов как у brd
+  intake.md          роль (имя файла = имя роли; roleDirectories += steps/intake/); содержание —
+                      навык requirements-intake из izi-flow
+  order.tpl          наряд: {BRD}, {MAP}, {ANSWERS}, {FEEDBACK}, {STAGING}, {CHECK} и ДВА словаря
+                      подстановкой — {DELTA_FORMS}, {SOURCES} (функция хоста frdForm, как brdForm)
+  frd.mjs            ЧИСТОЕ ядро: parseFrd · checkFrd · newFrd; правила F1..F7 (docs/intake.md §5)
+  map.mjs            ЧИСТОЕ: parseMap (ключи узлов) · mapMeasure (цена карты); индекса НЕТ — §3 там же
+  frd.test.mjs · map.test.mjs   тесты по формуле + швы наряда и роли
 
 steps/scope/        (S17) шаг-РОЙ: роль scout, ДВА наряда (по полю kind клетки), одно ядро
   scout.md           роль (имя файла = имя роли; roleDirectories += steps/scope/)
@@ -93,15 +103,16 @@ pi install ./ext
 
 ## 2. Программа
 
-`workflows/izi.js` целиком — три рельсы, `ok`/`err`/`exit`, литералы бюджетов вместо
-`pipeline.json` (бюджеты тратят только первые два шага — политика прогона данными пока не нужна,
-см. `docs/concept.md`, раздел «Что отложено и почему»):
+`workflows/izi.js` целиком — шесть фаз, `ok`/`err`/`exit`, бюджеты из `izi.config.json` вместо
+`pipeline.json` (`LOOPS` тратят `brd`, `scope` и `intake`; `QUESTIONS` — `brd` и `intake`, см.
+`docs/concept.md`, раздел «Что отложено и почему»):
 
 ```js
-let LOOPS, QUESTIONS, CHECKPOINT_RETRIES;                  // S16: не литералы — izi.config.json
+let LOOPS, QUESTIONS, QUESTION_ROUNDS, CHECKPOINT_RETRIES; // S16: не литералы — izi.config.json
+                                                          // S21: вопросов 60, кругов 3 — разное
 const b = await budgets({});                              // умолчания 3/3/2 живут в core/budgets.mjs,
 if (!b.ok) exit(err("blocked", { subject: b.why }));      // сломанный конфиг = отказ, не умолчание
-LOOPS = b.loops; QUESTIONS = b.questions; CHECKPOINT_RETRIES = b.checkpointRetries;
+LOOPS = b.loops; QUESTIONS = b.questions; QUESTION_ROUNDS = b.questionRounds; CHECKPOINT_RETRIES = b.checkpointRetries;
 
 const h = await herdrStatus({});                          // S16: наблюдаемость объявляется вслух —
 log(h.available ? `herdr: on pane=${h.pane}` : `herdr: off — ${h.why}`);  // herdr при недоступности
@@ -134,21 +145,32 @@ async function surveyPlan() {                              // S15: шаг-СКР
   const p = await survey({ path: PLAN });                  // одна функция хоста делает весь шаг
   if (!p.ok) exit(err("blocked", { subject: p.why }));     // единственный отказ — no-files
   log(`survey-plan: files=${p.files} bytes=${p.bytes} cells=${p.cells}`);   // стоимость роя ДО роя
-  exit(ok({ artifact: PLAN, files: p.files, cells: p.cells, gaps: p.gaps }));
+  log(`survey-plan: files=${p.files} bytes=${p.bytes} cells=${p.cells}`);   // стоимость роя ДО роя
+}
+
+async function intake() {                                  // S21: шаг 6 — форма brd(), но вход другой
+  const map = await graphMap({});                          // карта целиком ИЛИ отказ с числом байт:
+  if (!map.ok) exit(err("blocked", { subject: map.why }));  //   индексной формы этот срез не строит
+  // цикл до LOOPS: agent(order, { role: "intake" }) с {MAP} и ДВУМЯ словарями из frdForm();
+  // на вопросе — askOperator(env, asked, "intake", "intake") — та же рельса, свой префикс чекпойнта;
+  // на ok — checkFrd({ path: STAGING }) ПО STAGING, зелёный → promote → exit(ok), красный → feedback
 }
 
 try { phase("task"); await task(); phase("brd"); await brd();
-      phase("survey-plan"); await surveyPlan(); phase("scope"); await scope(); }
+      phase("survey-plan"); await surveyPlan(); phase("scope"); await scope();
+      phase("graph"); await graph(); phase("intake"); await intake(); }
 catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: String(e?.message ?? e) }); }
 ```
 
-Порядок остаётся КОДОМ, а не `pipeline.json`: третья фаза — ещё одна именованная функция. Решение
-принято с фактами трёх шагов на руках (`docs/survey-plan.md` §5): три ручных вызова подряд дешевле,
-чем манифест плюс диспетчер плюс их тесты.
+Порядок остаётся КОДОМ, а не `pipeline.json`: шестая фаза — ещё одна именованная функция. Решение
+принято с фактами шести шагов на руках (`docs/survey-plan.md` §5): ручные вызовы подряд всё ещё
+дешевле, чем манифест плюс диспетчер плюс их тесты.
 
 Полный файл — `workflows/izi.js`. Никакого `shell()`, `JSON.parse` или кода возврата процесса —
 воркфлоу-скрипт не знает о процессах вообще, только о функциях хоста (`readText`, `answers`,
-`checkTask`, `checkBrd`, `brdForm`, `promote`, `setPending`, `clearPending`, `survey`, `budgets`, `herdrStatus`) и о встроенных глобалах pi
+`checkTask`, `checkBrd`, `brdForm`, `frdForm`, `promote`, `setPending`, `clearPending`, `survey`,
+`cells`, `digest`, `reuse`, `remember`, `checkPart`, `buildGraph`, `graphMap`, `checkFrd`,
+`budgets`, `herdrStatus`) и о встроенных глобалах pi
 (`agent`, `checkpoint`, `prompt`, `log`, `phase`). `izi_answer` НЕ входит в этот список — это tool
 интерактивной сессии (`pi.registerTool`, `ext/index.mjs`), а не функция песочницы воркфлоу; внутри
 `workflows/izi.js` его вызвать нельзя и не нужно — его зовёт модель ЧАТА в ответ на follow-up
@@ -295,16 +317,33 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   оба `track:"ok"`, 15 модулей, 2 компоненты, 5 изолированных, 4 уровня, `FruitResourceIT` привязан
   к `component-native`, `<systems/>` пуст, `subject search` — `found="no"`
 
-### 6. `intake` — требование × реальность → FRD · role `intake` · **новое**
-- **вход:** `.agent/brd.md` и граф в той форме, которая влезает в окно роли: до 32К токенов карты
-  (≈530 узлов) — `appgraph.xml` целиком, выше — ИНДЕКС модулей плюс узел по требованию
-  (`docs/concept.md`, «Как карта читается»). Весь граф читателю не отдаётся никогда «на всякий
-  случай»: он читает карту ДО того, как посчитана рябь, и потолок здесь не деградация, а форма
-- **выход:** `.agent/frd.md` — `{ contract: Delta[], scenarios[], touched[] }`, где
-  `Delta = Added | Changed | Removed | Unknown(op, why)`
-- **проверка:** каждый `touched` резолвится в УЗЕЛ графа (ключ — `path`); сценарий различающий
+### 6. `intake` — требование × реальность → FRD · role `intake` · **есть** (S21)
+Полная карточка — `docs/intake.md`; здесь только место шага в полосе.
+- **вход:** `.agent/brd.md`, ответы оператора и `appgraph.xml` ЦЕЛИКОМ. Потолок чтения — 32К токенов
+  ≈ 115 КБ, то есть ≈306 узлов при измеренных 417 Б/узел (`docs/graph.md` §7). Выше потолка шаг
+  **встаёт** с числом байт: индексной формы этот срез не строит, её цена не измерена ни разу
+  (`docs/intake.md` §3)
+- **выход:** `.agent/frd.xml` (через `.agent/staging/frd.xml`) — грамматика, а не проза: артефакт
+  читают СКРИПТЫ шагов 7 и 8, а `steps/design/design.mjs::checkDesign` уже сегодня объявляет своим
+  входом `{ scenarios, touched }`. Проза живёт внутри тегов (`<pre>`, `<post>`, `<step>`, `outcome`)
+- **проверка:** `checkFrd({ path })` → `steps/intake/frd.mjs::newFrd` — семь правил F1..F7,
+  объявленных один раз в `docs/intake.md` §5: состав сценария использования; `touched` резолвится в
+  УЗЕЛ графа; форма дельты из закрытого словаря и её узел объявлен `touched`; сценарий различающий;
+  у каждой величины назван источник из закрытого словаря, и число из него встречается в источниках
+  (`numbersIn` из `steps/brd/brd.mjs` — тот же код, что судит `fit` на шаге 2); карта отказов 1:1 с
+  расширениями; хотя бы одна дельта
+- **оператор:** есть — та же рельса, что у `brd` (`setPending` → `checkpoint` → `answers`), но
+  вопросы едут **ПАКЕТОМ**: роль собирает все пробелы и задаёт их одним нумерованным списком, оператор
+  отвечает одним сообщением. Два бюджета считают разное — `questions` (сколько вопросов за прогон,
+  60) и `questionRounds` (сколько выходов к оператору, 3); вопрос НЕ тратит `LOOPS`. Дорог не вопрос,
+  а круг: роль перечитывает BRD и карту целиком на каждом (`docs/intake.md` §2)
 - **`Unknown` — обязательная форма, а не украшение:** роль, не сумевшая классифицировать операцию
-  (узла нет, два кандидата, операция вне графа), объявляет это, а не выбирает правдоподобную дельту
+  (узла нет, два кандидата, операция вне графа), объявляет это, а не выбирает правдоподобную дельту.
+  Артефакт с `Unknown` СДАЁТСЯ — отказывает шаг 7, и вопрос оператору задаёт он
+- **источник содержания роли:** навык `requirements-intake`
+  (`izi-flow/skills/lib/requirements-intake/SKILL.md`) — Cockburn use cases, словарь данных, карта
+  режимов отказа, элицитация вместо изобретения. Его собственный запрет «не проектируй модули и не
+  пиши код» стоит в `$START_FORBIDDEN` роли
 - **здесь же выполнимость:** первый шаг, у которого есть оба операнда — чего хотят и что есть
 
 ### 7. `weight` — вес по SemVer · script · **новое**

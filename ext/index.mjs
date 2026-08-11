@@ -55,7 +55,7 @@
 //               ext/index.test.mjs imports these directly and calls run() with a fabricated
 //               { run: { cwd } } context to prove the anchor without a live pi/workflow harness.
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, rmSync, readdirSync, statSync } from "node:fs"
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, readdirSync, statSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { dirname, join } from "node:path"
 import { Type } from "typebox"
@@ -69,8 +69,10 @@ import { readSource } from "../steps/scope/source.mjs"
 import { newComputed, computedXml, parseComputed } from "../steps/scope/computed.mjs"
 import { newDigest } from "../steps/scope/digest.mjs"
 import { newGraph, graphXml } from "../steps/graph/graph.mjs"
+import { newFrd, FRD_FORM } from "../steps/intake/frd.mjs"
+import { parseMap, mapMeasure, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
-import { newAnswers, looksLikeTemplate } from "../core/answers.mjs"
+import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
 import { newBudgets, BUDGETS_PATH } from "../core/budgets.mjs"
 import { BRD_FORM, ABSENT_DOC } from "../core/form.mjs"
 import { writeAnswer } from "../bin/write-answer.mjs"
@@ -86,6 +88,10 @@ const at = (root, p) => join(root, p)
 // twin and already lives in core/budgets.mjs. workflows/izi.js repeats the literal because the
 // sandbox has no import — a copy demanded by the host, not a second declaration.
 const TASK_PATH = "TASK.md"
+// The run's own state, named once each: the operator's answers (a source of NUMBERS for checkBrd and
+// checkFrd), the question currently open, the roles' unjudged output, and the place the PREVIOUS
+// run's copies of all three are carried to. newRun below is what carries them.
+const ANSWERS_PATH = ".agent/answers.md"
 const readIfExists = (root, p) => (existsSync(at(root, p)) ? readFileSync(at(root, p), "utf8") : "")
 
 // parsedAnswers — one parse of .agent/answers.md shared by `answers` and `checkBrd` below, so the
@@ -104,20 +110,20 @@ export const readText = {
 }
 
 export const answers = {
-  description: "Operator answers from .agent/answers.md as values ({question,text}[]), not raw text; [] when the file is absent.",
+  description: "Operator answers from .agent/answers.md as values ({n,question,text}[]), not raw text; [] when the file is absent. `n` numbers a question within its exchange; the key a caller matches on is the question TEXT.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "array",
     items: {
       type: "object",
-      properties: { question: { type: "string" }, text: { type: "string" } },
+      properties: { n: { type: "number" }, question: { type: "string" }, text: { type: "string" } },
       required: ["question", "text"],
       additionalProperties: false,
     },
   },
   run(_input, context) {
     const root = runRoot(context)
-    const r = parsedAnswers(readIfExists(root, ".agent/answers.md"))
+    const r = parsedAnswers(readIfExists(root, ANSWERS_PATH))
     if (!r.ok) throw new Error(`answers: .agent/answers.md повреждён — ${r.error.detail}`)
     return r.value
   },
@@ -163,7 +169,7 @@ export const checkBrd = {
     }
     const text = readFileSync(at(root, path), "utf8")
     const task = readIfExists(root, TASK_PATH)
-    const ans = parsedAnswers(readIfExists(root, ".agent/answers.md"))
+    const ans = parsedAnswers(readIfExists(root, ANSWERS_PATH))
     const answerTexts = ans.ok ? ans.value.map((a) => a.text) : []
     const r = newBrd(text, [task, ...answerTexts])
     if (!r.ok) return { ok: false, blockers: r.error.detail }
@@ -203,8 +209,29 @@ export const brdForm = {
   },
 }
 
+// frdForm — the same device as brdForm, for step 6: the order SUBSTITUTES the vocabularies the
+// guardrail judges by (steps/intake/frd.mjs::FRD_FORM), it does not retype them. A form written twice
+// drifts, and the copy that runs is the machine's.
+export const frdForm = {
+  description: "The FRD's form as data (deltaForms, sources) from steps/intake/frd.mjs — the order SUBSTITUTES these, it does not restate them.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      deltaForms: { type: "string" },
+      sources: { type: "string" },
+    },
+    required: ["deltaForms", "sources"],
+    additionalProperties: false,
+  },
+  run() {
+    // Joined HERE, not in the sandbox: the workflow substitutes a value, it does not format one.
+    return { deltaForms: FRD_FORM.deltaForms.join(" | "), sources: FRD_FORM.sources.join(" | ") }
+  },
+}
+
 export const budgets = {
-  description: "Run budgets from the project's izi.config.json (loops, questions, checkpointRetries). A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
+  description: "Run budgets from the project's izi.config.json (loops, questions, questionRounds, checkpointRetries, maxParallel). A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -213,6 +240,7 @@ export const budgets = {
       why: { type: "string" },
       loops: { type: "number" },
       questions: { type: "number" },
+      questionRounds: { type: "number" },
       checkpointRetries: { type: "number" },
       // maxParallel is declared here as well as in core/budgets.mjs for a reason the host makes
       // unavoidable: it validates every function's OUTPUT against this schema, and
@@ -274,20 +302,31 @@ export const herdrStatus = {
 }
 
 const PENDING_PATH = ".agent/pending.json"
+const STAGING_DIR = ".agent/staging"
+const PREV_DIR = ".agent/prev"
 
+// setPending writes the open question AND ITS ITEMS: a question may be a BATCH (step 6 asks 25-30 at
+// once), and the answer to a batch is addressed per item. The NUMBERING is assigned here, by machine,
+// exactly as the question key itself is — the model reads numbers from this file and never invents
+// one. A role that asked a single question (gilb) simply arrives with one item.
 export const setPending = {
-  description: "Record the operator question currently open at .agent/pending.json, called just before checkpoint() pauses. izi_answer reads this file for the question key — the model never supplies it.",
+  description: "Record the operator question currently open at .agent/pending.json, called just before checkpoint() pauses. Numbers its items 1..N. izi_answer reads this file for the questions and their numbers — the model never supplies them.",
   input: {
     type: "object",
-    properties: { subject: { type: "string" }, evidence: { type: "string" } },
+    properties: {
+      subject: { type: "string" },
+      evidence: { type: "string" },
+      items: { type: "array", items: { type: "string" } },
+    },
     required: ["subject"],
     additionalProperties: false,
   },
   output: { type: "object", properties: {}, additionalProperties: false },
-  run({ subject, evidence }, context) {
+  run({ subject, evidence, items }, context) {
     const root = runRoot(context)
+    const list = (items && items.length ? items : [subject]).map((text, i) => ({ n: i + 1, text }))
     mkdirSync(dirname(at(root, PENDING_PATH)), { recursive: true })
-    writeFileSync(at(root, PENDING_PATH), JSON.stringify({ subject, evidence: evidence || "" }, null, 2))
+    writeFileSync(at(root, PENDING_PATH), JSON.stringify({ subject, evidence: evidence || "", items: list }, null, 2))
     return {}
   },
 }
@@ -300,6 +339,90 @@ export const clearPending = {
     const root = runRoot(context)
     if (existsSync(at(root, PENDING_PATH))) rmSync(at(root, PENDING_PATH))
     return {}
+  },
+}
+
+// countFiles — how many FILES lie under a directory, at any depth; 0 for an absent one. Used by
+// newRun to say what it carried away, so "staging was empty" and "staging held a rejected part" are
+// different facts in the log instead of one silent line.
+function countFiles(dir) {
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) return 0
+  let n = 0
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name)
+    n += statSync(p).isDirectory() ? countFiles(p) : 1
+  }
+  return n
+}
+
+// newRun — the first act of a run: the PREVIOUS run's state is carried out of the way.
+//
+// Why it exists (live evidence, runbox 11.08): the answer «10» to gilb's question «предел 50
+// (альтернативы 20, 100)?» was written by run 0fbfdb53, which the operator then interrupted. Run
+// f5361857 started in the same directory, read that answer as its own (workflows/izi.js's
+// answersBlock puts every accumulated exchange into the order), and asked the operator again in its
+// own words — with 10 already as its default. The numbers matched, so nothing turned red. Had the
+// dead run's answer been «50», `fit: 50` would have passed checkBrd's invented-default rule in a run
+// where nobody ever said 50: the VALUES of answers are one of that rule's legal sources
+// (see checkBrd/checkFrd below), and nothing in the file says which run's question they answer.
+//
+// Three things are the state of ONE run, and all three are carried to .agent/prev/:
+//   answers.md   — an answer is addressed to a QUESTION of the run that asked it
+//   pending.json — the open question of a run that is over; izi_answer keys the answer off THIS file
+//   staging/     — the current run's role never wrote these, yet a guardrail judges staging and
+//                  promote() moves what it accepts (CLAUDE.md constraint 2)
+//
+// NOTHING is deleted, and that is deliberate: this harness diagnoses runs from facts on disk
+// (sandbox/pi-runbox.md §Диагноз — never trust what the launching model printed), so the state of a
+// run that fell over is EVIDENCE. It is carried aside, not destroyed. What .agent/prev/ held before
+// is overwritten: the run before last has already been read or has already lost its interest.
+//
+// What is NOT touched: the artifacts (.agent/brd.md, frd.xml, appgraph.xml, graph-parts/) — promote
+// overwrites each after a green check — and .izi/parts, the part cache that outlives runs BY DESIGN
+// and is re-judged before use (`reuse`). That is the whole distinction: a cached part can be
+// re-judged against today's tree, an answer cannot be re-judged against a question nobody asked.
+//
+// Replay-safe by construction: the host journals a completed function call under its structural path
+// and replays it from the journal on a retry of the same runId (packages/core/src/registry.ts:149,
+// persistence.ts:1027) — so `function/newRun/1` does not run twice, and answers written AFTER it
+// survive a resume.
+export const newRun = {
+  description: "First act of a run: carry the PREVIOUS run's state out of the way — .agent/answers.md, .agent/pending.json and the leftovers under .agent/staging/ are MOVED into .agent/prev/ (nothing is deleted; artifacts and the .izi/parts cache are untouched). Returns what was carried, so the run can log why the operator is asked again.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      answers: { type: "number" },   // answers carried away, counted by core/answers.mjs, not by eye
+      pending: { type: "boolean" },  // an open question of the dead run was found
+      staged: { type: "number" },    // files a guardrail never judged, or judged and rejected
+    },
+    required: ["answers", "pending", "staged"],
+    additionalProperties: false,
+  },
+  run(_input, context) {
+    const root = runRoot(context)
+    const prev = at(root, PREV_DIR)
+
+    const raw = readIfExists(root, ANSWERS_PATH)
+    // A malformed file is still carried away — counting it is what fails, not moving it. The count
+    // is a number for the log; the move is what the rule is about.
+    const answersCount = raw ? (newAnswers(raw).value || []).length : 0
+    const pending = existsSync(at(root, PENDING_PATH))
+    const staged = countFiles(at(root, STAGING_DIR))
+    if (!raw && !pending && !staged) return { answers: 0, pending: false, staged: 0 }
+
+    mkdirSync(prev, { recursive: true })
+    // renameSync overwrites an existing destination file, which is exactly the intent: .agent/prev/
+    // holds the LAST run, not a growing pile. A directory is not overwritten, so staging's old copy
+    // goes first.
+    if (raw) renameSync(at(root, ANSWERS_PATH), join(prev, "answers.md"))
+    if (pending) renameSync(at(root, PENDING_PATH), join(prev, "pending.json"))
+    if (staged) {
+      rmSync(join(prev, "staging"), { recursive: true, force: true })
+      renameSync(at(root, STAGING_DIR), join(prev, "staging"))
+      mkdirSync(at(root, STAGING_DIR), { recursive: true }) // the roles write into it; leave it ready
+    }
+    return { answers: answersCount, pending, staged }
   },
 }
 
@@ -756,19 +879,102 @@ export const buildGraph = {
   },
 }
 
+// --- intake: the map read, and the FRD judged --------------------------------------------------
+//
+// The map is handed to the role WHOLE or not at all. Above the reading ceiling the step refuses with
+// the number instead of degrading into a form whose price nobody has measured — the reasoning, and
+// what would bring the index form back, is docs/intake.md §3.
+export const graphMap = {
+  description: "Read .agent/appgraph.xml for step 6 and measure what it costs to hand it to a role (steps/intake/map.mjs). Above the reading ceiling the map is NOT trimmed — ok:false with the byte count, so the step refuses rather than silently degrading.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      text: { type: "string" },
+      bytes: { type: "number" },
+      nodes: { type: "number" },
+      cap: { type: "number" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_input, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, GRAPH_PATH))) {
+      return { ok: false, why: `${GRAPH_PATH} не существует — шаг 5 не отработал, читать нечего` }
+    }
+    const text = readFileSync(at(root, GRAPH_PATH), "utf8")
+    const m = mapMeasure(text)
+    if (m.overCap) {
+      return { ok: false, why: `карта ${m.bytes} Б на ${m.nodes} узлов — выше потолка чтения ${MAP_CAP_BYTES} Б: индексной формы этот срез не строит (docs/intake.md §3)`, bytes: m.bytes, nodes: m.nodes, cap: MAP_CAP_BYTES }
+    }
+    return { ok: true, text, bytes: m.bytes, nodes: m.nodes, cap: MAP_CAP_BYTES }
+  },
+}
+export const checkFrd = {
+  description: "Judge a staged FRD by steps/intake/frd.mjs::newFrd. Node keys come from .agent/appgraph.xml; a number in a field's domain or an NFR's fit must occur in TASK.md, in the VALUES of operator answers, in a BRD requirement's fit, or in the map itself.",
+  input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      deltas: { type: "number" },
+      unknown: { type: "number" },
+      scenarios: { type: "number" },
+      questions: { type: "number" },
+      touched: { type: "number" },
+      blockers: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ path }, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, path))) {
+      return { ok: false, blockers: `${path} не существует — роль ничего не записала по staging-пути` }
+    }
+    if (!existsSync(at(root, GRAPH_PATH))) {
+      return { ok: false, blockers: `${GRAPH_PATH} не существует — узлы карты неизвестны, судить дельту нечем` }
+    }
+
+    const mapText = readFileSync(at(root, GRAPH_PATH), "utf8")
+    const ans = parsedAnswers(readIfExists(root, ANSWERS_PATH))
+    // The provenance of a number: the task, the VALUES of the operator's answers (never the wording
+    // of a question — the alternatives an offer lists are the role's own words), the fit criteria of
+    // the BRD, and the map. The BRD arrives through parseBrd — one parser, from steps/brd.
+    const fits = parseBrd(readIfExists(root, ".agent/brd.md")).requirements.map((r) => r.fit || "").join("\n")
+    const sources = [readIfExists(root, TASK_PATH), ...(ans.ok ? ans.value.map((a) => a.text) : []), fits, mapText]
+
+    const map = parseMap(mapText)
+    const r = newFrd({ xml: readFileSync(at(root, path), "utf8"), nodes: map.nodes, tests: map.tests, sources })
+    if (!r.ok) return { ok: false, blockers: r.error.detail }
+    const v = r.value
+    return { ok: true, deltas: v.deltas.length, unknown: v.unknown, scenarios: v.scenarios.length, questions: v.questions.length, touched: v.touched.length }
+  },
+}
+
 // izi_answer — an ordinary pi TOOL (not a workflow sandbox function: this one is called by the
 // INTERACTIVE session's own model, reacting to the checkpoint follow-up message that
-// workflows/izi.js's askOperator() delivers into this same chat). It takes exactly one parameter,
-// `text` — the operator's reply, verbatim, nothing else. The question KEY is never a model input: it
-// is read from .agent/pending.json, written by the workflow's setPending() just before the pause.
-// Deliberately narrow — a tool that accepted `question` as a parameter would let a distracted model
-// answer the wrong open question, or invent one; this tool cannot, because it has no such parameter.
-const iziAnswer = {
+// workflows/izi.js's askOperator() delivers into this same chat). The question TEXT is never a model
+// input: the tool takes ANSWERS BY NUMBER and reads the questions themselves from
+// .agent/pending.json, written by the workflow's setPending() just before the pause.
+//
+// The model does the SPLITTING (it has the operator's reply and the batch in front of it) and this
+// tool JUDGES the split: an unknown number, or a batch answered only halfway, is a refusal naming the
+// missing numbers — not a half-written file. Splitting the reply here with a regex over "1. … 2. …"
+// would be parsing prose, the class of defect that returned three unusable graphs in a row.
+export const iziAnswer = {
   name: "izi_answer",
   label: "izi: operator answer",
-  description: "Record the operator's reply to the currently open izi checkpoint question in .agent/answers.md. Call with the operator's answer text, verbatim, right after they reply in this chat to a 'Workflow izi checkpoint ...' message. The question key comes from .agent/pending.json, not from you — do not pass it.",
-  promptSnippet: "izi_answer({text}) — record the operator's reply to the open izi checkpoint question; the key is read from .agent/pending.json, not supplied here.",
-  parameters: Type.Object({ text: Type.String({ description: "The operator's answer, verbatim — not your paraphrase, not the alternatives you offered." }) }, { additionalProperties: false }),
+  description: "Record the operator's reply to the currently open izi checkpoint question(s) in .agent/answers.md. Read the open questions and their numbers from .agent/pending.json (field items), then call with ONE xml block pairing every question with its answer: <exchange><question_1>…</question_1><answer_1>…</answer_1>…</exchange>. Every question must get an answer — a partial call is refused. SHOW the returned table to the operator: it says which answer landed under which question.",
+  promptSnippet: "izi_answer({exchange}) — record the operator's reply as <exchange><question_N>…</question_N><answer_N>…</answer_N></exchange>; numbers and questions come from .agent/pending.json, not from you.",
+  parameters: Type.Object({
+    exchange: Type.String({
+      description: "One <exchange> block: for every open question of .agent/pending.json a <question_N> with that question and an <answer_N> with the operator's reply to it, verbatim — not your paraphrase, not the alternatives the role offered. The value is the answer ITSELF, without the number the operator addressed it with: «1 GET /fruits» answering question 1 is <answer_1>GET /fruits</answer_1>.",
+    }),
+  }, { additionalProperties: false }),
   // ctx (5th arg) is pi's ExtensionContext (@earendil-works/pi-coding-agent) — this tool runs in the
   // INTERACTIVE session, which carries no WorkflowRunContext at all (that only exists inside the
   // workflow sandbox's registered functions, above). ctx.cwd is the session's own cwd — the same
@@ -785,17 +991,59 @@ const iziAnswer = {
     } catch {
       throw new Error("izi_answer: .agent/pending.json повреждён — не JSON")
     }
-    if (!pending || typeof pending.subject !== "string" || !pending.subject) {
-      throw new Error("izi_answer: .agent/pending.json не несёт subject — писать в answers.md некуда")
+    const items = Array.isArray(pending.items) && pending.items.length
+      ? pending.items
+      : [{ n: 1, text: pending.subject }]   // a pending written before items existed still answers
+    if (!items.every((i) => i && typeof i.text === "string" && i.text)) {
+      throw new Error("izi_answer: .agent/pending.json не несёт вопросов — писать в answers.md некуда")
     }
-    if (looksLikeTemplate(params.text)) {
-      throw new Error("izi_answer: текст похож на шаблон-плейсхолдер (форма «<...>»), а не на ответ оператора")
+
+    // The block arrives as TEXT in this pipeline's own grammar and is read by this pipeline's own
+    // parser — the model composes, the machine judges. What it is judged on is NUMBERS, never the
+    // wording: the observed defect (live run e82192db) was a correctly copied question with somebody
+    // else's answer under it, which no comparison of question texts would have caught, while such a
+    // comparison would refuse an honest call over one stray space in a long Cyrillic line.
+    const parsed = parsedAnswers(params.exchange)
+    if (!parsed.ok) {
+      throw new Error(`izi_answer: блок не разбирается — ${parsed.error.detail}. Форма: <exchange><question_1>…</question_1><answer_1>…</answer_1></exchange>`)
     }
-    const result = writeAnswer(root, { question: pending.subject, text: params.text })
+    if (!parsed.value.length) {
+      throw new Error("izi_answer: в блоке нет ни одной пары вопрос-ответ. Форма: <exchange><question_1>вопрос</question_1><answer_1>ответ</answer_1></exchange>, номера — из .agent/pending.json")
+    }
+    // Normalised HERE, once, before anything reads a value: the write below, the operator's table and
+    // the checks in between must all see the same text. stripOrdinal drops the number the operator
+    // ADDRESSED an answer with (live run 9d126ef3 — see its contract in core/answers.mjs); the value
+    // is what the guardrails may take a number from, so the addressing must not survive into it.
+    const byNumber = new Map(parsed.value.map((a) => [a.n, stripOrdinal(a.n, a.text)]))
+
+    // Every open question must be answered, and every answer must belong to an open question. Both
+    // directions matter: a stray number means the model answered something nobody asked, and a
+    // missing one means the batch would close with a hole nobody would notice until step 7.
+    const unknown = [...byNumber.keys()].filter((n) => !items.some((i) => i.n === n))
+    if (unknown.length) {
+      throw new Error(`izi_answer: номеров ${unknown.join(", ")} нет среди открытых вопросов (в .agent/pending.json их ${items.length}) — сверь номера с файлом`)
+    }
+    const missing = items.filter((i) => !String(byNumber.get(i.n) || "").trim()).map((i) => i.n)
+    if (missing.length) {
+      throw new Error(`izi_answer: нет ответов на ${missing.join(", ")} из ${items.length} — спроси оператора об оставшихся и вызови тул со ВСЕМИ ответами разом`)
+    }
+    const templated = items.filter((i) => looksLikeTemplate(byNumber.get(i.n))).map((i) => i.n)
+    if (templated.length) {
+      throw new Error(`izi_answer: ответ на ${templated.join(", ")} похож на шаблон-плейсхолдер (форма «<...>»), а не на ответ оператора`)
+    }
+
+    // The QUESTION written to disk is the one from pending.json, not the one the model retyped: the
+    // file keeps the pipeline's own text, and the model's copy serves only the table below.
+    const result = writeAnswer(root, items.map((i) => ({ n: i.n, question: i.text, text: byNumber.get(i.n) })))
+    if (result.why) throw new Error(`izi_answer: ${result.why}`)
+
+    // The table is the whole point of taking pairs instead of bare numbers: an answer glued to the
+    // wrong question is invisible to any check and obvious to the operator in one line.
+    const table = items.map((i) => `${i.n}. ${i.text}\n   → ${byNumber.get(i.n)}`).join("\n")
     const note = result.written ? "новая запись" : "уже была записана"
     return {
-      content: [{ type: "text", text: `izi_answer: записано по ключу «${pending.subject}» (${note}, всего ${result.count} в .agent/answers.md).` }],
-      details: { question: pending.subject, ...result },
+      content: [{ type: "text", text: `izi_answer: записано ответов ${items.length} (${note}, всего ${result.count} в .agent/answers.md). ПОКАЖИ оператору это разложение — если ответ лёг не под свой вопрос, он увидит здесь:\n${table}` }],
+      details: { answered: items.map((i) => i.n), ...result },
     }
   },
 }
@@ -803,14 +1051,15 @@ const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.8.0",
-    headline: "izi: task → brd → survey-plan → scope → graph host functions",
-    description: "readText/answers/brdForm/budgets/herdrStatus/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph, plus the gilb and scout role directories (steps/brd/, steps/scope/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, budgets, herdrStatus, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph },
-    // steps/brd/ carries gilb.md and steps/scope/ carries scout.md (role files, named by ROLE not by
-    // step — see steps/brd/gilb.md's own header) alongside their cores/orders/tests;
+    version: "1.10.0",
+    headline: "izi: task → brd → survey-plan → scope → graph → intake host functions",
+    description: "readText/answers/brdForm/frdForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd, plus the gilb, scout and intake role directories (steps/brd/, steps/scope/, steps/intake/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd },
+    // steps/brd/ carries gilb.md, steps/scope/ carries scout.md and steps/intake/ carries intake.md
+    // (role files, named by ROLE not by step — see steps/brd/gilb.md's own header) alongside their
+    // cores/orders/tests;
     // pi-extensible-workflows scans a role directory for *.md files only (validation.js
     // scanRoleFiles), so the non-.md neighbours here are inert to role resolution.
-    roleDirectories: [new URL("../steps/brd/", import.meta.url), new URL("../steps/scope/", import.meta.url)],
+    roleDirectories: [new URL("../steps/brd/", import.meta.url), new URL("../steps/scope/", import.meta.url), new URL("../steps/intake/", import.meta.url)],
   })
 }

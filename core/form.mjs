@@ -64,9 +64,11 @@ export const ABSENT_DOC = "(no operator answers yet)"
 // sane ceiling — and the lint stays silent. Verified by reintroducing the defect, not by reasoning. A
 // LINE, by contrast, is either written in Russian or it is not.
 //
-// The scope is the subagent: a step's role.md and its order.tpl. The router izi.md is NOT included
-// and stays Russian: its $START_OUTPUT_FORMAT is a verbatim copy of the lines the acceptance script
-// prints, and translating the router apart from that code would split a form from its only source.
+// The scope is every PROMPT this repository writes for a model: a step's role.md, its order.tpl and
+// the router prompts/izi.md. The router was the one exception while its text quoted the acceptance
+// script's Russian output verbatim; it no longer does — it delegates a pause's wording to
+// workflows/izi.js::askOperator — so the exception is gone with its reason. What stays Russian is
+// what the OPERATOR reads: a question's subject, a `blocked` diagnosis, log() and docs/*.md.
 //
 // $START_EXAMPLE is excluded from the check on purpose: an example shows an input and an artifact,
 // and their language is set by the order, not by the role (F16, standards/role.md). An English
@@ -74,7 +76,7 @@ export const ABSENT_DOC = "(no operator answers yet)"
 export const PROMPT_LANG = Object.freeze({
   code: "en",
   maxCyrillicPerLine: 0.5,
-  scope: "subagent: steps/<id>/role.md and its order.tpl",
+  scope: "every prompt this repo writes: steps/<id>/role.md, its order.tpl and prompts/izi.md",
 })
 
 // --- Prompt layers --------------------------------------------------------------------------------

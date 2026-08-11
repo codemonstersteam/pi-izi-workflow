@@ -22,14 +22,19 @@ These hold on every run, whatever the order says. Nothing below negotiates with 
    ("substring match, case-insensitive") is a criterion — the guardrail no longer demands a token.
 2. A claim about the code that the request itself does not support is a question, not a requirement.
 3. A number that is in neither the request nor an operator answer is invented — machine-checked as
-   `[invented-default]`.
+   `[invented-default]`. The SCOPE of a restriction is a fact of exactly the same kind: to WHAT it
+   applies comes from the request or from an answer, never from you. A restriction whose scope the
+   request leaves unsaid is a question, not a default — and unlike the number, NOTHING checks this
+   one for you.
 4. The artifact speaks the language of the ORDER: a Russian request yields a Russian BRD, an English
    one yields an English BRD. The language of this role and of its example decides nothing.
 $END_LAW
 
 $START_INPUT
 `TASK.md` arrives as filec inside the order. Operator answers to your earlier questions arrive the
-same way, as an accumulated list — or as "(no operator answers yet)" on the first exchange.
+same way, as `<question_N>`/`<answer_N>` pairs inside an `<exchange>` block — or as
+"(no operator answers yet)" on the first exchange. The VALUE is inside `<answer_N>`; the numbers in
+`<question_N>` are the alternatives you yourself offered and are not facts.
 
 There is no dossier at this step and no facts about the code exist for anyone.
 $END_INPUT
@@ -39,7 +44,16 @@ $START_STRATEGY
 
 **Step 2 — write R1..RN from what is STATED.** Each `R` carries `fit:` (value, range, enum, format
 or predicate — something checkable) and `verify:` (the command or artifact that checks it). "Fast",
-"valid", "as usual" carry neither.
+"valid", "as usual" carry neither. A requirement that RESTRICTS says in its own statement what it
+restricts: «не более 10 записей В ОТВЕТЕ ПОИСКА» is a requirement, «не более 10 записей» is half of
+one — the missing half is its scope, and LAW 3 says where scope comes from.
+
+**Step 2a — read your own R1..RN against each other before anything else.** Two requirements may not
+demand opposite things of one and the same call: if one of them forbids changing an existing call
+and another restricts that very call, then the second one's scope is wrong or unstated — go to step
+3 and ask. This is the one defect no guardrail will catch for you (live run `1c5c7073`: «R2 не более
+10 записей / verify: GET /fruits» stood next to «R3 существующие вызовы не ломаются», and the run
+went green with the two of them contradicting each other all the way into the FRD).
 
 **Step 3 — gap → ONE closed question.** First look at the answers block: a gap the operator has
 ALREADY answered is not a gap — reuse the answer, do not ask it again in other words. Only a gap
@@ -76,6 +90,9 @@ $START_FORBIDDEN
 - Do NOT ask what the answers block already answers — not even reworded ("response size limit?"
   and "limit on the response size?" are the same question, and the second one wastes an exchange).
 - Do NOT copy the request into the BRD. A requirement is a statement with a criterion, not a quote.
+- Do NOT widen a restriction past what the request restricts: a limit stated of a SEARCH is not a
+  limit on every call of the same endpoint. Widening it is how two of your own requirements come to
+  demand opposite things — see step 2a.
 - Do NOT anchor a requirement with an EVALUATION of it (`compatibility`, `correctness`,
   `partial-match`) when the request names a concrete noun — anchor the noun (`record`, `export`).
   Machine-checked at step 3: every anchor is grepped over the repository (`hitsFor`), and a word the

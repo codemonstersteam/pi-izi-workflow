@@ -8,9 +8,9 @@
 //               NO timers (pi-extensible-workflows/packages/core/src/execution.ts) — every byte it
 //               reads or writes goes through a host function listed below.
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
-//               GLOBALS — readText · answers · brdForm · budgets · herdrStatus · checkTask · checkBrd ·
-//               promote · setPending · clearPending · survey · cells · digest · reuse · remember ·
-//               checkPart · buildGraph. They are not
+//               GLOBALS — readText · answers · brdForm · frdForm · budgets · herdrStatus · newRun · checkTask ·
+//               checkBrd · promote · setPending · clearPending · survey · cells · digest · reuse ·
+//               remember · checkPart · buildGraph · graphMap · checkFrd. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -19,11 +19,13 @@
 //               maxParallel. Read once, at the start, by budgets(); the defaults live in
 //               core/budgets.mjs and are NOT copied here. A broken config is a refusal, never a
 //               silent default.
-// EXTERNAL_DEPENDENCY: roles `gilb` (steps/brd/gilb.md) and `scout` (steps/scope/scout.md) resolved
-//               by pi from the extension's roleDirectories BY FILENAME (validation.js
-//               scanRoleFiles). Renaming a role file breaks agent({role}) with no other symptom.
+// EXTERNAL_DEPENDENCY: roles `gilb` (steps/brd/gilb.md), `scout` (steps/scope/scout.md) and `intake`
+//               (steps/intake/intake.md) resolved by pi from the extension's roleDirectories BY
+//               FILENAME (validation.js scanRoleFiles). Renaming a role file breaks agent({role})
+//               with no other symptom.
 // EXTERNAL_DEPENDENCY: order templates read from disk at run time — steps/brd/order.tpl,
-//               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl. prompt() demands an
+//               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl, steps/intake/order.tpl.
+//               prompt() demands an
 //               EXACT bidirectional match between a template's placeholders and the values passed
 //               here: an added key with no placeholder, or a placeholder with no key, throws at
 //               launch. steps/scope/part.test.mjs holds that seam.
@@ -43,8 +45,9 @@
 
 // Budgets are assigned ONCE, before any phase. A budget that could change mid-run would make
 // "the loop is exhausted after N attempts" a statement about nothing.
-let LOOPS;              // gilb/scout redelegations after a RED guardrail check, NOT questions
-let QUESTIONS;          // operator exchanges allowed in one run
+let LOOPS;              // gilb/scout/intake redelegations after a RED guardrail check, NOT questions
+let QUESTIONS;          // QUESTIONS allowed in one run — not exchanges: intake asks them in BATCHES
+let QUESTION_ROUNDS;    // trips to the operator allowed in one run — the round is what costs context
 let CHECKPOINT_RETRIES; // re-pauses on the SAME question when no matching answer showed up
 let MAX_PARALLEL;       // swarm batch size at step 4 — see scope() for why the sandbox needs one
 
@@ -55,8 +58,8 @@ const exit = (result) => { throw new Exit(result); };
 
 // ENVELOPE — the one shape every role in this run returns through outputSchema. The host validates
 // it (standards/workflow.md §5), so no parser is written anywhere. Fields are shared across roles on
-// purpose: `requirements`/`questions` belong to gilb, `modules`/`gaps` to scout, and a role simply
-// omits what is not its own.
+// purpose: `requirements`/`questions` belong to gilb, `modules`/`gaps` to scout,
+// `deltas`/`scenarios`/`unknown` to intake, and a role simply omits what is not its own.
 const ENVELOPE = {
   type: "object",
   properties: {
@@ -66,8 +69,15 @@ const ENVELOPE = {
     questions: { type: "number" },
     modules: { type: "number" },
     gaps: { type: "number" },
+    deltas: { type: "number" },
+    scenarios: { type: "number" },
+    unknown: { type: "number" },
     kind: { type: "string", enum: ["blocked", "invalid", "question", "escalate", "crashed"] },
     subject: { type: "string" },
+    // items — the questions of a BATCH as a LIST. The machine numbers them (setPending) and the
+    // answer is addressed per number, so nothing has to parse "1) … 2) …" out of prose. A role that
+    // asks a single question omits this and the pipeline reads [subject].
+    items: { type: "array", items: { type: "string" } },
     evidence: { type: "string" },
     answer_cmd: { type: "string" },
   },
@@ -99,14 +109,39 @@ async function task() {
 //   Purity:       pure
 function byteLen(s) { return unescape(encodeURIComponent(String(s == null ? "" : s))).length; }
 
+// FUNCTION_CONTRACT: answersBlock — the operator's answers as they travel INTO an order
+//   Input:        seen — answers({})'s value: [{ n, question, text }]; absent — what to substitute
+//                 when there are none yet (the registry's wording, never invented here)
+//   Dependencies: —
+//   Antecedent:   seen is an array; an empty one means the first exchange
+//   Consequent:   success: the SAME grammar the answers file itself carries — one `<question_N>` and
+//                          one `<answer_N>` per answer. One fact, one form: before this, the file was
+//                          xml on disk and prose in the order, and a third shape of the same fact is
+//                          how a format drifts (CLAUDE.md: do not restate in prose what lives in code)
+//   Purity:       pure
+// Why the role gets the pairs and not a paraphrase: the boundary "a question is not a source of
+// facts" (core/answers.mjs, F17) is then visible in the SHAPE — the alternatives' numbers sit inside
+// question_N, the value inside answer_N — and the role can cite "answer 2" instead of retelling it.
+// The numbering here is the READER's, running 1..N over every exchange of the run: on disk each
+// round numbers its own questions from 1, and two `question_1` in one block would be ambiguous. The
+// pipeline never matches on these numbers — pending.json owns the ones that address an answer.
+function answersBlock(seen, absent) {
+  if (!seen.length) return absent;
+  const body = seen.map((a, i) => `  <question_${i + 1}>${a.question}</question_${i + 1}>\n  <answer_${i + 1}>${a.text}</answer_${i + 1}>`).join("\n");
+  return `<exchange>\n${body}\n</exchange>`;
+}
+
 // The checkpoint prompt is capped at 1024 UTF-8 bytes and its context at 4096
 // (pi-extensible-workflows/src/validation.ts:17-22, validateCheckpoint); past that it throws
 // INVALID_METADATA and the run CRASHES rather than degrades. gilb's subject is natural-language
 // operator prose with no length contract of its own, so the prompt cannot simply interpolate it.
-const ASK_HEAD = "Роль gilb ждёт ответа оператора в этом чате. ";
-const ASK_TAIL = " Получив ответ — вызови tool izi_answer({text: ответ дословно}). Затем workflow_respond({runId: <runId запуска>, name: <name из заголовка этого сообщения>, approved: true}). Отказ оператора — approved: false.";
-const ASK_LONG = "Вопрос слишком длинный для этого сообщения — прочитай его дословно в .agent/pending.json (поле subject) и задай оператору оттуда.";
-const RETRY_NOTE = "\n\n(Ответ не найден в .agent/answers.md по этому ключу — переспроси и повтори вызовы.)";
+const ASK_HEAD = (role) => `Роль ${role} ждёт ответа оператора в этом чате. `;
+const ASK_TAIL = " Получив ответ — вызови tool izi_answer({exchange}) со ВСЕМИ ответами разом: блок <exchange><question_N>вопрос</question_N><answer_N>ответ</answer_N>…</exchange>, номера и вопросы возьми из .agent/pending.json (поле items), не придумывай. ПОКАЖИ оператору разложение, которое вернёт тул. Затем workflow_respond({runId: <runId запуска>, name: <name из заголовка этого сообщения>, approved: true}). Отказ оператора — approved: false.";
+// The long form is the NORMAL path for intake, not an emergency one: a grilling batch of 25-30
+// questions cannot fit 1024 bytes and never will. The questions are not shortened — a clipped
+// question changes its meaning — they travel in .agent/pending.json, a file with no length limit.
+const ASK_LONG = "Вопросы не влезают в это сообщение — прочитай их дословно в .agent/pending.json (поле subject) и задай оператору оттуда, все сразу.";
+const RETRY_NOTE = "\n\n(Ответы не найдены в .agent/answers.md — переспроси оператора и вызови izi_answer со ВСЕМИ ответами разом, по номерам из .agent/pending.json.)";
 
 // FUNCTION_CONTRACT: askPrompt — the chat message that carries a question to the operator
 //   Input:        subject — the question verbatim, any length; retryNote — appended note or ""
@@ -117,22 +152,27 @@ const RETRY_NOTE = "\n\n(Ответ не найден в .agent/answers.md по 
 //                          its meaning mid-sentence — it points at .agent/pending.json, which
 //                          setPending() wrote with no length limit at all (a file, not this channel)
 //   Purity:       pure
-function askPrompt(subject, retryNote) {
+function askPrompt(subject, retryNote, role) {
   const note = retryNote || "";
-  const short = `${ASK_HEAD}Спроси оператора дословно:\n${subject}${ASK_TAIL}${note}`;
+  const head = ASK_HEAD(role);
+  const short = `${head}Спроси оператора дословно:\n${subject}${ASK_TAIL}${note}`;
   if (byteLen(short) <= 1024) return short;
-  return `${ASK_HEAD}${ASK_LONG}${ASK_TAIL}${note}`; // byte-safe regardless of subject length
+  return `${head}${ASK_LONG}${ASK_TAIL}${note}`; // byte-safe regardless of subject length
 }
 
 // FUNCTION_CONTRACT: askOperator — one question→answer exchange with the operator
 //   Input:        env — the role's err envelope carrying `subject` (the question) and `evidence`;
-//                 n — the question's ordinal in this run, used for the checkpoint name
+//                 n — the question's ordinal in this run, used for the checkpoint name;
+//                 step — the step's id, so two steps asking in one run get distinct checkpoint names
+//                        (the host keys a pause by its name; `brd-q1` twice would be one pause)
 //   Dependencies: EXTERNAL — setPending, checkpoint, answers, clearPending; askPrompt
-//   Antecedent:   env.subject is the question VERBATIM; CHECKPOINT_RETRIES ≥ 1
-//   Consequent:   success: returns only when an answer to THIS subject exists in
+//   Antecedent:   env.subject is the question VERBATIM; env.items — the batch as a LIST when the role
+//                 asked several at once; CHECKPOINT_RETRIES ≥ 1
+//   Consequent:   success: returns only when EVERY question of the batch has an answer in
 //                          .agent/answers.md — the answer is a FACT ON DISK, not a click
 //                 failure: exits with err("escalate") if the operator rejects, or err("question")
-//                          when no answer showed up within CHECKPOINT_RETRIES re-asks
+//                          when answers were still missing after CHECKPOINT_RETRIES re-asks — and the
+//                          diagnosis NAMES the numbers that stayed unanswered
 //   Purity:       io (through the host)
 //
 // checkpoint() resolves to "approved" | "rejected" and carries no text at all (standards/workflow.md
@@ -149,18 +189,54 @@ function askPrompt(subject, retryNote) {
 //             threw AFTER the operator's answer had already been accepted — the exchange worked and
 //             the run died anyway, with a crash that named the wrong culprit.
 //   Fix:      clearPending({}). Re-proven by run 0445e4cd, which reached .agent/brd.md.
-async function askOperator(env, n) {
-  await setPending({ subject: env.subject, evidence: env.evidence || "" });
+//
+// BUG_FIX_CONTEXT: live run 46edab60-39ee-4e1b-929f-08028ab011ff (the batch of six questions).
+//   Previous: `answers().some(a => a.question === env.subject)` — one string compared to one string.
+//   Problem:  a batch is multi-line, and the file format of the day kept an entry on ONE line: the
+//             stored key came back as the first line only, the comparison failed, and the operator —
+//             who had answered — was re-asked twice while their answer sat on disk. One string also
+//             cannot express "four of six answered".
+//   Fix:      the format carries a question per element (core/answers.mjs), and the check is per
+//             ITEM: what is missing is named by number, in the re-ask and in the final diagnosis.
+async function askOperator(env, n, step, role) {
+  // Trimmed here, once: the parser trims what it reads back (core/answers.mjs), so a role's stray
+  // leading space would otherwise make an answered question look unanswered forever.
+  const items = (env.items && env.items.length ? env.items : [env.subject]).map((q) => String(q).trim());
+  await setPending({ subject: env.subject, evidence: env.evidence || "", items });
+
+  // unanswered — the items with no answer on disk, by NUMBER. One expression, used twice: before
+  // the first pause and after every checkpoint, so "answered" means the same thing in both places.
+  const unanswered = async () => {
+    const seen = await answers({});
+    return items.map((q, i) => (seen.some((a) => a.question === q) ? 0 : i + 1)).filter((x) => x);
+  };
+
+  // The answer is a FACT ON DISK, not a click — so the disk is asked FIRST. Waking the operator for
+  // a question every item of which is already answered costs a round trip and buys nothing. This
+  // fires only on a verbatim match of the question: a role that rewords its question asks anew, and
+  // that border is the honest one — nothing here can tell two wordings apart.
+  let missing = await unanswered();
+  if (!missing.length) { await clearPending({}); return; }
+
   for (let retry = 1; retry <= CHECKPOINT_RETRIES; retry++) {
+    const note = retry === 1 ? "" : `${RETRY_NOTE}\n(Без ответа: ${missing.join(", ")} из ${items.length}.)`;
     const decision = await checkpoint({
-      name: retry === 1 ? `brd-q${n}` : `brd-q${n}-retry${retry}`,
-      prompt: askPrompt(env.subject, retry === 1 ? "" : RETRY_NOTE),
+      name: retry === 1 ? `${step}-q${n}` : `${step}-q${n}-retry${retry}`,
+      prompt: askPrompt(env.subject, note, role),
       context: { pending: ".agent/pending.json" },
     });
     if (decision !== "approved") exit(err("escalate", { subject: env.subject, evidence: env.evidence }));
-    if ((await answers({})).some((a) => a.question === env.subject)) { await clearPending({}); return; }
+
+    // The answer is judged by the QUESTION's text, which now round-trips verbatim however many lines
+    // it takes; the number is what the operator and the diagnosis speak in.
+    missing = await unanswered();
+    if (!missing.length) { await clearPending({}); return; }
   }
-  exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `ответ не получен за ${CHECKPOINT_RETRIES} переспросов` }));
+  exit(err("question", {
+    subject: env.subject,
+    evidence: env.evidence,
+    diagnosis: `нет ответов на ${missing.join(", ")} из ${items.length} за ${CHECKPOINT_RETRIES} переспросов`,
+  }));
 }
 
 // FUNCTION_CONTRACT: brd — step 2: raw requirement → measurable BRD, by role `gilb`
@@ -194,7 +270,7 @@ async function brd() {
 
   while (attempt < LOOPS) {
     const seen = await answers({});
-    const ANSWERS = seen.length ? seen.map((a) => `- вопрос: ${a.question}\n  ответ: ${a.text}`).join("\n") : FORM.absentDoc;
+    const ANSWERS = answersBlock(seen, FORM.absentDoc);
     const order = prompt(orderTpl, {
       TASK,
       ANSWERS,
@@ -208,8 +284,10 @@ async function brd() {
     const env = await agent(order, { role: "gilb", outputSchema: ENVELOPE });
 
     if (env.track === "err" && env.kind === "question") {
-      if (++asked > QUESTIONS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `вопросов за прогон больше ${QUESTIONS}` }));
-      await askOperator(env, asked);
+      // gilb asks ONE question per exchange, so its round IS its question (unlike intake, which
+      // batches — see intake() below). The cap it is judged by is therefore the round budget.
+      if (++asked > QUESTION_ROUNDS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `обменов с оператором больше ${QUESTION_ROUNDS}` }));
+      await askOperator(env, asked, "brd", "gilb");
       continue; // a question does not spend the redelegation budget
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
@@ -412,7 +490,7 @@ async function scope() {
 //   Input:        —
 //   Dependencies: EXTERNAL — buildGraph (ext/index.mjs → steps/graph/graph.mjs::newGraph)
 //   Antecedent:   step 4 promoted a part for EVERY cell of .agent/survey-plan.json
-//   Consequent:   success: exits ok with .agent/appgraph.xml — the first artifact that knows the
+//   Consequent:   success: RETURNS with .agent/appgraph.xml — the first artifact that knows the
 //                          repository. The merge is a commutative monoid over the node path, so the
 //                          order the scouts finished in cannot change the result and no batch order
 //                          is replayed here
@@ -435,15 +513,104 @@ async function graph() {
   if (g.unanswered.length) log(`graph: не найдено в репозитории — ${g.unanswered.join(", ")} (вопрос оператору на шаге 10)`);
   if (g.gaps) log(`graph: пробелов ${g.gaps} — непрочитанное, вход нечитаем, тест без сьюта`);
   if (g.cycles) log(`graph: циклов ${g.cycles} — топосорт шага 10 их не переживёт, см. <cycle> в артефакте`);
-  exit(ok({ artifact: ".agent/appgraph.xml", modules: g.modules, components: g.components, gaps: g.gaps }));
+}
+
+// FUNCTION_CONTRACT: intake — step 6: the requirement fried against the map, by role `intake`
+//   Input:        —
+//   Dependencies: EXTERNAL — graphMap, readText, answers, frdForm, agent(role "intake"), checkFrd,
+//                 promote, prompt; askOperator
+//   Antecedent:   step 5 wrote .agent/appgraph.xml; steps/intake/order.tpl exists in the run's cwd;
+//                 LOOPS ≥ 1
+//   Consequent:   success: exits ok with .agent/frd.xml promoted from staging after a GREEN checkFrd
+//                 failure: exits — err("blocked") when the map cannot be read or is above the
+//                          reading ceiling (docs/intake.md §3), err(kind) on a role error rail,
+//                          err("escalate") when LOOPS redelegations were spent, carrying the LAST
+//                          guardrail diagnosis
+//   Purity:       io (through the host)
+//
+// This step ASKS, and it asks in BATCHES. Frying a requirement without a question degenerates into a
+// guess, so a gap the BRD does not settle costs the operator's time, not a redelegation — and asking
+// 25-30 gaps ONE PER TRIP would cost a re-read of the BRD and the map per question, which is why the
+// role hands over the whole batch at once (docs/intake.md §2). Three budgets, three meanings: LOOPS
+// (red checks), QUESTIONS (questions asked), QUESTION_ROUNDS (trips to the operator). `Unknown` stays
+// for what even an answer cannot fix: an operation that does not land on the map at all.
+async function intake() {
+  const map = await graphMap({});
+  if (!map.ok) exit(err("blocked", { subject: map.why }));
+  log(`intake: карта ${map.bytes} Б на ${map.nodes} узлов, потолок ${map.cap} Б — едет роли целиком`);
+
+  const orderTpl = await readText({ path: "steps/intake/order.tpl" });
+  const BRD = await readText({ path: ".agent/brd.md" });
+  const STAGING = ".agent/staging/frd.xml";
+  const CHECK = "checkFrd({path}) — steps/intake/frd.mjs::newFrd, узлы из .agent/appgraph.xml, числа из TASK.md + значений ответов + fit BRD + карты";
+  // The vocabularies the guardrail judges by are SUBSTITUTED from steps/intake/frd.mjs, never retyped
+  // in the template: two texts of one rule drift apart in silence (ext/index.mjs::brdForm, G9e).
+  const FORM = await frdForm({});
+  let feedback = "(none — first attempt)", attempt = 0, round = 0, spent = 0;
+
+  while (attempt < LOOPS) {
+    const seen = await answers({});
+    const ANSWERS = answersBlock(seen, "(no operator answers yet)");
+    const order = prompt(orderTpl, {
+      BRD,
+      MAP: map.text,
+      ANSWERS,
+      FEEDBACK: feedback,
+      STAGING,
+      CHECK,
+      DELTA_FORMS: FORM.deltaForms,
+      SOURCES: FORM.sources,
+      QUESTIONS_LEFT: String(QUESTIONS - spent),
+    });
+    const env = await agent(order, { role: "intake", outputSchema: ENVELOPE });
+
+    // A BATCH, not one question (S21, the operator's decision): grilling a requirement on a real
+    // project takes 25-30 questions, and the ROUND is what costs context — the role re-reads the BRD
+    // and the whole map on every trip. Two budgets, two meanings: `round` is trips to the operator,
+    // `spent` is questions asked.
+    //
+    // BUG_FIX_CONTEXT: live run 6350f09b.
+    //   Previous: the batch size came from the envelope's `questions` field.
+    //   Problem:  the role sent `items` with ONE question and `questions: 3` — the number copied off
+    //             the role's own example. The size of a batch then lived in two places at once, they
+    //             disagreed on the first run, and the operator got three pauses for three questions
+    //             while the budget was charged nine.
+    //   Fix:      the size IS the list. `questions` is not read here at all — nothing can disagree
+    //             with a length.
+    if (env.track === "err" && env.kind === "question") {
+      const asked = (env.items && env.items.length) || 1;
+      if (++round > QUESTION_ROUNDS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `кругов уточнения больше ${QUESTION_ROUNDS}` }));
+      if (spent + asked > QUESTIONS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `вопросов за прогон больше ${QUESTIONS} (задано ${spent}, в пакете ещё ${asked})` }));
+      spent += asked;
+      log(`intake: раунд ${round} — вопросов ${asked}, всего ${spent} из ${QUESTIONS}`);
+      await askOperator(env, round, "intake", "intake");
+      continue; // a question does not spend the redelegation budget
+    }
+    if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
+
+    const check = await checkFrd({ path: STAGING }); // the check runs ON STAGING, before any promote
+    if (check.ok) {
+      await promote({ from: STAGING, to: ".agent/frd.xml" });
+      log(`intake: deltas=${check.deltas} unknown=${check.unknown} scenarios=${check.scenarios} touched=${check.touched}`);
+      // An Unknown is a legal artifact and a REFUSAL of step 7: said out loud here, where the run is
+      // still green, rather than discovered later as a missing .agent/mode.
+      if (check.unknown) log(`intake: ${check.unknown} дельт не классифицированы — шаг 7 веса не выведет, вопрос оператору`);
+      if (check.questions) log(`intake: открытых вопросов в артефакте — ${check.questions}`);
+      exit(ok({ artifact: ".agent/frd.xml", deltas: check.deltas, scenarios: check.scenarios, unknown: check.unknown }));
+    }
+    feedback = check.blockers;
+    attempt++;
+  }
+  exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
 }
 
 log("izi: start");
 try {
   const b = await budgets({});
   if (!b.ok) exit(err("blocked", { subject: b.why })); // a broken config is a refusal, not a default
-  LOOPS = b.loops; QUESTIONS = b.questions; CHECKPOINT_RETRIES = b.checkpointRetries; MAX_PARALLEL = b.maxParallel;
-  log(`budgets: loops=${LOOPS} questions=${QUESTIONS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} (${b.source})`);
+  LOOPS = b.loops; QUESTIONS = b.questions; QUESTION_ROUNDS = b.questionRounds;
+  CHECKPOINT_RETRIES = b.checkpointRetries; MAX_PARALLEL = b.maxParallel;
+  log(`budgets: loops=${LOOPS} questions=${QUESTIONS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} (${b.source})`);
 
   // Observability is declared out loud, never assumed: with herdr unavailable the herdr extension
   // does not register at all and stays SILENT, so a run from an ordinary terminal looks exactly like
@@ -453,12 +620,22 @@ try {
     ? `herdr: on pane=${h.pane}${h.fullyInspectable ? " fully-inspectable" : " (fully-inspectable выключен в ~/.pi/agent/pi-extensible-workflows/settings.json)"}`
     : `herdr: off — ${h.why}`);
 
+  // The run's FIRST act, before a single fact is read: the previous run's state is carried out of
+  // the way (ext/index.mjs::newRun). It is not deleted — it moves to .agent/prev/, because a run
+  // that fell over is diagnosed from disk. Logged out loud: an operator asked the same question
+  // twice must be able to see WHY, and where their earlier answer went.
+  const fresh = await newRun({});
+  log(fresh.answers || fresh.pending || fresh.staged
+    ? `run: состояние прошлого прогона убрано в .agent/prev — ответов ${fresh.answers}, staging ${fresh.staged}${fresh.pending ? ", открытый вопрос" : ""}`
+    : "run: .agent чист — состояния прошлого прогона нет");
+
   phase("task"); await task();
   phase("brd"); await brd();
   phase("survey-plan"); await surveyPlan();
   phase("scope"); await scope();
   phase("graph"); await graph();
-  return ok({}); // unreachable — graph() always exits — kept as the fall-through for a sixth phase
+  phase("intake"); await intake();
+  return ok({}); // unreachable — intake() always exits — kept as the fall-through for a seventh phase
 } catch (e) {
   if (e instanceof Exit) return e.result;
   const msg = String((e && e.message) || e);

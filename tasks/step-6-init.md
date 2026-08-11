@@ -6,9 +6,10 @@ $end_system
 $start_task
 Before starting development step 6, 
 the task is to analyze the results of step 5(docs/workflow.md), 
-analyze the artifacts from the test run (/tmp/quarus-rest-json-app-v2-t1-3),
+analyze the artifacts from the test run (/tmp/quarkus-rest-json-app-v2-t1-3),
 and determine whether everything is sufficient for step 6.
-
+If there are discrepancies, suggest the minimum steps to get the concept of step 6 ready for work. Check which skill is used in step
+should use skill from /Users/mac/IdeaProjects/codemonstersdev/izi-flow/skills/lib/requirements-intake
 $end_task
 
 $start_context
