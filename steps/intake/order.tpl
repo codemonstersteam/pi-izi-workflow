@@ -68,7 +68,7 @@ schema:
     <delta op="the operation" form="…" node="path from the map" from="…" to="…"/>
     <delta op="the operation" form="Unknown" why="why it could not be classified"/>
     <scenario id="S1" uc="UC1" before="…" after="…" nodes="path path"/>
-    <touched path="path from the map"/>
+    <touched path="path from the map" why="what changes in this node"/>
     <nfr subject="…" fit="…" source="…"/>
     <question subject="…" why="…"/>
   </frd>

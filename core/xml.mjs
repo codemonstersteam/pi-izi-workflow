@@ -89,3 +89,31 @@ export const esc = (v) => String(v == null ? "" : v)
 //   Purity:       pure (a new RegExp per call, so `lastIndex` is never shared between callers)
 //   Interface:    tag(name: string, tail?: string) -> RegExp
 export const tag = (name, tail = "/>") => new RegExp(`<${name}\\b${ATTRS}${tail}`, "g")
+
+// FUNCTION_CONTRACT: elem — a global matcher for one tag name in BOTH of its shapes
+//   Input:        name — the tag name, used verbatim in the pattern (`\b`-bounded)
+//   Dependencies: —
+//   Antecedent:   name is a plain tag name
+//   Consequent:   success: a fresh global RegExp; match[1] is the attribute body (feed it to
+//                          `attrs`), match[2] is the element body — undefined when the element was
+//                          written self-closing
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    elem(name: string) -> RegExp
+//
+// It exists because `tag()` covers one shape per call, and step 5 writes BOTH: a `<module>` with a
+// body when the node has declarations, self-closing when it does not. A reader that needs the body
+// AND must not lose the bodiless nodes cannot use `tag()` twice without merging two passes by hand.
+//
+// BUG_FIX_CONTEXT: steps/intake/map.mjs, caught by map.test.mjs before any live run.
+//   Previous: this pattern was written inline as `<module\b${ATTRS}(?:/>|>([\s\S]*?)</module>)`.
+//   Problem:  ATTRS is greedy and `[^<>]` admits `/`, so on `<module path="a"/>` it swallowed the
+//             closing `/` as an attribute character, failed `/>`, matched the bare `>` instead and
+//             then ran its lazy body up to the NEXT `</module>`. One self-closing node therefore ate
+//             the node that followed it: the map came back with fewer keys and the eaten node's
+//             `kind="test"` was lost — F2/F3 would have passed a delta ON A TEST.
+//   Fix:      inside the attribute body a `/` is admitted only when it is NOT followed by `>`
+//             (`/(?!>)`), so greedy matching can no longer cross the tag's own terminator. Quoted
+//             runs are untouched, which is what keeps `via="a -> b"` and every path intact.
+const ATTRS_ELEM = '((?:"[^"<]*"|/(?!>)|[^<>/])*)'
+export const elem = (name) => new RegExp(`<${name}\\b${ATTRS_ELEM}(?:/>|>([\\s\\S]*?)</${name}>)`, "g")

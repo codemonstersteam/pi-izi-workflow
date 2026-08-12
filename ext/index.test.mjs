@@ -17,7 +17,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, weight, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, weight, ripple, iziAnswer } from "./index.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
 const ctx = (cwd) => ({ run: { cwd } })
@@ -144,7 +144,7 @@ test("newRun carries the dead run's answers, question and staging into .agent/pr
   deadRun(root)
   const r = newRun.run({}, ctx(root))
 
-  assert.deepEqual(r, { answers: 1, pending: true, staged: 1 })
+  assert.deepEqual(r, { answers: 1, pending: true, staged: 1, dirty: -1 })   // a temp dir is no git repo: -1, never 0
   assert.deepEqual(answers.run({}, ctx(root)), [])                                   // the new run starts with no answers
   assert.equal(existsSync(join(root, ".agent", "pending.json")), false)
   assert.equal(existsSync(join(root, ".agent", "staging", "graph-parts", "root.xml")), false)
@@ -164,7 +164,7 @@ test("newRun does not touch artifacts or the .izi/parts cache — that cache out
 
 test("newRun on a clean root: nothing to carry, nothing created", () => {
   const root = tempRoot()
-  assert.deepEqual(newRun.run({}, ctx(root)), { answers: 0, pending: false, staged: 0 })
+  assert.deepEqual(newRun.run({}, ctx(root)), { answers: 0, pending: false, staged: 0, dirty: -1 })
   assert.equal(existsSync(join(root, ".agent", "prev")), false)
 })
 
@@ -174,7 +174,7 @@ test("newRun twice: .agent/prev holds the PREVIOUS run, not a growing pile", () 
   newRun.run({}, ctx(root))
   writeFileSync(join(root, ".agent", "answers.md"), EXCHANGE("предел?", "10"))       // the run that just ended
   const r = newRun.run({}, ctx(root))
-  assert.deepEqual(r, { answers: 1, pending: false, staged: 0 })
+  assert.deepEqual(r, { answers: 1, pending: false, staged: 0, dirty: -1 })
   const prev = readFileSync(join(root, ".agent", "prev", "answers.md"), "utf8")
   assert.match(prev, /10/)
   assert.doesNotMatch(prev, /50/)                                                     // overwritten, not appended
@@ -246,6 +246,62 @@ test("no .agent/frd.xml at the run root: refusal naming step 6, and no mode left
   assert.equal(r.ok, false)
   assert.match(r.why, /шаг 6 intake не отработал/)
   assert.equal(existsSync(join(root, ".agent", "mode")), false)
+})
+
+// --- ripple: the same rule, now for TWO files ---------------------------------------------------
+//
+// Step 8 writes a verdict AND the subgraph it was computed from, so "no ripple" must mean "neither
+// file". The seam is the same one weight bought: drop the `drop()` in ext/index.mjs::ripple and the
+// second test below goes red — step 9 would then be ordered (or skipped) on yesterday's verdict over
+// a subgraph nobody computed today (docs/ripple.md §5).
+const MAP = `<appgraph grammar="3" modules="2">
+  <module path="src/ParcelResource.java" level="3" fanin="1" fanout="1">
+    <role>REST-ресурс посылок</role>
+  </module>
+  <module path="src/ParcelRepo.java" level="4" fanin="1" fanout="0"/>
+  <edge from="src/ParcelResource.java" to="src/ParcelRepo.java" via="private ParcelRepo repo"/>
+</appgraph>`
+const FRD_R = `<frd grammar="1" goal="искать посылку">
+  <delta op="GET /parcels" form="Added" node="src/ParcelResource.java" from="list()" to="list(track)"/>
+  <scenario id="S1" uc="UC1" before="весь реестр" after="только совпавшие" nodes="src/ParcelResource.java"/>
+  <touched path="src/ParcelResource.java"/>
+</frd>
+`
+const rippleRoot = (mode = "minor", frd = FRD_R) => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "appgraph.xml"), MAP)
+  writeFileSync(join(root, ".agent", "frd.xml"), frd)
+  if (mode) writeFileSync(join(root, ".agent", "mode"), mode)
+  return root
+}
+
+test("ripple writes .agent/design and .agent/ripple.xml under context.run.cwd", () => {
+  const root = rippleRoot()
+  const r = ripple.run({}, ctx(root))
+  assert.deepEqual(r, { ok: true, design: "needed", mode: "minor", seeds: 1, nodes: 2, total: 2 })
+  assert.equal(readFileSync(join(root, ".agent", "design"), "utf8"), "needed")  // one word, no newline
+  assert.match(readFileSync(join(root, ".agent", "ripple.xml"), "utf8"), /^<ripple grammar="1" mode="minor"/)
+})
+
+test("a refusal ERASES both of the previous run's artifacts, not just the verdict", () => {
+  const root = rippleRoot("minor", `<frd grammar="1" goal="искать посылку"/>`)   // no delta at all
+  writeFileSync(join(root, ".agent", "design"), "needed")                       // yesterday's verdict
+  writeFileSync(join(root, ".agent", "ripple.xml"), "<ripple/>")                // yesterday's subgraph
+  const r = ripple.run({}, ctx(root))
+  assert.equal(r.ok, false)
+  assert.match(r.why, /no-delta/)
+  assert.equal(existsSync(join(root, ".agent", "design")), false)
+  assert.equal(existsSync(join(root, ".agent", "ripple.xml")), false)
+})
+
+test("no .agent/mode at the run root: refusal naming step 7, and nothing left behind", () => {
+  const root = rippleRoot(null)
+  writeFileSync(join(root, ".agent", "design"), "needed")
+  const r = ripple.run({}, ctx(root))
+  assert.equal(r.ok, false)
+  assert.match(r.why, /шаг 7 weight не отработал/)
+  assert.equal(existsSync(join(root, ".agent", "design")), false)
 })
 
 // --- izi_answer: the operator's numbering does not reach the VALUES -----------------------------

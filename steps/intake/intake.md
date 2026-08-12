@@ -63,10 +63,27 @@ $START_STRATEGY
    - `Fixed` — the contract does not move at all; the existing call stops being wrong and starts
      being right.
 
-   "The sentence says изменить" is not the question; the existing call is. Declare every node you
-   named as `<touched>`. The delta names the MODULE that changes; a test file is never a delta and
-   never `touched` — a test is the DoD of the change, not a change of its own. The map already binds
-   it to its module (`<test path suite>`), and both reach one ticket together.
+   "The sentence says изменить" is not the question; the existing call is. And a node with NO caller
+   cannot answer that question at all: if the map gives it neither an `<api>` of its own nor an
+   incoming edge — a leaf page, a template, a script nobody imports — then nothing that exists can
+   break, and behaviour it did not have before is `Added`, never `Changed`. Machine-checked as `F3`.
+
+   `op` names an operation of a CONTRACT — the entry as the map spells it (`GET /fruits`,
+   `findByAuthor`) — not a behaviour you invented a name for ("card-rendering", "list-refresh"). If
+   the node has no operation to name, the work still belongs in the FRD as a scenario step and a
+   `<touched>`; a delta is about a contract moving.
+
+   A delta is a MOVEMENT: `Changed` and `Fixed` claim one, so they carry both ends of it (`from`, `to`)
+   and the ends differ. An operation that does NOT change belongs in no delta at all — listing it as
+   `from="unchanged" to="unchanged"` cuts a ticket for work nobody has to do. Machine-checked as `F3b`.
+
+   Declare every node you named as `<touched why="…">`, and let the `why` say WHAT changes in that
+   node: a scenario running through a node is a fact about the route, not about the work, and only you
+   can tell the two apart. Machine-checked as `F2c`.
+
+   The delta names the MODULE that changes; a test file is never a delta and never `touched` — a test
+   is the DoD of the change, not a change of its own. The map already binds it to its module
+   (`<test path suite>`), and both reach one ticket together.
 9. Scenarios: one per use case the change alters, stating before and after.
 10. NFR with sources; anything still open — `<question>`.
 11. With FEEDBACK, repair exactly the rule and element it names before anything else.
@@ -77,9 +94,18 @@ $START_FORBIDDEN
 - Do NOT design: no module trees, packages, layers, classes or file names of your own. The only paths
   you write are node paths copied from the map — machine-checked as `F2` and `F3`.
 - Do NOT hand in a use case without an actor, a success guarantee or steps — machine-checked as `F1`.
+- Do NOT declare a node `<touched>` that nothing in the artifact explains — it must carry a delta of
+  its own or have a scenario running through it, and it must say in `why` what changes there.
+  Machine-checked as `F2b` and `F2c`. "I read it" and "a route passes through it" are not touching:
+  step 8 measures the WIDTH of the change by these nodes and orders the designer by it.
+- Do NOT write a delta for something that does not move — `from` equal to `to`, or a `Changed`/`Fixed`
+  with no ends at all. Machine-checked as `F3b`.
 - Do NOT invent a delta form, and do NOT hide "could not classify" behind a plausible one — use
   `Unknown` with a `why`, machine-checked as `F3`.
-- Do NOT write a scenario whose before and after are the same — machine-checked as `F4`.
+- Do NOT write a scenario whose before and after are the same, and do NOT leave its `nodes` empty or
+  fill it with a path the map does not declare — machine-checked as `F4`. `nodes` is the ROUTE the
+  scenario runs through, in order: step 8 cuts the change's subgraph from it and step 9 owes a
+  contract to every node of it, so a node you leave out is one nobody will design.
 - Do NOT write a number that stands in none of the order's sources, and do NOT name a source outside
   that list — machine-checked as `F5`.
 - Do NOT invent a failure code the repository has no idiom for, and do NOT leave the failure map
@@ -147,8 +173,8 @@ The alternatives you offer are YOUR words: only the operator's answer is a sourc
   <delta op="findByAuthor" form="Added" node="src/DraftRepo.java"/>
   <scenario id="S1" uc="UC1" before="GET /drafts отдаёт чужие и просроченные"
             after="отдаёт только свои и живые" nodes="src/DraftResource.java src/DraftRepo.java"/>
-  <touched path="src/DraftResource.java"/>
-  <touched path="src/DraftRepo.java"/>
+  <touched path="src/DraftResource.java" why="list получает фильтр по автору и ttl"/>
+  <touched path="src/DraftRepo.java" why="появляется выборка по автору"/>
   <nfr subject="draft-ttl" fit="30 дней" source="answers.md"/>
 </frd>
 ```
