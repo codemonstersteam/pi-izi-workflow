@@ -68,9 +68,25 @@ $START_STRATEGY
    incoming edge — a leaf page, a template, a script nobody imports — then nothing that exists can
    break, and behaviour it did not have before is `Added`, never `Changed`. Machine-checked as `F3`.
 
+   **A module the change CREATES** — a file the repository does not have yet — is
+   `<delta form="Added" node="<repo-relative path>" new="yes"/>`. It is the ONE case where `node` is
+   not a node of the map, and the check runs in the opposite direction: the path must be ABSENT from
+   it, and the form must be `Added` — a module that does not exist yet has no contract to move.
+   Machine-checked as `F3`. Everything else is asked of it as of any other delta: its own
+   `<touched why="…">` saying what the file is for, and a `<scenario nodes>` that runs through it.
+   Never invent one to route a scenario through: `new="yes"` is for a file the ANSWERS or the task
+   ask for, and the path you write is the path that will be created.
+
+   **`op` of a created module is the external entry it WILL expose** — the address the page opens
+   at, the command, the topic, the function it will provide — worded as the REQUIREMENT words it.
+   This is the one delta whose `op` cannot be copied from the map, because the map is about what
+   exists; the ban below still holds in full — an entry (`GET /fruit-card.html`) is not a behaviour
+   ("render card", "show details").
+
    `op` names an operation of a CONTRACT — the entry as the map spells it (`GET /fruits`,
-   `findByAuthor`) — not a behaviour you invented a name for ("card-rendering", "list-refresh"). If
-   the node has no operation to name, the work still belongs in the FRD as a scenario step and a
+   `findByAuthor`), or, for a module this change CREATES, the entry it will expose (see `new="yes"`
+   above) — not a behaviour you invented a name for ("card-rendering", "list-refresh"). If an
+   EXISTING node has no operation to name, the work still belongs in the FRD as a scenario step and a
    `<touched>`; a delta is about a contract moving.
 
    A delta is a MOVEMENT: `Changed` and `Fixed` claim one, so they carry both ends of it (`from`, `to`)

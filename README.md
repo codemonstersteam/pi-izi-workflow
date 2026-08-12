@@ -1,8 +1,9 @@
 # izi-pi-v2
 
-Первые восемь шагов конвейера `izi-flow-v2` (`task → brd → survey-plan → scope → graph → intake →
-weight → ripple`), перенесённые на `pi-extensible-workflows` (pi v5.1.1) и переписанные на функции
-расширения (S11, S15, S17, S20, S21, S22, S23). Порядок шагов
+Первые девять шагов конвейера `izi-flow-v2` (`task → brd → survey-plan → scope → graph → intake →
+weight → ripple → design`), перенесённые на `pi-extensible-workflows` (pi v5.1.1) и переписанные на
+функции расширения (S11, S15, S17, S20, S21, S22, S23, S24). Шаг `design` сдан срезом S24; живой
+прогон на нём ещё впереди (`backlog.md`, наряд Н8). Порядок шагов
 — код `workflows/izi.js`, а не манифест; бюджеты прогона с S16 поднимаются файлом проекта
 `izi.config.json` (см. ниже). Роль `gilb` превращает сырое требование оператора
 в BRD, который можно принять; шаг `survey-plan` — чистый скрипт без роли и без оператора: он режет дерево

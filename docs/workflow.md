@@ -19,8 +19,9 @@ ext/
   index.mjs         pi-extension: readText · answers · checkTask · checkBrd · brdForm · promote · setPending ·
                      clearPending · survey (S15) · budgets · herdrStatus (S16) · cells · digest · reuse ·
                      remember · checkPart (S17) · buildGraph (S20) · graphMap · checkFrd · frdForm (S21) ·
-                     weight (S22) · ripple (S23)
-                     — глобалы izi.js (roleDirectories → steps/brd/, steps/scope/, steps/intake/);
+                     weight (S22) · ripple (S23) · design (S24)
+                     — глобалы izi.js (roleDirectories → steps/brd/, steps/scope/, steps/intake/,
+                     steps/design/);
                      ПЛЮС (S13) tool izi_answer, зарегистрированный через pi.registerTool на самой
                      интерактивной сессии — export default function extension(pi) одновременно
                      обычный ExtensionFactory pi (`(pi: ExtensionAPI) => void`,
@@ -45,11 +46,13 @@ steps/survey-plan/  (S15) шаг-СКРИПТ: роли нет, значит н�
                       CELL_FILES=20 · CELL_BYTES=200 КБ (что раньше)
   plan.test.mjs      тест по формуле: happy · шов по байтам · no-files
 
-steps/design/       шаг 9: две проекции изменения. Срез готов, в программу НЕ включён — его вход
-  designer.md        (frd, подграф ряби) производят шаги 6 и 8; оба есть, включение — следующий срез
-  order.tpl          наряд: {FRD}, {RIPPLE}, {MODE}, {FEEDBACK}, {STAGING}, {CHECK}
-  design.mjs         ЧИСТОЕ ядро: parseDesign · parseRoutes · expand · checkDesign · newDesign
-  design.test.mjs    happy + пять правил + «ни одного <module>» + тотальность разбора
+steps/design/       (S24) шаг 9: две проекции изменения, роль designer + рельса вопроса
+  designer.md        роль (имя файла = имя роли; roleDirectories += steps/design/)
+  order.tpl          наряд: {FRD}, {RIPPLE}, {ANSWERS}, {MODE}, {DELTA_FORMS}, {FEEDBACK}, {STAGING},
+                      {CHECK} — словарь дельт подставляется функцией хоста frdForm, как на шаге 6
+  design.mjs         ЧИСТОЕ ядро: parseDesign · parseRoutes · expand · checkDesign · newDesign;
+                      expand даёт ОБЕ секции data-flow.md — поток по сценариям и список юнитов по узлам
+  design.test.mjs    happy + семь правил + «ни одного <module>» + тотальность + швы наряда и роли
 
 steps/intake/       (S21) шаг 6: роль intake, рельса вопросов как у brd
   intake.md          роль (имя файла = имя роли; roleDirectories += steps/intake/); содержание —
@@ -171,7 +174,16 @@ async function rippling() {                                // S23: шаг 8 — 
   const r = await ripple({});                              // отказ ⇒ ОБА артефакта стёрты хостом
   if (!r.ok) exit(err("blocked", { subject: r.why }));      // флаг — назначение дизайна, не радиус
   log(`ripple: design=${r.design} узлов ${r.nodes} из ${r.total} (затравок ${r.seeds})`);
-  exit(ok({ artifact: ".agent/design", design: r.design })); // конец сегодняшней полосы
+}
+
+async function designing() {                               // S24: шаг 9 — форма intake(), но с ГЕЙТОМ
+  const gate = await design({});                           // без path — ворота: читает .agent/design
+  if (!gate.ok) exit(err("blocked", { subject: gate.why })); //   и СТИРАЕТ оба артефакта в любой ветке
+  if (gate.design === "skip") { log("design: skip"); return ".agent/design"; }
+  // цикл до LOOPS: agent(order, { role: "designer" }) с подграфом ряби и словарём из frdForm();
+  // на вопросе — askOperator(env, round, "design", "designer") — ОДИН вопрос, не пакет;
+  // на ok — design({ path: STAGING }) ПО STAGING: зелёный → промоут + запись .agent/data-flow.md
+  return ".agent/data-flow.md";
 }
 
 async function intake() {                                  // S21: шаг 6 — форма brd(), но вход другой
@@ -185,11 +197,12 @@ async function intake() {                                  // S21: шаг 6 — 
 try { phase("task"); await task(); phase("brd"); await brd();
       phase("survey-plan"); await surveyPlan(); phase("scope"); await scope();
       phase("graph"); await graph(); phase("intake"); await intake();
-      phase("weight"); await weigh(); phase("ripple"); await rippling(); }
+      phase("weight"); await weigh(); phase("ripple"); await rippling();
+      phase("design"); bandEnds(await designing()); }   // конец полосы — одно место, а не восьмое
 catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: String(e?.message ?? e) }); }
 ```
 
-Порядок остаётся КОДОМ, а не `pipeline.json`: восьмая фаза — ещё одна именованная функция. Решение
+Порядок остаётся КОДОМ, а не `pipeline.json`: девятая фаза — ещё одна именованная функция. Решение
 принято с фактами шести шагов на руках (`docs/survey-plan.md` §5): ручные вызовы подряд всё ещё
 дешевле, чем манифест плюс диспетчер плюс их тесты.
 
@@ -364,6 +377,10 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   отвечает одним сообщением. Два бюджета считают разное — `questions` (сколько вопросов за прогон,
   60) и `questionRounds` (сколько выходов к оператору, 3); вопрос НЕ тратит `LOOPS`. Дорог не вопрос,
   а круг: роль перечитывает BRD и карту целиком на каждом (`docs/intake.md` §2)
+- **модуль, которого ещё нет, объявляется:** `<delta form="Added" node="<путь>" new="yes"/>` —
+  единственный случай, когда `node` не узел карты, и проверка идёт в обратную сторону (F3n,
+  `docs/intake.md` §4). Без него «создать новый файл» выразимо только как `Unknown`, и полоса встаёт
+  на шаге 7 — живой прогон `b857d4a0`, разбор в `docs/design.md` §9
 - **`Unknown` — обязательная форма, а не украшение:** роль, не сумевшая классифицировать операцию
   (узла нет, два кандидата, операция вне графа), объявляет это, а не выбирает правдоподобную дельту.
   Артефакт с `Unknown` СДАЁТСЯ — отказывает шаг 7, и вопрос оператору задаёт он
@@ -409,6 +426,8 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   не разрезана на тикеты, — а НЕ на вопрос SemVer: `major` и `minor` → `needed` всегда (контракт
   двинулся), `patch` → по ШИРИНЕ изменения. Ширина = `<touched>` ∪ узлы дельт, минус тестовые узлы
   (`docs/ripple.md` §3, расхождения A и E)
+- **узел, создаваемый изменением, в подграф не входит:** вырезать вокруг несуществующего файла
+  нечего; в ширину он входит, а роль шага 9 берёт его из `frd.xml`, который её наряд несёт целиком
 - **подграф считается отдельно от флага:** затравки — узлы дельт ∪ `<touched>` ∪ `nodes` сценариев
   (третий источник обязателен: транзитному узлу маршрута роль шага 9 берёт контракт только отсюда),
   соседи — радиус 1 в обе стороны; в ШИРИНУ узлы сценария при этом не входят — тикета они не
@@ -430,21 +449,41 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   запуска ролей (gilb×3, intake×1) и 81 016 токенов — вдвое дешевле прогона S22, потому что рой
   шагов 4-5 целиком взялся из кэша `.izi/parts`
 
-### 9. `design` — две проекции изменения · role `designer` · под условием · **новое**
+### 9. `design` — две проекции изменения · role `designer` · под условием · **есть** (S24)
+Полная карточка — `docs/design.md`; грамматика и правила — `docs/data-flow.md` §4-§6; здесь только
+место шага в полосе.
 - **условие:** `.agent/design == "needed"`. Отдельной квитанции пропуска НЕ существует: маркером
   служит сам файл `.agent/design`, который пишет шаг 8 — `skip` в нём и есть «решено пропустить»,
   отсутствие файла — «шаг 8 ещё не отработал». Различимость держится этим, а не вторым артефактом
-- **вход:** `.agent/frd.xml`, `.agent/ripple.xml` (подграф ряби, не весь граф)
-- **выход роли:** `.agent/staging/design-graph.xml` — узлы с `delta` и `<contract in out>` в
-  грамматике `appgraph.xml`, плюс **маршруты** сценариев (`<route scenario steps>`: путь узла и
-  номер альтернативы его `out`)
-- **выход скрипта:** `.agent/data-flow.md` — `expand` подставляет значения контрактов в маршрут;
-  роль строк потока не набирает, поэтому расхождение внутри потока невыразимо
-- **проверка:** `checkDesign` — пять правил, объявлены один раз в `docs/data-flow.md` §6. Красный
-  чек едет блокерами в фидбек и пере-делегацию, чек идёт **по staging**, до промоута
+- **вход:** `.agent/frd.xml`, `.agent/ripple.xml` (подграф ряби, не весь граф), `.agent/mode`,
+  ответы оператора
+- **выход роли:** `.agent/design-graph.xml` (через staging) — узлы с `delta` и `<contract in out>` в
+  грамматике `appgraph.xml`, плюс **маршруты** сценариев (`<route scenario entry steps>`: чем сценарий
+  запущен — номер входной альтернативы первого узла, — затем путь узла и номер альтернативы его `out`)
+- **выход скрипта:** `.agent/data-flow.md` — ДВЕ секции: `$START_FLOW id` (сценарий во времени) и
+  `$START_TESTS path` (юниты узла, они же `<dod>` его тикета). Роль строк не набирает и числа не
+  пишет: обе секции — проекции маршрутов, поэтому расхождение внутри потока невыразимо
+- **проверка:** `design({ path })` (функция расширения) → `steps/design/design.mjs::newDesign` — семь
+  правил, объявлены один раз в `docs/data-flow.md` §6. Красный чек едет блокерами в фидбек и
+  пере-делегацию, чек идёт **по staging**, до промоута
+- **гейт стирает:** `design({})` без `path` читает флаг и в ЛЮБОЙ ветке стирает оба артефакта —
+  вчерашний дизайн не переживает сегодняшний прогон (тот же довод, что у `.agent/mode` и ряби)
+- **оператор:** есть — рельса `brd`/`intake`, но вопрос ОДИН, не пакет: дизайнер не элицитирует
+  требование, он упирается в узел, контракт которого не определяет ни подграф, ни маршрут
 - **шов:** правило `out(k) ∈ in(k+1)` — единственное место, где остаётся ручной ввод роли (контракты
   соседних узлов пишутся независимо); всё остальное держится подстановкой
 - **срез:** `steps/design/{designer.md, order.tpl, design.mjs, design.test.mjs}`
+- **живое доказательство (S24, форма `runbox/quarkus-rest-json-app-v2-t2`, прогон
+  `ffe8cb7b-e225-4468-aaa2-ec05d9583550`, сессия `019ff605`):** `track:"ok"`, `function/design/1` →
+  `{ design: "needed" }`, `function/design/2` → `{ nodes: 2, routes: 2, units: 2 }` — читается из
+  `journal.json`, не из вывода модели. Роль прошла гардрейл с ПЕРВОЙ попытки, `.agent/staging/` пуст.
+  Маршрут `S2` трёхшаговый, через обе стороны стыка страница ↔ эндпоинт, — правило 4 сработало на
+  живых контрактах, а не на фикстуре (разбор — `docs/design.md` §9). Цена: 4 запуска ролей
+  (`gilb`×2, `intake`, `designer`), 138 781 токен. Перед этим прогон был отвергнут ЦЕЛИКОМ на
+  валидации метаданных: двоеточие в `description:` роли — YAML читает его как вложенный маппинг
+- **что зелёный прогон при этом вскрыл (S25):** первая строка потока лгала — вход первого шага брался
+  как `in[0]` ПО ПОЗИЦИИ, и правило 4 этого не ловит (вход в шаг 1 стыком не является). Маршрут теперь
+  НАЗЫВАЕТ вход номером (`entry`), правило 1 требует его существования; разбор — `docs/design.md` §9
 
 ### 10. `plan` — план работ · script · **новое**
 - **вход:** `.agent/design-graph.xml` либо `.agent/frd.xml`, `.agent/mode`, `.agent/appgraph.xml`
@@ -530,8 +569,10 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   пути ИЗ ГРАФА; для импорта, не резолвящегося в узел, — вырезка **реального вызова** из этого
   репозитория) · `$START_SKILL` (только если оператор дал навык на шаге 10; **единственная секция не
   из репозитория**, поэтому путь-источник обязателен) · `$START_TASK` (дельта из FRD) ·
-  `$START_TESTS` (юниты по формуле `1 happy + Σ ветвей` — это `<dod>` тикета, отдельного шага
-  «написать тесты» нет; плюс различающий сценарий) · `$START_CHECK` (команда узла из плана) ·
+  `$START_TESTS` (источник — одноимённая секция `.agent/data-flow.md`, вырезка по `path`, тем же
+  приёмом, что `$START_FLOW`: юниты по формуле `1 happy + Σ ветвей` — это `<dod>` тикета, отдельного
+  шага «написать тесты» нет; плюс различающий сценарий; шаг 9 пропущен (`design=skip`) → секции нет,
+  источником `<dod>` остаётся различающий сценарий FRD) · `$START_CHECK` (команда узла из плана) ·
   `$START_FLOW` (вырезка маршрутов шага 9, где участвует узел; шаг 9 пропущен → секции нет) ·
   `$START_FORBIDDEN` · `$START_DONE`
 - **разметка кода выведена, а не сочинена:** `CONTRACT` шапки файла ← `<contract>` узла из
@@ -618,7 +659,7 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
 Срезы идут по одному, каждый — до зелёного прогона, прежде чем начинать следующий:
 
 ```
-survey-plan → scope(рой) → graph → intake → weight → ripple → design? → plan → review → gate1
+survey-plan → scope(рой) → graph → intake → weight → ripple → design → plan → review → gate1
              → branch → tickets(рой) → implement(рой) → accept → pr
 ```
 

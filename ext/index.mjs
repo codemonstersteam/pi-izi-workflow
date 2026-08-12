@@ -73,6 +73,7 @@ import { newGraph, graphXml } from "../steps/graph/graph.mjs"
 import { newFrd, parseFrd, FRD_FORM } from "../steps/intake/frd.mjs"
 import { newMode } from "../steps/weight/weight.mjs"
 import { newRipple } from "../steps/ripple/ripple.mjs"
+import { newDesign } from "../steps/design/design.mjs"
 import { parseMap, mapMeasure, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
@@ -1103,6 +1104,83 @@ export const ripple = {
   },
 }
 
+// --- design: the two projections of the change, and the gate that decides they are needed ---------
+//
+// ONE function, TWO calls, told apart by `path` — the same step, asked two different questions:
+//   design({})            the GATE: reads `.agent/design` (written by step 8) and ALWAYS erases both
+//                         of this step's artifacts. Yesterday's design must not survive into today's
+//                         run in any branch: on `skip` nobody will rewrite it, and on `needed` it is
+//                         rewritten only if the role and the guardrail both succeed. The argument is
+//                         the one `.agent/mode` and `.agent/ripple.xml` are erased by (docs/weight.md
+//                         §4, docs/ripple.md §5): newRun carries the run's STATE into .agent/prev and
+//                         leaves the ARTIFACTS.
+//   design({ path })      the CHECK: judges what the role staged, and on green promotes it and writes
+//                         `.agent/data-flow.md` — the flow AND the unit list of every node, both
+//                         expanded by the script out of the contracts (steps/design/design.mjs).
+//
+// The FRD is read by THE frd parser and the subgraph by THE map reader — the same discipline the
+// ripple keeps: a second parser of either grammar is how two readers of one file start disagreeing.
+const DESIGN_GRAPH_PATH = ".agent/design-graph.xml"
+const DATA_FLOW_PATH = ".agent/data-flow.md"
+
+export const design = {
+  description: "Step 9. Without `path`: the gate — read .agent/design (needed|skip) and ERASE .agent/design-graph.xml and .agent/data-flow.md so no previous run's design can survive. With `path`: judge the staged design graph by steps/design/design.mjs::newDesign (nodes and routes against .agent/frd.xml and the ripple subgraph), and on green promote it to .agent/design-graph.xml and write .agent/data-flow.md — the scenario flows plus the unit list of each node, both substituted out of the contracts.",
+  input: { type: "object", properties: { path: { type: "string" } }, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      design: { type: "string" },
+      nodes: { type: "number" },
+      routes: { type: "number" },
+      units: { type: "number" },
+      blockers: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ path } = {}, context) {
+    const root = runRoot(context)
+
+    if (!path) {
+      for (const p of [DESIGN_GRAPH_PATH, DATA_FLOW_PATH]) if (existsSync(at(root, p))) rmSync(at(root, p))
+      if (!existsSync(at(root, DESIGN_PATH))) {
+        return { ok: false, why: `${DESIGN_PATH} не существует — шаг 8 ripple не отработал, решать про дизайн нечем` }
+      }
+      const flag = readFileSync(at(root, DESIGN_PATH), "utf8").trim()
+      if (flag !== "needed" && flag !== "skip") {
+        return { ok: false, why: `${DESIGN_PATH} содержит «${flag}» — допустимо needed | skip; артефакт из другой версии грамматики` }
+      }
+      return { ok: true, design: flag }
+    }
+
+    if (!existsSync(at(root, path))) {
+      return { ok: false, blockers: `${path} не существует — роль ничего не записала по staging-пути` }
+    }
+    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"]]) {
+      if (!existsSync(at(root, p))) return { ok: false, blockers: `${p} не существует — ${why}, судить дизайн не по чему` }
+    }
+
+    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+    const known = parseMap(readFileSync(at(root, RIPPLE_PATH), "utf8")).nodes
+    const r = newDesign({ xml: readFileSync(at(root, path), "utf8"), frd, known })
+    if (!r.ok) return { ok: false, blockers: r.error.detail }
+
+    // Written only AFTER the decision to accept (standards/code.md, constraint 6): the promote moves
+    // the role's file, and the script's file is written beside it in the same breath.
+    copyFileSync(at(root, path), at(root, DESIGN_GRAPH_PATH))
+    rmSync(at(root, path))
+    writeFileSync(at(root, DATA_FLOW_PATH), `${r.value.flow}\n`)
+    return {
+      ok: true,
+      nodes: r.value.nodes.size,
+      routes: r.value.routes.length,
+      units: (r.value.flow.match(/^\$START_TESTS /gm) || []).length,
+    }
+  },
+}
+
 // izi_answer — an ordinary pi TOOL (not a workflow sandbox function: this one is called by the
 // INTERACTIVE session's own model, reacting to the checkpoint follow-up message that
 // workflows/izi.js's askOperator() delivers into this same chat). The question TEXT is never a model
@@ -1199,15 +1277,15 @@ export const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.10.0",
-    headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple host functions",
-    description: "readText/answers/brdForm/frdForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple, plus the gilb, scout and intake role directories (steps/brd/, steps/scope/, steps/intake/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple },
-    // steps/brd/ carries gilb.md, steps/scope/ carries scout.md and steps/intake/ carries intake.md
-    // (role files, named by ROLE not by step — see steps/brd/gilb.md's own header) alongside their
-    // cores/orders/tests;
+    version: "1.11.0",
+    headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design host functions",
+    description: "readText/answers/brdForm/frdForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design, plus the gilb, scout, intake and designer role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design },
+    // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
+    // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
+    // own header) alongside their cores/orders/tests;
     // pi-extensible-workflows scans a role directory for *.md files only (validation.js
     // scanRoleFiles), so the non-.md neighbours here are inert to role resolution.
-    roleDirectories: [new URL("../steps/brd/", import.meta.url), new URL("../steps/scope/", import.meta.url), new URL("../steps/intake/", import.meta.url)],
+    roleDirectories: [new URL("../steps/brd/", import.meta.url), new URL("../steps/scope/", import.meta.url), new URL("../steps/intake/", import.meta.url), new URL("../steps/design/", import.meta.url)],
   })
 }
