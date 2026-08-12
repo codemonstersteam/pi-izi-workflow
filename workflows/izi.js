@@ -1,6 +1,6 @@
-// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph → intake → weight → ripple → design
+// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan
 // Purpose:      one decision — the ORDER of the pipeline, and it lives here as CODE. A phase is a
-//               named function, not a manifest entry: with nine steps, nine hand-written calls are
+//               named function, not a manifest entry: with ten steps, ten hand-written calls are
 //               cheaper than a pipeline.json plus a dispatcher plus their tests (docs/workflow.md
 //               §1-§2, docs/concept.md, "What is deferred and why"). The rule returns when the cost of
 //               listing phases by hand exceeds the cost of policy-as-data — not before.
@@ -10,7 +10,7 @@
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
 //               GLOBALS — readText · answers · brdForm · frdForm · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · cells · digest · reuse ·
-//               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design. They are not
+//               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design · plan. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -740,6 +740,41 @@ async function designing() {
   exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
 }
 
+// FUNCTION_CONTRACT: planning — step 10: the accepted change as an ordered DAG of work
+//   Input:        —
+//   Dependencies: EXTERNAL — plan (the host function; the local name differs because a sandbox global
+//                 cannot be shadowed by the function that calls it); askOperator
+//   Antecedent:   steps 5, 6 and 7 left .agent/appgraph.xml, .agent/frd.xml and .agent/mode;
+//                 QUESTION_ROUNDS ≥ 1
+//   Consequent:   success: RETURNS ".agent/plan-index.json" — nodes with a kind, a topological order
+//                          and a check command each, plus the branch name and the declared gaps
+//                 failure: exits err("blocked") — no weight, nothing to plan, a cycle, a node nothing
+//                          can close, a scenario with no suite, no trunk; the artifact does NOT exist
+//                          after it (the host erases a stale one), so no gate can approve a plan
+//                          computed for a change that no longer exists
+//   Purity:       io (through the host)
+//
+// The FIRST script step with an operator, and the shape follows from that: there is no role here to
+// re-delegate to, so the answer is applied by the script itself and the "loop" is simply the same
+// host call made again over the same disk. It therefore spends QUESTION_ROUNDS and never LOOPS — a
+// round costs the operator's time, not the model's (docs/plan.md §6, §8).
+async function planning() {
+  for (let round = 1; round <= QUESTION_ROUNDS + 1; round++) {
+    const p = await plan({});
+    if (p.ok) {
+      log(`plan: узлов ${p.nodes} (code ${p.code}, scenario ${p.scenario}), ветка ${p.branch} от ${p.base}`);
+      // What the repository could not answer is printed where the operator reads it. A gap that stays
+      // inside the artifact is indistinguishable from a step that never looked (the same rule step 5
+      // follows for its own found="no").
+      if (p.gaps.length) log(`plan: пробелы — ${p.gaps.join(", ")}: узла нет, решение заводить их есть отдельная работа`);
+      return ".agent/plan-index.json";
+    }
+    if (!p.ask) exit(err("blocked", { subject: p.why, evidence: ".agent/plan-index.json не написан" }));
+    if (round > QUESTION_ROUNDS) exit(err("question", { subject: p.subject, diagnosis: `кругов уточнения больше ${QUESTION_ROUNDS}` }));
+    await askOperator({ subject: p.subject, evidence: "" }, round, "plan", "plan");
+  }
+}
+
 // THE END OF THE BAND SAYS SO OUT LOUD, and it says it HERE — beside the code that moves it. The
 // terminal message is what the chat model reads when the run finishes, and a result that only says
 // `track:"ok"` reads to a coding agent sitting in a project directory as a green light to go build
@@ -754,7 +789,7 @@ async function designing() {
 //   end when step 9 was added: a message about the end that stays on step 8 is a message about the
 //   wrong step.
 function bandEnds(artifact) {
-  log("izi: полоса кончилась на шаге 9. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
+  log("izi: полоса кончилась на шаге 10. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
   exit(ok({
     artifact,
     next: "Полоса кончается здесь. Напечатай результат и остановись: не пиши код, не гоняй тесты, не меняй файлы проекта — реализация это шаг 15, которого ещё нет.",
@@ -799,8 +834,9 @@ try {
   phase("intake"); await intake();
   phase("weight"); await weigh();
   phase("ripple"); await rippling();
-  phase("design"); bandEnds(await designing()); // always exits — the band's end is one statement,
-  return ok({});                                // in one place; the return is the tenth phase's slot
+  phase("design"); await designing();
+  phase("plan"); bandEnds(await planning());    // always exits — the band's end is one statement,
+  return ok({});                                // in one place; the return is the next phase's slot
 } catch (e) {
   if (e instanceof Exit) return e.result;
   const msg = String((e && e.message) || e);

@@ -1,17 +1,25 @@
+
 $start_system
 You are software developer. Software craftsman and progmatic programmer.  
 Develop rationally and precisely according to the task. Avoid labor-intensive, all-purpose solutions.
 $end_system
 
 $start_task
-Before starting development step [10], 
-the task is to analyze the results of step [10] (docs/workflow.md), 
+Before starting development step [11], 
+the task is to analyze the results of step [11] (docs/workflow.md), 
 analyze the artifacts from the test run (~/IdeaProjects/codemonstersdev/sandbox/runbox/quarkus-rest-json-app-v2-t3),
-and determine whether everything is sufficient for step 10[plan].
-If there are discrepancies, suggest the minimum steps to get the concept of step 10.
-write the concept to docs/plan.md
-write the backlog.md to implement step [10] and show to operator
+and determine whether everything is sufficient for step 11[review].
+If there are discrepancies, suggest the minimum steps to get the concept of step 11.
+write the concept to docs/review.md
+write the backlog.md to implement step [11] and show to operator
 
+write the role to comply with the standard
+and articles
+https://codemonsters.team/blog/2025/12/15/program-modules/
+https://codemonsters.team/blog/2025/12/30/program-correctness/
+
+Use the corresponding skills from ~/IdeaProjects/codemonstersdev/izi-flow/skills/lib/
+and rewrite the skills to comply with the standard
 
 $end_task
 
@@ -33,7 +41,7 @@ described in the `standards` documentation.
 It's necessary to map out the contracts for each step
 and ensure that each module works in concert.
 In this context, a module is:
-LLM agent, a script function that performs a task, a Guardrail validation function, and the result of LLM execution.
+LLM agent, a script function that performs a task, a Garrail validation function, and the result of LLM execution.
 
 A clear contract for each step's work must be established.
 - What input is received?
@@ -50,5 +58,5 @@ $start-strategy-step-by-step
 3 Launch a critic subagent sonnet to search for overengineering and a simpler solution
 4 Refine the backlog and concept for criticism
 5 Present the work plan to the operator
-6 add to backlog tasks to synchronize docs/ according to the modification
+6 add to backlog tasks to synchronize docs/ according to the modifications
 $end-strategy-step-by-step

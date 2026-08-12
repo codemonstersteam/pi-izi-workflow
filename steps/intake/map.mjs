@@ -10,7 +10,8 @@
 // Invariants: parseMap and mapMeasure are total — any input, including undefined, yields an empty
 //             parse and never throws; the cap is a CONSTANT here and nowhere else.
 // Interface:  MAP_CAP_BYTES — the reading ceiling, in bytes
-//             parseMap(xml) -> { nodes, tests, entries: Set<string>, edges: Edge[], count }
+//             parseMap(xml) -> { nodes, tests, entries: Set<string>, edges: Edge[], count,
+//                                nodeTests: Map, suites: Suite[], spine: {…}, cycles: Set<string> }
 //             mapMeasure(xml, cap?) -> { bytes, nodes, overCap }
 //
 // WHY A MEASUREMENT AND NOT AN INDEX. docs/concept.md promised the reader an INDEX form above the
@@ -33,7 +34,8 @@ export const MAP_CAP_BYTES = 115 * 1024
 //   Dependencies: core/xml.mjs
 //   Antecedent:   any value — undefined/null/garbage are read as a map with no nodes
 //   Consequent:   success: { nodes: Set<path>, tests: Set<path>, entries: Set<path>,
-//                          edges: [{from, to}], count } — every `<module path=…>`, self-closing or
+//                          edges: [{from, to}], count, nodeTests, suites, spine, cycles }
+//                          — every `<module path=…>`, self-closing or
 //                          with a body, in appearance order; a repeated path collapses (a Set: one
 //                          path is one name, the invariant step 5 already enforced). `tests` is the
 //                          subset the map marked `kind="test"`; `entries` the subset that declares at
@@ -53,18 +55,57 @@ export const MAP_CAP_BYTES = 115 * 1024
 // `entries` exists for one rule too (F3, the `Changed`/`Removed` half): together with the incoming
 // edges it answers "can an existing call of this node break at all". A node with neither has no
 // existing caller, and a form defined by its effect ON a caller is then a statement about nothing.
+// FOUR MORE FIELDS FOR STEP 10, and none of them a second reader of this grammar (docs/plan.md §7):
+//   nodeTests — the `<test path suite>` a node declares, which is where the node's CHECK COMMAND comes
+//               from once the suite is looked up. `tests` above answers "is this node a test"; this
+//               answers "what tests does this node have", and the two are different questions about
+//               different keys.
+//   suites    — `<suite id kind cmd one path match>` verbatim: `cmd` runs the suite, `one` runs a
+//               single file (empty is a legal value — step 10 then plans the whole suite and says so).
+//   spine     — the answers the repository did NOT give: `toggles`, `branching`, `contract`. A
+//               `found="no"` becomes null, so "there is no toggle mechanism" is a case, never an empty
+//               string that reads as an answer (standards/code.md §2).
+//   cycles    — every module named by a `<cycle modules="…">`. Step 10 topologically sorts, and a
+//               cycle is the one thing a topological sort cannot survive.
 export function parseMap(xml) {
   const s = String(xml || "")
   const nodes = new Set()
   const tests = new Set()
   const entries = new Set()
+  const nodeTests = new Map()
   for (const m of s.matchAll(elem("module"))) {
     const a = attrs(m[1])
     if (!a.path) continue
     nodes.add(a.path)
     if (a.kind === "test") tests.add(a.path)
     if (/<api\b/.test(m[2] || "")) entries.add(a.path)
+    const own = [...String(m[2] || "").matchAll(tag("test"))]
+      .map((t) => attrs(t[1]))
+      .filter((t) => t.path)
+      .map((t) => Object.freeze({ path: t.path, suite: t.suite || "" }))
+    if (own.length) nodeTests.set(a.path, Object.freeze(own))
   }
+
+  const suites = [...s.matchAll(tag("suite"))]
+    .map((m) => attrs(m[1]))
+    .filter((a) => a.id)
+    .map((a) => Object.freeze({ id: a.id, kind: a.kind || "", cmd: a.cmd || "", one: a.one || "", path: a.path || "", match: a.match || "" }))
+
+  const spineAnswer = (el) => {
+    const m = s.match(tag(el, "/?>"))
+    if (!m) return null
+    const a = attrs(m[0].replace(new RegExp(`^<${el}\\b`), "").replace(/\/?>$/, ""))
+    return a.found === "no" ? null : Object.freeze(a)
+  }
+  const spine = Object.freeze({
+    toggles: spineAnswer("toggles"),
+    branching: spineAnswer("branching"),
+    contract: spineAnswer("contract"),
+  })
+
+  const cycles = new Set(
+    [...s.matchAll(tag("cycle"))].flatMap((m) => String(attrs(m[1]).modules || "").split(/\s+/).filter(Boolean)),
+  )
   // The edges are read but NOT judged: step 6 ignores them entirely, and step 8 decides for itself
   // what a test endpoint or a dangling one means for the ripple. `via` is dropped — the ripple carries
   // the fact of the edge, and the line of code that proves it is already in the map the operator reads.
@@ -72,7 +113,7 @@ export function parseMap(xml) {
     .map((m) => attrs(m[1]))
     .filter((a) => a.from && a.to)
     .map((a) => Object.freeze({ from: a.from, to: a.to }))
-  return { nodes, tests, entries, edges, count: nodes.size }
+  return { nodes, tests, entries, edges, count: nodes.size, nodeTests, suites, spine, cycles }
 }
 
 // FUNCTION_CONTRACT: mapMeasure — the price of handing this map to a role

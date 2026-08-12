@@ -25,6 +25,7 @@
 //             (`kind="test"`) is never a node of the ripple.
 // Interface:  GRAMMAR_VERSION — stamped on the artifact
 //             DESIGN_TABLE — weight → how the flag is decided, as data
+//             changeWidth({ frd, tests }) -> Set<path> — the nodes the change makes WORK on
 //             newRipple({ xml, frd, mode, map, cap? }) -> Result<Ripple, ...>
 
 import { ok, err } from "../../core/result.mjs"
@@ -64,6 +65,30 @@ export const DESIGN_TABLE = Object.freeze({
 // ones and have no way to tell which is true (docs/ripple.md §4). What the subgraph hides is said
 // instead by `cut`, the way the map says `<decl more="N"/>` about declarations it did not list.
 const DROPPED = new Set(["path", "fanin", "fanout"])
+
+// FUNCTION_CONTRACT: changeWidth — the nodes the change makes WORK on
+//   Input:        frd — parseFrd's parse (steps/intake/frd.mjs): `deltas`, `touched`
+//                 tests — the map's test nodes (parseMap's `tests`), which are never work of their own
+//   Dependencies: —
+//   Antecedent:   any values — a missing frd or tests yields an empty width, never an exception
+//   Consequent:   success: Set<path> — `<touched>` ∪ the nodes of `<delta node>`, minus test nodes
+//                 failure: none — total
+//   Purity:       pure
+//
+// It is EXPORTED because step 10 counts the same set to decide how many tickets the change cuts
+// (docs/plan.md §3), and a second copy of this expression is how the flag of step 8 and the node list
+// of step 10 would start disagreeing about what the change even touches (standards/code.md §1).
+//
+// Why `touched` and not the delta nodes alone: a delta can only be carried by a node that HAS a
+// contract. A page, a template or a build script has none — it stays `<touched>`, though the work on
+// it is real and it is one side of the joint (docs/ripple.md §3, discrepancy E). Test nodes are
+// excluded for the mirror reason: a test rides into the ticket with its module through
+// `<test path suite>`, which is F2/F3 of step 6.
+export function changeWidth({ frd, tests } = {}) {
+  const t = tests || new Set()
+  const deltaNodes = (((frd && frd.deltas) || []).map((d) => d && d.node)).filter(Boolean)
+  return new Set([...deltaNodes, ...((frd && frd.touched) || [])].filter((p) => p && !t.has(p)))
+}
 
 const openTag = (path, seed, rest, cut) => {
   const tail = Object.entries(rest).map(([k, v]) => ` ${k}="${esc(v)}"`).join("")
@@ -154,9 +179,10 @@ export function newRipple({ xml, frd, mode, map, cap = MAP_CAP_BYTES } = {}) {
   for (const s of seeds) for (const n of near.get(s) || []) if (!tests.has(n)) shown.add(n)
 
   // WIDTH — how many nodes the change makes WORK on, which is how many tickets step 10 will cut. It is
-  // `touched` plus the delta nodes, and NOT `seeds`: a scenario's route may pass through a node the
-  // change never touches, and a transit node is context for the designer, not work for an executor.
-  const width = new Set([...deltaNodes, ...(frd.touched || [])].filter((p) => p && !tests.has(p)))
+  // NOT `seeds`: a scenario's route may pass through a node the change never touches, and a transit
+  // node is context for the designer, not work for an executor. The set itself is built by
+  // changeWidth above — step 10 needs the same one.
+  const width = changeWidth({ frd, tests })
 
   const out = []
   const order = []
