@@ -1,6 +1,6 @@
-// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph → intake → weight
+// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph → intake → weight → ripple
 // Purpose:      one decision — the ORDER of the pipeline, and it lives here as CODE. A phase is a
-//               named function, not a manifest entry: with seven steps, seven hand-written calls are
+//               named function, not a manifest entry: with eight steps, eight hand-written calls are
 //               cheaper than a pipeline.json plus a dispatcher plus their tests (docs/workflow.md
 //               §1-§2, docs/concept.md, "What is deferred and why"). The rule returns when the cost of
 //               listing phases by hand exceeds the cost of policy-as-data — not before.
@@ -10,7 +10,7 @@
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
 //               GLOBALS — readText · answers · brdForm · frdForm · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · cells · digest · reuse ·
-//               remember · checkPart · buildGraph · graphMap · checkFrd · weight. They are not
+//               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -609,7 +609,7 @@ async function intake() {
 //   Dependencies: EXTERNAL — weight (the host function; the local name differs because a sandbox
 //                 global cannot be shadowed by the function that calls it)
 //   Antecedent:   step 6 promoted .agent/frd.xml
-//   Consequent:   success: exits ok with .agent/mode written — one word, the end of today's stripe
+//   Consequent:   success: RETURNS with .agent/mode written — one word
 //                 failure: exits err("blocked") — an Unknown delta, no delta, or a form outside the
 //                          vocabulary; .agent/mode does NOT exist after it (the host erases a stale
 //                          one, docs/weight.md §4), so step 8 can never read a previous run's weight
@@ -623,7 +623,50 @@ async function weigh() {
   const w = await weight({});
   if (!w.ok) exit(err("blocked", { subject: w.why, evidence: ".agent/mode не написан" }));
   log(`weight: mode=${w.mode} из ${w.earned} (дельт ${w.deltas})`);
-  exit(ok({ artifact: ".agent/mode", mode: w.mode, earned: w.earned }));
+}
+
+// FUNCTION_CONTRACT: rippling — step 8: is a design needed, and over which nodes
+//   Input:        —
+//   Dependencies: EXTERNAL — ripple (the host function; the local name differs for the same reason
+//                 weigh's does — a sandbox global cannot be shadowed by the function that calls it)
+//   Antecedent:   steps 5, 6 and 7 left .agent/appgraph.xml, .agent/frd.xml and .agent/mode
+//   Consequent:   success: exits ok with .agent/design (needed | skip) and .agent/ripple.xml written
+//                          — the end of today's stripe
+//                 failure: exits err("blocked") — no weight, nothing to ripple from, a seed the map
+//                          does not declare, or a subgraph above the reading ceiling; NEITHER file
+//                          exists after it (the host erases both, docs/ripple.md §5), so step 9 can
+//                          never be ordered on a previous run's verdict
+//   Purity:       io (through the host)
+//
+// The flag is a COUNT of the nodes carrying a delta, not a radius of reachability: a closure over the
+// map's edges is the connected component, which would make `skip` unreachable and order the designer
+// for every change ever (docs/ripple.md §2, discrepancy A). The subgraph is what step 9 reads INSTEAD
+// of the whole map.
+async function rippling() {
+  const r = await ripple({});
+  if (!r.ok) exit(err("blocked", { subject: r.why, evidence: ".agent/design не написан" }));
+  // Both numbers are named: "the subgraph was computed" and "the subgraph came out empty" are
+  // otherwise indistinguishable in the journal, and the journal is what diagnosis reads.
+  log(`ripple: design=${r.design} узлов ${r.nodes} из ${r.total} (затравок ${r.seeds}, mode=${r.mode})`);
+  // THE END OF THE BAND SAYS SO OUT LOUD, and it says it HERE — beside the code that moves it. The
+  // terminal message is what the chat model reads when the run finishes, and a result that only says
+  // `track:"ok"` reads to a coding agent sitting in a project directory as a green light to go build
+  // the thing TASK.md describes.
+  //
+  // BUG_FIX_CONTEXT: live run 9a8821a7 (quarkus-rest-json-app-v2-t2). After a green run the chat model
+  //   implemented the requirement by hand — 27 lines across three files plus a new page — and ran the
+  //   tests. Nothing was wrong with the artifacts; the band simply never said it had ended, and step 15
+  //   (`implement`) does not exist yet. The next run would have mapped that code as the repository's
+  //   own. The rule travels with the message for the same reason askOperator's checkpoint instruction
+  //   does: prompts/izi.md cannot restate what changes with this file.
+  log("izi: полоса кончилась на шаге 8. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
+  exit(ok({
+    artifact: ".agent/design",
+    design: r.design,
+    mode: r.mode,
+    nodes: r.nodes,
+    next: "Полоса кончается здесь. Напечатай результат и остановись: не пиши код, не гоняй тесты, не меняй файлы проекта — реализация это шаг 15, которого ещё нет.",
+  }));
 }
 
 log("izi: start");
@@ -650,6 +693,11 @@ try {
   log(fresh.answers || fresh.pending || fresh.staged
     ? `run: состояние прошлого прогона убрано в .agent/prev — ответов ${fresh.answers}, staging ${fresh.staged}${fresh.pending ? ", открытый вопрос" : ""}`
     : "run: .agent чист — состояния прошлого прогона нет");
+  // The working tree is DECLARED, never blocked on: uncommitted files are normal in a live repository.
+  // What is not normal is not knowing — the swarm maps the tree as it is, so work done by hand before
+  // the run is mapped as the repository's own and the FRD comes out about a different codebase (live
+  // run 9a8821a7, ext/index.mjs::dirtyCount). `-1` means git did not answer, which is not "clean".
+  if (fresh.dirty > 0) log(`run: рабочее дерево грязное — ${fresh.dirty} файлов не в коммите; разведка отобразит их КАК ЕСТЬ`);
 
   phase("task"); await task();
   phase("brd"); await brd();
@@ -658,7 +706,8 @@ try {
   phase("graph"); await graph();
   phase("intake"); await intake();
   phase("weight"); await weigh();
-  return ok({}); // unreachable — weigh() always exits — kept as the fall-through for an eighth phase
+  phase("ripple"); await rippling();
+  return ok({}); // unreachable — rippling() always exits — kept as the fall-through for a ninth phase
 } catch (e) {
   if (e instanceof Exit) return e.result;
   const msg = String((e && e.message) || e);

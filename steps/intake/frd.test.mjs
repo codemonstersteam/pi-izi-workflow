@@ -10,8 +10,17 @@ import { newFrd, parseFrd, checkFrd, FRD_FORM } from "./frd.mjs"
 
 // Fixture: a DIFFERENT domain from any live input (parcels, not fruits) — the same reason the role's
 // own EXAMPLE is foreign: a fixture indistinguishable from live input stops testing the code.
-const NODES = new Set(["src/ParcelResource.java", "src/ParcelRepo.java", "src/Parcel.java", "src/test/ParcelResourceTest.java"])
+const NODES = new Set(["src/ParcelResource.java", "src/ParcelRepo.java", "src/Parcel.java", "src/test/ParcelResourceTest.java", "src/ui/parcels.html"])
 const TESTS = new Set(["src/test/ParcelResourceTest.java"])
+// The map's two answers to "can an existing call of this node break": its own `<api>`, and an edge
+// pointing AT it. `src/ui/parcels.html` has neither — a leaf page that calls the resource and that
+// nobody calls (live run e2905b82, the node that earned a false `major`).
+const ENTRIES = new Set(["src/ParcelResource.java"])
+const EDGES = [
+  { from: "src/ui/parcels.html", to: "src/ParcelResource.java" },
+  { from: "src/ParcelResource.java", to: "src/ParcelRepo.java" },
+  { from: "src/ParcelRepo.java", to: "src/Parcel.java" },
+]
 const SOURCES = ["Нужен поиск посылки по части трек-номера, в ответе не больше 20 записей."]
 
 const FRD = `<frd grammar="1" goal="искать посылку по части трек-номера">
@@ -33,15 +42,17 @@ const FRD = `<frd grammar="1" goal="искать посылку по части 
   <delta op="findByTrack" form="Added" node="src/ParcelRepo.java"/>
   <scenario id="S1" uc="UC1" before="GET /parcels?track=AB отдаёт весь реестр"
             after="отдаёт только посылки с AB в треке" nodes="src/ParcelResource.java"/>
-  <touched path="src/ParcelResource.java"/>
-  <touched path="src/ParcelRepo.java"/>
+  <touched path="src/ParcelResource.java" why="метод list получает параметр track и фильтрует"/>
+  <touched path="src/ParcelRepo.java" why="добавляется поиск по подстроке трека"/>
 
   <nfr subject="response-size" fit="не больше 20 записей" source="answers.md"/>
 </frd>`
 
-const build = (xml = FRD) => newFrd({ xml, nodes: NODES, tests: TESTS, sources: SOURCES })
+const REPO_TOUCHED = '<touched path="src/ParcelRepo.java" why="добавляется поиск по подстроке трека"/>'
+
+const build = (xml = FRD) => newFrd({ xml, nodes: NODES, tests: TESTS, entries: ENTRIES, edges: EDGES, sources: SOURCES })
 const blockersOf = (xml) =>
-  checkFrd({ frd: parseFrd(xml), nodes: NODES, tests: TESTS, known: new Set(["20"]) })
+  checkFrd({ frd: parseFrd(xml), nodes: NODES, tests: TESTS, entries: ENTRIES, edges: EDGES, known: new Set(["20"]) })
 
 test("happy: the FRD is built, and it carries what steps 7-9 consume", () => {
   const r = build()
@@ -78,8 +89,20 @@ test("F1: no goal, a use case without post, without actor and without a step", (
 })
 
 test("F2: a touched that resolves to no node of the map", () => {
-  const told = FRD.replace('<touched path="src/ParcelRepo.java"/>', '<touched path="src/Invented.java"/>')
+  const told = FRD.replace('<touched path="src/ParcelRepo.java"', '<touched path="src/Invented.java"')
   assert.match(blockersOf(told).join("\n"), /F2 touched «src\/Invented\.java» не резолвится/)
+})
+
+// Step 8 measures the WIDTH of the change by `touched` (docs/ripple.md §3), so a node declared touched
+// on nothing but the role's say-so orders the `designer` role for free — and step 10 would owe it a
+// ticket nobody can write. Touching must be explained by a delta or by a scenario running through it.
+test("F2b: a touched with no delta of its own and no scenario through it is not explained", () => {
+  const bare = FRD.replace('  ' + REPO_TOUCHED, '  ' + REPO_TOUCHED + '\n  <touched path="src/Parcel.java" why="поле track становится частью поиска"/>')
+  assert.match(blockersOf(bare).join("\n"), /F2b touched «src\/Parcel\.java» ничем не объяснён/)
+  // The same node, named by a scenario's route: explained, and green — this is exactly the live shape
+  // of run c4b7cea5, where the page carried no delta of its own but the scenario ran through it.
+  const viaRoute = bare.replace('nodes="src/ParcelResource.java"', 'nodes="src/ParcelResource.java src/Parcel.java"')
+  assert.deepEqual(blockersOf(viaRoute), [])
 })
 
 test("F3: an invented form, an Unknown without why, a node outside the map and outside touched", () => {
@@ -91,7 +114,58 @@ test("F3: an invented form, an Unknown without why, a node outside the map and o
   // `Fixed` is a form like the other three — it carries a node and passes. Without it a
   // contract-stable bug fix would have to be declared `Changed`, and step 7 could never weigh a
   // `patch` (docs/weight.md §3).
-  assert.deepEqual(blockersOf(FRD.replace('form="Added"', 'form="Fixed"')), [])
+  assert.deepEqual(blockersOf(FRD.replace('form="Added" node="src/ParcelRepo.java"', 'form="Fixed" node="src/ParcelRepo.java" from="ищет по полному треку" to="ищет по подстроке"')), [])
+})
+
+// Live run 9a8821a7 (quarkus-rest-json-app-v2-t2): beside the one real delta the artifact listed the
+// three operations that do NOT change — `form="Fixed" from="unchanged" to="unchanged"` each. Step 10
+// makes a plan node per delta, so that is three tickets for work nobody has to do.
+test("F3b: a delta that moves nothing is not a delta, and Changed/Fixed owe both ends of the move", () => {
+  const still = FRD.replace('<delta op="findByTrack" form="Added" node="src/ParcelRepo.java"/>',
+    '<delta op="findByTrack" form="Fixed" node="src/ParcelRepo.java" from="unchanged" to="unchanged"/>')
+  assert.match(blockersOf(still).join("\n"), /F3b findByTrack: from и to совпадают/)
+  // A form that CLAIMS a movement must name it: `Fixed` and `Changed` without both ends say nothing.
+  assert.match(blockersOf(FRD.replace('form="Added" node="src/ParcelRepo.java"', 'form="Fixed" node="src/ParcelRepo.java"')).join("\n"),
+    /F3b findByTrack: Fixed без from\/to/)
+  // `Added` needs no `from`: the movement IS the appearance — the green fixture proves it.
+  assert.deepEqual(blockersOf(FRD), [])
+})
+
+// Live run 9a8821a7 again: `<touched path=".../Fruit.java"/>` passed F2b because a scenario's route ran
+// through it — and the implementation written afterwards never touched that file. The route is a fact
+// about the path, not about the work; only the role knows the difference, so it must say it.
+test("F2c: a touched with no why — the role must name what changes in the node", () => {
+  const mute = FRD.replace(' why="добавляется поиск по подстроке трека"', "")
+  assert.match(blockersOf(mute).join("\n"), /F2c touched «src\/ParcelRepo\.java» без why/)
+  assert.match(blockersOf(FRD.replace('why="добавляется поиск по подстроке трека"', 'why="   "')).join("\n"), /F2c/)
+})
+
+// Live run e2905b82 (sandbox/runbox/quarkus-rest-json-app-v2-t2): the FRD declared
+// `<delta op="fruit-card-rendering" form="Changed" node=".../fruits.html"/>` for a page that GAINED a
+// card. That node has no `<api>` and `fanin="0"` — nothing calls it — so "the existing call changed"
+// was a statement about nothing, and it weighed `major`, ordering step 9 for a purely additive change.
+// The forms are defined by their effect ON AN EXISTING CALL, and this rule is where that definition
+// finally has teeth.
+test("F3: Changed/Removed need a node someone can actually call — an <api> or an incoming edge", () => {
+  const onLeaf = (form) => FRD.replace(
+    '  ' + REPO_TOUCHED,
+    `  <delta op="parcel-card-rendering" form="${form}" node="src/ui/parcels.html" from="список без карточки" to="карточка по клику"/>\n  ${REPO_TOUCHED}\n  <touched path="src/ui/parcels.html" why="добавляется карточка по клику"/>`,
+  )
+  for (const form of ["Changed", "Removed"]) {
+    const b = blockersOf(onLeaf(form)).join("\n")
+    assert.match(b, new RegExp(`F3 parcel-card-rendering: «src/ui/parcels\\.html» — ${form}`))
+    assert.match(b, /ломаться нечему/)
+  }
+  // The same node, the same page, declared for what it is: additive. Green.
+  assert.deepEqual(blockersOf(onLeaf("Added")), [])
+  assert.deepEqual(blockersOf(onLeaf("Fixed")), [])
+  // And the rule does NOT fire on a node without an `<api>` that something DOES call: `Parcel.java`
+  // is called by the repo, so breaking its shape breaks a real caller.
+  const onCallee = FRD
+    .replace('<delta op="findByTrack" form="Added" node="src/ParcelRepo.java"/>',
+             '<delta op="findByTrack" form="Added" node="src/ParcelRepo.java"/>\n  <delta op="Parcel.track" form="Changed" node="src/Parcel.java" from="String track" to="TrackNo track"/>')
+    .replace('  ' + REPO_TOUCHED, '  ' + REPO_TOUCHED + '\n  <touched path="src/Parcel.java" why="тип поля track"/>')
+  assert.deepEqual(blockersOf(onCallee), [])
 })
 
 // Live run 1d804798: beside the delta on FruitResource.java the artifact carried one on
@@ -99,8 +173,8 @@ test("F3: an invented form, an Unknown without why, a node outside the map and o
 // two tickets and the test would have been written by a different executor than the code.
 test("F2/F3: a test file is not a delta and not touched — it is the DoD of the change", () => {
   const withTest = FRD.replace(
-    '  <touched path="src/ParcelRepo.java"/>',
-    '  <delta op="testList" form="Changed" node="src/test/ParcelResourceTest.java" from="тест списка" to="тесты поиска"/>\n  <touched path="src/ParcelRepo.java"/>\n  <touched path="src/test/ParcelResourceTest.java"/>',
+    '  ' + REPO_TOUCHED,
+    '  <delta op="testList" form="Changed" node="src/test/ParcelResourceTest.java" from="тест списка" to="тесты поиска"/>\n  ' + REPO_TOUCHED + '\n  <touched path="src/test/ParcelResourceTest.java" why="новые проверки"/>',
   )
   const b = blockersOf(withTest).join("\n")
   assert.match(b, /F3 testList: узел «src\/test\/ParcelResourceTest\.java» — тест/)
@@ -114,6 +188,16 @@ test("F4: a scenario that does not distinguish, and an FRD with no scenario at a
   assert.match(blockersOf(same).join("\n"), /F4 S1: before и after совпадают/)
   assert.match(blockersOf(FRD.replace(/<scenario[\s\S]*?\/>/, "")).join("\n"), /F4 ни одного <scenario>/)
   assert.match(blockersOf(FRD.replace('uc="UC1"', 'uc="UC9"')).join("\n"), /F4 S1: uc="UC9" — такого <usecase> нет/)
+
+  // The ROUTE of the scenario. Step 8 seeds the ripple subgraph from these paths and step 9 demands a
+  // contract for every node of the route (design.mjs::checkDesign, rule 1), copied out of that
+  // subgraph. A path that no module owns would arrive at step 9 as a node nobody can contract, and
+  // step 8 — a script with no role — could only stop the band. It is cheap here and terminal there.
+  assert.match(blockersOf(FRD.replace('nodes="src/ParcelResource.java"', 'nodes=""')).join("\n"), /F4 S1: nodes пуст/)
+  assert.match(blockersOf(FRD.replace('nodes="src/ParcelResource.java"', 'nodes="src/Invented.java"')).join("\n"),
+    /F4 S1: узла «src\/Invented.java» нет в карте/)
+  // A route of several nodes is the ordinary case — whitespace-separated, every one resolved.
+  assert.deepEqual(blockersOf(FRD.replace('nodes="src/ParcelResource.java"', 'nodes="src/ParcelResource.java src/ParcelRepo.java"')), [])
 })
 
 test("F5: a number with no source among the sources, and a source outside the vocabulary", () => {
@@ -153,7 +237,7 @@ test("F7: an FRD with use cases but not a single delta", () => {
 
 test("Unknown is a legal artifact: it passes acceptance and is COUNTED, for step 7 to refuse on", () => {
   const told = FRD.replace('form="Added" node="src/ParcelRepo.java"', 'form="Unknown" why="в карте два кандидата"')
-    .replace('  <touched path="src/ParcelRepo.java"/>\n', "")
+    .replace('  ' + REPO_TOUCHED + '\n', "")
   const r = newFrd({ xml: told, nodes: NODES, sources: SOURCES })
   assert.equal(r.ok, true)
   assert.equal(r.value.unknown, 1)

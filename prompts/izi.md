@@ -1,5 +1,5 @@
 ---
-description: Start the izi workflow (task → brd → survey-plan → scope → graph → intake) in this pi session
+description: Start the izi workflow (task → brd → survey-plan → scope → graph → intake → weight → ripple) in this pi session
 ---
 $START_TASK
 Call the `workflow` tool NOW, exactly once, with exactly these parameters and no others:
@@ -14,6 +14,10 @@ $START_CONSTRAINTS
   (pi-extensible-workflows/src/host.ts:686). With `false` the tool returns `{ runId, state }` at once
   and pauses arrive as follow-up messages here (host.ts:673-677).
 - Never ask for Approve and never act ahead: pauses arrive on their own.
+- When the run FINISHES, you are done too. Print the result and stop: no code, no tests, no edits to
+  the project's files, whatever `TASK.md` asks for. The band delivers ARTIFACTS under `.agent/`, and
+  implementation is a step of the pipeline that does not exist yet — anything written by hand here is
+  mapped by the NEXT run as the repository's own code (live run 9a8821a7, where this happened).
 $END_CONSTRAINTS
 
 $START_OUTPUT
@@ -23,4 +27,7 @@ Print the tool's result verbatim, once, then one line: `izi` runs in the backgro
 Keep that `runId` — later pause messages do not repeat it. On a
 `Workflow izi checkpoint <name>: <instruction>` message follow the instruction INSIDE it: it is
 written by `workflows/izi.js::askOperator` and changes with the code, so this file does not restate it.
+
+The terminal message carries its own instruction the same way — the run's result has a `next` field
+written by `workflows/izi.js`. Follow it and stop there.
 $END_OUTPUT

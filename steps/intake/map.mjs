@@ -1,13 +1,16 @@
-// MODULE_CONTRACT: map — how the application map is READ by step 6: its node keys and its price
+// MODULE_CONTRACT: map — how the application map is READ: its node keys, its edges and its price
 // Purpose:    one decision — does `.agent/appgraph.xml` fit the reader's window, and which node keys
-//             a `touched` may resolve to. Two consumers, one parse: the guardrail needs the key set
-//             (F2/F3, docs/intake.md §5) and the order needs the map's text with its measured cost.
+//             a `touched` may resolve to. THREE consumers, one parse: step 6's guardrail needs the key
+//             set (F2/F3/F4, docs/intake.md §4), its order needs the map's text with the measured
+//             cost, and step 8 needs the same keys plus the EDGES to cut the ripple subgraph out of
+//             the map (steps/ripple/ripple.mjs). A second reader of this grammar would drift from
+//             this one exactly as a second parser of frd.xml would — which is why step 7 has none.
 //             PURE: knows nothing of disk, io lives in ext/index.mjs.
 // io:         none
 // Invariants: parseMap and mapMeasure are total — any input, including undefined, yields an empty
 //             parse and never throws; the cap is a CONSTANT here and nowhere else.
 // Interface:  MAP_CAP_BYTES — the reading ceiling, in bytes
-//             parseMap(xml) -> { nodes: Set<string>, count: number }
+//             parseMap(xml) -> { nodes, tests, entries: Set<string>, edges: Edge[], count }
 //             mapMeasure(xml, cap?) -> { bytes, nodes, overCap }
 //
 // WHY A MEASUREMENT AND NOT AN INDEX. docs/concept.md promised the reader an INDEX form above the
@@ -18,7 +21,7 @@
 // only a synthetic fixture can reach is a test that no edit of the code can turn red — precisely the
 // test standards/code.md forbids writing. Above the ceiling the step therefore REFUSES with the
 // number, and the index arrives together with the repository that needs it, priced on that repository.
-import { attrs, tag } from "../../core/xml.mjs"
+import { attrs, elem, tag } from "../../core/xml.mjs"
 
 // 32K tokens of map ≈ 115 KB (docs/concept.md, "Как карта читается"); at the measured 417 B/node
 // (docs/graph.md §7, live run c166bd87) that is ≈306 nodes. The number lives HERE — the workflow and
@@ -29,28 +32,47 @@ export const MAP_CAP_BYTES = 115 * 1024
 //   Input:        xml — text of `.agent/appgraph.xml`; type unconstrained
 //   Dependencies: core/xml.mjs
 //   Antecedent:   any value — undefined/null/garbage are read as a map with no nodes
-//   Consequent:   success: { nodes: Set<path>, tests: Set<path>, count } — every `<module path=…>`,
-//                          self-closing or with a body, in appearance order; a repeated path
-//                          collapses (a Set: one path is one name, the invariant step 5 already
-//                          enforced). `tests` is the subset the map marked `kind="test"`
+//   Consequent:   success: { nodes: Set<path>, tests: Set<path>, entries: Set<path>,
+//                          edges: [{from, to}], count } — every `<module path=…>`, self-closing or
+//                          with a body, in appearance order; a repeated path collapses (a Set: one
+//                          path is one name, the invariant step 5 already enforced). `tests` is the
+//                          subset the map marked `kind="test"`; `entries` the subset that declares at
+//                          least one `<api>` — an entry someone outside the repository can call.
+//                          `edges` are the map's `<edge from to/>` VERBATIM, in appearance order:
+//                          duplicates, self-loops and endpoints outside `nodes` are kept, because
+//                          which of those matter is the consumer's rule, not the reader's
 //                 failure: none — total
 //   Purity:       pure
-// The scan is `<module\b …` without demanding a closing form, so BOTH shapes of the grammar are seen:
-// step 5 writes a body when the node has declarations and a self-closing tag when it does not.
+// The scan takes BOTH shapes of the grammar in one pass — step 5 writes a body when the node has
+// declarations and a self-closing tag when it does not — because `entries` needs the body.
 //
 // `tests` exists for one rule (docs/intake.md §4, F3): a test is never a delta of its own. It reaches
 // a ticket together with the module it checks — the map already binds them through `<test path suite>`
 // — and splitting them would hand the test and the code to two different executors.
+//
+// `entries` exists for one rule too (F3, the `Changed`/`Removed` half): together with the incoming
+// edges it answers "can an existing call of this node break at all". A node with neither has no
+// existing caller, and a form defined by its effect ON a caller is then a statement about nothing.
 export function parseMap(xml) {
+  const s = String(xml || "")
   const nodes = new Set()
   const tests = new Set()
-  for (const m of String(xml || "").matchAll(tag("module", ">"))) {
+  const entries = new Set()
+  for (const m of s.matchAll(elem("module"))) {
     const a = attrs(m[1])
     if (!a.path) continue
     nodes.add(a.path)
     if (a.kind === "test") tests.add(a.path)
+    if (/<api\b/.test(m[2] || "")) entries.add(a.path)
   }
-  return { nodes, tests, count: nodes.size }
+  // The edges are read but NOT judged: step 6 ignores them entirely, and step 8 decides for itself
+  // what a test endpoint or a dangling one means for the ripple. `via` is dropped — the ripple carries
+  // the fact of the edge, and the line of code that proves it is already in the map the operator reads.
+  const edges = [...s.matchAll(tag("edge"))]
+    .map((m) => attrs(m[1]))
+    .filter((a) => a.from && a.to)
+    .map((a) => Object.freeze({ from: a.from, to: a.to }))
+  return { nodes, tests, entries, edges, count: nodes.size }
 }
 
 // FUNCTION_CONTRACT: mapMeasure — the price of handing this map to a role

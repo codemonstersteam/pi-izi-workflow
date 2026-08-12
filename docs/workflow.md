@@ -19,7 +19,7 @@ ext/
   index.mjs         pi-extension: readText · answers · checkTask · checkBrd · brdForm · promote · setPending ·
                      clearPending · survey (S15) · budgets · herdrStatus (S16) · cells · digest · reuse ·
                      remember · checkPart (S17) · buildGraph (S20) · graphMap · checkFrd · frdForm (S21) ·
-                     weight (S22)
+                     weight (S22) · ripple (S23)
                      — глобалы izi.js (roleDirectories → steps/brd/, steps/scope/, steps/intake/);
                      ПЛЮС (S13) tool izi_answer, зарегистрированный через pi.registerTool на самой
                      интерактивной сессии — export default function extension(pi) одновременно
@@ -46,7 +46,7 @@ steps/survey-plan/  (S15) шаг-СКРИПТ: роли нет, значит н�
   plan.test.mjs      тест по формуле: happy · шов по байтам · no-files
 
 steps/design/       шаг 9: две проекции изменения. Срез готов, в программу НЕ включён — его вход
-  designer.md        (frd, подграф ряби) производят шаги 6 и 8, которых ещё нет
+  designer.md        (frd, подграф ряби) производят шаги 6 и 8; оба есть, включение — следующий срез
   order.tpl          наряд: {FRD}, {RIPPLE}, {MODE}, {FEEDBACK}, {STAGING}, {CHECK}
   design.mjs         ЧИСТОЕ ядро: parseDesign · parseRoutes · expand · checkDesign · newDesign
   design.test.mjs    happy + пять правил + «ни одного <module>» + тотальность разбора
@@ -57,13 +57,20 @@ steps/intake/       (S21) шаг 6: роль intake, рельса вопросо
   order.tpl          наряд: {BRD}, {MAP}, {ANSWERS}, {FEEDBACK}, {STAGING}, {CHECK} и ДВА словаря
                       подстановкой — {DELTA_FORMS}, {SOURCES} (функция хоста frdForm, как brdForm)
   frd.mjs            ЧИСТОЕ ядро: parseFrd · checkFrd · newFrd; правила F1..F7 (docs/intake.md §5)
-  map.mjs            ЧИСТОЕ: parseMap (ключи узлов) · mapMeasure (цена карты); индекса НЕТ — §3 там же
+  map.mjs            ЧИСТОЕ: parseMap (ключи узлов, тесты, рёбра — читает и шаг 8) · mapMeasure (цена
+                      карты); индекса НЕТ — §3 там же
   frd.test.mjs · map.test.mjs   тесты по формуле + швы наряда и роли
 
 steps/weight/       (S22) шаг 7 — шаг-СКРИПТ: ни роли, ни оператора, ни токена
   weight.mjs         ЧИСТОЕ ядро: MODE_TABLE (форма → вес) · newMode({deltas}) — максимум по формам;
                       словарь форм НЕ дублируется, он берётся из steps/intake/frd.mjs
   weight.test.mjs    тест по формуле + шов «каждая форма словаря имеет вес» против расхождения слоёв
+
+steps/ripple/       (S23) шаг 8 — шаг-СКРИПТ: ни роли, ни оператора, ни токена
+  ripple.mjs         ЧИСТОЕ ядро: DESIGN_TABLE (вес → как решается флаг) · newRipple({xml, frd, mode,
+                      map, cap}) — major/minor всегда, patch по ШИРИНЕ (тронутые узлы); подграф
+                      радиусом 1; карту читает steps/intake/map.mjs, второго разбора грамматики нет
+  ripple.test.mjs    тест по формуле; шов грамматики — вывод читается parseDesign шага 9
 
 steps/scope/        (S17) шаг-РОЙ: роль scout, ДВА наряда (по полю kind клетки), одно ядро
   scout.md           роль (имя файла = имя роли; roleDirectories += steps/scope/)
@@ -109,7 +116,7 @@ pi install ./ext
 
 ## 2. Программа
 
-`workflows/izi.js` целиком — семь фаз, `ok`/`err`/`exit`, бюджеты из `izi.config.json` вместо
+`workflows/izi.js` целиком — восемь фаз, `ok`/`err`/`exit`, бюджеты из `izi.config.json` вместо
 `pipeline.json` (`LOOPS` тратят `brd`, `scope` и `intake`; `QUESTIONS` — `brd` и `intake`, см.
 `docs/concept.md`, раздел «Что отложено и почему»):
 
@@ -158,7 +165,13 @@ async function weigh() {                                   // S22: шаг 7 — 
   const w = await weight({});                              // имя локальное ≠ имя глобала хоста
   if (!w.ok) exit(err("blocked", { subject: w.why }));      // Unknown / нет дельт / форма вне словаря:
   log(`weight: mode=${w.mode} из ${w.earned}`);             //   .agent/mode стёрт функцией хоста
-  exit(ok({ artifact: ".agent/mode", mode: w.mode }));      // конец сегодняшней полосы
+}
+
+async function rippling() {                                // S23: шаг 8 — тоже пять строк
+  const r = await ripple({});                              // отказ ⇒ ОБА артефакта стёрты хостом
+  if (!r.ok) exit(err("blocked", { subject: r.why }));      // флаг — назначение дизайна, не радиус
+  log(`ripple: design=${r.design} узлов ${r.nodes} из ${r.total} (затравок ${r.seeds})`);
+  exit(ok({ artifact: ".agent/design", design: r.design })); // конец сегодняшней полосы
 }
 
 async function intake() {                                  // S21: шаг 6 — форма brd(), но вход другой
@@ -172,11 +185,11 @@ async function intake() {                                  // S21: шаг 6 — 
 try { phase("task"); await task(); phase("brd"); await brd();
       phase("survey-plan"); await surveyPlan(); phase("scope"); await scope();
       phase("graph"); await graph(); phase("intake"); await intake();
-      phase("weight"); await weigh(); }
+      phase("weight"); await weigh(); phase("ripple"); await rippling(); }
 catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: String(e?.message ?? e) }); }
 ```
 
-Порядок остаётся КОДОМ, а не `pipeline.json`: седьмая фаза — ещё одна именованная функция. Решение
+Порядок остаётся КОДОМ, а не `pipeline.json`: восьмая фаза — ещё одна именованная функция. Решение
 принято с фактами шести шагов на руках (`docs/survey-plan.md` §5): ручные вызовы подряд всё ещё
 дешевле, чем манифест плюс диспетчер плюс их тесты.
 
@@ -387,14 +400,35 @@ catch (e) { return e instanceof Exit ? e.result : err("crashed", { subject: Stri
   написала `form="Added"` — расхождение A закрыто определениями форм, а не арифметикой ядра. Шаг 7 —
   0 токенов; весь прогон 5 запусков ролей и 170 347 токенов
 
-### 8. `ripple` — подграф изменения и нужен ли дизайн · script · **новое**
+### 8. `ripple` — подграф изменения и нужен ли дизайн · script · **есть** (S23)
+Полная карточка — `docs/ripple.md`; здесь только место шага в полосе.
 - **вход:** `.agent/appgraph.xml`, `.agent/frd.xml`, `.agent/mode`
-- **выход:** `.agent/design` (`needed | skip`) и `.agent/ripple.xml` — сам подграф замыкания
-- **проверка:** радиус достижимости по рёбрам графа из узлов дельты — вычислимо, роль не зовём;
-  `needed`, если замыкание больше одного узла ИЛИ `mode == major`. Одноузловой `patch` дизайна не
-  требует: границы модуля дельта не пересекает, ломаться композиции негде (`docs/data-flow.md` §8)
+- **выход:** `.agent/design` (`needed | skip`) и `.agent/ripple.xml` — подграф изменения
+- **проверка:** `ripple({})` → `steps/ripple/ripple.mjs::newRipple`. Флаг отвечает на вопрос, ради
+  которого шаг 9 существует — держать контракты согласованными и отрисовать поток данных, пока работа
+  не разрезана на тикеты, — а НЕ на вопрос SemVer: `major` и `minor` → `needed` всегда (контракт
+  двинулся), `patch` → по ШИРИНЕ изменения. Ширина = `<touched>` ∪ узлы дельт, минус тестовые узлы
+  (`docs/ripple.md` §3, расхождения A и E)
+- **подграф считается отдельно от флага:** затравки — узлы дельт ∪ `<touched>` ∪ `nodes` сценариев
+  (третий источник обязателен: транзитному узлу маршрута роль шага 9 берёт контракт только отсюда),
+  соседи — радиус 1 в обе стороны; в ШИРИНУ узлы сценария при этом не входят — тикета они не
+  получат. Тестовые узлы в рябь не входят: тест едет в тикет со своим модулем через
+  `<test path suite>` — то же правило, что F2/F3 шага 6
 - **зачем второй артефакт:** подграф — вход шага 9. Весь `appgraph.xml` роли не отдаётся: рябь уже
   посчитана, а на живом репозитории граф целиком не влезет в окно
+- **оператор:** внутри шага нет; любой отказ терминальный, и оба артефакта при нём **стираются** —
+  иначе шаг 9 поехал бы на вчерашнем вердикте (тот же довод, что у `.agent/mode`, `docs/weight.md` §4)
+- **живое доказательство (S23, форма `runbox/quarkus-rest-json-app-v2-t1-3`, прогон
+  `e4ebbca9-b282-4f39-b1c7-baad5c4ee92f`, сессия `019ff332`):** `track:"ok"`, `.agent/design` = `skip`
+  (по правилу того дня; под нынешним тот же FRD даёт `needed` — прогон доказал ВЫРЕЗКУ, не флаг),
+  `.agent/ripple.xml` из 3 узлов. `function/ripple/1` → `{ design: "skip", mode: "minor", seeds: 1,
+  nodes: 3, total: 15 }` — читается из `journal.json`, не из вывода модели. Подграф: `FruitResource`
+  (`seed="yes"`, оба своих `<test>` при нём), `Fruit`, `fruits.html`; тестовых узлов ноль, `fanin`/
+  `fanout` ни на одном, `cut` не понадобился — за радиусом 1 здесь не осталось ни одного соседа.
+  Новое правило F4 (`nodes` сценария резолвятся в узлы карты) роль прошла с первой попытки:
+  `function/checkFrd/1` зелёный, ноль пере-делегаций шага 6. Цена: шаг 8 — 0 токенов; весь прогон 4
+  запуска ролей (gilb×3, intake×1) и 81 016 токенов — вдвое дешевле прогона S22, потому что рой
+  шагов 4-5 целиком взялся из кэша `.izi/parts`
 
 ### 9. `design` — две проекции изменения · role `designer` · под условием · **новое**
 - **условие:** `.agent/design == "needed"`. Отдельной квитанции пропуска НЕ существует: маркером

@@ -14,8 +14,8 @@
 //             steps/brd/brd.mjs, constraint 2); FRD_FORM is fixed at module load.
 // Interface:  FRD_FORM — the artifact's form as data (grammar, deltaForms, sources)
 //             parseFrd(xml) -> Frd
-//             checkFrd({ frd, nodes, known }) -> string[]  — blockers, empty = green
-//             newFrd({ xml, nodes, sources }) -> Result<Frd, "invalid-frd">
+//             checkFrd({ frd, nodes, tests, entries, edges, known }) -> string[]  — blockers, empty = green
+//             newFrd({ xml, nodes, tests, entries, edges, sources }) -> Result<Frd, "invalid-frd">
 
 import { ok, err } from "../../core/result.mjs"
 // EXTERNAL_DEPENDENCY: core/xml.mjs — the tag scanner shared with steps/scope and steps/design. One
@@ -104,7 +104,13 @@ export function parseFrd(xml) {
     failures: list("failure"),
     deltas: list("delta"),
     scenarios: list("scenario"),
+    // `touched` stays a list of PATHS and nothing else: step 8 counts the width of the change by it
+    // (steps/ripple/ripple.mjs), step 9 checks routes against it (steps/design/design.mjs::checkDesign)
+    // and the host reports its length — widening its shape would be a change to every one of those
+    // consumers (CLAUDE.md, constraint 5). The elements themselves ride alongside as `touchedRows`,
+    // for the one rule that needs an attribute of theirs.
     touched: Object.freeze(list("touched").map((t) => t.path || "")),
+    touchedRows: list("touched"),
     nfrs: list("nfr"),
     questions: list("question"),
   })
@@ -147,8 +153,17 @@ function provenance(at, value, source, known) {
 //                          §5 and are NOT restated in prose here
 //                 failure: none — total; "the FRD is bad" is DATA, not a function failure
 //   Purity:       pure
-export function checkFrd({ frd, nodes = new Set(), tests = new Set(), known = null }) {
+export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], known = null }) {
   const B = []
+  // Who has an existing caller: a node someone else points an edge AT. `entries` answers the same
+  // question for the world outside the repository. Both come from the map (steps/intake/map.mjs) —
+  // this module never parses appgraph.xml itself.
+  const called = new Set((Array.isArray(edges) ? edges : []).map((e) => e && e.to).filter(Boolean))
+  // A map that declares NEITHER an entry NOR an edge says nothing about who calls whom, and the rule
+  // below would then redden every `Changed` in the artifact on no evidence at all. It stays silent
+  // instead — the same discipline F5 keeps when no sources were supplied: a rule with nothing to judge
+  // against is not a rule that judges everything.
+  const knowsCallers = entries.size > 0 || called.size > 0
 
   // F1 — the frying itself: a goal and use cases with an actor, a guarantee and steps.
   if (!frd.goal) B.push("F1 <frd goal> пуст — цель одной фразой обязательна")
@@ -169,9 +184,32 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), known = nu
   //   "TDD in one ticket" (docs/concept.md, step 15). The map already binds a module to its test
   //   (`<test path suite>`), which is where step 10 takes both the file and the check command from.
   const touched = new Set(frd.touched)
+  // F2b — a touched must be EXPLAINED: it carries a delta of its own, or a scenario runs through it.
+  // Since step 8 measures the WIDTH of the change by `touched` (docs/ripple.md §3), a node declared
+  // touched on nothing but the role's say-so orders the `designer` role for free — and step 10 would
+  // owe it a ticket nobody can write, because nothing in the artifact says what changes there.
+  const explained = new Set([
+    ...frd.deltas.map((d) => d.node).filter(Boolean),
+    ...frd.scenarios.flatMap((s) => String(s.nodes || "").split(/\s+/).filter(Boolean)),
+  ])
   for (const t of frd.touched) {
     if (!nodes.has(t)) B.push(`F2 touched «${t}» не резолвится в узел карты — такого path в appgraph.xml нет`)
     else if (tests.has(t)) B.push(`F2 touched «${t}» — тест: тест это <dod> изменения, а не изменение; он едет в тикет вместе со своим модулем (<test> карты, шаг 10)`)
+    else if (!explained.has(t)) B.push(`F2b touched «${t}» ничем не объяснён: у него нет своей <delta>, и ни один <scenario nodes> через него не идёт. «Посмотрел, но не менял» — не тронутость: она считается шириной изменения на шаге 8`)
+  }
+  // F2c — every touched says WHAT changes in it, in its own words.
+  //
+  // BUG_FIX_CONTEXT: live run 9a8821a7 (quarkus-rest-json-app-v2-t2). `<touched path=".../Fruit.java"/>`
+  //   passed F2b because scenario S1's route ran through that node — and the implementation written
+  //   afterwards never touched the file at all. "A scenario passes through it" is not "it changes":
+  //   the first is a fact about the route, the second about the work. The machine cannot tell them
+  //   apart from the outside, so the role is made to SAY it — the same device `<failures found="no"
+  //   why=…>` and `Unknown why` use. Presence is machine-checked; the truth of the sentence is judged
+  //   by the human who reads the artifact, exactly as it is for those two.
+  for (const t of frd.touchedRows || []) {
+    if (t.path && nodes.has(t.path) && !tests.has(t.path) && !String(t.why || "").trim()) {
+      B.push(`F2c touched «${t.path}» без why — назови, ЧТО в этом узле меняется. Маршрут сценария через узел не значит, что узел меняется, а ширина изменения (шаг 8) считается по этому списку`)
+    }
   }
 
   // F7 — an FRD without a delta says nothing about the change.
@@ -193,9 +231,50 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), known = nu
     if (!nodes.has(d.node)) B.push(`F3 ${at}: узла «${d.node}» нет в карте — либо это Unknown, либо путь выдуман`)
     else if (tests.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» — тест: тест это <dod> изменения, а не изменение; назови модуль, который меняется, тест приедет с ним в один тикет (<test> карты, шаг 10)`)
     else if (!touched.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» не объявлен <touched> — шаг 8 не досчитает рябь`)
+    // `Changed`/`Removed` are defined BY THEIR EFFECT ON AN EXISTING CALL (steps/intake/intake.md,
+    // STRATEGY §8), so they are only sayable about a node that HAS one: an `<api>` of its own, or an
+    // incoming edge from another module. About a node with neither, "the existing call breaks" is a
+    // statement about nothing — and it weighs `major` (steps/weight/weight.mjs), ordering step 9 for
+    // free.
+    //
+    // BUG_FIX_CONTEXT: live run e2905b82 (sandbox/runbox/quarkus-rest-json-app-v2-t2). The FRD carried
+    //   `<delta op="fruit-card-rendering" form="Changed" node=".../fruits.html">` — an AngularJS page
+    //   that gained a card. In the map that node has no `<api>` and `fanin="0"`: nothing calls it, it
+    //   calls the resource. The weight came out `major` and step 8 ordered a design on what is a purely
+    //   additive change. The same breed as discrepancy A of S22 (docs/weight.md §2), one layer down:
+    //   there the definitions were missing, here they had nothing to bite on.
+    else if (knowsCallers && (d.form === "Changed" || d.form === "Removed") && !entries.has(d.node) && !called.has(d.node)) {
+      B.push(`F3 ${at}: «${d.node}» — ${d.form}, но у узла нет ни своей внешней точки (<api>), ни входящего вызова: ломаться нечему. Поведение, которого не было, это Added; поведение wrong→right — Fixed`)
+    }
+
+    // F3b — a delta is a MOVEMENT. `Changed` and `Fixed` claim one explicitly, so they owe both ends
+    // of it and the ends must differ; for any form, two equal ends describe nothing that moved.
+    //
+    // BUG_FIX_CONTEXT: live run 9a8821a7 (quarkus-rest-json-app-v2-t2). Beside the one real delta the
+    //   artifact carried three more — `GET /fruits`, `POST /fruits`, `DELETE /fruits`, each
+    //   `form="Fixed" from="unchanged" to="unchanged"` — the role listing the operations that do NOT
+    //   change. Nothing judged `from`/`to`, so it passed. Step 10 makes a plan node per delta, so that
+    //   is three tickets for work nobody has to do; and `Fixed` weighs `patch`, so an artifact without
+    //   the real `Added` beside them would have been weighed on "nothing changed". The same rule F4
+    //   already applies to scenarios ("before и after совпадают — сценарий зелен и до изменения").
+    const from = String(d.from || "").trim()
+    const to = String(d.to || "").trim()
+    if (d.form === "Changed" || d.form === "Fixed") {
+      if (!from || !to) B.push(`F3b ${at}: ${d.form} без from/to — движение не названо, а форма его утверждает`)
+      else if (from === to) B.push(`F3b ${at}: from и to совпадают («${from}») — ничего не двинулось. Операция, которая не меняется, дельтой не бывает: в списке дельт ей не место`)
+    } else if (from && to && from === to) {
+      B.push(`F3b ${at}: from и to совпадают («${from}») — ничего не двинулось. Операция, которая не меняется, дельтой не бывает: в списке дельт ей не место`)
+    }
   }
 
   // F4 — a scenario that is green before the change is a finding of acceptance, not a test.
+  //
+  // `nodes` is the scenario's ROUTE, and it is judged here because here is the only rail that can fix
+  // it: a red check redelegates to this role. Step 8 seeds the ripple subgraph from these paths
+  // (docs/ripple.md §4) and step 9's `checkDesign` rule 1 then demands a contract for every node of
+  // the route — which the role copies OUT of that subgraph and has no other source for. A node named
+  // here but absent from the map would therefore reach step 9 as a node with no contract, and step 8
+  // has no redelegation to fix it with — only a terminal `blocked`.
   if (!frd.scenarios.length) B.push("F4 ни одного <scenario> — различать изменение нечем")
   const ucs = new Set(frd.usecases.map((u) => u.id))
   for (const sc of frd.scenarios) {
@@ -203,6 +282,9 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), known = nu
     if (!sc.uc || !ucs.has(sc.uc)) B.push(`F4 ${at}: uc="${sc.uc || ""}" — такого <usecase> нет`)
     if (!sc.before || !sc.after) B.push(`F4 ${at}: before/after пусты — сценарий не различающий`)
     else if (sc.before.trim() === sc.after.trim()) B.push(`F4 ${at}: before и after совпадают — сценарий зелен и до изменения`)
+    const route = String(sc.nodes || "").split(/\s+/).filter(Boolean)
+    if (!route.length) B.push(`F4 ${at}: nodes пуст — через какие узлы карты идёт сценарий, не названо`)
+    for (const p of route) if (!nodes.has(p)) B.push(`F4 ${at}: узла «${p}» нет в карте — маршрут сценария опирается на выдуманный путь`)
   }
 
   // F5 — every quantity of the requirement has a named, declared source.
@@ -246,7 +328,7 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), known = nu
 //                 failure: "invalid-frd" — the detail carries EVERY blocker, one per line, and rides
 //                          in the FEEDBACK of the redelegation exactly as newBrd's does
 //   Purity:       pure
-export function newFrd({ xml, nodes = new Set(), tests = new Set(), sources = [] }) {
+export function newFrd({ xml, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], sources = [] }) {
   const frd = parseFrd(xml)
   if (!frd.usecases.length && !frd.deltas.length) {
     return err("invalid-frd", "в артефакте нет ни <usecase>, ни <delta> — грамматика не распознана: staging пуст или это не frd.xml")
@@ -255,7 +337,7 @@ export function newFrd({ xml, nodes = new Set(), tests = new Set(), sources = []
   const src = sources.filter(Boolean)
   const known = src.length ? new Set(src.flatMap((t) => [...numbersIn(t)])) : null
 
-  const blockers = checkFrd({ frd, nodes, tests, known })
+  const blockers = checkFrd({ frd, nodes, tests, entries, edges, known })
   if (blockers.length) return err("invalid-frd", blockers.join("\n  "))
 
   return ok(Object.freeze({ ...frd, unknown: frd.deltas.filter((d) => d.form === "Unknown").length }))

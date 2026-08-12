@@ -34,6 +34,17 @@ test("happy: every module is a key, and nothing else is", () => {
 // Live run 1d804798: the FRD carried a delta on the test file beside the one on its module, and
 // passed — the path does resolve to a node. A test is the DoD of a change, not a change; the rule
 // that says so needs to know WHICH nodes are tests.
+// F3's `Changed`/`Removed` half (live run e2905b82): a form defined by its effect on an existing call
+// is only sayable about a node that HAS one. `<api>` answers it for the world outside; the edges
+// answer it inside. Here only the resource declares an api — the POJO and the test do not.
+test("entries are the nodes declaring an <api> — who can be called from outside at all", () => {
+  const { entries } = parseMap(MAP)
+  assert.deepEqual([...entries], ["src/ParcelResource.java"])
+})
+
+// The seam for core/xml.mjs::elem's BUG_FIX_CONTEXT: `src/Parcel.java` is SELF-CLOSING and the test
+// node follows it. With a greedy attribute body the self-closing tag ate the node behind it — the map
+// lost a key and, worse, lost its `kind="test"`, so a delta on a test would have passed F3.
 test("a test node is a node AND is listed as a test — F2/F3 judge by this set", () => {
   const { nodes, tests } = parseMap(MAP)
   assert.deepEqual([...tests], ["src/test/ParcelResourceTest.java"])
@@ -41,8 +52,23 @@ test("a test node is a node AND is listed as a test — F2/F3 judge by this set"
   assert.equal(tests.has("src/ParcelResource.java"), false)
 })
 
+// Step 8 cuts the ripple subgraph out of THIS parse: without edges it would have to parse the map a
+// second time, and the second reader of a grammar is where the two drift apart.
+test("edges are read verbatim — endpoints only, `via` dropped, an incomplete edge is not one", () => {
+  const { edges } = parseMap(MAP)
+  assert.deepEqual(edges, [{ from: "src/ParcelResource.java", to: "src/Parcel.java" }])
+  // `via` carries the line of code that proved the edge, and `<` inside it is written `&lt;` — the
+  // ATTRS scanner survives it (core/xml.mjs), so the edge is still seen and its `via` still ignored.
+  const withAngle = `<appgraph><edge from="a.js" to="b.js" via="Set&lt;Parcel&gt; p"/><edge to="c.js"/></appgraph>`
+  assert.deepEqual(parseMap(withAngle).edges, [{ from: "a.js", to: "b.js" }])
+  assert.deepEqual(parseMap(`<appgraph><module path="a.js"/></appgraph>`).edges, [])
+})
+
 test("parse is total: garbage, undefined and an empty map yield no keys, never a throw", () => {
-  for (const bad of [undefined, null, "", "<appgraph>", "не xml"]) assert.equal(parseMap(bad).count, 0)
+  for (const bad of [undefined, null, "", "<appgraph>", "не xml"]) {
+    assert.equal(parseMap(bad).count, 0)
+    assert.deepEqual(parseMap(bad).edges, [])
+  }
 })
 
 test("measure: bytes are UTF-8, not characters — the map's <role> texts are Cyrillic", () => {

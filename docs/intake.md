@@ -40,7 +40,7 @@
 
   <delta op="GET /fruits" form="Changed" node="src/.../FruitResource.java" from="list()" to="list(search)"/>
   <scenario id="S1" uc="UC1" before="…" after="…" nodes="src/.../FruitResource.java"/>
-  <touched path="src/.../FruitResource.java"/>
+  <touched path="src/.../FruitResource.java" why="list получает параметр search и лимит"/>
   <nfr subject="response-size" fit="≤ 10 записей" source="answers.md"/>
   <question subject="…" why="…"/>
 </frd>
@@ -64,8 +64,11 @@
 |---|---|
 | **F1** | `goal` непуст; есть хотя бы один `<usecase>`, у каждого — `actor`, `<post>`, хотя бы один `<step>` |
 | **F2** | каждый `<touched path>` резолвится в узел карты и не является тестом (`kind="test"`) |
-| **F3** | `form ∈ Added \| Changed \| Removed \| Fixed \| Unknown` (`FRD_FORM.deltaForms`); `Unknown` несёт `why`; прочие несут `node`, который есть в карте, не является тестом и объявлен `<touched>` |
-| **F4** | есть хотя бы один `<scenario>`; у каждого `uc` существует, `before` и `after` непусты и различны |
+| **F2b** | каждый `<touched>` ОБЪЯСНЁН: у него есть своя `<delta>` либо через него идёт `<scenario nodes>`. Шаг 8 меряет `<touched>` ширину изменения (`docs/ripple.md` §3), и «посмотрел, но не менял» заказывал бы дизайнера даром |
+| **F2c** | у каждого `<touched>` непустой `why` — ЧТО именно в узле меняется. Маршрут сценария через узел это факт о пути, а не о работе; различить их может только роль, значит она обязана это сказать (тот же приём, что `<failures found="no" why>` и `Unknown why`) |
+| **F3** | `form ∈ Added \| Changed \| Removed \| Fixed \| Unknown` (`FRD_FORM.deltaForms`); `Unknown` несёт `why`; прочие несут `node`, который есть в карте, не является тестом и объявлен `<touched>`; `Changed`/`Removed` — только на узле, у которого ЕСТЬ существующий вызов: своя внешняя точка (`<api>`) или входящее ребро (`docs/ripple.md` §2, расхождение D) |
+| **F3b** | дельта — это ДВИЖЕНИЕ: `from` ≠ `to`, а `Changed`/`Fixed` несут оба конца непустыми. Операция, которая не меняется, дельтой не бывает — иначе шаг 10 нарежет тикет на несуществующую работу |
+| **F4** | есть хотя бы один `<scenario>`; у каждого `uc` существует, `before` и `after` непусты и различны, `nodes` непуст и каждый путь в нём — узел карты (маршрут сценария; шаг 8 берёт из него затравки ряби, шаг 9 требует контракт каждому узлу маршрута — `docs/ripple.md` §4) |
 | **F5** | у `<field>` и `<nfr>` — `source` из словаря `TASK.md \| answers.md \| brd.md \| appgraph.xml`; каждое число в `domain`/`fit` встречается в этих источниках (`numbersIn` из `steps/brd/brd.mjs`) |
 | **F6** | есть `<failure>` ИЛИ `<failures found="no" why="…"/>` с непустым `why`; где коды есть — `<ext error>` и `<failure code>` совпадают 1:1 в обе стороны |
 | **F7** | есть хотя бы одна `<delta>` |

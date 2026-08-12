@@ -1,8 +1,8 @@
 # izi-pi-v2
 
-Первые семь шагов конвейера `izi-flow-v2` (`task → brd → survey-plan → scope → graph → intake →
-weight`), перенесённые на `pi-extensible-workflows` (pi v5.1.1) и переписанные на функции расширения
-(S11, S15, S17, S20, S21, S22). Порядок шагов
+Первые восемь шагов конвейера `izi-flow-v2` (`task → brd → survey-plan → scope → graph → intake →
+weight → ripple`), перенесённые на `pi-extensible-workflows` (pi v5.1.1) и переписанные на функции
+расширения (S11, S15, S17, S20, S21, S22, S23). Порядок шагов
 — код `workflows/izi.js`, а не манифест; бюджеты прогона с S16 поднимаются файлом проекта
 `izi.config.json` (см. ниже). Роль `gilb` превращает сырое требование оператора
 в BRD, который можно принять; шаг `survey-plan` — чистый скрипт без роли и без оператора: он режет дерево
@@ -14,7 +14,11 @@ weight`), перенесённые на `pi-extensible-workflows` (pi v5.1.1) и
 режимов отказа и дельта контракта по узлам карты, с вопросом оператору вместо умолчания
 (`docs/intake.md`); шаг `weight` — снова чистый скрипт: он складывает ФОРМЫ дельт в одно слово
 `.agent/mode` (`patch | minor | major`), а дельта, которую роль не смогла классифицировать,
-останавливает полосу вместо тихого умолчания (`docs/weight.md`).
+останавливает полосу вместо тихого умолчания (`docs/weight.md`); шаг `ripple` — третий скрипт подряд:
+он решает, нужна ли роль-архитектор шага 9 — и решает это по назначению дизайна (держать контракты
+согласованными и отрисовать поток данных до нарезки работы на тикеты), а не по SemVer: при `major` и
+`minor` дизайн нужен всегда, при `patch` — только если изменение трогает больше одного узла. Он же
+вырезает из карты подграф изменения, который эта роль получит вместо всего графа (`docs/ripple.md`).
 Подробности программы — `docs/workflow.md`; принципы и что из них отложено на двух шагах —
 `docs/concept.md`.
 
@@ -28,7 +32,7 @@ pi install ./ext
 `ext/` — pi-extension: функции хоста для воркфлоу-песочницы (`readText`, `answers`, `brdForm`,
 `frdForm`, `budgets`, `herdrStatus`, `checkTask`, `checkBrd`, `promote`, `setPending`,
 `clearPending`, `survey`, `cells`, `digest`, `reuse`, `remember`, `checkPart`, `buildGraph`,
-`graphMap`, `checkFrd`, `weight`), `roleDirectories: [steps/brd/, steps/scope/, steps/intake/]`,
+`graphMap`, `checkFrd`, `weight`, `ripple`), `roleDirectories: [steps/brd/, steps/scope/, steps/intake/]`,
 откуда pi резолвит роли `gilb`, `scout` и `intake` по именам файлов `gilb.md`, `scout.md` и
 `intake.md`, и (S13) tool `izi_answer`, зарегистрированный
 на самой ИНТЕРАКТИВНОЙ сессии через `pi.registerTool` — не на песочнице воркфлоу, а на модели,

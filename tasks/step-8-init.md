@@ -50,4 +50,5 @@ $start-strategy-step-by-step
 3 Launch a critic subagent sonnet to search for overengineering and a simpler solution
 4 Refine the backlog and concept for criticism
 5 Present the work plan to the operator
+6 add to backlog tasks to synchronize docs/ according to the modification
 $end-strategy-step-by-step

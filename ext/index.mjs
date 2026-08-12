@@ -57,6 +57,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, renameSync, rmSync, readdirSync, statSync } from "node:fs"
 import { createHash } from "node:crypto"
+import { execFileSync } from "node:child_process"
 import { dirname, join } from "node:path"
 import { Type } from "typebox"
 import { registerWorkflowExtension, herdrAvailable, herdrPaneId, loadSettings } from "pi-extensible-workflows"
@@ -71,6 +72,7 @@ import { newDigest } from "../steps/scope/digest.mjs"
 import { newGraph, graphXml } from "../steps/graph/graph.mjs"
 import { newFrd, parseFrd, FRD_FORM } from "../steps/intake/frd.mjs"
 import { newMode } from "../steps/weight/weight.mjs"
+import { newRipple } from "../steps/ripple/ripple.mjs"
 import { parseMap, mapMeasure, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
@@ -387,6 +389,41 @@ function countFiles(dir) {
 // and replays it from the journal on a retry of the same runId (packages/core/src/registry.ts:149,
 // persistence.ts:1027) — so `function/newRun/1` does not run twice, and answers written AFTER it
 // survive a resume.
+// dirtyCount — how many files the working tree carries uncommitted, or -1 when git did not answer.
+//
+// It DECLARES, it does not stop: an uncommitted working tree is normal in a live repository, and a
+// rail here would refuse to run on most of them. What is NOT normal is not knowing: the swarm maps the
+// tree as it is, so work already done by hand is mapped as if it had always been there, and the FRD
+// comes out about a different repository.
+//
+// BUG_FIX_CONTEXT: live run 9a8821a7 (quarkus-rest-json-app-v2-t2). The band ends at step 8, but after
+//   the run finished the CHAT model went on and implemented the task — 27 lines across three files
+//   plus a new page. The next run would have mapped that implementation as the repository's own code
+//   and produced an FRD for work already done, with nothing anywhere saying why. The rule against
+//   doing this lives where the model reads it (prompts/izi.md and the terminal log of
+//   workflows/izi.js); this number is how the next run NOTICES.
+//
+// -1 is not 0: "git did not answer" (no repository, no git, a broken invocation) is a different fact
+// from "nothing is uncommitted", and a catch that returned 0 would turn a tool failure into data
+// (standards/code.md, constraint 4).
+// It counts what the SWARM would map, by the swarm's own rule (steps/survey-plan/skip.mjs): the
+// harness copied into the project — `workflows/`, `steps/`, `core/`, `bin/` — is permanently modified
+// against the form's own HEAD after every `bin/install.mjs`, and counting it would make this warning
+// fire on every run in a runbox copy. A signal that always fires says nothing.
+function dirtyCount(root) {
+  try {
+    const out = execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+    return out.split("\n")
+      .map((l) => l.slice(3).trim())                      // " M path" · "?? path" · "R  old -> new"
+      .map((p) => (p.includes(" -> ") ? p.split(" -> ").pop() : p))
+      .filter(Boolean)
+      .filter((p) => !p.split("/").slice(0, -1).some(skipDir) && !skipFile(p))
+      .length
+  } catch {
+    return -1
+  }
+}
+
 export const newRun = {
   description: "First act of a run: carry the PREVIOUS run's state out of the way — .agent/answers.md, .agent/pending.json and the leftovers under .agent/staging/ are MOVED into .agent/prev/ (nothing is deleted; artifacts and the .izi/parts cache are untouched). Returns what was carried, so the run can log why the operator is asked again.",
   input: { type: "object", properties: {}, additionalProperties: false },
@@ -396,6 +433,7 @@ export const newRun = {
       answers: { type: "number" },   // answers carried away, counted by core/answers.mjs, not by eye
       pending: { type: "boolean" },  // an open question of the dead run was found
       staged: { type: "number" },    // files a guardrail never judged, or judged and rejected
+      dirty: { type: "number" },     // files the working tree carries uncommitted; -1 = git said nothing
     },
     required: ["answers", "pending", "staged"],
     additionalProperties: false,
@@ -403,6 +441,7 @@ export const newRun = {
   run(_input, context) {
     const root = runRoot(context)
     const prev = at(root, PREV_DIR)
+    const dirty = dirtyCount(root)
 
     const raw = readIfExists(root, ANSWERS_PATH)
     // A malformed file is still carried away — counting it is what fails, not moving it. The count
@@ -410,7 +449,7 @@ export const newRun = {
     const answersCount = raw ? (newAnswers(raw).value || []).length : 0
     const pending = existsSync(at(root, PENDING_PATH))
     const staged = countFiles(at(root, STAGING_DIR))
-    if (!raw && !pending && !staged) return { answers: 0, pending: false, staged: 0 }
+    if (!raw && !pending && !staged) return { answers: 0, pending: false, staged: 0, dirty }
 
     mkdirSync(prev, { recursive: true })
     // renameSync overwrites an existing destination file, which is exactly the intent: .agent/prev/
@@ -423,7 +462,7 @@ export const newRun = {
       renameSync(at(root, STAGING_DIR), join(prev, "staging"))
       mkdirSync(at(root, STAGING_DIR), { recursive: true }) // the roles write into it; leave it ready
     }
-    return { answers: answersCount, pending, staged }
+    return { answers: answersCount, pending, staged, dirty }
   },
 }
 
@@ -821,6 +860,11 @@ const GRAPH_PATH = ".agent/appgraph.xml"
 // readers are scripts (steps 8 and 10), and a word is the smallest thing that cannot be misparsed.
 const FRD_PATH = ".agent/frd.xml"
 const MODE_PATH = ".agent/mode"
+// Step 8's two artifacts. `.agent/design` holds ONE word for the same reason `.agent/mode` does — the
+// program branches on it; `.agent/ripple.xml` is the subgraph step 9's role is handed instead of the
+// whole map.
+const DESIGN_PATH = ".agent/design"
+const RIPPLE_PATH = ".agent/ripple.xml"
 
 export const buildGraph = {
   description: "Merge every graph part and the script's computed facts into .agent/appgraph.xml — steps/graph/graph.mjs::newGraph wired to disk. Parts are read by the PLAN, so a missing one is named instead of silently shrinking the graph. Written only after a green merge.",
@@ -953,7 +997,7 @@ export const checkFrd = {
     const sources = [readIfExists(root, TASK_PATH), ...(ans.ok ? ans.value.map((a) => a.text) : []), fits, mapText]
 
     const map = parseMap(mapText)
-    const r = newFrd({ xml: readFileSync(at(root, path), "utf8"), nodes: map.nodes, tests: map.tests, sources })
+    const r = newFrd({ xml: readFileSync(at(root, path), "utf8"), nodes: map.nodes, tests: map.tests, entries: map.entries, edges: map.edges, sources })
     if (!r.ok) return { ok: false, blockers: r.error.detail }
     const v = r.value
     return { ok: true, deltas: v.deltas.length, unknown: v.unknown, scenarios: v.scenarios.length, questions: v.questions.length, touched: v.touched.length }
@@ -1000,6 +1044,62 @@ export const weight = {
     mkdirSync(dirname(at(root, MODE_PATH)), { recursive: true })   // written AFTER the decision to accept
     writeFileSync(at(root, MODE_PATH), r.value.mode)               // one word, no trailing newline
     return { ok: true, mode: r.value.mode, earned: r.value.why.join(", "), deltas: deltas.length }
+  },
+}
+
+// --- ripple: is a design needed, and over which nodes --------------------------------------------
+//
+// The whole of step 8: no role, no operator, no token. Three artifacts in, two out. The map is read by
+// THE map reader (steps/intake/map.mjs) and the FRD by THE frd parser (steps/intake/frd.mjs) — a
+// second parser of either grammar is how two readers of one file start disagreeing.
+//
+// ERASING BOTH is half the contract, exactly as it is for `.agent/mode` (docs/weight.md §4): newRun
+// carries the run's STATE into .agent/prev and leaves the artifacts, so yesterday's `.agent/design`
+// would survive today's refusal and step 9 would be ordered — or skipped — on a subgraph nobody
+// computed today.
+export const ripple = {
+  description: "Decide whether step 9 designer is needed and cut the ripple subgraph out of the map (steps/ripple/ripple.mjs::newRipple). Writes .agent/design (needed|skip) and .agent/ripple.xml. Any refusal — no weight, no delta, a seed the map does not declare, a subgraph above the reading ceiling — is ok:false, and then BOTH files are REMOVED so that step 9 can never read a previous run's verdict.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      design: { type: "string" },
+      mode: { type: "string" },
+      seeds: { type: "number" },
+      nodes: { type: "number" },
+      total: { type: "number" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_input, context) {
+    const root = runRoot(context)
+    const drop = () => {
+      for (const p of [DESIGN_PATH, RIPPLE_PATH]) if (existsSync(at(root, p))) rmSync(at(root, p))
+    }
+
+    for (const [path, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [GRAPH_PATH, "шаг 5 graph не отработал"], [MODE_PATH, "шаг 7 weight не отработал"]]) {
+      if (!existsSync(at(root, path))) {
+        drop()
+        return { ok: false, why: `${path} не существует — ${why}, рябь считать не от чего` }
+      }
+    }
+
+    const xml = readFileSync(at(root, GRAPH_PATH), "utf8")
+    const map = parseMap(xml)
+    const mode = readFileSync(at(root, MODE_PATH), "utf8")
+    const r = newRipple({ xml, frd: parseFrd(readFileSync(at(root, FRD_PATH), "utf8")), mode, map })
+    if (!r.ok) {
+      drop()
+      return { ok: false, why: `${r.error.cls}:\n  ${r.error.detail}` }
+    }
+
+    mkdirSync(dirname(at(root, DESIGN_PATH)), { recursive: true })  // written AFTER the decision to accept
+    writeFileSync(at(root, RIPPLE_PATH), `${r.value.xml}\n`)
+    writeFileSync(at(root, DESIGN_PATH), r.value.design)            // one word, no trailing newline
+    return { ok: true, design: r.value.design, mode: mode.trim(), seeds: r.value.seeds.length, nodes: r.value.nodes.length, total: map.count }
   },
 }
 
@@ -1100,9 +1200,9 @@ export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
     version: "1.10.0",
-    headline: "izi: task → brd → survey-plan → scope → graph → intake → weight host functions",
-    description: "readText/answers/brdForm/frdForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight, plus the gilb, scout and intake role directories (steps/brd/, steps/scope/, steps/intake/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight },
+    headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple host functions",
+    description: "readText/answers/brdForm/frdForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple, plus the gilb, scout and intake role directories (steps/brd/, steps/scope/, steps/intake/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md and steps/intake/ carries intake.md
     // (role files, named by ROLE not by step — see steps/brd/gilb.md's own header) alongside their
     // cores/orders/tests;
