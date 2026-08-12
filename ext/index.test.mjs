@@ -18,7 +18,8 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, weight, ripple, design, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, weight, ripple, design, plan, iziAnswer } from "./index.mjs"
+import { KEY_QUESTION } from "../steps/plan/plan.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
 const ctx = (cwd) => ({ run: { cwd } })
@@ -511,4 +512,40 @@ test("ENVELOPE: track:err with kind but no subject is REJECTED", () => {
 test("ENVELOPE: track:err with both kind and subject validates", () => {
   const schema = Compile(readEnvelopeSchema())
   assert.equal(schema.Check({ track: "err", kind: "question", subject: "Вопросы по архитектуре:\n1. …" }), true)
+})
+
+// --- plan: the question is a rail, and a refusal erases -------------------------------------------
+//
+// Step 10 is the first SCRIPT step with an operator, so it has two io halves nothing else has: an
+// `ask` that is not a refusal (the question travels verbatim, and the caller re-asks it), and the
+// same erasure rule as the weight and the ripple. Remove the `drop()` in ext/index.mjs::plan and the
+// second test below goes red — the gate at step 12 would then approve a plan computed for a change
+// that no longer exists.
+//
+// The GREEN path is not unit-tested here: it needs a real git repository for the trunk, and this is
+// an io module — a live run proves it (standards/code.md, the four kinds of module).
+const planRoot = (mode = "minor") => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "appgraph.xml"), MAP)
+  writeFileSync(join(root, ".agent", "frd.xml"), FRD_R)
+  if (mode) writeFileSync(join(root, ".agent", "mode"), mode)
+  return root
+}
+
+test("plan asks for the task key VERBATIM, and asking is not a refusal of the step", () => {
+  const root = planRoot()
+  const r = plan.run({}, ctx(root))
+  assert.equal(r.ok, false)
+  assert.equal(r.ask, true, "the question rail, not a blocked run")
+  assert.equal(r.subject, KEY_QUESTION, "byte-stable: the answer written against it is recognised next call")
+})
+
+test("a refusal erases yesterday's plan-index.json", () => {
+  const root = planRoot(null)                                        // no weight — step 7 never ran
+  writeFileSync(join(root, ".agent", "plan-index.json"), '{"grammar":1}')   // yesterday's plan
+  const r = plan.run({}, ctx(root))
+  assert.equal(r.ok, false)
+  assert.match(r.why, /шаг 7 weight не отработал/)
+  assert.equal(existsSync(join(root, ".agent", "plan-index.json")), false)
 })

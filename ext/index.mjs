@@ -73,7 +73,8 @@ import { newGraph, graphXml } from "../steps/graph/graph.mjs"
 import { newFrd, parseFrd, FRD_FORM } from "../steps/intake/frd.mjs"
 import { newMode } from "../steps/weight/weight.mjs"
 import { newRipple } from "../steps/ripple/ripple.mjs"
-import { newDesign } from "../steps/design/design.mjs"
+import { newDesign, parseDesign } from "../steps/design/design.mjs"
+import { newPlanIndex } from "../steps/plan/plan.mjs"
 import { parseMap, mapMeasure, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
@@ -1181,6 +1182,104 @@ export const design = {
   },
 }
 
+// --- plan: the change as an ordered DAG of work ---------------------------------------------------
+// Step 10. One io function, and the ONLY one in the band that both asks the operator and applies the
+// answer itself: there is no role here to re-delegate to, so the value the operator typed is
+// substituted by this script (docs/plan.md §6). The judgement is steps/plan/plan.mjs::newPlanIndex.
+//
+// ERASING is half the contract, exactly as for `.agent/mode` and the ripple (docs/weight.md §4):
+// newRun carries the run's STATE into .agent/prev and leaves the artifacts, so yesterday's plan would
+// survive today's refusal and the operator would approve a plan for a change that no longer exists.
+const PLAN_INDEX_PATH = ".agent/plan-index.json"
+
+// gitTrunk — the trunk's name as a FACT, or "" when git cannot say.
+//
+// `origin/HEAD` first (the remote's own answer to "what is the default branch"), then a local
+// `main`/`master`. NEVER the current branch: it can be anything, and a base taken from it would cut
+// the work branch off whatever happened to be checked out. "" is not "main" — no fact means the
+// refusal `no-trunk`, not a guess (standards/code.md, constraint 4: a tool failure is not data).
+function gitTrunk(root) {
+  const git = (args) => {
+    try {
+      return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()
+    } catch {
+      return ""
+    }
+  }
+  const head = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])   // "origin/main"
+  if (head) return head.split("/").slice(1).join("/")
+  for (const name of ["main", "master"]) {
+    if (git(["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])) return name
+  }
+  return ""
+}
+
+export const plan = {
+  description: "Step 10. Project the accepted change onto the work: nodes with a kind, a topological order out of the map's DIRECTED edges, and a check command per node (steps/plan/plan.mjs::newPlanIndex). Writes .agent/plan-index.json. The task key is asked ONCE — ok:false with ask:true carries the question verbatim, and the caller puts it on the operator's rail and calls again. Any refusal REMOVES the artifact so that no gate can approve a previous run's plan.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      ask: { type: "boolean" },
+      subject: { type: "string" },
+      branch: { type: "string" },
+      base: { type: "string" },
+      nodes: { type: "number" },
+      code: { type: "number" },
+      scenario: { type: "number" },
+      gaps: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_input, context) {
+    const root = runRoot(context)
+    const drop = () => { if (existsSync(at(root, PLAN_INDEX_PATH))) rmSync(at(root, PLAN_INDEX_PATH)) }
+
+    for (const [path, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [GRAPH_PATH, "шаг 5 graph не отработал"], [MODE_PATH, "шаг 7 weight не отработал"]]) {
+      if (!existsSync(at(root, path))) {
+        drop()
+        return { ok: false, why: `${path} не существует — ${why}, планировать нечего` }
+      }
+    }
+
+    // The design graph is OPTIONAL by contract: step 8 may have decided a design was not needed, and
+    // then a created module simply has no declared neighbours (docs/plan.md §4, rule 2).
+    const designXml = readIfExists(root, DESIGN_GRAPH_PATH)
+    const said = parsedAnswers(readIfExists(root, ANSWERS_PATH))
+    const r = newPlanIndex({
+      frd: parseFrd(readFileSync(at(root, FRD_PATH), "utf8")),
+      map: parseMap(readFileSync(at(root, GRAPH_PATH), "utf8")),
+      mode: readFileSync(at(root, MODE_PATH), "utf8"),
+      design: designXml ? parseDesign(designXml) : null,
+      trunk: gitTrunk(root),
+      answers: said.ok ? said.value : [],
+    })
+
+    if (!r.ok) {
+      drop()
+      // `ask` is a RAIL, not a refusal: the detail IS the question, byte-stable across calls, so the
+      // answer written against it is recognised on the next call by comparison, not by memory.
+      if (r.error.cls === "ask") return { ok: false, ask: true, subject: r.error.detail, why: r.error.detail }
+      return { ok: false, why: `${r.error.cls}:\n  ${r.error.detail}` }
+    }
+
+    mkdirSync(dirname(at(root, PLAN_INDEX_PATH)), { recursive: true })   // written AFTER the decision to accept
+    writeFileSync(at(root, PLAN_INDEX_PATH), `${JSON.stringify(r.value.index, null, 2)}\n`)
+    return {
+      ok: true,
+      branch: r.value.branch.name,
+      base: r.value.branch.base,
+      nodes: r.value.nodes.length,
+      code: r.value.nodes.filter((n) => n.kind === "code").length,
+      scenario: r.value.nodes.filter((n) => n.kind === "scenario").length,
+      gaps: r.value.gaps,
+    }
+  },
+}
+
 // izi_answer — an ordinary pi TOOL (not a workflow sandbox function: this one is called by the
 // INTERACTIVE session's own model, reacting to the checkpoint follow-up message that
 // workflows/izi.js's askOperator() delivers into this same chat). The question TEXT is never a model
@@ -1278,9 +1377,9 @@ export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
     version: "1.11.0",
-    headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design host functions",
-    description: "readText/answers/brdForm/frdForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design, plus the gilb, scout, intake and designer role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design },
+    headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan host functions",
+    description: "readText/answers/brdForm/frdForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan, plus the gilb, scout, intake and designer role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, plan },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;
