@@ -27,7 +27,15 @@ $START_CONSTRAINTS
    keys fail the load. `version` and `headline` are required; the npm build also requires
    `description` — declare all three.
 5. **`outputSchema` replaces hand-written parsers.** The host validates the agent's return through
-   `workflow_result`; do not write an envelope grammar.
+   `workflow_result`; do not write an envelope grammar. On `track:"err"` the schema requires `kind`
+   and `subject` — conditionally, not just `track` (`workflows/izi.js`, `ENVELOPE`). The schema
+   decides, not the workflow: the host compiles `outputSchema`
+   (`pi-extensible-workflows/packages/core/src/agent-execution.ts:816`) and rejects a malformed
+   envelope inside the role's own turn (`isError:true`) — no `LOOPS` spent, no re-delegation. Before
+   this rule `track:"err"` alone was a valid envelope, and a role could return an error with no rail
+   name: live run `fcc4c120` did exactly that (`{"track":"err","code":10,"subject":"…"}`, no `kind`),
+   the question rail (`env.kind === "question"`) never armed, the run died terminal at a live
+   question — 193 316 tokens, 5 role launches.
 6. **A workflow launches only through the `workflow` tool** from a pi session
    (`host.ts:967`). `/workflow` is a run picker, not a launcher. The `piewf` CLI is documented but
    absent from 5.1.1 (no `bin` in the package).

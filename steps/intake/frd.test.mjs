@@ -195,9 +195,56 @@ test("F4: a scenario that does not distinguish, and an FRD with no scenario at a
   // step 8 — a script with no role — could only stop the band. It is cheap here and terminal there.
   assert.match(blockersOf(FRD.replace('nodes="src/ParcelResource.java"', 'nodes=""')).join("\n"), /F4 S1: nodes пуст/)
   assert.match(blockersOf(FRD.replace('nodes="src/ParcelResource.java"', 'nodes="src/Invented.java"')).join("\n"),
-    /F4 S1: узла «src\/Invented.java» нет в карте/)
+    /F4 S1: узла «src\/Invented.java» нет ни в карте, ни среди создаваемых/)
   // A route of several nodes is the ordinary case — whitespace-separated, every one resolved.
   assert.deepEqual(blockersOf(FRD.replace('nodes="src/ParcelResource.java"', 'nodes="src/ParcelResource.java src/ParcelRepo.java"')), [])
+})
+
+// F3n — the module this change CREATES.
+//
+// BUG_FIX_CONTEXT: live run b857d4a0 (quarkus-rest-json-app-v2-t2). The operator answered «создать
+//   новый файл fruit.html» and the FRD had no way to say it: F2/F3 demand a map node. The role wrote
+//   `form="Unknown"`, step 7 refused on it terminally, and the band stopped after intake×5 and
+//   281 188 tokens on a change the operator had ordered outright.
+const NEW_PAGE = "src/ui/parcel-card.html"
+const WITH_NEW = FRD.replace(REPO_TOUCHED, `${REPO_TOUCHED}
+  <delta op="parcel card page" form="Added" node="${NEW_PAGE}" new="yes"/>
+  <touched path="${NEW_PAGE}" why="новая страница карточки посылки, создаётся этим изменением"/>
+  <scenario id="S2" uc="UC1" before="карточки посылки нет" after="карточка показывает трек и статус" nodes="${NEW_PAGE} src/ParcelResource.java"/>`)
+
+test("F3n: a module the change CREATES is a legal delta — the map cannot know it yet", () => {
+  assert.deepEqual(blockersOf(WITH_NEW), [])
+  const r = build(WITH_NEW)
+  assert.equal(r.ok, true)
+  assert.equal(r.value.unknown, 0)   // the whole point: no Unknown, so step 7 has a weight to fold
+})
+
+test("F3n: the claim is checked in the opposite direction, and the form is pinned", () => {
+  // The path IS in the map: then it is not a new module, whatever the role wrote.
+  assert.match(blockersOf(WITH_NEW.replaceAll(NEW_PAGE, "src/ui/parcels.html")).join("\n"),
+    /F3 parcel card page: new="yes", но узел «src\/ui\/parcels.html» ЕСТЬ в карте/)
+  // A module that does not exist yet has no contract to move.
+  assert.match(blockersOf(WITH_NEW.replace('form="Added" node="' + NEW_PAGE + '" new="yes"', `form="Changed" node="${NEW_PAGE}" new="yes" from="одна колонка" to="две колонки"`)).join("\n"),
+    /F3 parcel card page: new="yes" с формой Changed/)
+  // Without the declaration the path is what it has always been: invented.
+  assert.match(blockersOf(WITH_NEW.replace(' new="yes"', "")).join("\n"),
+    /F3 parcel card page: узла «src\/ui\/parcel-card.html» нет в карте — либо это Unknown, либо путь выдуман, либо модуль создаётся/)
+})
+
+// The blocker's TEXT is the whole repair instruction: it rides in the FEEDBACK and nothing else does.
+// Live run 6889fc3f spent all three redelegations and 392 378 tokens on «F3 <delta> без op — операция
+// не названа», because the role's own rule says `op` is the entry AS THE MAP SPELLS IT and a file that
+// does not exist yet is in no map. Reintroducing the generic message turns this red.
+test("F3n: a created module with no op is told WHERE its op comes from — the requirement, not the map", () => {
+  const b = blockersOf(WITH_NEW.replace('op="parcel card page" ', ""))
+  assert.equal(b.length, 1)
+  assert.match(b[0], /у создаваемого модуля op это ВНЕШНЯЯ ТОЧКА, которую он заведёт/)
+  assert.match(b[0], new RegExp(NEW_PAGE))   // and it names WHICH delta, since a run has several
+})
+
+test("F2c holds for a created node too — its why is the only place the artifact says what it is for", () => {
+  const b = blockersOf(WITH_NEW.replace(' why="новая страница карточки посылки, создаётся этим изменением"', ""))
+  assert.match(b.join("\n"), new RegExp(`F2c touched «${NEW_PAGE}» без why`))
 })
 
 test("F5: a number with no source among the sources, and a source outside the vocabulary", () => {

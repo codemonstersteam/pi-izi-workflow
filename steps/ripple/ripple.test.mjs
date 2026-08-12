@@ -130,6 +130,37 @@ test("a node a scenario merely passes through is IN the subgraph — step 9 has 
   assert.equal(r.value.design, "skip")
 })
 
+// The module the change CREATES: declared at step 6 as `<delta new="yes">` (F3n) and absent from the
+// map by definition. Reintroducing the defect — dropping the `created` filter — turns this red with
+// `unknown-node`, which is exactly how the band died in live run b857d4a0, one step earlier.
+const CARD = "src/ui/parcel-card.html"
+
+test("a module this change creates is not a missing node and not a seed — there is nothing to cut around it", () => {
+  const r = build({
+    deltas: [{ op: "GET /parcels", form: "Added", node: RESOURCE }, { op: "card page", form: "Added", node: CARD, new: "yes" }],
+    touched: [RESOURCE, CARD],
+    scenarios: [{ id: "S1", nodes: RESOURCE }, { id: "S2", nodes: `${CARD} ${RESOURCE}` }],
+  })
+  assert.equal(r.ok, true)
+  assert.equal(r.value.design, "needed")
+  // The subgraph is cut around what EXISTS; the new page is in neither the seeds nor the nodes, and
+  // step 9 reads it out of the FRD its order carries whole.
+  assert.equal(r.value.nodes.includes(CARD), false)
+  assert.deepEqual(r.value.seeds, [RESOURCE])
+})
+
+test("a change that ONLY adds modules: an empty subgraph is a legal state, not a refusal", () => {
+  const r = build({
+    deltas: [{ op: "card page", form: "Added", node: CARD, new: "yes" }],
+    touched: [CARD],
+    scenarios: [{ id: "S1", nodes: CARD }],
+  })
+  assert.equal(r.ok, true)
+  assert.equal(r.value.design, "needed")   // minor: the contract grew, and the new module has two sides
+  assert.deepEqual(r.value.nodes, [])
+  assert.match(r.value.xml, /^<ripple grammar="1" mode="minor" seeds="0" nodes="0">/)
+})
+
 test("refusals are data: no weight, a foreign weight, nothing to ripple from, a path the map denies, a subgraph too big", () => {
   const cls = (r) => (r.ok ? "ok" : r.error.cls)
 

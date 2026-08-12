@@ -2,7 +2,8 @@
 
 $START_GOAL
 Turn a human's raw requirement into a plan they accept, where every decision on the way left a trace
-a machine can check. Two steps exist today: `task` → `brd`. The rest is `docs/concept.md`.
+a machine can check. Nine steps exist today: `task → brd → survey-plan → scope → graph → intake →
+weight → ripple → design`. The rest is `docs/concept.md`.
 $END_GOAL
 
 $START_CONTEXT
@@ -10,8 +11,8 @@ The pipeline runs on `pi-extensible-workflows` — a pi extension for determinis
 
 - `workflows/izi.js` — the whole program: two rails, ~95 lines, no step manifest, no config file.
 - `ext/index.mjs` — the extension: host functions (`readText`, `answers`, `checkTask`, `checkBrd`,
-  `promote`, `setPending`, `clearPending`) plus the pi tool `izi_answer`. All disk work lives here —
-  the sandbox has no `fs`.
+  `promote`, `setPending`, `clearPending`, `design`) plus the pi tool `izi_answer`. All disk work
+  lives here — the sandbox has no `fs`.
 - `steps/<id>/` — one vertical slice: role, order template, pure core, its test.
 - `core/` — rules shared by several slices. `bin/answer.mjs` — the operator's fallback channel.
 

@@ -1,6 +1,6 @@
-// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph → intake → weight → ripple
+// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph → intake → weight → ripple → design
 // Purpose:      one decision — the ORDER of the pipeline, and it lives here as CODE. A phase is a
-//               named function, not a manifest entry: with eight steps, eight hand-written calls are
+//               named function, not a manifest entry: with nine steps, nine hand-written calls are
 //               cheaper than a pipeline.json plus a dispatcher plus their tests (docs/workflow.md
 //               §1-§2, docs/concept.md, "What is deferred and why"). The rule returns when the cost of
 //               listing phases by hand exceeds the cost of policy-as-data — not before.
@@ -10,7 +10,7 @@
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
 //               GLOBALS — readText · answers · brdForm · frdForm · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · cells · digest · reuse ·
-//               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple. They are not
+//               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -19,12 +19,13 @@
 //               maxParallel. Read once, at the start, by budgets(); the defaults live in
 //               core/budgets.mjs and are NOT copied here. A broken config is a refusal, never a
 //               silent default.
-// EXTERNAL_DEPENDENCY: roles `gilb` (steps/brd/gilb.md), `scout` (steps/scope/scout.md) and `intake`
-//               (steps/intake/intake.md) resolved by pi from the extension's roleDirectories BY
-//               FILENAME (validation.js scanRoleFiles). Renaming a role file breaks agent({role})
-//               with no other symptom.
+// EXTERNAL_DEPENDENCY: roles `gilb` (steps/brd/gilb.md), `scout` (steps/scope/scout.md), `intake`
+//               (steps/intake/intake.md) and `designer` (steps/design/designer.md) resolved by pi
+//               from the extension's roleDirectories BY FILENAME (validation.js scanRoleFiles).
+//               Renaming a role file breaks agent({role}) with no other symptom.
 // EXTERNAL_DEPENDENCY: order templates read from disk at run time — steps/brd/order.tpl,
-//               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl, steps/intake/order.tpl.
+//               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl, steps/intake/order.tpl,
+//               steps/design/order.tpl.
 //               prompt() demands an
 //               EXACT bidirectional match between a template's placeholders and the values passed
 //               here: an added key with no placeholder, or a placeholder with no key, throws at
@@ -83,6 +84,18 @@ const ENVELOPE = {
   },
   required: ["track"],
   additionalProperties: false,
+  // BUG_FIX_CONTEXT: run fcc4c120 — intake returned {"track":"err","code":10,"subject":"…"} with NO
+  // `kind`. The question rail switches on env.kind === "question" (:287, :581, :709), so an err
+  // envelope with no kind fell past every question branch and out through the generic err(env.kind, …)
+  // exit — the operator never saw the questions, at a cost of 193 316 tokens and 5 role runs. `track`
+  // alone let "an error with no rail name" through. This `allOf`/`if`/`then` makes track:"err" REQUIRE
+  // kind AND subject, so that shape is rejected before the workflow ever runs — the host compiles
+  // outputSchema with typebox and rejects the envelope IN THE ROLE'S OWN TURN
+  // (pi-extensible-workflows/packages/core/src/agent-execution.ts:816), which is cheaper than a
+  // redelegation.
+  allOf: [
+    { if: { properties: { track: { const: "err" } }, required: ["track"] }, then: { required: ["kind", "subject"] } },
+  ],
 };
 
 // FUNCTION_CONTRACT: task — step 1: the operator's raw requirement, judged
@@ -648,23 +661,102 @@ async function rippling() {
   // Both numbers are named: "the subgraph was computed" and "the subgraph came out empty" are
   // otherwise indistinguishable in the journal, and the journal is what diagnosis reads.
   log(`ripple: design=${r.design} узлов ${r.nodes} из ${r.total} (затравок ${r.seeds}, mode=${r.mode})`);
-  // THE END OF THE BAND SAYS SO OUT LOUD, and it says it HERE — beside the code that moves it. The
-  // terminal message is what the chat model reads when the run finishes, and a result that only says
-  // `track:"ok"` reads to a coding agent sitting in a project directory as a green light to go build
-  // the thing TASK.md describes.
-  //
-  // BUG_FIX_CONTEXT: live run 9a8821a7 (quarkus-rest-json-app-v2-t2). After a green run the chat model
-  //   implemented the requirement by hand — 27 lines across three files plus a new page — and ran the
-  //   tests. Nothing was wrong with the artifacts; the band simply never said it had ended, and step 15
-  //   (`implement`) does not exist yet. The next run would have mapped that code as the repository's
-  //   own. The rule travels with the message for the same reason askOperator's checkpoint instruction
-  //   does: prompts/izi.md cannot restate what changes with this file.
-  log("izi: полоса кончилась на шаге 8. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
+}
+
+// FUNCTION_CONTRACT: designing — step 9: the change as two aligned projections, by role `designer`
+//   Input:        —
+//   Dependencies: EXTERNAL — design (the host function; the local name differs because a sandbox
+//                 global cannot be shadowed by the function that calls it), readText, answers,
+//                 frdForm, agent(role "designer"), prompt; askOperator
+//   Antecedent:   step 8 left .agent/design, .agent/ripple.xml; steps 6 and 7 left .agent/frd.xml and
+//                 .agent/mode; steps/design/order.tpl exists in the run's cwd; LOOPS ≥ 1
+//   Consequent:   success: EXITS ok — either with .agent/design-graph.xml and .agent/data-flow.md
+//                          promoted after a GREEN check, or with the design skipped by step 8's flag.
+//                          In both cases NEITHER artifact is left over from a previous run: the gate
+//                          call erases them before anything else happens (docs/design.md §5)
+//                 failure: exits — err("blocked") when step 8 wrote no flag or an unknown word,
+//                          err(kind) on a role error rail, err("escalate") when LOOPS redelegations
+//                          were spent, carrying the LAST guardrail diagnosis
+//   Purity:       io (through the host)
+//
+// The role gets the FRD and the ripple SUBGRAPH, never the whole map: the reachable part was computed
+// at step 8 precisely so this window stays affordable on a live repository (docs/ripple.md §4).
+//
+// The question rail is the one brd and intake use, with one difference: a question here is SINGLE, not
+// a batch. The designer does not elicit a requirement — it runs into one node whose contract nothing
+// in its order determines (docs/design.md §7), and that is one question with one answer.
+async function designing() {
+  const gate = await design({});                 // ALWAYS erases yesterday's pair — in both branches
+  if (!gate.ok) exit(err("blocked", { subject: gate.why, evidence: ".agent/design-graph.xml не написан" }));
+  if (gate.design === "skip") {
+    log("design: skip — шаг 8 решил, что синхронизировать нечего (patch на одном узле); роль не зовётся, 0 токенов");
+    return ".agent/design"; // the flag file IS the receipt of the skip — there is no second artifact
+  }
+
+  const orderTpl = await readText({ path: "steps/design/order.tpl" });
+  const FRD = await readText({ path: ".agent/frd.xml" });
+  const RIPPLE = await readText({ path: ".agent/ripple.xml" });
+  const MODE = (await readText({ path: ".agent/mode" })).trim();
+  const STAGING = ".agent/staging/design-graph.xml";
+  const CHECK = "design({path}) — steps/design/design.mjs::newDesign по staging: узлы подграфа из .agent/ripple.xml, сценарии и touched из .agent/frd.xml";
+  // The vocabulary of a delta's form is SUBSTITUTED from steps/intake/frd.mjs, never retyped in the
+  // template — the same device the intake order uses, for the same reason (ext/index.mjs::frdForm).
+  const FORM = await frdForm({});
+  let feedback = "(none — first attempt)", attempt = 0, round = 0, spent = 0;
+
+  while (attempt < LOOPS) {
+    const seen = await answers({});
+    const order = prompt(orderTpl, {
+      FRD,
+      RIPPLE,
+      ANSWERS: answersBlock(seen, "(no operator answers yet)"),
+      MODE,
+      DELTA_FORMS: FORM.deltaForms,
+      FEEDBACK: feedback,
+      STAGING,
+      CHECK,
+    });
+    const env = await agent(order, { role: "designer", outputSchema: ENVELOPE });
+
+    if (env.track === "err" && env.kind === "question") {
+      const asked = (env.items && env.items.length) || 1;
+      if (++round > QUESTION_ROUNDS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `кругов уточнения больше ${QUESTION_ROUNDS}` }));
+      if (spent + asked > QUESTIONS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `вопросов за прогон больше ${QUESTIONS} (задано ${spent}, в пакете ещё ${asked})` }));
+      spent += asked;
+      log(`design: вопрос ${round} — «${env.subject}»`);
+      await askOperator(env, round, "design", "designer");
+      continue; // a question does not spend the redelegation budget
+    }
+    if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
+
+    const check = await design({ path: STAGING }); // the check runs ON STAGING, before any promote
+    if (check.ok) {
+      log(`design: узлов ${check.nodes}, маршрутов ${check.routes}, списков юнитов ${check.units} → .agent/design-graph.xml + .agent/data-flow.md`);
+      return ".agent/data-flow.md";
+    }
+    feedback = check.blockers;
+    attempt++;
+  }
+  exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
+}
+
+// THE END OF THE BAND SAYS SO OUT LOUD, and it says it HERE — beside the code that moves it. The
+// terminal message is what the chat model reads when the run finishes, and a result that only says
+// `track:"ok"` reads to a coding agent sitting in a project directory as a green light to go build
+// the thing TASK.md describes.
+//
+// BUG_FIX_CONTEXT: live run 9a8821a7 (quarkus-rest-json-app-v2-t2). After a green run the chat model
+//   implemented the requirement by hand — 27 lines across three files plus a new page — and ran the
+//   tests. Nothing was wrong with the artifacts; the band simply never said it had ended, and step 15
+//   (`implement`) does not exist yet. The next run would have mapped that code as the repository's
+//   own. The rule travels with the message for the same reason askOperator's checkpoint instruction
+//   does: prompts/izi.md cannot restate what changes with this file. It MOVED here with the band's
+//   end when step 9 was added: a message about the end that stays on step 8 is a message about the
+//   wrong step.
+function bandEnds(artifact) {
+  log("izi: полоса кончилась на шаге 9. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
   exit(ok({
-    artifact: ".agent/design",
-    design: r.design,
-    mode: r.mode,
-    nodes: r.nodes,
+    artifact,
     next: "Полоса кончается здесь. Напечатай результат и остановись: не пиши код, не гоняй тесты, не меняй файлы проекта — реализация это шаг 15, которого ещё нет.",
   }));
 }
@@ -707,7 +799,8 @@ try {
   phase("intake"); await intake();
   phase("weight"); await weigh();
   phase("ripple"); await rippling();
-  return ok({}); // unreachable — rippling() always exits — kept as the fall-through for a ninth phase
+  phase("design"); bandEnds(await designing()); // always exits — the band's end is one statement,
+  return ok({});                                // in one place; the return is the tenth phase's slot
 } catch (e) {
   if (e instanceof Exit) return e.result;
   const msg = String((e && e.message) || e);

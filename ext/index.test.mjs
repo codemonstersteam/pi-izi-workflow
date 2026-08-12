@@ -17,7 +17,8 @@ import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, weight, ripple, iziAnswer } from "./index.mjs"
+import { Compile } from "typebox/compile"
+import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, weight, ripple, design, iziAnswer } from "./index.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
 const ctx = (cwd) => ({ run: { cwd } })
@@ -304,6 +305,92 @@ test("no .agent/mode at the run root: refusal naming step 7, and nothing left be
   assert.equal(existsSync(join(root, ".agent", "design")), false)
 })
 
+// --- design: the gate erases, the check promotes -------------------------------------------------
+//
+// Step 9's own version of the same rule, one layer on: the GATE (design({}) with no path) must erase
+// BOTH of yesterday's artifacts in EVERY branch — on `skip` nobody will rewrite them, and on `needed`
+// they are rewritten only if the role and the guardrail both succeed. Remove the rmSync loop in
+// ext/index.mjs::design and the first test below goes red: step 10 would then read a design graph
+// computed for a different FRD (docs/design.md §5).
+const DESIGN_RIPPLE = `<ripple grammar="1" mode="minor" seeds="1" nodes="2">
+  <module path="src/ParcelResource.java" seed="yes" level="3">
+    <role>REST-ресурс посылок</role>
+    <api name="GET /parcels" kind="http" scope="public" via="@GET public Set&lt;Parcel&gt; list()"/>
+    <dep path="src/ParcelRepo.java"/>
+  </module>
+  <module path="src/ParcelRepo.java" level="4">
+    <role>хранилище посылок</role>
+    <decl kind="method" name="all()" sig="public Set&lt;Parcel&gt; all()"/>
+  </module>
+</ripple>`
+const STAGED = `<design mode="minor" base=".agent/appgraph.xml">
+  <module path="src/ParcelResource.java" delta="Added">
+    <role>REST-ресурс посылок</role>
+    <contract in="GET /parcels?track=&lt;v&gt; | Set&lt;Parcel&gt;" out="all() | Set&lt;Parcel&gt; (совпавшие)"/>
+    <dep path="src/ParcelRepo.java"/>
+  </module>
+  <module path="src/ParcelRepo.java">
+    <role>хранилище посылок</role>
+    <contract in="all()" out="Set&lt;Parcel&gt;"/>
+  </module>
+  <route scenario="S1" entry="1" steps="src/ParcelResource.java#1 -> src/ParcelRepo.java#1 -> src/ParcelResource.java#2"/>
+</design>`
+const designRoot = (flag = "needed") => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  writeFileSync(join(root, ".agent", "frd.xml"), FRD_R)
+  writeFileSync(join(root, ".agent", "ripple.xml"), DESIGN_RIPPLE)
+  if (flag) writeFileSync(join(root, ".agent", "design"), flag)
+  writeFileSync(join(root, ".agent", "design-graph.xml"), "<design/>")     // yesterday's graph
+  writeFileSync(join(root, ".agent", "data-flow.md"), "$START_FLOW id=\"вчера\"\n$END_FLOW\n")
+  return root
+}
+
+test("the gate erases both artifacts of the previous run — on skip and on needed alike", () => {
+  for (const flag of ["skip", "needed"]) {
+    const root = designRoot(flag)
+    assert.deepEqual(design.run({}, ctx(root)), { ok: true, design: flag })
+    assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false, flag)
+    assert.equal(existsSync(join(root, ".agent", "data-flow.md")), false, flag)
+  }
+})
+
+test("no .agent/design at the run root: refusal naming step 8", () => {
+  const r = design.run({}, ctx(designRoot(null)))
+  assert.equal(r.ok, false)
+  assert.match(r.why, /шаг 8 ripple не отработал/)
+})
+
+test("the check promotes the role's graph and writes the flow with the unit list beside it", () => {
+  const root = designRoot()
+  const staging = join(".agent", "staging", "design-graph.xml")
+  writeFileSync(join(root, staging), STAGED)
+
+  const r = design.run({ path: staging }, ctx(root))
+  assert.deepEqual(r, { ok: true, nodes: 2, routes: 1, units: 2 })
+  // promote is a MOVE: what stays under staging is exactly what a guardrail rejected.
+  assert.equal(existsSync(join(root, staging)), false)
+  assert.match(readFileSync(join(root, ".agent", "design-graph.xml"), "utf8"), /^<design mode="minor"/)
+  const flow = readFileSync(join(root, ".agent", "data-flow.md"), "utf8")
+  assert.match(flow, /^1\. src\/ParcelResource\.java : GET \/parcels\?track=<v> -> all\(\)$/m)
+  assert.match(flow, /\$START_TESTS path="src\/ParcelRepo\.java"\n1\. all\(\) -> Set<Parcel>\n\$END_TESTS/)
+})
+
+test("a red check leaves the artifacts absent and hands the blockers back as text", () => {
+  const root = designRoot()
+  const staging = join(".agent", "staging", "design-graph.xml")
+  design.run({}, ctx(root))   // the gate runs first in the phase, and it is what erased yesterday's pair
+  // The subgraph knows no such module, and it carries no delta: rule 6 — a transit node invented.
+  writeFileSync(join(root, staging), STAGED.replaceAll("src/ParcelRepo.java", "src/Nope.java"))
+
+  const r = design.run({ path: staging }, ctx(root))
+  assert.equal(r.ok, false)
+  assert.match(r.blockers, /6 узел без delta вне подграфа ряби — src\/Nope\.java/)
+  assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false)
+  assert.equal(existsSync(join(root, ".agent", "data-flow.md")), false)
+  assert.equal(existsSync(join(root, staging)), true)  // the rejected file stays where it was written
+})
+
 // --- izi_answer: the operator's numbering does not reach the VALUES -----------------------------
 //
 // The wiring seam for core/answers.mjs::stripOrdinal (live run 9d126ef3): removing the call from
@@ -347,4 +434,81 @@ test("no context.run.cwd falls back to process.cwd(), never to this repo's own l
   } finally {
     process.chdir(prevCwd)
   }
+})
+
+// --- ENVELOPE: an err with no rail name must be rejected by the SCHEMA, not by workflow logic -----
+//
+// S28. Live run fcc4c120: `intake` returned {"track":"err","code":10,"subject":"Вопросы…"} with no
+// `kind`. The question rail switches on env.kind === "question" (workflows/izi.js:287/:581/:709), so
+// that envelope fell past every question branch and left the operator no way to answer — 193 316
+// tokens and 5 role runs spent. The fix lives in workflows/izi.js's ENVELOPE literal: an `allOf`/
+// `if`/`then` clause that makes track:"err" REQUIRE kind AND subject.
+//
+// This test lives in ext/, not workflows/, because typebox resolves from ext/node_modules — the
+// pipeline itself (workflows/izi.js) runs in a host vm sandbox with no import and no node_modules of
+// its own (standards/code.md, MODULE_CONTRACT at the top of izi.js).
+//
+// It READS the ENVELOPE literal out of workflows/izi.js instead of copying the schema, because a
+// second copy of the same rule is exactly the defect standards/code.md forbids ("one rule, one
+// place"): a copy can drift from what the host actually compiles. The literal is cut out by matching
+// balanced braces after `const ENVELOPE = ` (skipping braces inside strings/comments) and turned into
+// an object with `new Function("return " + src)()` — comments inside the literal are just source text
+// to a JS parser, so they survive.
+//
+// It compiles that object with `Compile` from "typebox/compile" — the exact function
+// pi-extensible-workflows/packages/core/src/agent-execution.ts:816 uses on outputSchema — so a pass
+// here means the host's own validator would also pass, and a fail here means the host would reject
+// the envelope in the role's own turn (agent-execution.ts:816-828), before the workflow logic ever
+// runs.
+//
+// The seam: delete the `allOf` clause from ENVELOPE (or narrow `then.required` back to just `kind`)
+// and the second and third branches below turn red — an err envelope missing kind, or missing
+// subject, would again validate as legal.
+
+function readEnvelopeSchema() {
+  const src = readFileSync(new URL("../workflows/izi.js", import.meta.url), "utf8")
+  const marker = "const ENVELOPE = "
+  const markerAt = src.indexOf(marker)
+  if (markerAt === -1) throw new Error("workflows/izi.js: `const ENVELOPE = ` not found")
+  let i = markerAt + marker.length
+  while (src[i] !== "{") i++
+  const literalStart = i
+  let depth = 0
+  let inString = null   // one of: ' " ` while inside a string literal
+  let inLineComment = false
+  let inBlockComment = false
+  for (; i < src.length; i++) {
+    const c = src[i]
+    const next = src[i + 1]
+    if (inLineComment) { if (c === "\n") inLineComment = false; continue }
+    if (inBlockComment) { if (c === "*" && next === "/") { inBlockComment = false; i++ } continue }
+    if (inString) { if (c === "\\") { i++; continue }; if (c === inString) inString = null; continue }
+    if (c === "/" && next === "/") { inLineComment = true; i++; continue }
+    if (c === "/" && next === "*") { inBlockComment = true; i++; continue }
+    if (c === '"' || c === "'" || c === "`") { inString = c; continue }
+    if (c === "{") depth++
+    else if (c === "}") { depth--; if (depth === 0) { i++; break } }
+  }
+  const literal = src.slice(literalStart, i)
+  return new Function("return " + literal)()
+}
+
+test("ENVELOPE: track:ok with an artifact validates", () => {
+  const schema = Compile(readEnvelopeSchema())
+  assert.equal(schema.Check({ track: "ok", artifact: ".agent/brd.md" }), true)
+})
+
+test("ENVELOPE: track:err with subject but no kind — the fcc4c120 shape — is REJECTED", () => {
+  const schema = Compile(readEnvelopeSchema())
+  assert.equal(schema.Check({ track: "err", subject: "Вопросы по архитектуре:\n1. …" }), false)
+})
+
+test("ENVELOPE: track:err with kind but no subject is REJECTED", () => {
+  const schema = Compile(readEnvelopeSchema())
+  assert.equal(schema.Check({ track: "err", kind: "question" }), false)
+})
+
+test("ENVELOPE: track:err with both kind and subject validates", () => {
+  const schema = Compile(readEnvelopeSchema())
+  assert.equal(schema.Check({ track: "err", kind: "question", subject: "Вопросы по архитектуре:\n1. …" }), true)
 })

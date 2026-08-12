@@ -114,13 +114,29 @@ export function newRipple({ xml, frd, mode, map, cap = MAP_CAP_BYTES } = {}) {
   const routeNodes = (frd.scenarios || []).flatMap((s) => String(s.nodes || "").split(/\s+/).filter(Boolean))
   const named = [...new Set([...deltaNodes, ...(frd.touched || []).filter(Boolean), ...routeNodes])]
 
-  const unknown = named.filter((p) => !nodes.has(p))
+  // The modules this change CREATES (`<delta new="yes">`, declared and judged at step 6 — F3n,
+  // steps/intake/frd.mjs). They are absent from the map BY DEFINITION, so they are neither a missing
+  // node nor a seed: there is no neighbourhood to cut around a file that does not exist. Step 9 gets
+  // them from the FRD itself — its order carries `.agent/frd.xml` whole — and `checkDesign` rule 6
+  // already allows a node with a `delta` outside this subgraph, calling it the designer's own
+  // judgement (steps/design/design.mjs).
+  //
+  // BUG_FIX_CONTEXT: live run b857d4a0 — the band stopped one step earlier, at the weight, because
+  //   the FRD could not express a new module at all; this filter is the second half of that fix, and
+  //   without it the very next refusal would have been `unknown-node` here.
+  const created = new Set(deltas.filter((d) => d.new === "yes" && d.node).map((d) => d.node))
+
+  const unknown = named.filter((p) => !nodes.has(p) && !created.has(p))
   if (unknown.length) {
     return err("unknown-node", `узла нет в карте: ${unknown.join(", ")} — frd.xml старше appgraph.xml либо путь выдуман`)
   }
 
-  const seeds = new Set(named.filter((p) => !tests.has(p)))
-  if (!seeds.size) {
+  const seeds = new Set(named.filter((p) => !tests.has(p) && !created.has(p)))
+  // A change that ONLY adds modules has nothing to cut a subgraph around, and that is a legal state:
+  // the width below still counts the work, the flag is still decided, and the designer writes the new
+  // modules from the FRD. The refusal stays for the case it was written for — deltas that named no
+  // module at all.
+  if (!seeds.size && !created.size) {
     return err("no-delta", "ни одна дельта не назвала узла-модуля — рябь считать не от чего (тест дельтой не бывает, F2/F3 шага 6)")
   }
 

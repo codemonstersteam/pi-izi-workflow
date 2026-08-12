@@ -184,6 +184,26 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   //   "TDD in one ticket" (docs/concept.md, step 15). The map already binds a module to its test
   //   (`<test path suite>`), which is where step 10 takes both the file and the check command from.
   const touched = new Set(frd.touched)
+  // The nodes this change CREATES. Declared once, on the delta — `<touched>` and `<scenario nodes>`
+  // derive it from here rather than repeating the attribute, because two places for one fact disagree
+  // on the first artifact where the role marks only one of them (CLAUDE.md, constraint 5).
+  //
+  // Why an ATTRIBUTE and not "an Added delta whose path is not in the map": today a path outside the
+  // map is the blocker below, «либо это Unknown, либо путь выдуман». Inferring newness from the form
+  // would delete that blocker for every `Added` delta — a typo in a path (`FruitResourse.java`) would
+  // silently become a legal new module, step 9 would design it and step 10 would cut a ticket to
+  // create a duplicate file. A declaration is the same device `<failures found="no" why>`,
+  // `Unknown why` and `cut="N"` use: standards/code.md, constraint 3 — a default is
+  // indistinguishable from a fact.
+  //
+  // BUG_FIX_CONTEXT: live run b857d4a0 (quarkus-rest-json-app-v2-t2). The operator answered the
+  //   role's question with «создать новый файл fruit.html», and the FRD had no way to say it: F2/F3
+  //   demand a map node, and a file that does not exist yet has none. The role wrote the only legal
+  //   thing left — `form="Unknown"` — step 7 refused terminally on it (steps/weight/weight.mjs), and
+  //   the band stopped after intake×5 and 281 188 tokens on a change the operator had explicitly
+  //   ordered. Step 9 was ready for it all along (checkDesign rule 6 allows a delta node outside the
+  //   ripple subgraph — «новый модуль это суждение дизайнера»); nothing could carry the fact there.
+  const newNodes = new Set(frd.deltas.filter((d) => d.new === "yes" && d.node).map((d) => d.node))
   // F2b — a touched must be EXPLAINED: it carries a delta of its own, or a scenario runs through it.
   // Since step 8 measures the WIDTH of the change by `touched` (docs/ripple.md §3), a node declared
   // touched on nothing but the role's say-so orders the `designer` role for free — and step 10 would
@@ -193,6 +213,7 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     ...frd.scenarios.flatMap((s) => String(s.nodes || "").split(/\s+/).filter(Boolean)),
   ])
   for (const t of frd.touched) {
+    if (newNodes.has(t)) continue   // a node this change creates: F3 below judges it, the map cannot
     if (!nodes.has(t)) B.push(`F2 touched «${t}» не резолвится в узел карты — такого path в appgraph.xml нет`)
     else if (tests.has(t)) B.push(`F2 touched «${t}» — тест: тест это <dod> изменения, а не изменение; он едет в тикет вместе со своим модулем (<test> карты, шаг 10)`)
     else if (!explained.has(t)) B.push(`F2b touched «${t}» ничем не объяснён: у него нет своей <delta>, и ни один <scenario nodes> через него не идёт. «Посмотрел, но не менял» — не тронутость: она считается шириной изменения на шаге 8`)
@@ -206,8 +227,12 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   //   apart from the outside, so the role is made to SAY it — the same device `<failures found="no"
   //   why=…>` and `Unknown why` use. Presence is machine-checked; the truth of the sentence is judged
   //   by the human who reads the artifact, exactly as it is for those two.
+  // A node the change CREATES owes the same sentence — and owes it more, not less: `why` is the only
+  // place the artifact says what the new file is for. Gating this on `nodes.has(path)` alone would let
+  // every new node through silently the moment F2 above stopped blocking it.
   for (const t of frd.touchedRows || []) {
-    if (t.path && nodes.has(t.path) && !tests.has(t.path) && !String(t.why || "").trim()) {
+    const judged = t.path && (newNodes.has(t.path) || (nodes.has(t.path) && !tests.has(t.path)))
+    if (judged && !String(t.why || "").trim()) {
       B.push(`F2c touched «${t.path}» без why — назови, ЧТО в этом узле меняется. Маршрут сценария через узел не значит, что узел меняется, а ширина изменения (шаг 8) считается по этому списку`)
     }
   }
@@ -218,7 +243,24 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   // F3 — the delta's form, and its node when the form claims to know one.
   for (const d of frd.deltas) {
     const at = d.op || "(delta без op)"
-    if (!d.op) B.push("F3 <delta> без op — операция не названа")
+    // The blocker's TEXT is the whole repair instruction the role gets — it rides in the FEEDBACK of
+    // the redelegation and nothing else does. A generic sentence is affordable only when the role can
+    // work out the answer on its own.
+    //
+    // BUG_FIX_CONTEXT: live run 6889fc3f (quarkus-rest-json-app-v2-t3), the first task where a new
+    //   file was unavoidable. The role wrote `<delta form="Added" node=".../fruit-card.html"
+    //   new="yes"/>` with no `op` — because its own rule says `op` is «the entry AS THE MAP SPELLS
+    //   IT», and a file that does not exist yet is in no map. This blocker then said only «операция
+    //   не названа», which the role could not act on: it spent one loop leaving `op` out, one loop
+    //   moving the delta onto the list page (blocked as `Changed` with no caller), one more leaving
+    //   it out again — three redelegations, 392 378 tokens, `escalate`. S26 introduced `new="yes"`
+    //   and never said what `op` means for a module that does not exist yet; the answer lives in the
+    //   requirement, not in the map, and now the message says so.
+    if (!d.op) {
+      B.push(d.new === "yes"
+        ? `F3 <delta new="yes"> на «${d.node || "(без node)"}» без op — у создаваемого модуля op это ВНЕШНЯЯ ТОЧКА, которую он заведёт: адрес страницы, команда, топик, имя функции — словами требования, а не именем поведения`
+        : "F3 <delta> без op — операция не названа")
+    }
     if (!FRD_FORM.deltaForms.includes(d.form)) {
       B.push(`F3 ${at}: form="${d.form || ""}" — допустимо ${FRD_FORM.deltaForms.join(" | ")}`)
       continue
@@ -228,7 +270,18 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
       continue
     }
     if (!d.node) { B.push(`F3 ${at}: ${d.form} без node — дельта обязана опираться на узел карты`); continue }
-    if (!nodes.has(d.node)) B.push(`F3 ${at}: узла «${d.node}» нет в карте — либо это Unknown, либо путь выдуман`)
+    // F3n — the module this change CREATES. Everything the rules below ask of a delta is asked of it
+    // too — a `<touched>` of its own with a `why`, a scenario that runs through it — except the one
+    // thing that cannot be true of a file that does not exist yet: being in the map. The two claims
+    // are checked in the opposite direction, and the form is pinned: a module that is not there yet
+    // cannot have its contract Changed, Removed or Fixed — there is nothing to move.
+    if (d.new === "yes") {
+      if (nodes.has(d.node)) B.push(`F3 ${at}: new="yes", но узел «${d.node}» ЕСТЬ в карте — это не новый модуль, сними признак`)
+      if (d.form !== "Added") B.push(`F3 ${at}: new="yes" с формой ${d.form} — у модуля, которого ещё нет, контракт двигаться не может: новый модуль это Added`)
+      if (!touched.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» не объявлен <touched> — шаг 8 не досчитает рябь`)
+      continue
+    }
+    if (!nodes.has(d.node)) B.push(`F3 ${at}: узла «${d.node}» нет в карте — либо это Unknown, либо путь выдуман, либо модуль создаётся этим изменением и тогда дельта несёт new="yes"`)
     else if (tests.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» — тест: тест это <dod> изменения, а не изменение; назови модуль, который меняется, тест приедет с ним в один тикет (<test> карты, шаг 10)`)
     else if (!touched.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» не объявлен <touched> — шаг 8 не досчитает рябь`)
     // `Changed`/`Removed` are defined BY THEIR EFFECT ON AN EXISTING CALL (steps/intake/intake.md,
@@ -284,7 +337,8 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     else if (sc.before.trim() === sc.after.trim()) B.push(`F4 ${at}: before и after совпадают — сценарий зелен и до изменения`)
     const route = String(sc.nodes || "").split(/\s+/).filter(Boolean)
     if (!route.length) B.push(`F4 ${at}: nodes пуст — через какие узлы карты идёт сценарий, не названо`)
-    for (const p of route) if (!nodes.has(p)) B.push(`F4 ${at}: узла «${p}» нет в карте — маршрут сценария опирается на выдуманный путь`)
+    // A scenario may run through a node this change creates — that is the whole point of adding one.
+    for (const p of route) if (!nodes.has(p) && !newNodes.has(p)) B.push(`F4 ${at}: узла «${p}» нет ни в карте, ни среди создаваемых этим изменением (<delta new="yes">) — маршрут сценария опирается на выдуманный путь`)
   }
 
   // F5 — every quantity of the requirement has a named, declared source.
