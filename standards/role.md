@@ -14,14 +14,26 @@ appended to pi's system prompt unless `overrideSystemPrompt: true`.
 ```yaml
 ---
 description: Requirements front door — raw business request into a measurable BRD
-model: openrouter/qwen/qwen3.6-27b
+model: execution        # ИМЯ АЛИАСА, не модель
 thinking: low
 tools: [read, write]
 ---
 ```
 
 Supported keys: `description`, `model`, `thinking`, `tools`, `overrideSystemPrompt`, `contextFiles`,
-`disabledAgentResources`. **There is no per-path permission map in pi** — "writes only to staging" is
+`disabledAgentResources`.
+
+**`model` names an ALIAS, never a model.** The host resolves a value with no slash in it against
+`modelAliases` of the workflow settings (`pi-extensible-workflows/packages/core/src/utils.ts::
+modelAliasName`), and the three names it defines are `routing`, `execution`, `judgment` — a role is
+`execution`. Writing a provider id here pins the whole repository to one vendor's one model and makes
+"change the model" a five-file edit in someone else's checkout.
+
+Live cost of learning this: every role of this pipeline carried `model: openrouter/qwen/qwen3.6-27b`
+in its own frontmatter, so changing `modelAliases` in the machine's settings did NOTHING — twice, on
+two consecutive runs, and the fallback was silent. The status line shows the CHAT model, so nothing
+on screen contradicts the assumption either. The only honest check is the run's own
+`state.json`. **There is no per-path permission map in pi** — "writes only to staging" is
 discipline plus the guardrail, not a host-enforced boundary. Say so in the role; do not pretend.
 $END_CONTEXT
 

@@ -1,6 +1,6 @@
 ---
 description: Repository scout — one cell of the survey plan into a fragment of the application graph
-model: openrouter/qwen/qwen3.6-27b
+model: execution
 thinking: low
 tools: [read, write]
 ---
