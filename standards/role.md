@@ -14,7 +14,7 @@ appended to pi's system prompt unless `overrideSystemPrompt: true`.
 ```yaml
 ---
 description: Requirements front door — raw business request into a measurable BRD
-model: execution        # ИМЯ АЛИАСА, не модель
+model: openrouter/qwen/qwen3.6-27b
 thinking: low
 tools: [read, write]
 ---
@@ -23,17 +23,18 @@ tools: [read, write]
 Supported keys: `description`, `model`, `thinking`, `tools`, `overrideSystemPrompt`, `contextFiles`,
 `disabledAgentResources`.
 
-**`model` names an ALIAS, never a model.** The host resolves a value with no slash in it against
-`modelAliases` of the workflow settings (`pi-extensible-workflows/packages/core/src/utils.ts::
-modelAliasName`), and the three names it defines are `routing`, `execution`, `judgment` — a role is
-`execution`. Writing a provider id here pins the whole repository to one vendor's one model and makes
-"change the model" a five-file edit in someone else's checkout.
+**`model` may name a provider id OR an ALIAS, and the difference decides who owns the choice.** A
+value with no slash is resolved against `modelAliases` of the workflow settings
+(`pi-extensible-workflows/packages/core/src/utils.ts::modelAliasName`), whose three names are
+`routing`, `execution`, `judgment`. A provider id — what every role here carries today — pins the
+repository to one vendor's one model, and the machine's settings then have no say at all.
 
-Live cost of learning this: every role of this pipeline carried `model: openrouter/qwen/qwen3.6-27b`
-in its own frontmatter, so changing `modelAliases` in the machine's settings did NOTHING — twice, on
-two consecutive runs, and the fallback was silent. The status line shows the CHAT model, so nothing
-on screen contradicts the assumption either. The only honest check is the run's own
-`state.json`. **There is no per-path permission map in pi** — "writes only to staging" is
+Which of the two this pipeline should use is an OPEN DECISION, deliberately not taken here. What is
+not open is the trap, and it cost two runs on 2026-08-13: with an id in the frontmatter, editing
+`modelAliases` changes NOTHING, silently — and the status line shows the CHAT model, so the screen
+does not contradict the assumption either. The same silence follows an alias pointing at a model the
+session does not have: execution falls back with no message. **The only honest check is the run's own
+`state.json`** (`"model":…`) against `snapshot.json`'s `models` — both are on disk after every run. **There is no per-path permission map in pi** — "writes only to staging" is
 discipline plus the guardrail, not a host-enforced boundary. Say so in the role; do not pretend.
 $END_CONTEXT
 
