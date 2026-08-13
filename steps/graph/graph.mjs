@@ -461,7 +461,15 @@ export function graphXml(graph) {
   // The dictionary is computed over every path this file will WRITE — node paths once, edge ends
   // twice — because that is what it pays for.
   const edgesAll = g.edges || []
-  const prefix = bestPrefix([...modules.map((m) => m.path), ...edgesAll.flatMap((e) => [e.from, e.to])])
+  // The dictionary is computed over the EDGE ends only, and only they are written short.
+  //
+  // BUG_FIX_CONTEXT: the first live run with compression (eddi). A node's path is its IDENTITY, and
+  //   the map is read by a MODEL as well as by parseMap: step 6's role copied `~modules/llm/impl/
+  //   LlmTask.java` out of a `<module>` line straight into its FRD, and the guardrail refused a path
+  //   that does not exist. Abbreviating what a reader must quote back is a trap regardless of how
+  //   well the parser expands it. The measurement says the price is small: of the 9 504 B the
+  //   dictionary saved on that map, 7 911 were in edge ends and only 1 593 in node paths.
+  const prefix = bestPrefix(edgesAll.flatMap((e) => [e.from, e.to]))
   const P = (p) => (prefix && String(p).startsWith(prefix) ? `~${String(p).slice(prefix.length)}` : String(p))
   L.push(`<appgraph grammar="${esc(g.grammar || "")}" modules="${modules.length}" components="${(g.components || []).length}" isolated="${(g.isolated || []).length}" levels="${modules.reduce((n, m) => Math.max(n, m.level), 0)}">`)
 
@@ -496,7 +504,7 @@ export function graphXml(graph) {
   for (const c of g.components || []) L.push(`  <component id="${esc(c.id)}" modules="${c.modules}" heads="${esc(c.heads.join(" "))}"/>`)
 
   for (const m of modules) {
-    const head = `  <module path="${esc(P(m.path))}"${m.pkg ? attr("pkg", m.pkg) : ""}${m.kind ? attr("kind", m.kind) : ""}${m.kind === "test" ? attr("suite", m.suite) : ""}` +
+    const head = `  <module path="${esc(m.path)}"${m.pkg ? attr("pkg", m.pkg) : ""}${m.kind ? attr("kind", m.kind) : ""}${m.kind === "test" ? attr("suite", m.suite) : ""}` +
       `${m.component ? attr("component", m.component) : ""} level="${m.level}" fanin="${m.fanin}" fanout="${m.fanout}">`
     L.push(head)
     if (m.role) L.push(`    <role>${esc(m.role)}</role>`)
@@ -507,7 +515,7 @@ export function graphXml(graph) {
     for (const d of m.decls) L.push(`    <decl kind="${esc(d.kind)}" name="${esc(d.name)}" sig="${esc(d.sig)}"/>`)
     if (m.declsMore) L.push(`    <decl more="${m.declsMore}"/>`)
     for (const p of m.io) L.push(`    <io${Object.entries(p).map(([k, v]) => attr(k, v)).join("")}/>`)
-    for (const t of m.tests) L.push(`    <test path="${esc(P(t.path))}" suite="${esc(t.suite)}"/>`)
+    for (const t of m.tests) L.push(`    <test path="${esc(t.path)}" suite="${esc(t.suite)}"/>`)
     L.push("  </module>")
   }
 

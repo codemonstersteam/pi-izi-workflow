@@ -284,6 +284,13 @@ test("the map compresses without losing anything: one path head, edges as rows",
   assert.match(packed, new RegExp(`<paths prefix="${long.replace(/[/.]/g, "\\$&")}"`))
   assert.match(packed, /<edges from="~M0\.java" to="~M0\.java ~M1\.java/)
 
+  // A NODE's path is never abbreviated, and that is not an oversight — it is identity, and the map
+  // is read by a model as well as by parseMap. BUG_FIX_CONTEXT: the first live run with compression
+  // had step 6's role copy `~modules/llm/impl/LlmTask.java` out of a <module> line into its FRD, and
+  // the guardrail refused a path that does not exist.
+  assert.match(packed, new RegExp(`<module path="${long.replace(/[/.]/g, "\\$&")}M0\\.java"`))
+  assert.equal(/<module path="~/.test(packed), false)
+
   // THE property that matters: the reader gets the same graph either way
   const back = parseMap(packed)
   assert.equal(back.nodes.size, 40)
