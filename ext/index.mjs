@@ -73,8 +73,9 @@ import { newGraph, graphXml } from "../steps/graph/graph.mjs"
 import { newFrd, parseFrd, FRD_FORM } from "../steps/intake/frd.mjs"
 import { newMode } from "../steps/weight/weight.mjs"
 import { newRipple } from "../steps/ripple/ripple.mjs"
-import { newDesign, parseDesign } from "../steps/design/design.mjs"
+import { newDesign, parseDesign, parseRoutes } from "../steps/design/design.mjs"
 import { newPlanIndex } from "../steps/plan/plan.mjs"
+import { newReview, CODES } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
@@ -236,7 +237,7 @@ export const frdForm = {
 }
 
 export const budgets = {
-  description: "Run budgets from the project's izi.config.json (loops, questions, questionRounds, checkpointRetries, maxParallel). A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
+  description: "Run budgets from the project's izi.config.json (loops, questions, questionRounds, checkpointRetries, maxParallel, reviewRounds). A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -253,6 +254,7 @@ export const budgets = {
       // "Invalid output from budgets" — a crashed run with no hint about which key it disliked.
       // Caught by the first live launch after maxParallel was added (run 657fcd98).
       maxParallel: { type: "number" },
+      reviewRounds: { type: "number" },
       source: { type: "string" },
     },
     required: ["ok"],
@@ -1215,8 +1217,22 @@ function gitTrunk(root) {
 }
 
 export const plan = {
-  description: "Step 10. Project the accepted change onto the work: nodes with a kind, a topological order out of the map's DIRECTED edges, and a check command per node (steps/plan/plan.mjs::newPlanIndex). Writes .agent/plan-index.json. The task key is asked ONCE — ok:false with ask:true carries the question verbatim, and the caller puts it on the operator's rail and calls again. Any refusal REMOVES the artifact so that no gate can approve a previous run's plan.",
-  input: { type: "object", properties: {}, additionalProperties: false },
+  description: "Step 10. Project the accepted change onto the work: nodes with a kind, a topological order out of the map's DIRECTED edges and the design's DIRECTED routes, and a check command per node (steps/plan/plan.mjs::newPlanIndex). Writes .agent/plan-index.json. The task key is asked ONCE — ok:false with ask:true carries the question verbatim, and the caller puts it on the operator's rail and calls again. `edges` are the dependencies step 11's critic asserted, already resolved to plan ids by its guardrail: passing them re-plans WITHOUT re-delegating any role. Any refusal REMOVES the artifact so that no gate can approve a previous run's plan.",
+  input: {
+    type: "object",
+    properties: {
+      edges: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { from: { type: "string" }, to: { type: "string" } },
+          required: ["from", "to"],
+          additionalProperties: false,
+        },
+      },
+    },
+    additionalProperties: false,
+  },
   output: {
     type: "object",
     properties: {
@@ -1234,7 +1250,7 @@ export const plan = {
     required: ["ok"],
     additionalProperties: false,
   },
-  run(_input, context) {
+  run(input, context) {
     const root = runRoot(context)
     const drop = () => { if (existsSync(at(root, PLAN_INDEX_PATH))) rmSync(at(root, PLAN_INDEX_PATH)) }
 
@@ -1254,8 +1270,10 @@ export const plan = {
       map: parseMap(readFileSync(at(root, GRAPH_PATH), "utf8")),
       mode: readFileSync(at(root, MODE_PATH), "utf8"),
       design: designXml ? parseDesign(designXml) : null,
+      routes: designXml ? parseRoutes(designXml) : [],
       trunk: gitTrunk(root),
       answers: said.ok ? said.value : [],
+      edges: (input && input.edges) || [],
     })
 
     if (!r.ok) {
@@ -1277,6 +1295,94 @@ export const plan = {
       scenario: r.value.nodes.filter((n) => n.kind === "scenario").length,
       gaps: r.value.gaps,
     }
+  },
+}
+
+// --- review: the critic's verdict on the plan -----------------------------------------------------
+// Step 11. The verdict is DATA, and the io reflects that: the artifact is promoted on a green FORM in
+// BOTH branches of the verdict, because a Reject's blockers are what the band repairs from and what
+// the operator reads. What is never promoted is a file that broke R1..R4 — that is not a negative
+// verdict, it is a malformed one (docs/review.md §7).
+//
+// ERASING first, as for the mode, the ripple and the design (docs/weight.md §4): newRun carries the
+// run's STATE into .agent/prev and leaves the artifacts, so yesterday's Pass would sit on disk while
+// today's plan was never judged.
+const REVIEW_PATH = ".agent/review.xml"
+
+export const reviewForm = {
+  description: "The blocker vocabulary as data (codes) from steps/review/review.mjs — the order SUBSTITUTES it, it does not restate it.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: { codes: { type: "string" } },
+    required: ["codes"],
+    additionalProperties: false,
+  },
+  run() {
+    return { codes: CODES.join(" | ") }
+  },
+}
+
+export const review = {
+  description: "Step 11. Judge the staged verdict of the role `critic` by steps/review/review.mjs::newReview: the verdict agrees with its body, every code is in the vocabulary, every `node` resolves to a node of .agent/plan-index.json and every `evidence` to the kind of fact its code takes. ERASES .agent/review.xml before judging, and on a green FORM promotes the staged file — for a Reject too, since its blockers are what the band repairs from. Returns the blockers with the culprit artifact and the OWNING STEP derived from each code, so the caller can route the repair without parsing prose.",
+  input: { type: "object", properties: { path: { type: "string" } }, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      verdict: { type: "string" },
+      blockers: { type: "string" },
+      findings: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            code: { type: "string" },
+            node: { type: "string" },
+            evidence: { type: "string" },
+            culprit: { type: "string" },
+            owner: { type: "number" },
+            text: { type: "string" },
+          },
+          required: ["code", "node", "evidence", "culprit", "owner", "text"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ path } = {}, context) {
+    const root = runRoot(context)
+    if (existsSync(at(root, REVIEW_PATH))) rmSync(at(root, REVIEW_PATH))
+
+    if (!path) return { ok: false, blockers: "review({path}) вызван без пути к staging — судить нечего" }
+    if (!existsSync(at(root, path))) {
+      return { ok: false, blockers: `${path} не существует — роль ничего не записала по staging-пути` }
+    }
+    for (const [p, why] of [[PLAN_INDEX_PATH, "шаг 10 plan не отработал"], [FRD_PATH, "шаг 6 intake не отработал"]]) {
+      if (!existsSync(at(root, p))) return { ok: false, blockers: `${p} не существует — ${why}, судить план не по чему` }
+    }
+
+    let plan = null
+    try {
+      plan = JSON.parse(readFileSync(at(root, PLAN_INDEX_PATH), "utf8"))
+    } catch (e) {
+      // A tool failure is not data (standards/code.md, constraint 4): a plan that does not parse is
+      // named as such, never read as "a plan with no nodes".
+      return { ok: false, blockers: `${PLAN_INDEX_PATH} не разбирается как JSON: ${String((e && e.message) || e)}` }
+    }
+
+    const r = newReview({
+      xml: readFileSync(at(root, path), "utf8"),
+      plan,
+      frd: parseFrd(readFileSync(at(root, FRD_PATH), "utf8")),
+    })
+    if (!r.ok) return { ok: false, blockers: r.error.detail }
+
+    copyFileSync(at(root, path), at(root, REVIEW_PATH))   // promoted AFTER the decision to accept
+    rmSync(at(root, path))
+    return { ok: true, verdict: r.value.verdict, findings: r.value.blockers.map((b) => ({ ...b })) }
   },
 }
 
@@ -1376,15 +1482,15 @@ export const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.11.0",
-    headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan host functions",
-    description: "readText/answers/brdForm/frdForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan, plus the gilb, scout, intake and designer role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, plan },
+    version: "1.12.0",
+    headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
+    description: "readText/answers/brdForm/frdForm/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, plan, review },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;
     // pi-extensible-workflows scans a role directory for *.md files only (validation.js
     // scanRoleFiles), so the non-.md neighbours here are inert to role resolution.
-    roleDirectories: [new URL("../steps/brd/", import.meta.url), new URL("../steps/scope/", import.meta.url), new URL("../steps/intake/", import.meta.url), new URL("../steps/design/", import.meta.url)],
+    roleDirectories: [new URL("../steps/brd/", import.meta.url), new URL("../steps/scope/", import.meta.url), new URL("../steps/intake/", import.meta.url), new URL("../steps/design/", import.meta.url), new URL("../steps/review/", import.meta.url)],
   })
 }

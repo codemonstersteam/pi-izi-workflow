@@ -19,6 +19,9 @@ test("no file at all — the defaults entire, never a refusal", () => {
   // both — 60 exchanges is the cost the batch exists to remove (see the module's header).
   assert.equal(DEFAULT_BUDGETS.questions, 60)
   assert.equal(DEFAULT_BUDGETS.questionRounds, 3)
+  // S30: a rewind of the band by the critic is a THIRD kind of round — it costs role calls, not the
+  // operator's time and not a redelegation of one role (docs/review.md §6).
+  assert.equal(DEFAULT_BUDGETS.reviewRounds, 2)
 })
 
 test("a broken config is a refusal, never a silent default", () => {

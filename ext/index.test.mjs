@@ -14,11 +14,11 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs"
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, weight, ripple, design, plan, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
@@ -548,4 +548,55 @@ test("a refusal erases yesterday's plan-index.json", () => {
   assert.equal(r.ok, false)
   assert.match(r.why, /шаг 7 weight не отработал/)
   assert.equal(existsSync(join(root, ".agent", "plan-index.json")), false)
+})
+
+// --- review (step 11) ------------------------------------------------------------------------
+// The io seam of the slice: the verdict is DATA, so a green FORM promotes the file in BOTH branches
+// — a Reject's blockers are what the band repairs from — while a MALFORMED verdict promotes nothing
+// and leaves no stale artifact behind. Remove the rmSync at the top of review.run and the third test
+// goes red: yesterday's Pass would sit on disk while today's plan was never judged.
+const reviewRoot = (verdict) => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  writeFileSync(join(root, ".agent", "frd.xml"), FRD_R)
+  writeFileSync(join(root, ".agent", "plan-index.json"), JSON.stringify({
+    grammar: 1,
+    order: ["src/ParcelResource.java"],
+    nodes: [{ id: "src/ParcelResource.java", kind: "code", delta: ["GET /parcels (Added)"], deps: [], check: [], coveredBy: ["scenario:S1"] }],
+  }))
+  writeFileSync(join(root, ".agent", "staging", "review.xml"), verdict)
+  return root
+}
+
+test("review promotes a Pass and returns the verdict", () => {
+  const root = reviewRoot('<review verdict="Pass" grammar="1"/>')
+  const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
+  assert.equal(r.ok, true, r.ok ? "" : r.blockers)
+  assert.equal(r.verdict, "Pass")
+  assert.equal(existsSync(join(root, ".agent", "review.xml")), true)
+  assert.equal(existsSync(join(root, ".agent", "staging", "review.xml")), false, "promoted, not copied")
+})
+
+test("review promotes a Reject too, and hands back the owner of each blocker", () => {
+  const root = reviewRoot('<review verdict="Reject" grammar="1"><blocker code="goal-not-delivered" node="src/ParcelResource.java" evidence="S1">поиск не выполняется ни одним узлом</blocker></review>')
+  const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
+  assert.equal(r.ok, true, r.ok ? "" : r.blockers)
+  assert.equal(r.verdict, "Reject")
+  assert.deepEqual(r.findings.map((f) => [f.code, f.culprit, f.owner]), [["goal-not-delivered", "frd.xml", 6]])
+  assert.equal(existsSync(join(root, ".agent", "review.xml")), true, "the operator and the repair rail both read the blockers")
+})
+
+test("a malformed verdict promotes nothing and erases yesterday's review", () => {
+  const root = reviewRoot('<review verdict="Reject" grammar="1"><blocker code="made-up" node="src/ParcelResource.java" evidence="S1">x</blocker></review>')
+  writeFileSync(join(root, ".agent", "review.xml"), '<review verdict="Pass" grammar="1"/>')   // yesterday's
+  const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
+  assert.equal(r.ok, false)
+  assert.match(r.blockers, /R2 /)
+  assert.equal(existsSync(join(root, ".agent", "review.xml")), false, "a stale Pass must not survive today's run")
+})
+
+test("review names the step that did not run instead of reading an absent artifact", () => {
+  const root = reviewRoot('<review verdict="Pass" grammar="1"/>')
+  rmSync(join(root, ".agent", "plan-index.json"))
+  assert.match(review.run({ path: ".agent/staging/review.xml" }, ctx(root)).blockers, /шаг 10 plan не отработал/)
 })

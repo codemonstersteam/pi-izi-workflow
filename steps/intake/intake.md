@@ -102,7 +102,10 @@ $START_STRATEGY
    (`<test path suite>`), and both reach one ticket together.
 9. Scenarios: one per use case the change alters, stating before and after.
 10. NFR with sources; anything still open — `<question>`.
-11. With FEEDBACK, repair exactly the rule and element it names before anything else.
+11. With FEEDBACK, read its SOURCE first. `guardrail:` — repair exactly the rule and the element it
+    names, before anything else, and touch nothing else. `critic:` — step 11 judged the plan built
+    out of your FRD: no rule was broken, the requirement was. Reconsider the content the named node
+    comes from and write the FRD that delivers what the blocker says is missing.
 12. Write the staging path from the order and return the result. Never write `.agent/frd.xml`.
 $END_STRATEGY
 

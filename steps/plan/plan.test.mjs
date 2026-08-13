@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { parseMap } from "../intake/map.mjs"
 import { parseFrd } from "../intake/frd.mjs"
-import { parseDesign } from "../design/design.mjs"
+import { parseDesign, parseRoutes } from "../design/design.mjs"
 import { newPlanIndex, TASK_KEY, KEY_QUESTION } from "./plan.mjs"
 
 const RESOURCE = "src/main/java/org/acme/rest/json/FruitResource.java"
@@ -62,6 +62,20 @@ const DESIGN = `<design mode="minor">
   </module>
 </design>`
 
+// The routes of the live t3 design graph, in their live shape: the page navigates to the card, and
+// the card calls the resource and comes BACK to itself. Both legs are here on purpose — the return is
+// what the forward-only rule exists to ignore.
+const ROUTED = `<design mode="minor">
+  <module path="${CARD}" delta="Added">
+    <role>card page</role>
+    <contract in="navigate | Fruit" out="GET /fruits/{id} | rendered card"/>
+    <dep path="${RESOURCE}"/>
+    <dep path="${FRUIT}"/>
+  </module>
+  <route scenario="S1" entry="1" steps="${LIST}#1 -> ${CARD}#1"/>
+  <route scenario="S2" entry="1" steps="${CARD}#1 -> ${RESOURCE}#1 -> ${CARD}#2"/>
+</design>`
+
 const ANSWERED = [{ question: KEY_QUESTION, text: "DOS-42" }]
 
 const run = (over = {}) => newPlanIndex({
@@ -69,8 +83,10 @@ const run = (over = {}) => newPlanIndex({
   map: parseMap(over.map || MAP),
   mode: "mode" in over ? over.mode : "minor",
   design: over.design === null ? null : parseDesign(over.design || DESIGN),
+  routes: over.design === null ? [] : parseRoutes(over.design || DESIGN),
   trunk: "trunk" in over ? over.trunk : "main",
   answers: over.answers || ANSWERED,
+  edges: over.edges,
 })
 
 const idsOf = (v) => v.order
@@ -93,6 +109,45 @@ test("order follows the edge direction: a node comes after everything it uses", 
   assert.ok(order.indexOf(FRUIT) < order.indexOf(RESOURCE), "Fruit before FruitResource")
   assert.ok(order.indexOf(RESOURCE) < order.indexOf(LIST), "FruitResource before fruits.html")
   assert.ok(order.indexOf(CARD) < order.indexOf("scenario:S1"), "the scenario greens last")
+})
+
+// S30-0. The map cannot carry an edge INTO a file the change creates — it was built before that file
+// existed — so the page ends up ordered before the page it links to. The routes can: they are
+// directed by construction. Drop the route pass and this goes red on the very ordering the live t3
+// run produced (docs/review.md §2.1).
+test("the route's forward leg orders a created module before the node that links to it", () => {
+  const withoutRoutes = idsOf(run().value)
+  assert.ok(withoutRoutes.indexOf(LIST) < withoutRoutes.indexOf(CARD), "the map alone puts the page first — the defect")
+
+  const order = idsOf(run({ design: ROUTED }).value)
+  assert.ok(order.indexOf(CARD) < order.indexOf(LIST), "the card exists before the page links to it")
+  assert.ok(run({ design: ROUTED }).value.nodes.find((n) => n.id === LIST).deps.includes(CARD))
+})
+
+// The other half of the same rule: a route comes BACK. Taking every consecutive pair would make
+// CARD → RESOURCE → CARD a two-node cycle — exactly what disqualified <dep> as the source of order.
+test("the RETURN leg of a route is not an edge", () => {
+  const r = run({ design: ROUTED })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.deepEqual(r.value.nodes.find((n) => n.id === RESOURCE).deps.filter((d) => d === CARD), [], "the return does not order the callee after its caller")
+  assert.ok(idsOf(r.value).indexOf(RESOURCE) < idsOf(r.value).indexOf(CARD), "the callee still comes first")
+})
+
+// S30e. A blocker of step 11 whose two ends the guardrail resolved to plan ids IS an edge, and the
+// script applies it — no role is re-delegated for a repair that is a substitution (docs/review.md §6).
+test("an edge asserted by the critic reorders the plan, and one that closes it is named apart", () => {
+  const fixed = run({ edges: [{ from: LIST, to: CARD }] })
+  assert.equal(fixed.ok, true, fixed.ok ? "" : fixed.error.detail)
+  assert.ok(idsOf(fixed.value).indexOf(CARD) < idsOf(fixed.value).indexOf(LIST), "the asserted edge is what ordered them")
+
+  const closed = run({ edges: [{ from: LIST, to: CARD }, { from: CARD, to: LIST }] })
+  assert.equal(closed.ok, false)
+  assert.equal(closed.error.cls, "cycle-from-review", "a cycle the REVIEW made is not the repository's cycle")
+  assert.match(closed.error.detail, /fruit-card\.html/)
+
+  // an edge naming something outside the plan is ignored, not a crash: the guardrail already refused
+  // such a blocker (R3/R4), and this core stays total
+  assert.equal(run({ edges: [{ from: LIST, to: "nowhere.java" }, null] }).ok, true)
 })
 
 test("a created module takes its deps from the design graph; without step 9 it has none", () => {

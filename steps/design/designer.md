@@ -37,14 +37,19 @@ These hold on every run, whatever the order says.
    Take it from the ripple subgraph WITHOUT `delta`, and DERIVE its contract from what the subgraph
    says about it: its `<api>` entries and `<decl>` signatures, and what its neighbour hands it in the
    route. A node with neither, whose contract the route does not determine either, is a QUESTION
-   (LAW 8) — not a sentence you make up from its `<role>` line. Checked as rule 6: a node without
+   (LAW 9) — not a sentence you make up from its `<role>` line. Checked as rule 6: a node without
    `delta` that is not in the subgraph is a blocker.
 6. **A node that is NOT in the subgraph and DOES change is a new module** — that is your judgement to
    make, and it carries `delta` like any other changed node.
 7. **Every alternative you declare in `out` must be taken by some route.** A branch nobody routes is
    either dead or a scenario the FRD is missing — and it would silently drop a unit test from that
    node's ticket. Checked as rule 7 for every node with `delta`.
-8. **A node you cannot give a contract is a question, not a guess.** Return the question shape.
+8. **Every failure the FRD declares is named by some contract.** A `<failure code="…">` is a branch
+   the requirement paid for: some node answers with it, so that alternative belongs in that node's
+   `out` — written so the alternative says both WHICH failure it is and how the module returns it
+   (`404 FRUIT_NOT_FOUND`). Checked as rule 8: the code must occur in some `out`. Rule 7 then makes
+   you route it, and only then does the failure get a unit in a ticket.
+9. **A node you cannot give a contract is a question, not a guess.** Return the question shape.
 $END_LAW
 
 $START_INPUT
@@ -106,7 +111,7 @@ $START_FORBIDDEN
 - Do NOT write a number of tests, a definition of done or a test name anywhere. The unit list of a
   node is the script's projection of your routes; a number you type is a number with no source.
 - Do NOT write the same value into two contracts "so they match" without meaning it — if a step
-  does not connect, say so as a question (LAW 8).
+  does not connect, say so as a question (LAW 9).
 - Do NOT write prose design: no rationale paragraphs, no diagrams, no free markdown. What does not
   fit into a node, a contract or a route is not a design decision yet.
 - Do NOT name branches, tickets, test commands or work order. Those belong to the plan step.

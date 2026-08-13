@@ -1,4 +1,4 @@
-// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan
+// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph → (intake → weight → ripple → design → plan → review)⟳
 // Purpose:      one decision — the ORDER of the pipeline, and it lives here as CODE. A phase is a
 //               named function, not a manifest entry: with ten steps, ten hand-written calls are
 //               cheaper than a pipeline.json plus a dispatcher plus their tests (docs/workflow.md
@@ -10,7 +10,8 @@
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
 //               GLOBALS — readText · answers · brdForm · frdForm · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · cells · digest · reuse ·
-//               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design · plan. They are not
+//               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
+//               plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -20,12 +21,13 @@
 //               core/budgets.mjs and are NOT copied here. A broken config is a refusal, never a
 //               silent default.
 // EXTERNAL_DEPENDENCY: roles `gilb` (steps/brd/gilb.md), `scout` (steps/scope/scout.md), `intake`
-//               (steps/intake/intake.md) and `designer` (steps/design/designer.md) resolved by pi
+//               (steps/intake/intake.md), `designer` (steps/design/designer.md) and `critic`
+//               (steps/review/critic.md) resolved by pi
 //               from the extension's roleDirectories BY FILENAME (validation.js scanRoleFiles).
 //               Renaming a role file breaks agent({role}) with no other symptom.
 // EXTERNAL_DEPENDENCY: order templates read from disk at run time — steps/brd/order.tpl,
 //               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl, steps/intake/order.tpl,
-//               steps/design/order.tpl.
+//               steps/design/order.tpl, steps/review/order.tpl.
 //               prompt() demands an
 //               EXACT bidirectional match between a template's placeholders and the values passed
 //               here: an added key with no placeholder, or a placeholder with no key, throws at
@@ -51,6 +53,21 @@ let QUESTIONS;          // QUESTIONS allowed in one run — not exchanges: intak
 let QUESTION_ROUNDS;    // trips to the operator allowed in one run — the round is what costs context
 let CHECKPOINT_RETRIES; // re-pauses on the SAME question when no matching answer showed up
 let MAX_PARALLEL;       // swarm batch size at step 4 — see scope() for why the sandbox needs one
+let REVIEW_ROUNDS;      // rewinds of steps 6-11 ordered by the critic — see band() at the bottom
+
+// The two counters the operator's budgets are actually spent from. They are MODULE state, not phase
+// state, because since S30 a phase can run more than once in a run: the critic rewinds the band to
+// the step that owns the artifact it blamed (docs/review.md §6). Counters living inside intake()
+// were reset by that rewind and handed the role a second full QUESTIONS budget — the same class of
+// defect as a checkpoint name that repeats, and invisible to every unit, since a unit calls a phase
+// once.
+//
+// ROUND_N is also what makes a pause NAMEABLE: it counts trips over the whole run, so `intake-q4`
+// after a rewind can never collide with the `intake-q1` of the first pass. The host keys a pause by
+// its name — two pauses called `intake-q1` are ONE pause, and the second question would never reach
+// the operator (see askOperator).
+let ROUND_N = 0;        // trips to the operator made so far, over the whole run
+let ASKED_N = 0;        // questions asked so far, over the whole run
 
 const ok = (fields) => ({ track: "ok", code: 0, ...fields });
 const err = (kind, fields) => ({ track: "err", kind, code: kind === "crashed" ? 2 : 10, ...fields });
@@ -270,6 +287,25 @@ async function askOperator(env, n, step, role) {
 //   Problem:  it threw away the only useful thing the run knew: WHY the check was red. The operator
 //             got a count instead of a diagnosis the guardrail had already written.
 //   Fix:      `feedback` here IS check.blockers from the last red iteration, so the exit carries it.
+// FUNCTION_CONTRACT: charge — spend the run's question budgets for one exchange
+//   Input:        env — the role's question envelope; step — the step's id, for the diagnosis
+//   Dependencies: EXTERNAL — none; ROUND_N, ASKED_N, QUESTIONS, QUESTION_ROUNDS
+//   Antecedent:   env.items is the batch as a LIST, or absent for a single question
+//   Consequent:   success: returns the ordinal of THIS trip, already counted; the budgets are spent
+//                 failure: exits err("question") naming which of the two budgets ran out
+//   Purity:       io (through exit)
+//
+// One place spends them, so "how many questions has this run asked" has one answer even when a phase
+// runs twice. The SIZE of a batch is its list's length and nothing else — the envelope's `questions`
+// field is not read here (BUG_FIX_CONTEXT of intake, run 6350f09b).
+function charge(env, step) {
+  const asked = (env.items && env.items.length) || 1;
+  if (++ROUND_N > QUESTION_ROUNDS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `кругов уточнения за прогон больше ${QUESTION_ROUNDS} (шаг ${step})` }));
+  if (ASKED_N + asked > QUESTIONS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `вопросов за прогон больше ${QUESTIONS} (задано ${ASKED_N}, в пакете ещё ${asked})` }));
+  ASKED_N += asked;
+  return ROUND_N;
+}
+
 async function brd() {
   const orderTpl = await readText({ path: "steps/brd/order.tpl" });
   const TASK = await readText({ path: "TASK.md" });
@@ -279,7 +315,7 @@ async function brd() {
   // the template: the guardrail quotes that same registry in its refusal, and two texts of one rule
   // drift apart in silence (backlog G9e, standards/code.md §1).
   const FORM = await brdForm({});
-  let feedback = "(none — first attempt)", attempt = 0, asked = 0;
+  let feedback = "(none — first attempt)", attempt = 0;
 
   while (attempt < LOOPS) {
     const seen = await answers({});
@@ -298,9 +334,8 @@ async function brd() {
 
     if (env.track === "err" && env.kind === "question") {
       // gilb asks ONE question per exchange, so its round IS its question (unlike intake, which
-      // batches — see intake() below). The cap it is judged by is therefore the round budget.
-      if (++asked > QUESTION_ROUNDS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `обменов с оператором больше ${QUESTION_ROUNDS}` }));
-      await askOperator(env, asked, "brd", "gilb");
+      // batches — see intake() below). Both budgets are spent in one place, charge().
+      await askOperator(env, charge(env, "brd"), "brd", "gilb");
       continue; // a question does not spend the redelegation budget
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
@@ -547,7 +582,7 @@ async function graph() {
 // role hands over the whole batch at once (docs/intake.md §2). Three budgets, three meanings: LOOPS
 // (red checks), QUESTIONS (questions asked), QUESTION_ROUNDS (trips to the operator). `Unknown` stays
 // for what even an answer cannot fix: an operation that does not land on the map at all.
-async function intake() {
+async function intake(fromCritic) {
   const map = await graphMap({});
   if (!map.ok) exit(err("blocked", { subject: map.why }));
   log(`intake: карта ${map.bytes} Б на ${map.nodes} узлов, потолок ${map.cap} Б — едет роли целиком`);
@@ -559,7 +594,11 @@ async function intake() {
   // The vocabularies the guardrail judges by are SUBSTITUTED from steps/intake/frd.mjs, never retyped
   // in the template: two texts of one rule drift apart in silence (ext/index.mjs::brdForm, G9e).
   const FORM = await frdForm({});
-  let feedback = "(none — first attempt)", attempt = 0, round = 0, spent = 0;
+  // On a REWIND the first order is not a first attempt: it carries the critic's blockers, and they
+  // are marked as such. A blocker of the guardrail is numbered by a RULE and repaired pointwise; a
+  // blocker of the critic names a code and a node and asks for the CONTENT to be reconsidered. The
+  // role reacts to the two differently, so it is told which it is holding (docs/review.md §6).
+  let feedback = fromCritic || "(none — first attempt)", attempt = 0;
 
   while (attempt < LOOPS) {
     const seen = await answers({});
@@ -573,7 +612,7 @@ async function intake() {
       CHECK,
       DELTA_FORMS: FORM.deltaForms,
       SOURCES: FORM.sources,
-      QUESTIONS_LEFT: String(QUESTIONS - spent),
+      QUESTIONS_LEFT: String(QUESTIONS - ASKED_N),
     });
     const env = await agent(order, { role: "intake", outputSchema: ENVELOPE });
 
@@ -591,12 +630,9 @@ async function intake() {
     //   Fix:      the size IS the list. `questions` is not read here at all — nothing can disagree
     //             with a length.
     if (env.track === "err" && env.kind === "question") {
-      const asked = (env.items && env.items.length) || 1;
-      if (++round > QUESTION_ROUNDS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `кругов уточнения больше ${QUESTION_ROUNDS}` }));
-      if (spent + asked > QUESTIONS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `вопросов за прогон больше ${QUESTIONS} (задано ${spent}, в пакете ещё ${asked})` }));
-      spent += asked;
-      log(`intake: раунд ${round} — вопросов ${asked}, всего ${spent} из ${QUESTIONS}`);
-      await askOperator(env, round, "intake", "intake");
+      const n = charge(env, "intake");
+      log(`intake: круг ${n} — вопросов в пакете ${(env.items && env.items.length) || 1}, всего ${ASKED_N} из ${QUESTIONS}`);
+      await askOperator(env, n, "intake", "intake");
       continue; // a question does not spend the redelegation budget
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
@@ -702,7 +738,7 @@ async function designing() {
   // The vocabulary of a delta's form is SUBSTITUTED from steps/intake/frd.mjs, never retyped in the
   // template — the same device the intake order uses, for the same reason (ext/index.mjs::frdForm).
   const FORM = await frdForm({});
-  let feedback = "(none — first attempt)", attempt = 0, round = 0, spent = 0;
+  let feedback = "(none — first attempt)", attempt = 0;
 
   while (attempt < LOOPS) {
     const seen = await answers({});
@@ -719,12 +755,9 @@ async function designing() {
     const env = await agent(order, { role: "designer", outputSchema: ENVELOPE });
 
     if (env.track === "err" && env.kind === "question") {
-      const asked = (env.items && env.items.length) || 1;
-      if (++round > QUESTION_ROUNDS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `кругов уточнения больше ${QUESTION_ROUNDS}` }));
-      if (spent + asked > QUESTIONS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `вопросов за прогон больше ${QUESTIONS} (задано ${spent}, в пакете ещё ${asked})` }));
-      spent += asked;
-      log(`design: вопрос ${round} — «${env.subject}»`);
-      await askOperator(env, round, "design", "designer");
+      const n = charge(env, "design");
+      log(`design: вопрос ${n} — «${env.subject}»`);
+      await askOperator(env, n, "design", "designer");
       continue; // a question does not spend the redelegation budget
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
@@ -758,9 +791,12 @@ async function designing() {
 // re-delegate to, so the answer is applied by the script itself and the "loop" is simply the same
 // host call made again over the same disk. It therefore spends QUESTION_ROUNDS and never LOOPS — a
 // round costs the operator's time, not the model's (docs/plan.md §6, §8).
-async function planning() {
+async function planning(edges) {
   for (let round = 1; round <= QUESTION_ROUNDS + 1; round++) {
-    const p = await plan({});
+    // `edges` are the dependencies step 11's critic asserted on a previous turn of the band: both
+    // ends were resolved to plan ids by its guardrail, so they are edges, and re-planning with them
+    // is a repair that costs no role at all (docs/review.md §6).
+    const p = await plan({ edges: edges || [] });
     if (p.ok) {
       log(`plan: узлов ${p.nodes} (code ${p.code}, scenario ${p.scenario}), ветка ${p.branch} от ${p.base}`);
       // What the repository could not answer is printed where the operator reads it. A gap that stays
@@ -770,9 +806,50 @@ async function planning() {
       return ".agent/plan-index.json";
     }
     if (!p.ask) exit(err("blocked", { subject: p.why, evidence: ".agent/plan-index.json не написан" }));
-    if (round > QUESTION_ROUNDS) exit(err("question", { subject: p.subject, diagnosis: `кругов уточнения больше ${QUESTION_ROUNDS}` }));
-    await askOperator({ subject: p.subject, evidence: "" }, round, "plan", "plan");
+    await askOperator({ subject: p.subject, evidence: "" }, charge({ subject: p.subject }, "plan"), "plan", "plan");
   }
+}
+
+// FUNCTION_CONTRACT: reviewing — step 11: the plan judged as a program, by role `critic`
+//   Input:        —
+//   Dependencies: EXTERNAL — readText, reviewForm, agent(role "critic"), review (the host function;
+//                 the local name differs because a sandbox global cannot be shadowed by its caller),
+//                 prompt
+//   Antecedent:   step 10 left .agent/plan-index.json; step 6 left .agent/frd.xml; LOOPS ≥ 1
+//   Consequent:   success: RETURNS { verdict, findings[] } — a Reject is a SUCCESSFUL run of this
+//                          step, and .agent/review.xml carries its blockers either way
+//                 failure: exits — err(kind) on a role error rail, err("escalate") when LOOPS
+//                          redelegations were spent on a MALFORMED verdict (R1..R4)
+//   Purity:       io (through the host)
+//
+// There is no question rail here and no operator: what the critic does not understand in the plan IS
+// a blocker, not a gap in a requirement. The verdict is not acted on here either — band() owns that,
+// because the repair belongs to whichever step owns the artifact the blocker blamed.
+async function reviewing() {
+  const orderTpl = await readText({ path: "steps/review/order.tpl" });
+  const PLAN = await readText({ path: ".agent/plan-index.json" });
+  const FRD = await readText({ path: ".agent/frd.xml" });
+  const STAGING = ".agent/staging/review.xml";
+  const CHECK = "review({path}) — steps/review/review.mjs::newReview по staging: node из .agent/plan-index.json, evidence по коду (узел плана для unreachable-antecedent, id FRD для goal-not-delivered)";
+  // The vocabulary is SUBSTITUTED from steps/review/review.mjs, never retyped in the template — the
+  // same device the intake and design orders use (ext/index.mjs::reviewForm).
+  const FORM = await reviewForm({});
+  let feedback = "(none — first attempt)", attempt = 0;
+
+  while (attempt < LOOPS) {
+    const order = prompt(orderTpl, { PLAN, FRD, CODES: FORM.codes, FEEDBACK: feedback, STAGING, CHECK });
+    const env = await agent(order, { role: "critic", outputSchema: ENVELOPE });
+    if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
+
+    const check = await review({ path: STAGING }); // the check runs ON STAGING, before any promote
+    if (check.ok) {
+      log(`review: ${check.verdict}${(check.findings || []).length ? ` — блокеров ${check.findings.length}` : ""}`);
+      return { verdict: check.verdict, findings: check.findings || [] };
+    }
+    feedback = check.blockers;   // the FORM was wrong, not the judgement — the finding is kept, its address is fixed
+    attempt++;
+  }
+  exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
 }
 
 // THE END OF THE BAND SAYS SO OUT LOUD, and it says it HERE — beside the code that moves it. The
@@ -788,8 +865,75 @@ async function planning() {
 //   does: prompts/izi.md cannot restate what changes with this file. It MOVED here with the band's
 //   end when step 9 was added: a message about the end that stays on step 8 is a message about the
 //   wrong step.
+// FUNCTION_CONTRACT: band — steps 6-11 as ONE loop: the critic's verdict comes back into the band
+//   Input:        —
+//   Dependencies: intake, weigh, rippling, designing, planning, reviewing; REVIEW_ROUNDS
+//   Antecedent:   steps 1-5 left .agent/appgraph.xml; REVIEW_ROUNDS ≥ 1
+//   Consequent:   success: RETURNS the plan's artifact path, with a PASSED review beside it
+//                 failure: exits — err("escalate") when the rounds ran out or when a repair did not
+//                          take, err(...) from any phase inside
+//   Purity:       io (through the phases)
+//
+// A Reject is routed, not printed: every blocker carries the STEP that owns the artifact it blamed
+// (steps/review/review.mjs::CODE_OWNER), and the repair is that step running again.
+//   owner 10 — a script: the blocker IS a missing edge, so the plan is recomputed with it and NO
+//              role is called at all;
+//   owner 6  — a role: the band rewinds to intake with the blockers in FEEDBACK, and 7, 8, 9 run
+//              again after it. They MUST: the FRD changed, so yesterday's weight and ripple were
+//              computed from deltas that no longer exist, and the designer would be handed a
+//              subgraph belonging to a different change (docs/review.md §6).
+//
+// The loop's real stop is not the counter but the REPEAT: the same (code, node) coming back after a
+// repair means the repair did not take, and another round would only spend the same tokens again.
+function blockerKey(b) { return `${b.code}|${b.node}`; }
+
+async function band() {
+  let from = 6, edges = [], fromCritic = "", planned = "";
+  const repaired = new Set();
+
+  for (let round = 0; ; round++) {
+    if (from <= 6) {
+      phase("intake"); await intake(fromCritic);
+      phase("weight"); await weigh();
+      phase("ripple"); await rippling();
+      phase("design"); await designing();
+    }
+    phase("plan"); planned = await planning(edges);
+    phase("review"); const verdict = await reviewing();
+    if (verdict.verdict === "Pass") return planned;
+
+    const blockers = verdict.findings;
+    const again = blockers.filter((b) => repaired.has(blockerKey(b)));
+    if (again.length) {
+      exit(err("escalate", {
+        subject: again.map((b) => `${b.code} · ${b.node} — ${b.text}`).join("\n  "),
+        evidence: `починка не взялась: та же находка вернулась после круга ${round + 1}`,
+      }));
+    }
+    if (round >= REVIEW_ROUNDS) {
+      exit(err("escalate", {
+        subject: blockers.map((b) => `${b.code} · ${b.node} (${b.culprit}) — ${b.text}`).join("\n  "),
+        evidence: `перемоток полосы больше ${REVIEW_ROUNDS}`,
+      }));
+    }
+    for (const b of blockers) repaired.add(blockerKey(b));
+
+    if (blockers.every((b) => b.owner === 10)) {
+      from = 10;
+      edges = blockers.map((b) => ({ from: b.node, to: b.evidence }));
+      fromCritic = "";
+      log(`review: круг ${round + 1} — ${edges.length} рёбер от критика, план пересчитывается, роли не зовутся`);
+    } else {
+      from = 6;
+      edges = [];   // the FRD is being rewritten: an edge computed for the previous one addresses nodes that may not survive it
+      fromCritic = blockers.map((b) => `critic: ${b.code} · узел ${b.node} · улика ${b.evidence} — ${b.text}`).join("\n  ");
+      log(`review: круг ${round + 1} — перемотка на шаг 6, блокеров ${blockers.length}`);
+    }
+  }
+}
+
 function bandEnds(artifact) {
-  log("izi: полоса кончилась на шаге 10. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
+  log("izi: полоса кончилась на шаге 11. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
   exit(ok({
     artifact,
     next: "Полоса кончается здесь. Напечатай результат и остановись: не пиши код, не гоняй тесты, не меняй файлы проекта — реализация это шаг 15, которого ещё нет.",
@@ -801,8 +945,8 @@ try {
   const b = await budgets({});
   if (!b.ok) exit(err("blocked", { subject: b.why })); // a broken config is a refusal, not a default
   LOOPS = b.loops; QUESTIONS = b.questions; QUESTION_ROUNDS = b.questionRounds;
-  CHECKPOINT_RETRIES = b.checkpointRetries; MAX_PARALLEL = b.maxParallel;
-  log(`budgets: loops=${LOOPS} questions=${QUESTIONS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} (${b.source})`);
+  CHECKPOINT_RETRIES = b.checkpointRetries; MAX_PARALLEL = b.maxParallel; REVIEW_ROUNDS = b.reviewRounds;
+  log(`budgets: loops=${LOOPS} questions=${QUESTIONS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} reviewRounds=${REVIEW_ROUNDS} (${b.source})`);
 
   // Observability is declared out loud, never assumed: with herdr unavailable the herdr extension
   // does not register at all and stays SILENT, so a run from an ordinary terminal looks exactly like
@@ -831,11 +975,10 @@ try {
   phase("survey-plan"); await surveyPlan();
   phase("scope"); await scope();
   phase("graph"); await graph();
-  phase("intake"); await intake();
-  phase("weight"); await weigh();
-  phase("ripple"); await rippling();
-  phase("design"); await designing();
-  phase("plan"); bandEnds(await planning());    // always exits — the band's end is one statement,
+  // Steps 6-11 are ONE statement now: the critic's verdict decides whether they run again, and which
+  // of them do (band(), above). Everything before them is a fact of the repository — the survey does
+  // not change because a plan was rejected.
+  bandEnds(await band());                       // always exits — the band's end is one statement,
   return ok({});                                // in one place; the return is the next phase's slot
 } catch (e) {
   if (e instanceof Exit) return e.result;
