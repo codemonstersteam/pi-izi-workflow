@@ -31,59 +31,34 @@ import { attrs, elem, tag } from "../../core/xml.mjs"
 // the role receive it through the host, they do not carry a copy.
 export const MAP_CAP_BYTES = 115 * 1024
 
-// MAP_NODE_BYTES / MAP_EDGE_BYTES — what the map costs, as two numbers the code may multiply by.
+// MAP_PRICE — what each ELEMENT of the map costs, and why this is a price list rather than an average.
 //
-// They live next to the cap because the three are one arithmetic: "does the map fit" is
-// `Σ nodes + Σ edges ≤ cap`. Step 3b (steps/focus/focus.mjs) is their only consumer: it decides
-// BEFORE the swarm whether the map the swarm would produce can be read at all, which is the whole
-// point of measuring instead of finding out after 39 batches (docs/big-projects-problems.md §2).
-//
-// MEASURED on a live artifact — but read the correction below before trusting the second decimal.
-// The split was taken on `runbox/s31-before-t3/appgraph.xml` (10310 B, 17 modules, 8 edges):
-//   edges   1528 B over 8   → 191 B each, of which 103 B is the two paths  → 88 B + the paths
-//   the rest 8782 B over 17 → 516 B each, of which  48 B is the path       → 468 B + the path
-// The PATH is not folded into the constant, and that is the correction that matters: a java monolith
-// writes `src/main/java/ai/labs/eddi/backup/impl/RestExportService.java` where the form writes
-// `src/main/java/org/acme/rest/json/Fruit.java`, and an edge names two of them. Folding an average
-// path length into one number is what made the previous constant (417 B/node, no edges at all)
-// under-count eddi by 2.3× — 114 KB estimated against 259 KB real.
-//
-// CORRECTION, and it is the kind this file exists to prevent. That 10310 B file is the snapshot
-// taken BEFORE run 23644036, not its result: the run's own artifact is 10253 B, so the formula
-// reproduces its source to 0.50%, not to the 0.1% first claimed here and in commit 67ea8b2.
-//
-// Two things are folded into the 468 and both make it OVER-count a small focus: the map's fixed
-// preamble (the header, `<lang>`, `<suite>`, the spine's answers — 2153 B on t3, 11498 B on eddi)
-// and `<role>`, which the scout writes and which does not exist before the swarm. Measured against
-// eddi's real map (run a3597dd3, 114072 B over 126 nodes and 199 edges) the per-element numbers are
-// 409 and 84, and the formula lands at 110745 — 2.9% low, because the preamble it never modelled is
-// larger there than the per-node slack it carries. The estimate is therefore a two-sided
-// approximation, not a bound, and the last honest check stays where it has always been:
-// mapMeasure() below, after the swarm, on the real bytes.
-export const MAP_NODE_BYTES = 468
-export const MAP_EDGE_BYTES = 88
+// BUG_FIX_CONTEXT: three live runs on eddi died at step 6 with the map 2-3% over the ceiling while
+//   the estimate was 10-12% under it (fa8def32, fb57f506). The estimate was a flat 468 B per node.
+//   Measured on the map of fb57f506 — 120 050 B over 103 nodes — that flatness hid the biggest term
+//   of all:
+//     <edge>            45 654 B   216 × 211      (both paths inside)
+//     <decl>            25 538 B   211 × 121      ← 21% of the file, and the estimate priced it at 0
+//     <module> header   19 097 B   103 × (113 + path)
+//     <role>            13 755 B   103 × 134      ← prose; see MAP_ROLE_CAP in steps/graph/graph.mjs
+//     <api>              5 298 B    46 × 115
+//     preamble           10 300 B   ≈100 per node (lang, suite, component, subject, surface, systems)
+//   Everything above except `<role>` is KNOWN before the swarm runs: the declarations and the api
+//   rows are already parsed out of `.agent/graph-computed.xml`, which step 3b reads anyway. The one
+//   term nobody can predict is the sentence a scout writes, and that is why it is capped instead.
+export const MAP_PRICE = Object.freeze({
+  node: 113,        // <module …> header without its path
+  preamble: 100,    // the file's fixed sections, per node — they scale with the node count
+  role: 134,        // the scout's sentence, bounded by MAP_ROLE_CAP
+  decl: 121,        // one <decl kind name sig/>
+  api: 115,         // one <api …/>
+  edge: 67,         // <edge from to via by/> without its two paths
+})
 
-// MAP_EST_SLACK — the estimate above is a MODEL of a file the model has not written yet, and this
-// number is how wrong that model has been measured to be. Step 3b divides the ceiling by it instead
-// of comparing to the ceiling directly.
-//
-// BUG_FIX_CONTEXT: live run fa8def32 (eddi). The focus estimated 110 099 B, the map came out
-//   121 384 B against a 117 760 B ceiling, and step 6 refused an artifact that missed by 3%. The
-//   swarm had already run. Two things the estimate cannot know were the whole gap: `<role>` is a
-//   sentence a scout writes in its own words, and the number of `<api>` rows depends on what the
-//   scouts found (26 here, 12 in the previous run over the same repository).
-//
-// Measured error of the model on every live map there is: 0% (t3, run 23644036), +0.3%
-// (a3597dd3, 113 678 estimated against 114 072), −10% (fa8def32). The slack is the worst of those,
-// rounded to the tenth, and its BOUNDS were measured too — by replaying newFocus over the saved
-// artifacts of fa8def32:
-//   ×1.05 changes nothing, the run still dies;
-//   ×1.10 drops `helm` — 18 files of infrastructure yaml, no code — and the map fits at ≈117 043;
-//   ×1.20 drops `modules/templating`, 11 nodes of the actual work. Too much.
-// So the working range is ×1.07…×1.19 and this is the middle of it, not a round number chosen for
-// comfort. The asymmetry that justifies erring high at all is named: under-counting costs the whole
-// swarm, over-counting costs a few cells of the map.
-export const MAP_EST_SLACK = 1.1
+// MAP_EST_SLACK — what is left of "the estimate may be wrong" once the elements are priced.
+// It stays because `<role>` is capped, not fixed, and because a part may carry `<io>` rows nobody
+// predicted. It is no longer the thing holding the estimate together.
+export const MAP_EST_SLACK = 1.05
 
 // FUNCTION_CONTRACT: parseMap — the map's node keys
 //   Input:        xml — text of `.agent/appgraph.xml`; type unconstrained
@@ -125,6 +100,12 @@ export const MAP_EST_SLACK = 1.1
 //               cycle is the one thing a topological sort cannot survive.
 export function parseMap(xml) {
   const s = String(xml || "")
+  // The map may declare a shared path head once and write `~` in its place everywhere
+  // (steps/graph/graph.mjs::bestPrefix). Expanding it here keeps every consumer — ripple, plan,
+  // design, the FRD guardrail — reading full paths exactly as before: the compression is a property
+  // of the FILE, never of the value.
+  const pre = (s.match(/<paths prefix="([^"]*)"/) || ["", ""])[1]
+  const full = (p) => (pre && String(p).startsWith("~") ? pre + String(p).slice(1) : String(p))
   const nodes = new Set()
   const tests = new Set()
   const entries = new Set()
@@ -132,14 +113,15 @@ export function parseMap(xml) {
   for (const m of s.matchAll(elem("module"))) {
     const a = attrs(m[1])
     if (!a.path) continue
-    nodes.add(a.path)
-    if (a.kind === "test") tests.add(a.path)
-    if (/<api\b/.test(m[2] || "")) entries.add(a.path)
+    const path = full(a.path)
+    nodes.add(path)
+    if (a.kind === "test") tests.add(path)
+    if (/<api\b/.test(m[2] || "")) entries.add(path)
     const own = [...String(m[2] || "").matchAll(tag("test"))]
       .map((t) => attrs(t[1]))
       .filter((t) => t.path)
-      .map((t) => Object.freeze({ path: t.path, suite: t.suite || "" }))
-    if (own.length) nodeTests.set(a.path, Object.freeze(own))
+      .map((t) => Object.freeze({ path: full(t.path), suite: t.suite || "" }))
+    if (own.length) nodeTests.set(path, Object.freeze(own))
   }
 
   const suites = [...s.matchAll(tag("suite"))]
@@ -165,10 +147,19 @@ export function parseMap(xml) {
   // The edges are read but NOT judged: step 6 ignores them entirely, and step 8 decides for itself
   // what a test endpoint or a dangling one means for the ripple. `via` is dropped — the ripple carries
   // the fact of the edge, and the line of code that proves it is already in the map the operator reads.
-  const edges = [...s.matchAll(tag("edge"))]
-    .map((m) => attrs(m[1]))
-    .filter((a) => a.from && a.to)
-    .map((a) => Object.freeze({ from: a.from, to: a.to }))
+  // Two shapes, one meaning: `<edge from to/>` for an edge that carries its own evidence, and
+  // `<edges from to="a b c"/>` for the rows the writer compressed (CSR). A consumer sees the same
+  // flat list either way.
+  const edges = [
+    ...[...s.matchAll(tag("edge"))]
+      .map((m) => attrs(m[1]))
+      .filter((a) => a.from && a.to)
+      .map((a) => Object.freeze({ from: full(a.from), to: full(a.to) })),
+    ...[...s.matchAll(tag("edges"))]
+      .map((m) => attrs(m[1]))
+      .filter((a) => a.from && a.to)
+      .flatMap((a) => String(a.to).split(/\s+/).filter(Boolean).map((t) => Object.freeze({ from: full(a.from), to: full(t) }))),
+  ]
   return { nodes, tests, entries, edges, count: nodes.size, nodeTests, suites, spine, cycles }
 }
 

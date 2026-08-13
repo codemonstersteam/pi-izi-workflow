@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs"
 import { newSlices } from "./slices.mjs"
 import { newFocus, names } from "./focus.mjs"
 import { newPlan } from "../survey-plan/plan.mjs"
-import { MAP_NODE_BYTES, MAP_EST_SLACK } from "../intake/map.mjs"
+import { MAP_PRICE, MAP_EST_SLACK } from "../intake/map.mjs"
 
 const FX = JSON.parse(readFileSync(new URL("./fixture-eddi.json", import.meta.url), "utf8"))
 const ENTRY = FX.entry                       // …/configs/agents/IRestCapabilityRegistry.java — cone of 5
@@ -37,7 +37,7 @@ const SPINE = CELLS.find((c) => c.kind === "spine").id
 
 const EDGES = FX.edges
 const focusIn = (over) => newFocus({ slices, cells: CELLS, edges: EDGES, ...over })
-const TIGHT = 8 * MAP_NODE_BYTES         // the whole plan estimates at 13613 B: it cannot meet this
+const TIGHT = 8 * (MAP_PRICE.node + MAP_PRICE.preamble + MAP_PRICE.role)         // the whole plan estimates at 13613 B: it cannot meet this
 const focus = (over) => newFocus({ slices, orphans, cells: CELLS, ...over })
 
 test("names: the anchor NAMES the file — by its PATH, case-insensitively", () => {
@@ -108,15 +108,15 @@ test("an anchor on an orphan brings its cell — else a config could never be su
 test("two phases: the CELL of a named file first, the CONE after — and the rest is COUNTED", () => {
   // Measured order, not an argued one (see focus.mjs): naming a file is the cheapest, most precise
   // thing an anchor buys; a cone is structure and costs an order of magnitude more.
-  const tight = newFocus({ slices, cells: CELLS, edges: EDGES, anchors: ["capabilityregistry", "irestaction"], cap: 6 * MAP_NODE_BYTES })
+  const tight = newFocus({ slices, cells: CELLS, edges: EDGES, anchors: ["capabilityregistry", "irestaction"], cap: 6 * (MAP_PRICE.node + MAP_PRICE.preamble + MAP_PRICE.role) })
   assert.equal(tight.value.why, "anchors")
   assert.deepEqual(tight.value.chosen, [], "no cone fits under this ceiling…")
   assert.ok(tight.value.cells.length > 1, "…but the cells of the named files are in")
   assert.equal(tight.value.dropped.slices, 2, "and the cones that did not fit are counted")
-  assert.ok(tight.value.estBytes <= 6 * MAP_NODE_BYTES, "the ceiling is never exceeded to fit one more")
+  assert.ok(tight.value.estBytes <= 6 * (MAP_PRICE.node + MAP_PRICE.preamble + MAP_PRICE.role), "the ceiling is never exceeded to fit one more")
 
   // give it room and the cones follow the cells, cheapest cone first
-  const roomy = newFocus({ slices, cells: CELLS, edges: EDGES, anchors: ["capabilityregistry", "irestaction"], cap: 14 * MAP_NODE_BYTES })
+  const roomy = newFocus({ slices, cells: CELLS, edges: EDGES, anchors: ["capabilityregistry", "irestaction"], cap: 14 * (MAP_PRICE.node + MAP_PRICE.preamble + MAP_PRICE.role) })
   assert.deepEqual(roomy.value.chosen, [idOf(OTHER), idOf(ENTRY)], "IRestAction's cone is the cheaper one")
   assert.deepEqual(roomy.value.dropped, { slices: 0, cells: 0 })
 
@@ -137,7 +137,7 @@ test("no plan, no entry, no cone that fits — three different refusals, and all
   assert.equal(newFocus({ slices: [], cells: CELLS, edges: EDGES }).value.why, "whole-plan")
 
   // a ceiling under the cheapest cone: nothing can be surveyed, and saying so costs zero tokens
-  const over = newFocus({ slices, cells: CELLS, edges: EDGES, cap: 2 * MAP_NODE_BYTES, anchors: ["capabilityregistry"] })
+  const over = newFocus({ slices, cells: CELLS, edges: EDGES, cap: 2 * (MAP_PRICE.node + MAP_PRICE.preamble + MAP_PRICE.role), anchors: ["capabilityregistry"] })
   assert.equal(over.error.cls, "over-cap")
   assert.match(over.error.detail, /ключ кэша/)
 })

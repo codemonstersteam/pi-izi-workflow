@@ -54,7 +54,7 @@ const text = (s) => String(s == null ? "" : s).trim()
 // order digest already uses ("… N more declarations"). At cap 12 that remainder is large (252 of 537
 // declarations live in those 9 nodes), and it says so on the node instead of the map pretending the
 // class is small.
-const DECL_CAP = 12
+export const DECL_CAP = 12
 
 // matches — a suite's `match` against a file NAME. `*` is the only wildcard: the patterns this reads
 // come from build manifests (`*Test.java`, `*IT.java`, `test_*.py`), and a full glob engine would be
@@ -404,6 +404,33 @@ export function newGraph({ parts = [], computedXml = "", plan = {}, focus = null
 
 const attr = (name, value) => ` ${name}="${esc(value)}"`
 
+// PATH_PREFIX_MIN — below this the dictionary costs more than it saves, so it is not written at all.
+// A form with fifteen files has no common root worth naming; a monolith has one in every path.
+const PATH_PREFIX_MIN = 512
+
+// bestPrefix — the directory prefix whose removal saves the most bytes across every path the map
+// writes, counting each path once per OCCURRENCE (a node names its path once, an edge names two).
+//
+// This is front coding, the oldest trick in the index-compression book: one shared head is declared
+// once and replaced by a sigil everywhere it appears. Measured on eddi's live map (run fb57f506):
+// `src/main/java/ai/labs/eddi/` is 27 characters over 352 occurrences — 9 504 B, 8% of the file,
+// with nothing lost.
+function bestPrefix(occurrences) {
+  const count = new Map()
+  for (const p of occurrences) {
+    for (let i = p.indexOf("/"); i > 0; i = p.indexOf("/", i + 1)) {
+      const pre = p.slice(0, i + 1)
+      count.set(pre, (count.get(pre) || 0) + 1)
+    }
+  }
+  let best = "", saved = 0
+  for (const [pre, n] of count) {
+    const s = (pre.length - 1) * n              // one sigil replaces the prefix
+    if (s > saved) { saved = s; best = pre }
+  }
+  return saved >= PATH_PREFIX_MIN ? best : ""
+}
+
 // answerXml — one spine answer, with its own attributes or with found="no". `found="no"` is written
 // even where the scout simply never produced the element: at step 10 the operator answers a question
 // about a missing toggle mechanism, and "nobody looked" must not be indistinguishable from "there is
@@ -430,6 +457,12 @@ export function graphXml(graph) {
   const g = graph || {}
   const modules = g.modules || []
   const L = []
+
+  // The dictionary is computed over every path this file will WRITE — node paths once, edge ends
+  // twice — because that is what it pays for.
+  const edgesAll = g.edges || []
+  const prefix = bestPrefix([...modules.map((m) => m.path), ...edgesAll.flatMap((e) => [e.from, e.to])])
+  const P = (p) => (prefix && String(p).startsWith(prefix) ? `~${String(p).slice(prefix.length)}` : String(p))
   L.push(`<appgraph grammar="${esc(g.grammar || "")}" modules="${modules.length}" components="${(g.components || []).length}" isolated="${(g.isolated || []).length}" levels="${modules.reduce((n, m) => Math.max(n, m.level), 0)}">`)
 
   // The boundary, declared in ONE line and only when there is one. A per-edge `<outside path why
@@ -442,6 +475,8 @@ export function graphXml(graph) {
   if (g.focus) {
     L.push(`  <focus slices="${esc(g.focus.slices)}" cells="${g.focus.cells}" of="${g.focus.of}" nodes="${g.focus.nodes}" repo="${g.focus.repo}" dropped="${g.focus.dropped}" dropped-cells="${g.focus.droppedCells}" local="level fanin fanout component"/>`)
   }
+
+  if (prefix) L.push(`  <paths prefix="${esc(prefix)}"/>`)   // every `~` below stands for it
 
   L.push(answerXml("artifact", (g.answers || {}).artifact))
   for (const s of g.suites || []) L.push(`  <suite${Object.entries(s).map(([k, v]) => attr(k, v)).join("")}/>`)
@@ -461,7 +496,7 @@ export function graphXml(graph) {
   for (const c of g.components || []) L.push(`  <component id="${esc(c.id)}" modules="${c.modules}" heads="${esc(c.heads.join(" "))}"/>`)
 
   for (const m of modules) {
-    const head = `  <module path="${esc(m.path)}"${m.pkg ? attr("pkg", m.pkg) : ""}${m.kind ? attr("kind", m.kind) : ""}${m.kind === "test" ? attr("suite", m.suite) : ""}` +
+    const head = `  <module path="${esc(P(m.path))}"${m.pkg ? attr("pkg", m.pkg) : ""}${m.kind ? attr("kind", m.kind) : ""}${m.kind === "test" ? attr("suite", m.suite) : ""}` +
       `${m.component ? attr("component", m.component) : ""} level="${m.level}" fanin="${m.fanin}" fanout="${m.fanout}">`
     L.push(head)
     if (m.role) L.push(`    <role>${esc(m.role)}</role>`)
@@ -472,7 +507,7 @@ export function graphXml(graph) {
     for (const d of m.decls) L.push(`    <decl kind="${esc(d.kind)}" name="${esc(d.name)}" sig="${esc(d.sig)}"/>`)
     if (m.declsMore) L.push(`    <decl more="${m.declsMore}"/>`)
     for (const p of m.io) L.push(`    <io${Object.entries(p).map(([k, v]) => attr(k, v)).join("")}/>`)
-    for (const t of m.tests) L.push(`    <test path="${esc(t.path)}" suite="${esc(t.suite)}"/>`)
+    for (const t of m.tests) L.push(`    <test path="${esc(P(t.path))}" suite="${esc(t.suite)}"/>`)
     L.push("  </module>")
   }
 
@@ -492,10 +527,22 @@ export function graphXml(graph) {
     const fq = String(e.to).replace(/^.*java\//, "").replace(/\.java$/, "").replace(/\//g, ".")
     return /^import\s+(static\s+)?[\w.]+;?$/.test(String(e.via || "").trim()) && String(e.via).includes(fq)
   }
-  for (const e of g.edges || []) {
+  // CSR, and it is the standard sparse-graph layout rather than a trick of this file: a list of
+  // (from, to) pairs is a coordinate list, and grouping by source turns it into compressed rows. On
+  // eddi's live map 216 edges came from 60 sources — the `from` path was written 156 times for
+  // nothing. An edge that still carries evidence (`via`, `by`) keeps its own line: the row form has
+  // nowhere to put a value that differs per element.
+  const rows = new Map()
+  for (const e of edgesAll) {
     const via = restatesTo(e) ? "" : esc(e.via)
-    L.push(`  <edge from="${esc(e.from)}" to="${esc(e.to)}"${via ? ` via="${via}"` : ""}${e.by ? attr("by", e.by) : ""}/>`)
+    if (via || e.by) {
+      L.push(`  <edge from="${esc(P(e.from))}" to="${esc(P(e.to))}"${via ? ` via="${via}"` : ""}${e.by ? attr("by", e.by) : ""}/>`)
+      continue
+    }
+    if (!rows.has(e.from)) rows.set(e.from, [])
+    rows.get(e.from).push(e.to)
   }
+  for (const [from, tos] of rows) L.push(`  <edges from="${esc(P(from))}" to="${esc(tos.map(P).join(" "))}"/>`)
 
   L.push("  <surface>")
   for (const a of g.surface || []) L.push(`    <api name="${esc(a.name)}" kind="${esc(a.kind)}" at="${esc(a.at)}"/>`)

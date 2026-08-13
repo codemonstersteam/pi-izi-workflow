@@ -749,7 +749,13 @@ export const focus = {
     // resolved to files by step 3 and arrive through the plan; `analogue` is a single term that
     // exists nowhere else.
     const brd = parseBrd(readIfExists(root, ".agent/brd.md"))
-    const r = newFocus({ slices, anchors: p.plan.subjects || [], analogue: analogueTerm(brd.analogue), cells: p.cells, edges: computed.edges })
+    // The estimate prices what the map will carry, so it needs the counts the map will carry:
+    // declarations and api rows per path, both already parsed out of graph-computed.xml above.
+    const declsAt = {}
+    for (const d of computed.decls) declsAt[d.at] = (declsAt[d.at] || 0) + 1
+    const apisAt = {}
+    for (const a of computed.api) apisAt[a.at] = (apisAt[a.at] || 0) + 1
+    const r = newFocus({ slices, anchors: p.plan.subjects || [], analogue: analogueTerm(brd.analogue), cells: p.cells, edges: computed.edges, decls: declsAt, apis: apisAt })
     if (!r.ok) {
       drop()
       return { ok: false, why: `${r.error.cls}: ${r.error.detail}`, slices: slices.length, entries: slices.length }

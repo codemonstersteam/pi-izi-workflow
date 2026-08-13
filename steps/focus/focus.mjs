@@ -13,7 +13,8 @@
 //             newFocus({ slices, anchors, cells, edges, cap }) -> Result<Focus, …>
 
 import { ok, err } from "../../core/result.mjs"
-import { MAP_CAP_BYTES, MAP_NODE_BYTES, MAP_EDGE_BYTES, MAP_EST_SLACK } from "../intake/map.mjs"
+import { MAP_CAP_BYTES, MAP_PRICE, MAP_EST_SLACK } from "../intake/map.mjs"
+import { DECL_CAP } from "../graph/graph.mjs"
 
 // names — the anchor rule of step 3b, and it is NOT the anchor rule of step 3.
 //
@@ -58,6 +59,8 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 //                 cells   — the plan's cells: [{ id, kind, files: [{ path }] }]
 //                 edges   — [{ from, to }] of graph-computed.xml: the estimate prices them, because
 //                           on a monolith they are the larger half of the map
+//                 decls   — { path -> count } and apis — { path -> count }, from the same computed
+//                           facts; the estimate prices what the map will carry, not an average
 //                 cap     — the reading ceiling; MAP_CAP_BYTES when absent
 //   Dependencies: ok, err (core/result.mjs), names, kb
 //   Antecedent:   any values; missing ones read as empty. `cells` empty is the "no plan" case, not
@@ -92,7 +95,7 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 // that everything which did not fit is COUNTED in `dropped`, carried into `<focus>` by step 5 and
 // printed in the run's log. An anchor whose files ended outside comes back as `found="outside"` in
 // the map, so step 6's role meets an honest Unknown instead of a guess.
-export function newFocus({ slices = [], anchors = [], analogue = "", cells = [], edges = [], cap = MAP_CAP_BYTES } = {}) {
+export function newFocus({ slices = [], anchors = [], analogue = "", cells = [], edges = [], decls = {}, apis = {}, cap = MAP_CAP_BYTES } = {}) {
   // The budget is the ceiling MINUS the measured error of the estimate below (steps/intake/map.mjs::
   // MAP_EST_SLACK). Comparing to the ceiling itself is what killed run fa8def32: the estimate was
   // 10% low, the map missed by 3%, and the swarm had already been paid for.
@@ -102,17 +105,24 @@ export function newFocus({ slices = [], anchors = [], analogue = "", cells = [],
 
   const filesOf = (cs) => cs.reduce((n, c) => n + (c.files || []).length, 0)
 
-  // The estimate, and it is the map's own arithmetic rather than a rule of thumb: every node costs
-  // its overhead plus its PATH, every edge costs its overhead plus the two paths it names. Both
-  // constants are measured on a live artifact (steps/intake/map.mjs). The path is not averaged away
-  // because a monolith's paths are twice a form's, and an edge names two of them — averaging is what
-  // made the previous estimate under-count eddi by 2.3×.
+  // The estimate prices the map ELEMENT BY ELEMENT (steps/intake/map.mjs::MAP_PRICE), because every
+  // term except one is known before the swarm runs: the paths from the plan, the edges, the
+  // declarations and the api rows from graph-computed.xml. The one term nobody can predict — the
+  // sentence a scout writes — is bounded instead (steps/graph/graph.mjs::MAP_ROLE_CAP).
+  //
+  // BUG_FIX_CONTEXT: runs fa8def32 and fb57f506 died with the map 2-3% over the ceiling while a flat
+  //   468 B/node estimate sat 10-12% under it. `<decl>` alone was 21% of eddi's map and was priced
+  //   at zero.
   const bytesOf = (cs) => {
     const inMap = new Set(cs.flatMap((c) => (c.files || []).map((f) => f.path)))
     let n = 0
-    for (const p of inMap) n += MAP_NODE_BYTES + p.length
+    for (const p of inMap) {
+      n += MAP_PRICE.node + p.length + MAP_PRICE.preamble + MAP_PRICE.role
+      n += MAP_PRICE.decl * Math.min(decls[p] || 0, DECL_CAP)
+      n += MAP_PRICE.api * (apis[p] || 0)
+    }
     for (const e of edges || []) {
-      if (inMap.has(e.from) && inMap.has(e.to)) n += MAP_EDGE_BYTES + e.from.length + e.to.length
+      if (inMap.has(e.from) && inMap.has(e.to)) n += MAP_PRICE.edge + e.from.length + e.to.length
     }
     return n
   }

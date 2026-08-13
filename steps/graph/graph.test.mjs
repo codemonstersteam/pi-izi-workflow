@@ -7,6 +7,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { mergeGraph, newGraph, graphXml, suiteFor } from "./graph.mjs"
 import { parseComputed } from "../scope/computed.mjs"
+import { parseMap } from "../intake/map.mjs"
 
 const M = "src/main/java/org/acme/rest/json"
 const T = "src/test/java/org/acme/rest/json"
@@ -263,6 +264,32 @@ test("an edge's via is dropped when it only restates the node the edge already n
   const one = (edge) => graphXml(newGraph({ parts: PARTS, computedXml: COMPUTED.replace("</computed>", `  ${edge}\n</computed>`), plan: PLAN }).value)
   assert.equal(one(restating).includes('via="import org.acme.rest.json.Fruit;"'), false)
   assert.ok(one(carrying).includes("private Set"))
+})
+
+test("the map compresses without losing anything: one path head, edges as rows", () => {
+  // Two techniques from index compression, both lossless, measured on eddi's live map (run fb57f506,
+  // 120 050 B): front coding of the shared path head (352 occurrences of a 27-char prefix) and CSR —
+  // a coordinate list of (from, to) pairs becomes compressed rows, 216 edges out of 60 sources.
+  // Together they took that map to 109 188 B, under the ceiling it had died over.
+  const g = newGraph({ parts: PARTS, computedXml: COMPUTED, plan: PLAN }).value
+  const xml = graphXml(g)
+
+  // the form's paths share too little to pay for a dictionary — it is not written at all
+  assert.equal(xml.includes("<paths prefix="), false, "no dictionary where it would cost more than it saves")
+
+  // …and a tree that does share one gets it, with every path written short
+  const long = "src/main/java/com/example/very/deep/package/"
+  const many = { ...g, modules: Array.from({ length: 40 }, (_, i) => ({ ...g.modules[0], path: `${long}M${i}.java` })), edges: Array.from({ length: 40 }, (_, i) => ({ from: `${long}M0.java`, to: `${long}M${i}.java`, via: "", by: "" })) }
+  const packed = graphXml(many)
+  assert.match(packed, new RegExp(`<paths prefix="${long.replace(/[/.]/g, "\\$&")}"`))
+  assert.match(packed, /<edges from="~M0\.java" to="~M0\.java ~M1\.java/)
+
+  // THE property that matters: the reader gets the same graph either way
+  const back = parseMap(packed)
+  assert.equal(back.nodes.size, 40)
+  assert.equal(back.edges.length, 40)
+  assert.ok([...back.nodes].every((p) => p.startsWith(long)), "paths come back whole")
+  assert.ok(back.edges.every((e) => e.from.startsWith(long) && e.to.startsWith(long)))
 })
 
 test("an edge with an end outside the map is not written — the map is not the repository", () => {
