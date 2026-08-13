@@ -21,6 +21,7 @@ https://codemonsters.team/blog/2025/12/30/program-correctness/
 Use the corresponding skills from ~/IdeaProjects/codemonstersdev/izi-flow/skills/lib/
 and rewrite the skills to comply with the standard
 
+Write critic role per standards/role.md (it's already declared by the §3.11 card) judges the plan and returns Pass | Reject(blockers[]), where each blocker carries evidence (node/file/command) and the culprit artifact. The minimal first cut, according to the "don't generalize to the unobserved" rule: Reject → terminal blocked with blockers, and connect the intake/designer re-delegation rails when the first live run shows which blockers actually occur—the same path that Fixed took in weight.
 $end_task
 
 $start_context

@@ -29,11 +29,18 @@ import { ok, err } from "./result.mjs"
 // single counter of 60 the role could take sixty round trips — exactly the price the batch exists to
 // remove.
 //
+// reviewRounds — how many times the band may be REWOUND by step 11's critic (docs/review.md §6). It
+// is not `loops` and not `questionRounds`: a rewind re-runs steps 6-11 on the artifact whose owner
+// the blocker named, so one round costs a re-delegation of `intake` and `designer` plus the scripts
+// between them. The default 2 is deliberately small — a third round has never been observed, and the
+// invariant that stops the loop is not this counter but the repeat of a `(code, node)` pair, which
+// means the repair did not take and a human is needed.
+//
 // maxParallel — the BATCH size of the swarm (step 4 `scope`), not a cap on the number of cells. It
 // exists because the workflow sandbox has no limiter at all: `parallel` is `Promise.all`
 // (pi-extensible-workflows/packages/core/src/execution.ts:245-266), so a hundred cells would go to
 // the model at once. The default 8 is pi's own concurrency ceiling.
-export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, questions: 60, questionRounds: 3, checkpointRetries: 2, maxParallel: 8 })
+export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, questions: 60, questionRounds: 3, checkpointRetries: 2, maxParallel: 8, reviewRounds: 2 })
 export const BUDGETS_PATH = "izi.config.json"
 
 const KEYS = Object.keys(DEFAULT_BUDGETS)

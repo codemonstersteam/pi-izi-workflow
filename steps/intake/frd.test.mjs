@@ -350,3 +350,17 @@ test("the form the order substitutes is the SAME data the guardrail judges by", 
   assert.match(role, /`Fixed` — the contract does not move/)
   assert.match(role, /what happens to a call that exists TODAY/)
 })
+
+// S30g seam: since step 11 exists, a FEEDBACK line can come from TWO places, and they are not
+// repaired the same way. A guardrail blocker is numbered by a rule and fixed pointwise; a critic
+// blocker names a code and a node and says the REQUIREMENT is short. Without the distinction the
+// role hunts for a rule number that does not exist and repairs the wrong thing. Drop either mention
+// and this goes red.
+test("role and order: a FEEDBACK line names its source, and the two are repaired differently", () => {
+  const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
+  const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
+  for (const [what, text] of [["role", role], ["order", tpl]]) {
+    assert.match(text, /guardrail:/, `${what} must name the guardrail as a source of feedback`)
+    assert.match(text, /critic:/, `${what} must name the critic as a source of feedback`)
+  }
+})

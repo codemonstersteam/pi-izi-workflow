@@ -13,6 +13,9 @@
 // EXTERNAL_DEPENDENCY: steps/intake/map.mjs — parseMap's parse is the ONLY reader of appgraph.xml in
 //             this band; `nodeTests`, `suites`, `spine` and `cycles` were added there rather than
 //             re-scanned here for that reason.
+// EXTERNAL_DEPENDENCY: steps/design/design.mjs — parseDesign AND parseRoutes, both parsed by the
+//             CALLER (ext/index.mjs) and handed in. The routes carry the change's own direction and
+//             are absent whenever step 9 was skipped, which is a legal input, not a failure.
 // EXTERNAL_DEPENDENCY: steps/plan/git-conventions.md — the branch convention this module encodes:
 //             `<prefix>/<KEY>`, prefix from the weight, base a fact of git. TASK_KEY below is the ONE
 //             copy of the key's shape, and plan.test.mjs asserts that the file and this constant
@@ -81,15 +84,20 @@ const oneCmd = (suite, testPath) =>
     : suite.cmd
 
 // FUNCTION_CONTRACT: newPlanIndex — the change as an ordered DAG of work
-//   Input:        { frd, map, mode, design, trunk, answers }
+//   Input:        { frd, map, mode, design, routes, trunk, answers, edges }
 //                 frd    — parseFrd's parse (steps/intake/frd.mjs): deltas, touched, scenarios
 //                 map    — parseMap's parse (steps/intake/map.mjs): nodes, tests, edges, nodeTests,
 //                          suites, spine, cycles
 //                 mode   — the one word of `.agent/mode`
 //                 design — parseDesign's parse (steps/design/design.mjs) or null when step 9 was
 //                          skipped; used for ONE thing: the deps of a module the change creates
+//                 routes — parseRoutes' parse (same module) or [] when step 9 was skipped: the
+//                          DIRECTED source of order, the only one that knows an edge into a created
+//                          module
 //                 trunk  — the trunk's name, a fact of git
 //                 answers — [{ question, text }] as core/answers.mjs reads them off disk
+//                 edges  — [{from, to}] asserted by step 11's critic, already resolved to plan ids
+//                          by its guardrail; [] on the first pass of a run
 //   Dependencies: changeWidth, PREFIX, DOC_EXT, oneCmd
 //   Antecedent:   any values — every absence below is a named refusal, never a default
 //   Consequent:   success: { index, nodes[], order[], gaps[], branch } — `index` is the object written
@@ -97,14 +105,17 @@ const oneCmd = (suite, testPath) =>
 //                 failure: "no-mode"        — no weight: step 7 refused or never ran
 //                          "bad-mode"       — a word outside the vocabulary: another grammar version
 //                          "no-width"       — the change touches no module: nothing to plan
-//                          "cycle"          — a node of the plan sits inside a `<cycle>` of the map
+//                          "cycle"          — a node of the plan sits inside a `<cycle>` of the map,
+//                                             or the deps do not sort at all
+//                          "cycle-from-review" — an edge the critic asserted closed the order: the
+//                                             requirement contradicts itself, and no re-plan fixes it
 //                          "no-trunk"       — neither origin/HEAD nor a local main/master
 //                          "ask"            — the task key is missing or malformed; the detail IS the
 //                                             question, and the caller puts it on the operator's rail
 //                          "uncovered-node" — a `code` node with no check command and no scenario
 //                          "no-suite"       — a scenario node whose nodes declare no suite at all
 //   Purity:       pure
-export function newPlanIndex({ frd, map, mode, design, trunk, answers } = {}) {
+export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, edges } = {}) {
   const weight = String(mode == null ? "" : mode).trim()
   if (!weight) return err("no-mode", ".agent/mode пуст или отсутствует — шаг 7 не отработал, вес не угадывается")
   if (!PREFIX[weight]) {
@@ -221,6 +232,30 @@ export function newPlanIndex({ frd, map, mode, design, trunk, answers } = {}) {
   }
   for (const e of m.edges || []) if (byId.has(e.from) && byId.has(e.to)) addDep(e.from, e.to)
 
+  // The SECOND source of direction: the design's ROUTES. A route is directed by construction — it is
+  // the scenario played out in time — and it is the only artifact that knows an edge INTO a module
+  // the change creates, because the map was built before that file existed.
+  //
+  // BUG_FIX_CONTEXT: the live artifacts of runbox/quarkus-rest-json-app-v2-t3 (run c6bc2e54).
+  //   Previous: the map's edges were the only source.
+  //   Problem:  `fruits.html` gets an anchor to `fruit-card.html` (FRD UC1 step 2), and `fruit-card`
+  //             is created by this very change. No map edge can carry that — the map predates the
+  //             file — so the plan ordered the page BEFORE the page it links to, and the implementer
+  //             of instruction 1 would have had no contract to link against.
+  //   Fix:      the forward leg of every route is an edge. Only the FORWARD leg: a route returns
+  //             along the same nodes (`fruit-card#2 -> FruitResource#1 -> fruit-card#3`), and taking
+  //             the return as an edge would reintroduce exactly the two-node cycle that disqualified
+  //             `<dep>`. A node already seen in this route is where the return begins.
+  for (const r of routes || []) {
+    const steps = (r && r.steps) || []
+    const seen = new Set()
+    for (const [k, s] of steps.entries()) {
+      seen.add(s.path)
+      const next = steps[k + 1]
+      if (next && !seen.has(next.path)) addDep(s.path, next.path)   // caller waits for the callee
+    }
+  }
+
   // A created module has no edge in the map — it is not there yet. Its neighbours are what the
   // designer wrote, and the undirectedness of `<dep>` is harmless here: a module that does not exist
   // yet is later than every module that does.
@@ -232,12 +267,29 @@ export function newPlanIndex({ frd, map, mode, design, trunk, answers } = {}) {
   // The capability is switched by the flag, so the flag exists first.
   if (toggle) for (const n of nodes) if (n.kind === "code" && n.delta.length) addDep(n.id, toggle.id)
 
+  // ---- edges asserted by the critic (step 11) ---------------------------------------------------
+  // A blocker `unreachable-antecedent` says "node X needs node Y", and BOTH ends were resolved to
+  // plan ids by the guardrail's rules R3/R4 before it got here (docs/review.md §5) — so it is an
+  // edge, and applying it is a repair the script performs for 0 tokens instead of re-delegating a
+  // role. What the model may NOT decide is whether the result is still a DAG: that stays here, and a
+  // review edge that closes a cycle is a contradiction in the requirement, named as its own refusal
+  // rather than folded into `cycle` (which means a cycle the repository has had for years).
+  const asserted = (edges || []).filter((e) => e && byId.has(e.from) && byId.has(e.to))
+  for (const e of asserted) addDep(e.from, e.to)
+
   // ---- order: Kahn, ties broken by the listing order above --------------------------------------
   const order = []
   const left = new Map(nodes.map((n) => [n.id, new Set(n.deps)]))
   while (left.size) {
     const ready = [...left].filter(([, d]) => ![...d].some((x) => left.has(x))).map(([id]) => id)
-    if (!ready.length) return err("cycle", `неразрешимый порядок среди узлов плана: ${[...left.keys()].join(", ")}`)
+    if (!ready.length) {
+      const stuck = new Set(left.keys())
+      const guilty = asserted.filter((e) => stuck.has(e.from) && stuck.has(e.to))
+      if (guilty.length) {
+        return err("cycle-from-review", `ребро, утверждённое критиком, замкнуло порядок: ${guilty.map((e) => `${e.from} → ${e.to}`).join(", ")} — требование противоречиво, план этого не чинит`)
+      }
+      return err("cycle", `неразрешимый порядок среди узлов плана: ${[...left.keys()].join(", ")}`)
+    }
     for (const id of ready) { order.push(id); left.delete(id) }
   }
 

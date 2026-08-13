@@ -41,8 +41,15 @@ $END_CONSTRAINTS
 
 $START_FEEDBACK
 Evidence from the last red check on the staging file, if this is a redelegation. Empty means this is
-the first attempt — nothing to fix yet. Non-empty: repair EXACTLY the rule and the element it names,
-before anything else. A question about something else leaves the blocker where it is.
+the first attempt — nothing to fix yet. Every line names its SOURCE, and the two are repaired
+differently:
+- `guardrail:` (or a bare rule code such as F3) — the FORM of the artifact broke a rule. Repair
+  EXACTLY the rule and the element it names, before anything else, and change nothing else.
+- `critic:` — step 11 judged the PLAN built out of this FRD and found the requirement itself
+  wanting: the line carries a code, the node it sits on and the evidence. There is no rule number to
+  fix; reconsider the CONTENT — the scenario, the delta or the use case that node comes from — and
+  write the FRD that delivers what the blocker says is missing.
+A question about something else leaves the blocker where it is.
 $START_CONTENT
 {FEEDBACK}
 $END_CONTENT
