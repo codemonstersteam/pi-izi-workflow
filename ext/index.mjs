@@ -75,7 +75,10 @@ import { newGraph, graphXml } from "../steps/graph/graph.mjs"
 import { newFrd, parseFrd, FRD_FORM } from "../steps/intake/frd.mjs"
 import { newMode } from "../steps/weight/weight.mjs"
 import { newRipple } from "../steps/ripple/ripple.mjs"
-import { newDesign, parseDesign, parseRoutes } from "../steps/design/design.mjs"
+import { parseDesign, parseRoutes, expand, assemble } from "../steps/design/design.mjs"
+import { parseValues, checkValues } from "../steps/design/values.mjs"
+import { parseNodes, checkGraph, cards } from "../steps/design/nodes.mjs"
+import { parseRoutes as parseWorkRoutes, checkRoutes } from "../steps/design/routes.mjs"
 import { newPlanIndex } from "../steps/plan/plan.mjs"
 import { newReview, CODES } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
@@ -1289,17 +1292,26 @@ export const ripple = {
 // The FRD is read by THE frd parser and the subgraph by THE map reader — the same discipline the
 // ripple keeps: a second parser of either grammar is how two readers of one file start disagreeing.
 const DESIGN_GRAPH_PATH = ".agent/design-graph.xml"
+const VALUES_PATH = ".agent/values.xml"
+const NODES_PATH = ".agent/design-nodes.xml"
 const DATA_FLOW_PATH = ".agent/data-flow.md"
 
 export const design = {
-  description: "Step 9. Without `path`: the gate — read .agent/design (needed|skip) and ERASE .agent/design-graph.xml and .agent/data-flow.md so no previous run's design can survive. With `path`: judge the staged design graph by steps/design/design.mjs::newDesign (nodes and routes against .agent/frd.xml and the ripple subgraph), and on green promote it to .agent/design-graph.xml and write .agent/data-flow.md — the scenario flows plus the unit list of each node, both substituted out of the contracts.",
-  input: { type: "object", properties: { path: { type: "string" } }, additionalProperties: false },
+  description: "Step 9 in three passes. Without `pass`: the GATE — read .agent/design (needed|skip) and erase every artifact of the step that is not green NOW, so no previous run's design can survive. With `pass` and `path`: judge that pass's staged artifact by its own guardrail (values → steps/design/values.mjs, nodes → steps/design/nodes.mjs, routes → steps/design/routes.mjs) and promote it on green; a green `routes` pass also ASSEMBLES .agent/design-graph.xml and .agent/data-flow.md out of the three, in the form steps 10 and 14 read. Pass `cards: true` to get the node cards of pass C instead of judging.",
+  input: {
+    type: "object",
+    properties: { pass: { type: "string", enum: ["values", "nodes", "routes"] }, path: { type: "string" }, cards: { type: "boolean" } },
+    additionalProperties: false,
+  },
   output: {
     type: "object",
     properties: {
       ok: { type: "boolean" },
       why: { type: "string" },
       design: { type: "string" },
+      reused: { type: "array", items: { type: "string" } },
+      values: { type: "number" },
+      text: { type: "string" },
       nodes: { type: "number" },
       routes: { type: "number" },
       units: { type: "number" },
@@ -1308,44 +1320,114 @@ export const design = {
     required: ["ok"],
     additionalProperties: false,
   },
-  run({ path } = {}, context) {
+  run({ pass, path, cards: wantCards } = {}, context) {
     const root = runRoot(context)
+    const read = (p) => readFileSync(at(root, p), "utf8")
+    const drop = (...ps) => { for (const p of ps) if (existsSync(at(root, p))) rmSync(at(root, p)) }
+    const frdNow = () => parseFrd(read(FRD_PATH))
 
-    if (!path) {
-      for (const p of [DESIGN_GRAPH_PATH, DATA_FLOW_PATH]) if (existsSync(at(root, p))) rmSync(at(root, p))
+    // GREEN NOW, NOT GREEN ONCE — the same rule `reuse` applies to a cached swarm part and
+    // `bandStart` to the band (workflows/izi.js). A promoted artifact of pass A or B is reusable only
+    // while its own guardrail still accepts it: the ripple may have moved under it since.
+    const valuesNow = () => {
+      if (!existsSync(at(root, VALUES_PATH))) return null
+      const values = parseValues(read(VALUES_PATH))
+      return checkValues({ values, frd: frdNow() }).length ? null : values
+    }
+    const nodesNow = (values) => {
+      if (!values || !existsSync(at(root, NODES_PATH))) return null
+      const nodes = parseNodes(read(NODES_PATH))
+      const known = parseMap(read(RIPPLE_PATH)).nodes
+      return checkGraph({ nodes, values, frd: frdNow(), known }).length ? null : nodes
+    }
+
+    if (!pass) {
       if (!existsSync(at(root, DESIGN_PATH))) {
         return { ok: false, why: `${DESIGN_PATH} не существует — шаг 8 ripple не отработал, решать про дизайн нечем` }
       }
-      const flag = readFileSync(at(root, DESIGN_PATH), "utf8").trim()
+      const flag = read(DESIGN_PATH).trim()
       if (flag !== "needed" && flag !== "skip") {
         return { ok: false, why: `${DESIGN_PATH} содержит «${flag}» — допустимо needed | skip; артефакт из другой версии грамматики` }
       }
-      return { ok: true, design: flag }
+
+      // THE PAIR NEVER SURVIVES THE GATE, and that is not the same rule as the two above. It is the
+      // artifact of pass C, whose own input — the staged routes — is deliberately not promoted
+      // (docs/design-step-by-step.md §7): a green C assembles the pair in the same breath, so there
+      // is nothing for the routes to survive INTO. Reaching the gate at all therefore means pass C
+      // has to run again, and yesterday's pair would otherwise be planned on by step 10.
+      if (flag === "skip") { drop(VALUES_PATH, NODES_PATH, DESIGN_GRAPH_PATH, DATA_FLOW_PATH); return { ok: true, design: flag } }
+
+      if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, RIPPLE_PATH))) {
+        return { ok: false, why: `${FRD_PATH} или ${RIPPLE_PATH} не существует — судить, что из дизайна ещё живо, не по чему` }
+      }
+      const values = valuesNow()
+      const nodes = nodesNow(values)
+      // From the first RED pass downward: a red dictionary takes the graph with it, because the graph
+      // speaks its ids and nothing else can resolve them.
+      if (!values) drop(VALUES_PATH, NODES_PATH, DESIGN_GRAPH_PATH, DATA_FLOW_PATH)
+      else if (!nodes) drop(NODES_PATH, DESIGN_GRAPH_PATH, DATA_FLOW_PATH)
+      else drop(DESIGN_GRAPH_PATH, DATA_FLOW_PATH)
+      return { ok: true, design: flag, reused: [values ? "values" : "", nodes ? "nodes" : ""].filter(Boolean) }
+    }
+
+    // MODE_PATH is demanded here and not only where it is read: the assembled graph types itself
+    // with the weight of step 7, and a deliverable that says mode="" is not a smaller deliverable —
+    // it is one whose weight step 11 and the operator cannot read at all.
+    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"], [MODE_PATH, "шаг 7 weight не отработал"]]) {
+      if (!existsSync(at(root, p))) return { ok: false, blockers: `${p} не существует — ${why}, судить дизайн не по чему` }
+    }
+
+    // The cards of pass C are DATA of its order, not a verdict: the role picks a name it sees instead
+    // of counting separators in a contract it typed itself (steps/design/nodes.mjs::cards).
+    if (wantCards) {
+      const values = valuesNow(), nodes = nodesNow(values)
+      if (!values || !nodes) return { ok: false, blockers: "проходы A и B ещё не зелены — карточки узлов собирать не из чего" }
+      return { ok: true, text: cards(values, nodes) }
     }
 
     if (!existsSync(at(root, path))) {
       return { ok: false, blockers: `${path} не существует — роль ничего не записала по staging-пути` }
     }
-    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"]]) {
-      if (!existsSync(at(root, p))) return { ok: false, blockers: `${p} не существует — ${why}, судить дизайн не по чему` }
+    const staged = read(path)
+
+    // EVERY PASS: judge on STAGING, promote only after green (standards/workflow.md). A red pass
+    // leaves its staging file where it is — that file is the evidence the operator diagnoses from.
+    if (pass === "values") {
+      const values = parseValues(staged)
+      const blockers = checkValues({ values, frd: frdNow() })
+      if (blockers.length) return { ok: false, blockers: blockers.join("\n  ") }
+      copyFileSync(at(root, path), at(root, VALUES_PATH)); rmSync(at(root, path))
+      return { ok: true, values: values.size }
     }
 
-    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
-    const known = parseMap(readFileSync(at(root, RIPPLE_PATH), "utf8")).nodes
-    const r = newDesign({ xml: readFileSync(at(root, path), "utf8"), frd, known })
-    if (!r.ok) return { ok: false, blockers: r.error.detail }
+    if (pass === "nodes") {
+      const values = valuesNow()
+      if (!values) return { ok: false, blockers: `${VALUES_PATH} не зелен — проход A не закрыт, а контракт узла говорит его id` }
+      const nodes = parseNodes(staged)
+      const known = parseMap(read(RIPPLE_PATH)).nodes
+      const blockers = checkGraph({ nodes, values, frd: frdNow(), known })
+      if (blockers.length) return { ok: false, blockers: blockers.join("\n  ") }
+      copyFileSync(at(root, path), at(root, NODES_PATH)); rmSync(at(root, path))
+      return { ok: true, nodes: nodes.size }
+    }
 
-    // Written only AFTER the decision to accept (standards/code.md, constraint 6): the promote moves
-    // the role's file, and the script's file is written beside it in the same breath.
-    copyFileSync(at(root, path), at(root, DESIGN_GRAPH_PATH))
+    // pass === "routes": the joint, and the only pass that writes the DELIVERABLE.
+    const values = valuesNow()
+    const nodes = nodesNow(values)
+    if (!values || !nodes) return { ok: false, blockers: "проходы A и B не зелены — стыковать маршруты не с чем" }
+    const routes = parseWorkRoutes(staged)
+    const blockers = checkRoutes({ routes, nodes, values, frd: frdNow() })
+    if (blockers.length) return { ok: false, blockers: blockers.join("\n  ") }
+
+    const mode = read(MODE_PATH).trim()
+    const graph = assemble({ values, nodes, routes, mode })
+    writeFileSync(at(root, DESIGN_GRAPH_PATH), `${graph}\n`)
+    // The flow is expanded out of the ASSEMBLED graph, never out of the working form: one reader, the
+    // same one steps 10 and 14 use, so the deliverable cannot disagree with itself.
+    const flow = expand(parseDesign(graph), parseRoutes(graph))
+    writeFileSync(at(root, DATA_FLOW_PATH), `${flow}\n`)
     rmSync(at(root, path))
-    writeFileSync(at(root, DATA_FLOW_PATH), `${r.value.flow}\n`)
-    return {
-      ok: true,
-      nodes: r.value.nodes.size,
-      routes: r.value.routes.length,
-      units: (r.value.flow.match(/^\$START_TESTS /gm) || []).length,
-    }
+    return { ok: true, nodes: nodes.size, routes: routes.length, units: (flow.match(/^\$START_TESTS /gm) || []).length }
   },
 }
 

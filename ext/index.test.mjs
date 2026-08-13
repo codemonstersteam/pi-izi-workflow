@@ -551,19 +551,70 @@ const designRoot = (flag = "needed") => {
   mkdirSync(join(root, ".agent", "staging"), { recursive: true })
   writeFileSync(join(root, ".agent", "frd.xml"), FRD_R)
   writeFileSync(join(root, ".agent", "ripple.xml"), DESIGN_RIPPLE)
+  writeFileSync(join(root, ".agent", "mode"), "minor")   // step 7: the graph types itself with it
   if (flag) writeFileSync(join(root, ".agent", "design"), flag)
   writeFileSync(join(root, ".agent", "design-graph.xml"), "<design/>")     // yesterday's graph
   writeFileSync(join(root, ".agent", "data-flow.md"), "$START_FLOW id=\"вчера\"\n$END_FLOW\n")
   return root
 }
 
-test("the gate erases both artifacts of the previous run — on skip and on needed alike", () => {
-  for (const flag of ["skip", "needed"]) {
-    const root = designRoot(flag)
-    assert.deepEqual(design.run({}, ctx(root)), { ok: true, design: flag })
-    assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false, flag)
-    assert.equal(existsSync(join(root, ".agent", "data-flow.md")), false, flag)
+// D6: the three passes on disk. The working artifacts of A and B for the SAME change as STAGED above.
+const W_VALUES = `<values>
+  <value id="v1" text="GET /parcels?track=&lt;v&gt;"/>
+  <value id="v2" text="all()"/>
+  <value id="v3" text="Set&lt;Parcel&gt;"/>
+  <value id="v4" text="Set&lt;Parcel&gt; (совпавшие)"/>
+</values>`
+const W_NODES = `<design mode="minor" base=".agent/appgraph.xml">
+  <module path="src/ParcelResource.java" delta="Changed">
+    <role>REST-точка поиска</role>
+    <contract in="v1 | v3" out="v2 | v4"/>
+    <dep path="src/ParcelRepo.java"/>
+  </module>
+  <module path="src/ParcelRepo.java">
+    <role>хранилище посылок</role>
+    <contract in="v2" out="v3"/>
+  </module>
+</design>`
+const W_ROUTES = `<routes>
+  <route scenario="S1" entry="v1" steps="src/ParcelResource.java@v2 -> src/ParcelRepo.java@v3 -> src/ParcelResource.java@v4"/>
+</routes>`
+
+const stage = (root, name, text) => {
+  const p = join(".agent", "staging", name)
+  writeFileSync(join(root, p), text)
+  return p
+}
+
+test("the gate erases the pair ALWAYS, and A and B only from the first one that is not green now", () => {
+  // skip — nothing of step 9 may survive, four artifacts including the two working ones
+  const skip = designRoot("skip")
+  writeFileSync(join(skip, ".agent", "values.xml"), W_VALUES)
+  writeFileSync(join(skip, ".agent", "design-nodes.xml"), W_NODES)
+  assert.deepEqual(design.run({}, ctx(skip)), { ok: true, design: "skip" })
+  for (const f of ["values.xml", "design-nodes.xml", "design-graph.xml", "data-flow.md"]) {
+    assert.equal(existsSync(join(skip, ".agent", f)), false, f)
   }
+
+  // needed, both passes green — they are REUSED, and only the pair goes: its own input, the staged
+  // routes, is never promoted, so reaching the gate means pass C has to run again.
+  const both = designRoot("needed")
+  writeFileSync(join(both, ".agent", "values.xml"), W_VALUES)
+  writeFileSync(join(both, ".agent", "design-nodes.xml"), W_NODES)
+  const r = design.run({}, ctx(both))
+  assert.deepEqual(r.reused, ["values", "nodes"])
+  assert.equal(existsSync(join(both, ".agent", "values.xml")), true)
+  assert.equal(existsSync(join(both, ".agent", "design-nodes.xml")), true)
+  assert.equal(existsSync(join(both, ".agent", "design-graph.xml")), false)
+
+  // needed, the graph no longer green — it goes, the dictionary stays. This is the resume INTO the
+  // middle of step 9, and it is judged, never assumed: the id v9 is in no dictionary.
+  const half = designRoot("needed")
+  writeFileSync(join(half, ".agent", "values.xml"), W_VALUES)
+  writeFileSync(join(half, ".agent", "design-nodes.xml"), W_NODES.replace('out="v2 | v4"', 'out="v2 | v9"'))
+  assert.deepEqual(design.run({}, ctx(half)).reused, ["values"])
+  assert.equal(existsSync(join(half, ".agent", "values.xml")), true)
+  assert.equal(existsSync(join(half, ".agent", "design-nodes.xml")), false)
 })
 
 test("no .agent/design at the run root: refusal naming step 8", () => {
@@ -572,38 +623,50 @@ test("no .agent/design at the run root: refusal naming step 8", () => {
   assert.match(r.why, /шаг 8 ripple не отработал/)
 })
 
-test("the check promotes the role's graph and writes the flow with the unit list beside it", () => {
+test("three green passes promote in turn, and the LAST one assembles the deliverable steps 10 and 14 read", () => {
   const root = designRoot()
-  const staging = join(".agent", "staging", "design-graph.xml")
-  writeFileSync(join(root, staging), STAGED)
+  design.run({}, ctx(root))                                    // the gate: yesterday's pair goes
 
-  const r = design.run({ path: staging }, ctx(root))
+  assert.deepEqual(design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root)), { ok: true, values: 4 })
+  assert.equal(existsSync(join(root, ".agent", "values.xml")), true)
+
+  assert.deepEqual(design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root)), { ok: true, nodes: 2 })
+  assert.equal(existsSync(join(root, ".agent", "design-nodes.xml")), true)
+
+  // The cards of pass C are DATA, not a verdict — and they never carry a position.
+  const c = design.run({ pass: "routes", cards: true }, ctx(root))
+  assert.match(c.text, /v1 GET \/parcels\?track=<v>/)
+  assert.doesNotMatch(c.text, /#\d/)
+
+  const r = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root))
   assert.deepEqual(r, { ok: true, nodes: 2, routes: 1, units: 2 })
-  // promote is a MOVE: what stays under staging is exactly what a guardrail rejected.
-  assert.equal(existsSync(join(root, staging)), false)
+
+  // THE DELIVERABLE DID NOT MOVE: byte for byte the shape step 14 cut yesterday.
   assert.match(readFileSync(join(root, ".agent", "design-graph.xml"), "utf8"), /^<design mode="minor"/)
   const flow = readFileSync(join(root, ".agent", "data-flow.md"), "utf8")
   assert.match(flow, /^1\. src\/ParcelResource\.java : GET \/parcels\?track=<v> -> all\(\)$/m)
   assert.match(flow, /\$START_TESTS path="src\/ParcelRepo\.java"\n1\. all\(\) -> Set<Parcel>\n\$END_TESTS/)
+  assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), false)   // promote is a MOVE
 })
 
-test("a red check leaves the artifacts absent and hands the blockers back as text", () => {
+test("a red pass promotes nothing, keeps its staging file, and does not reach the pass after it", () => {
   const root = designRoot()
-  const staging = join(".agent", "staging", "design-graph.xml")
-  design.run({}, ctx(root))   // the gate runs first in the phase, and it is what erased yesterday's pair
-  // The artifact carries no `<module>` at all. This test proves the PIPE, not a rule, and it has
-  // changed its way of reddening twice for the same reason: the rule it used to lean on moved to the
-  // pass that owns it. Rule 6 went to steps/design/nodes.mjs (backlog D2), then rule 1 went to
-  // steps/design/routes.mjs (D4) — and «not one <module>» is the LAST verdict `newDesign` still
-  // reaches on its own, because `checkDesign` now decides nothing until D5/D6 replace this call site.
-  writeFileSync(join(root, staging), STAGED.replace(/<module[\s\S]*<\/module>/, ""))
+  design.run({}, ctx(root))
+  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
 
-  const r = design.run({ path: staging }, ctx(root))
+  // The graph names an id the dictionary does not carry.
+  const p = stage(root, "design-nodes.xml", W_NODES.replace('in="v2"', 'in="v9"'))
+  const r = design.run({ pass: "nodes", path: p }, ctx(root))
   assert.equal(r.ok, false)
-  assert.match(r.blockers, /ни одного <module>/)
+  assert.match(r.blockers, /v9/)
+  assert.equal(existsSync(join(root, p)), true)                                    // the rejected file stays
+  assert.equal(existsSync(join(root, ".agent", "design-nodes.xml")), false)
+
+  // And pass C refuses to stitch onto a graph that was never accepted.
+  const rc = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root))
+  assert.equal(rc.ok, false)
+  assert.match(rc.blockers, /проходы A и B не зелены/)
   assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false)
-  assert.equal(existsSync(join(root, ".agent", "data-flow.md")), false)
-  assert.equal(existsSync(join(root, staging)), true)  // the rejected file stays where it was written
 })
 
 // --- izi_answer: the operator's numbering does not reach the VALUES -----------------------------
