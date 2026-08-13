@@ -591,15 +591,16 @@ test("a red check leaves the artifacts absent and hands the blockers back as tex
   const root = designRoot()
   const staging = join(".agent", "staging", "design-graph.xml")
   design.run({}, ctx(root))   // the gate runs first in the phase, and it is what erased yesterday's pair
-  // The route steps into a module the graph does not carry: rule 1 — an invented node. The defect
-  // used to be written as rule 6 («a transit node invented»), and that rule now lives one pass
-  // earlier (steps/design/nodes.mjs, backlog D2) — what this test proves is the PIPE, not the rule:
-  // a red check writes nothing and leaves staging where it was.
-  writeFileSync(join(root, staging), STAGED.replace("src/ParcelRepo.java#1", "src/Nope.java#1"))
+  // The artifact carries no `<module>` at all. This test proves the PIPE, not a rule, and it has
+  // changed its way of reddening twice for the same reason: the rule it used to lean on moved to the
+  // pass that owns it. Rule 6 went to steps/design/nodes.mjs (backlog D2), then rule 1 went to
+  // steps/design/routes.mjs (D4) — and «not one <module>» is the LAST verdict `newDesign` still
+  // reaches on its own, because `checkDesign` now decides nothing until D5/D6 replace this call site.
+  writeFileSync(join(root, staging), STAGED.replace(/<module[\s\S]*<\/module>/, ""))
 
   const r = design.run({ path: staging }, ctx(root))
   assert.equal(r.ok, false)
-  assert.match(r.blockers, /1 S1#2: узла нет в дизайн-графе — src\/Nope\.java/)
+  assert.match(r.blockers, /ни одного <module>/)
   assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false)
   assert.equal(existsSync(join(root, ".agent", "data-flow.md")), false)
   assert.equal(existsSync(join(root, staging)), true)  // the rejected file stays where it was written

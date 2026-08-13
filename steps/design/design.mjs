@@ -7,14 +7,15 @@
 //             PURE: knows nothing of disk, io lives in ext/index.mjs. Parsing — docs/data-flow.md §3–§6.
 // io:         none
 // Invariants: parseDesign/parseRoutes are total — any input, including undefined, yields an empty parse,
-//             never an exception; expand is called ONLY after a green checkDesign (its antecedent is a
-//             route where every step resolves to a node and to an existing alternative), so newDesign
-//             chains them in exactly this order; the rule lives in exactly one place — RULES below,
-//             numbers match docs/data-flow.md §6
+//             never an exception; expand's antecedent is a route where every step resolves to a node
+//             and to an existing alternative — TODAY nothing in this file establishes it any more,
+//             see checkDesign: the eight rules moved to values.mjs, nodes.mjs and routes.mjs, and the
+//             passes that call them are wired in D5/D6. The rule lives in exactly one place, and for
+//             this file that place is now elsewhere
 // Interface:  parseDesign(xml) -> Map<path, Node>
 //             parseRoutes(xml) -> Route[]
 //             expand(nodes, routes) -> string
-//             checkDesign({ nodes, routes, frd, known }) -> string[]  — blockers, empty = green
+//             checkDesign({ nodes, routes, frd, known }) -> string[]  — EMPTY, see its contract
 //             newDesign({ xml, frd, known }) -> Result<Design, "invalid-design">
 
 import { ok, err } from "../../core/result.mjs"
@@ -181,111 +182,35 @@ export function expand(nodes, routes) {
   return out.join("\n")
 }
 
-// FUNCTION_CONTRACT: checkDesign — alignment of the two projections
-//   Input:        { nodes, routes, frd, known }
-//                 frd — the parse of `.agent/frd.xml` AS steps/intake/frd.mjs::parseFrd returns it:
-//                       `scenarios` are the ELEMENTS (an id lives in `.id`), `touched` are paths.
-//                       Parsing that file belongs to the intake slice; here it is a DEPENDENCY
-//                 known — accepted and UNUSED since rule 6 moved to steps/design/nodes.mjs
-//                       (backlog D2); see the note at the end of the body for why the parameter
-//                       stays. Callers keep passing the ripple subgraph's Set<path>
+// FUNCTION_CONTRACT: checkDesign — EMPTY: every rule it carried has moved out, and the function is
+//                 kept only until D5 replaces its caller
+//   Input:        { nodes, routes, frd, known } — all four accepted and none of them read
 //   Dependencies: —
-//   Antecedent:   nodes — parseDesign's Map; routes — its array; frd — an object with two arrays
-//                 (missing fields are read as empty)
-//   Consequent:   success: string[] of blockers, empty = green. The rules and their numbers are the
-//                          same as in docs/data-flow.md §6, NOT restated here in prose — rules
-//                          1, 2, 3, 4, 5 and 7, the ones that need BOTH projections on the table;
-//                          rules 6 and 8 are judged one artifact earlier, see the note at the end
-//                 failure: none — total, "the design is bad" is DATA, not a function failure
+//   Antecedent:   any value
+//   Consequent:   success: `[]`, always
+//                 failure: none — total
 //   Purity:       pure
-//   BUG_FIX_CONTEXT: this slice was written BEFORE steps 6 and 8 existed, and its fixture was
-//                 invented rather than parsed. `frd.scenarios` was compared as a list of STRINGS
-//                 while parseFrd returns elements, so rule 5 reddened on every real FRD, with the
-//                 text «у сценария FRD [object Object] нет маршрута» — a blocker no role can repair,
-//                 burning every redelegation down to `escalate` (docs/design.md §3, discrepancy A).
 //
-// A route's node MUST be IN THE DESIGN GRAPH even if it doesn't change: the role copies a transit
-// node from the ripple subgraph with a contract it derives from that node's `<api>`/`<decl>`, and
-// WITHOUT `delta`. Otherwise expand has nothing to unfold the step from, and rule 4 has nothing to
-// join — the contract lives on the node, and the script has no other source for it.
+// ALL EIGHT RULES NOW LIVE ONE ARTIFACT EARLIER, and no number was reused:
+//   8 → steps/design/values.mjs::checkValues (backlog D1). The dictionary of pass A is the earliest
+//     artifact in which a declared failure is decidable, and everything after it refers to values by
+//     id. What that move costs is repaid in checkGraph: over a flat dictionary the rule only says
+//     "declared somewhere", so "produced by SOME node's out" is judged there, in the pass that owns
+//     the contracts (backlog, «Что концепт обещает, а код не подтвердил», п. 2).
+//   6 → steps/design/nodes.mjs::checkGraph (backlog D2), whole, both halves. It reads only NODES,
+//     never a route, so it belongs to the pass whose only subject is the graph.
+//   1, 2, 3, 4, 5, 7 → steps/design/routes.mjs::checkRoutes (backlog D4), with the numbers unchanged
+//     and the blocker rewritten as a FACT: no `<scenario>#<k>` prefix, the scenarios in the tail of
+//     the line, rules 3 and 4 grouped by the receiving node (docs/design-step-by-step.md §8).
+//
+// So this function decides NOTHING, and it is not given new work to look busy: the honest note is
+// that `newDesign` is unguarded until D5 replaces it with `assemble` and D6 wires the three
+// guardrails to the three passes. Until then a live step 9 rejects exactly one thing — a text with no
+// `<module>` in it. That window is the one the backlog names («Окно без правил 8 и 6»), now open on
+// all eight; the alternative — a second copy of six rules living for three tickets — is worse, because
+// two copies drift and the window closes with one ticket.
 export function checkDesign({ nodes, routes = [], frd = {}, known = null }) {
-  const B = []
-  const used = new Set()
-  const chosen = new Map() // path → Set of the `out` alternatives some route actually took (rule 7)
-
-  for (const r of routes) {
-    for (const [k, s] of r.steps.entries()) {
-      const n = nodes.get(s.path)
-      // Rule 1. An unknown node short-circuits the rest of this pair's checks: three blockers for one
-      // defect take the role three times as long to fix as one.
-      if (!n) { B.push(`1 ${r.scenario}#${k + 1}: узла нет в дизайн-графе — ${s.path}`); continue }
-      // Rule 1 at the BOUNDARY: what starts the scenario is named, never guessed. Before this the
-      // script took `in[0]` by position (see walk's BUG_FIX_CONTEXT) — a silent default, which
-      // standards/code.md forbids by constraint 3 for exactly the reason the live run demonstrated:
-      // a default is indistinguishable from a fact.
-      if (k === 0 && !n.in[r.entry - 1]) {
-        B.push(`1 ${r.scenario}: entry=${Number.isFinite(r.entry) ? `"${r.entry}"` : "(не назван)"} — у первого узла ${s.path} нет такой альтернативы in. Маршрут обязан НАЗВАТЬ, каким внешним вызовом он запущен; если подходящей альтернативы нет, значит вход в контракте узла не объявлен`)
-        continue
-      }
-      if (!n.out[s.alt - 1]) { B.push(`1 ${r.scenario}#${k + 1}: у ${s.path} нет альтернативы #${s.alt} в out`); continue }
-      used.add(s.path)
-      if (!chosen.has(s.path)) chosen.set(s.path, new Set())
-      chosen.get(s.path).add(s.alt)
-
-      const next = r.steps[k + 1]
-      if (!next) continue
-      const m = nodes.get(next.path)
-      if (!m) continue
-      // Rule 3. The edge is undirected: the return unwinds along the same <dep> backwards.
-      if (!n.deps.includes(m.path) && !m.deps.includes(n.path)) {
-        B.push(`3 ${r.scenario}#${k + 1}: нет ребра <dep> между ${s.path} и ${m.path}`)
-      }
-      // Rule 4 — the ONLY place where the role's manual input remains: neighboring contracts are
-      // written independently of each other. Everything else is held together by expand's substitution.
-      if (!m.in.includes(n.out[s.alt - 1])) {
-        B.push(`4 ${r.scenario}#${k + 1}: out «${n.out[s.alt - 1]}» не среди in узла ${m.path}`)
-      }
-    }
-  }
-
-  // Rule 2. A node with a delta that no route passes through is structure without time: nothing
-  // calls it, and a ticket for it would be written blind.
-  for (const n of nodes.values()) if (n.delta && !used.has(n.path)) B.push(`2 узел с delta="${n.delta}" не встречен ни в одном маршруте — ${n.path}`)
-
-  // Rule 5. A forgotten delta: an FRD scenario without a route, and a touched node outside all routes.
-  const covered = new Set(routes.map((r) => r.scenario))
-  for (const s of frd.scenarios || []) {
-    const id = (s && s.id) || ""
-    if (!covered.has(id)) B.push(`5 у сценария FRD ${id || "(без id)"} нет маршрута`)
-  }
-  for (const t of frd.touched || []) if (!used.has(t)) B.push(`5 touched FRD не встречен ни в одном маршруте — ${t}`)
-
-  for (const n of nodes.values()) {
-    // Rule 7. An `out` alternative no route takes is either a dead branch of the contract or a missing
-    // FRD scenario — and it would silently shorten the node's unit list, which IS the `<dod>` of its
-    // ticket (docs/design.md §2). Only nodes with a delta are judged: an existing node keeps as many
-    // branches as it likes, and no ticket will be written for it. A delta node NO route passes through
-    // is rule 2's finding, and it does not reach here — one defect, one blocker.
-    if (!n.delta || !used.has(n.path)) continue
-    const took = chosen.get(n.path) || new Set()
-    for (const [i, alt] of n.out.entries()) {
-      if (!took.has(i + 1)) B.push(`7 узел ${n.path} с delta="${n.delta}": альтернатива out «${alt}» не пройдена ни одним маршрутом — она мертва либо сценария FRD не хватает`)
-    }
-  }
-
-  // Rules 6 and 8 are NOT here any more, and neither number was reused:
-  //   8 → steps/design/values.mjs::checkValues (backlog D1). The dictionary of pass A is the earliest
-  //     artifact in which a declared failure is decidable, and everything after it refers to values by
-  //     id. What that move costs is repaid in checkGraph: over a flat dictionary the rule only says
-  //     "declared somewhere", so "produced by SOME node's out" is judged there, in the pass that owns
-  //     the contracts (backlog, «Что концепт обещает, а код не подтвердил», п. 2).
-  //   6 → steps/design/nodes.mjs::checkGraph (backlog D2), whole, both halves. It reads only NODES,
-  //     never a route, so it belongs to the pass whose only subject is the graph. `known` is the one
-  //     input it consumed; the parameter stays in this signature because ext/index.mjs still passes
-  //     it, and this whole function is deleted in D5 — a signature change here would be a second edit
-  //     of the same code.
-
-  return B
+  return []
 }
 
 // FUNCTION_CONTRACT: newDesign — step 9's artifacts from the role's text

@@ -11,7 +11,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { newDesign, parseDesign, parseRoutes, expand, checkDesign } from "./design.mjs"
+import { newDesign, parseDesign, parseRoutes, expand } from "./design.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 
 // Fixture: booking a taken slot (S1 → 409) and a successful booking (S2 → 201). The return unwinds
@@ -59,9 +59,6 @@ const FRD = parseFrd(FRD_XML)
 // The ripple subgraph as step 8 cuts it: what EXISTS. SlotLock is absent on purpose — it is new.
 const KNOWN = new Set(["src/BookingResource.java", "src/BookingService.java", "src/SlotRepo.java"])
 
-const blockersOf = (xml, frd = FRD, known = KNOWN) =>
-  checkDesign({ nodes: parseDesign(xml), routes: parseRoutes(xml), frd, known })
-
 test("happy: both projections agree, the flow is expanded OUT of the contracts, and the units are the flow regrouped", () => {
   const r = newDesign({ xml: GRAPH, frd: FRD, known: KNOWN })
   assert.equal(r.ok, true)
@@ -94,98 +91,24 @@ test("not one <module> — there is nothing to map the change onto", () => {
   assert.match(r.error.detail, /ни одного <module>/)
 })
 
-test("rule 1: a made-up module — one blocker, the rest of the pair's checks are short-circuited", () => {
-  const xml = GRAPH.replace('src/BookingService.java#1 -> src/SlotLock.java#1', 'src/Nope.java#1')
-  const b = blockersOf(xml)
-  assert.equal(b.filter((x) => x.startsWith("1 ")).length, 1)
-  assert.match(b[0], /узла нет в дизайн-графе — src\/Nope\.java/)
-  assert.equal(b.filter((x) => x.startsWith("3 ") || x.startsWith("4 ")).length, 0)
-})
-
-// The seam of live run ffe8cb7b: what STARTS a scenario is named by number, never taken by position.
-// Reintroducing the defect — `in: k === 0 ? n.in[0] : …` in walk, and dropping the boundary half of
-// rule 1 — turns this test green again while the flow's first line goes back to lying (design.mjs,
-// walk's BUG_FIX_CONTEXT).
-test("rule 1 at the boundary: the route names its entry, and the script never guesses in[0]", () => {
-  // Not named at all — the случай the live run produced: the whole `entry` attribute is absent.
-  const b = blockersOf(GRAPH.replaceAll(' entry="1"', ""))
-  const named = b.filter((x) => x.startsWith("1 "))
-  assert.equal(named.length, 2)   // one per route: neither scenario says what starts it
-  for (const x of named) assert.match(x, /entry=\(не назван\) — у первого узла src\/BookingResource\.java нет такой альтернативы in/)
-  // Both first steps dropped out of the walk, so nothing takes BookingResource's out#1 any more —
-  // rule 7 says that on its own line. One defect, two truths, and they do not hide each other.
-  assert.equal(b.filter((x) => x.startsWith("7 ")).length, 1)
-
-  // Named, but pointing outside the contract.
-  const off = blockersOf(GRAPH.replace('scenario="S2" entry="1"', 'scenario="S2" entry="9"'))
-  assert.deepEqual(off.map((x) => x.slice(0, 15)), ['1 S2: entry="9"'])
-
-  // Named correctly — the flow's first line is a COPY of that alternative, not of the first one.
+// The seam of live run ffe8cb7b, the half of it that belongs to THIS file: what starts a scenario is
+// named, and `walk` copies THAT alternative into the flow's first line. Reintroducing the defect —
+// `in: k === 0 ? n.in[0] : …` in walk — turns the assertion below red. The other half, the BLOCKER
+// that demands the entry be named, moved with rule 1 (steps/design/routes.mjs).
+test("the entry of a route is a copy of the named alternative, never in[0] by position", () => {
   const flow = expand(parseDesign(GRAPH), parseRoutes(GRAPH.replace('scenario="S1" entry="1"', 'scenario="S1" entry="2"')))
   assert.match(flow, /^1\. src\/BookingResource\.java : Booked\(bookingId\) -> book\(slotId,userId\)$/m)
 })
 
-test("rule 1: the node has no #alt alternative", () => {
-  const b = blockersOf(GRAPH.replace("src/SlotLock.java#1 ->", "src/SlotLock.java#9 ->"))
-  assert.equal(b.filter((x) => x.startsWith("1 ")).length, 1)
-  assert.match(b[0], /нет альтернативы #9 в out/)
-})
-
-test("rule 2: a node with a delta that no route passes through — and rule 7 stays silent about it", () => {
-  const xml = GRAPH.replace("<route", `<module path="src/AuditLog.java" delta="Added">
-    <contract in="Booked(bookingId)" out="ok"/>
-  </module>
-  <route`)
-  const b = blockersOf(xml)
-  assert.deepEqual(b, ['2 узел с delta="Added" не встречен ни в одном маршруте — src/AuditLog.java'])
-})
-
-test("rule 3: no <dep> edge between the route's neighbors", () => {
-  // Tokens join up (Booked(bookingId) is a legitimate input for Notifier), but there is no edge:
-  // rule 4 stays silent, exactly rule 3 goes red.
-  const xml = GRAPH
-    .replace("<route", `<module path="src/Notifier.java" delta="Added">
-    <contract in="Booked(bookingId)" out="sent"/>
-  </module>
-  <route`)
-    .replace('src/BookingService.java#3 -> src/BookingResource.java#2', 'src/BookingService.java#3 -> src/Notifier.java#1')
-  const b = blockersOf(xml)
-  assert.deepEqual(b.filter((x) => x.startsWith("3 ")), ["3 S2#6: нет ребра <dep> между src/BookingService.java и src/Notifier.java"])
-  // Cutting the last step of S2 also took the `201 {bookingId}` branch out of every route — rule 7
-  // says so on its own line. That is the connection rule 7 exists for: a branch nobody routes has no
-  // unit in the ticket, and nothing else in the pipeline would have noticed.
-  assert.deepEqual(b.filter((x) => x.startsWith("7 ")), ['7 узел src/BookingResource.java с delta="Changed": альтернатива out «201 {bookingId}» не пройдена ни одним маршрутом — она мертва либо сценария FRD не хватает'])
-})
-
-test("rule 4's seam: neighboring contracts diverged — the only place with manual role input", () => {
-  const b = blockersOf(GRAPH.replace('out="Taken |', 'out="Occupied |'))
-  assert.equal(b.length, 1)
-  assert.match(b[0], /4 S1#3: out «Occupied» не среди in узла src\/BookingService\.java/)
-})
-
-test("rule 5: an FRD scenario without a route, and touched outside all routes", () => {
-  const frd = parseFrd(FRD_XML.replace("</frd>", `
-    <scenario id="S3" uc="UC1" before="письмо не уходит" after="письмо уходит" nodes="src/BookingResource.java"/>
-    <touched path="src/Mailer.java" why="письмо о брони"/>
-  </frd>`))
-  assert.deepEqual(blockersOf(GRAPH, frd), [
-    "5 у сценария FRD S3 нет маршрута",
-    "5 touched FRD не встречен ни в одном маршруте — src/Mailer.java",
-  ])
-})
-
-// Rule 6's seams are NOT here any more: both halves moved whole to steps/design/nodes.mjs (backlog
-// D2) and their tests moved with them — a seam lives beside the rule it proves, or the next reader
-// deletes the rule and watches a green suite. steps/design/nodes.test.mjs, the two "rule 6" tests.
-
-test("rule 7: an out alternative no route takes has no unit in the ticket", () => {
-  const b = blockersOf(GRAPH.replace('out="Taken | save(slotId,lock) | Lock"', 'out="Taken | save(slotId,lock) | Lock | Expired"'))
-  assert.deepEqual(b, ['7 узел src/SlotLock.java с delta="Added": альтернатива out «Expired» не пройдена ни одним маршрутом — она мертва либо сценария FRD не хватает'])
-})
-
-// Rule 8's seam is NOT here any more: the rule moved whole to steps/design/values.mjs (backlog D1)
-// and its test moved with it — a seam lives beside the rule it proves, or the next reader deletes
-// the rule and watches a green suite. steps/design/values.test.mjs, "rule 8".
+// NOT ONE RULE'S SEAM IS IN THIS FILE ANY MORE, and each moved BESIDE the rule it proves — otherwise
+// the next reader deletes a rule and watches a green suite:
+//   8 → steps/design/values.test.mjs ("rule 8"), with the rule, backlog D1;
+//   6 → steps/design/nodes.test.mjs (the two "rule 6" tests), backlog D2;
+//   1, 2, 3, 4, 5, 7 → steps/design/routes.test.mjs, backlog D4 — and their blockers were REWRITTEN
+//     there as facts (docs/design-step-by-step.md §8), which is why they could not be moved verbatim.
+// What is left here is `checkDesign` deciding nothing at all (see its contract) — untested on purpose:
+// a test that no code change can turn red is a comment (standards/code.md). D5 replaces the function
+// with `assemble` and the round trip that proves it.
 
 // The two seams the SLICE keeps outside the core: the order carries exactly the keys the workflow
 // passes, and the role names no rule twice. `steps/scope/part.test.mjs` keeps the same pair for its
