@@ -11,7 +11,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { newDesign, parseDesign, parseRoutes, expand } from "./design.mjs"
+import { newDesign, parseDesign, parseRoutes, expand, assemble } from "./design.mjs"
+import { parseValues } from "./values.mjs"
+import { parseNodes } from "./nodes.mjs"
+import { parseRoutes as parseWorkRoutes } from "./routes.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 
 // Fixture: booking a taken slot (S1 → 409) and a successful booking (S2 → 201). The return unwinds
@@ -159,4 +162,92 @@ test("totality of parsing: garbage and undefined are read as an empty graph, not
   assert.equal(parseDesign(undefined).size, 0)
   assert.deepEqual(parseRoutes(null), [])
   assert.equal(expand(parseDesign(GRAPH), []), "")
+})
+
+// --- D5: assembly. THE ROUND TRIP IS THE SEAM ------------------------------------------------
+//
+// Passes A/B/C write by ID; steps 10 and 14, `parseDesign`, `parseRoutes` and `expand` read TEXT and
+// `#n`. `assemble` is the only place that translates, so the only honest proof that the deliverable
+// did not move is to read its output back with TODAY's readers and get the same change.
+
+const WORK_VALUES = `<values>
+  <value id="v1" text="POST /bookings {slotId,userId}"/>
+  <value id="v2" text="book(slotId,userId)"/>
+  <value id="v3" text="lock(slotId,ttl)"/>
+  <value id="v4" text="409 {conflict}"/>
+  <value id="v5" text="Taken"/>
+  <value id="v6" text="Conflict(slotId)"/>
+  <value id="v7" text="Booked(bookingId)"/>
+  <value id="v8" text="201 {bookingId}"/>
+  <value id="v9" text="save(slotId,lock)"/>
+  <value id="v10" text="Saved"/>
+  <value id="v11" text="Lock"/>
+</values>`
+
+// The SAME change as GRAPH above, in the working form: contracts speak ids, routes name values.
+const WORK_NODES = `<design mode="major" base=".agent/appgraph.xml">
+  <module path="src/BookingResource.java" delta="Changed">
+    <role>REST-точка брони</role>
+    <contract in="v1 | v7 | v6" out="v2 | v8 | v4"/>
+    <dep path="src/BookingService.java"/>
+  </module>
+  <module path="src/BookingService.java" delta="Changed">
+    <contract in="v2 | v5 | v11" out="v3 | v6 | v7"/>
+    <dep path="src/SlotLock.java"/>
+  </module>
+  <module path="src/SlotLock.java" delta="Added">
+    <contract in="v3 | v10" out="v5 | v9 | v11"/>
+    <dep path="src/SlotRepo.java"/>
+  </module>
+  <module path="src/SlotRepo.java">
+    <contract in="v9" out="v10"/>
+  </module>
+</design>`
+
+const WORK_ROUTES = `<routes>
+  <route scenario="S1" entry="v1" steps="src/BookingResource.java@v2 -> src/BookingService.java@v3 -> src/SlotLock.java@v5 -> src/BookingService.java@v6 -> src/BookingResource.java@v4"/>
+  <route scenario="S2" entry="v1" steps="src/BookingResource.java@v2 -> src/BookingService.java@v3 -> src/SlotLock.java@v9 -> src/SlotRepo.java@v10 -> src/SlotLock.java@v11 -> src/BookingService.java@v7 -> src/BookingResource.java@v8"/>
+</routes>`
+
+const assembled = () => assemble({
+  values: parseValues(WORK_VALUES),
+  nodes: parseNodes(WORK_NODES),
+  routes: parseWorkRoutes(WORK_ROUTES),
+  mode: "major",
+})
+
+test("assembly: what the passes wrote by id, today's readers read as the change they read yesterday", () => {
+  const out = assembled()
+  const back = parseDesign(out)
+  const backRoutes = parseRoutes(out)
+  const was = parseDesign(GRAPH)
+
+  // structure: the same nodes, the same deltas, the same edges
+  assert.deepEqual([...back.keys()], [...was.keys()])
+  for (const [path, n] of was) {
+    assert.equal(back.get(path).delta, n.delta, path)
+    assert.deepEqual(back.get(path).deps, n.deps, path)
+    assert.deepEqual(back.get(path).in, n.in, `in of ${path}`)     // ids became TEXTS
+    assert.deepEqual(back.get(path).out, n.out, `out of ${path}`)
+  }
+
+  // time: the same routes, with the positions a SCRIPT computed instead of a model counting
+  assert.deepEqual(backRoutes, parseRoutes(GRAPH))
+
+  // and the deliverable step 14 cuts: identical, line for line
+  assert.equal(expand(back, backRoutes), expand(was, parseRoutes(GRAPH)))
+})
+
+test("assembly: the number is the position of the NAMED value, and off-by-one is visible", () => {
+  const out = assembled()
+  // `entry` names v1 — the FIRST `in` of the first node, so `entry="1"`, never 0 and never 2.
+  assert.match(out, /entry="1"/)
+  // S1's last step hands back v4, the THIRD alternative of BookingResource's out.
+  assert.match(out, /src\/BookingResource\.java#3"/)
+  // Reintroduction: number from zero in assemble — both assertions above and the round trip go red.
+  assert.doesNotMatch(out, /#0/)
+
+  // `<role>` is read by NO guardrail, and precisely therefore it needs a seam: a projection that
+  // quietly drops a section of the deliverable would pass every other test in this file.
+  assert.match(out, /<role>REST-точка брони<\/role>/)
 })

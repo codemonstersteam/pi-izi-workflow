@@ -22,7 +22,7 @@ import { ok, err } from "../../core/result.mjs"
 // EXTERNAL_DEPENDENCY: core/xml.mjs — tag scanner (attrs · ATTRS · tag) shared with steps/scope: one
 // grammar for two slices is read by one piece of code, otherwise part-parsing and design-parsing would drift apart.
 // The same file holds the BUG_FIX_CONTEXT for ATTRS' quote-resilience.
-import { attrs, ATTRS, tag } from "../../core/xml.mjs"
+import { attrs, ATTRS, tag, esc } from "../../core/xml.mjs"
 // The slice's dependency on steps/intake/frd.mjs::FRD_FORM moved with rule 6 to
 // steps/design/nodes.mjs (backlog D2) — the vocabulary of a delta's FORM is read where the delta is
 // judged, and importing it here for nobody would be a second claim on the same fact.
@@ -179,6 +179,60 @@ export function expand(nodes, routes) {
     out.push("$END_TESTS")
   }
 
+  return out.join("\n")
+}
+
+// FUNCTION_CONTRACT: assemble — the three working artifacts of step 9 into the ONE promoted file
+//   Input:        { values, nodes, routes, mode }
+//                 values — steps/design/values.mjs::parseValues (id → text)
+//                 nodes  — steps/design/nodes.mjs::parseNodes, whose contracts carry IDS
+//                 routes — steps/design/routes.mjs::parseRoutes, whose steps carry `path@id`
+//                 mode   — the weight of step 7, the attribute the role used to type itself
+//   Dependencies: esc (core/xml.mjs)
+//   Antecedent:   all three artifacts GREEN by their own guardrails. Nothing is re-judged here: an id
+//                 the dictionary does not carry survives as itself, because checkGraph already
+//                 refused that graph and assembly of a refused artifact never happens
+//   Consequent:   success: the text of `.agent/design-graph.xml` in TODAY's form — contracts as
+//                          texts, route steps as `path#n`, `entry` as a number
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    assemble({ values, nodes, routes, mode }) -> string
+//
+// THE FORM OF THE DELIVERABLE DOES NOT MOVE, and that is the whole point of this function. Passes A,
+// B and C write by ID because a name survives a regenerated graph and a position does not
+// (steps/design/routes.mjs). Their consumers — `steps/plan/plan.mjs`, `ext/index.mjs`, step 14 and
+// `parseDesign`/`parseRoutes` right here — read TEXT and `#n`, exactly as they read yesterday. The
+// translation lives in one place, costs no tokens, and is proved by a ROUND TRIP: what this writes,
+// today's readers read back into the same nodes and routes, and `expand` yields the same data-flow.
+//
+// This is CLAUDE.md's constraint 5 answered rather than argued with: widening the shape of a value is
+// a change to every consumer of it — so the widened shape stops at staging, and not one consumer of
+// the promoted artifact is touched.
+//
+// The position is computed HERE and never asked of a model: `#n` is the index of the named value in
+// the node's own list. The number a script derives cannot disagree with the list it derived it from —
+// which is precisely what live run 0bbf7054 could not manage, spending blockers on «нет альтернативы
+// #12» in a contract the role itself had typed a hundred lines earlier.
+export function assemble({ values, nodes, routes = [], mode = "" }) {
+  const text = (id) => (values && values.get(id) != null ? values.get(id) : id)
+  const at = (list, id) => list.indexOf(id) + 1        // 0 means "not there" — impossible after checkRoutes
+  const out = [`<design mode="${esc(mode)}" base=".agent/appgraph.xml">`]
+
+  for (const n of nodes.values()) {
+    out.push(`  <module path="${esc(n.path)}"${n.delta ? ` delta="${esc(n.delta)}"` : ""}>`)
+    if (n.role) out.push(`    <role>${esc(n.role)}</role>`)
+    out.push(`    <contract in="${n.in.map((v) => esc(text(v))).join(" | ")}" out="${n.out.map((v) => esc(text(v))).join(" | ")}"/>`)
+    for (const d of n.deps) out.push(`    <dep path="${esc(d)}"/>`)
+    out.push("  </module>")
+  }
+
+  for (const r of routes) {
+    const first = nodes.get((r.steps[0] || {}).path)
+    const steps = r.steps.map((s) => `${s.path}#${at((nodes.get(s.path) || { out: [] }).out, s.value)}`).join(" -> ")
+    out.push(`  <route scenario="${esc(r.scenario)}" entry="${first ? at(first.in, r.entry) : 0}" steps="${esc(steps)}"/>`)
+  }
+
+  out.push("</design>")
   return out.join("\n")
 }
 

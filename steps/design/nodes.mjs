@@ -69,6 +69,11 @@ export function parseNodes(xml) {
     nodes.set(a.path, Object.freeze({
       path: a.path,
       delta: a.delta || "",
+      // `role` is read by no guardrail — and it is carried anyway, because ASSEMBLY writes it back out
+      // (D5). Nothing in code consumes the line; the promoted artifact carries it for the human and
+      // for step 14, and a projection that silently drops a section of the deliverable is a lossy
+      // round trip, not a simplification.
+      role: (body.match(/<role>([\s\S]*?)<\/role>/) || ["", ""])[1].trim(),
       in: Object.freeze(alts(c.in)),
       out: Object.freeze(alts(c.out)),
       deps: Object.freeze([...body.matchAll(tag("dep"))].map((d) => attrs(d[1]).path)),
