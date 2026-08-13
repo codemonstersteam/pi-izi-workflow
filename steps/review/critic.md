@@ -1,6 +1,6 @@
 ---
 description: Plan critic — the work plan read as a program, judged by contracts that must compose
-model: execution
+model: openrouter/qwen/qwen3.6-27b
 thinking: low
 tools: [read, write]
 ---

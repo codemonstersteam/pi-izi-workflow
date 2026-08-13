@@ -1,6 +1,6 @@
 ---
 description: Software development business analyst — raw business request into a measurable BRD
-model: execution
+model: openrouter/qwen/qwen3.6-27b
 thinking: low
 tools: [read, write]
 ---

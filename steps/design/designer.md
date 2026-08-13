@@ -1,6 +1,6 @@
 ---
 description: Software Architect. designer — the delta as two aligned projections, a module graph with contracts plus one route per scenario
-model: execution
+model: openrouter/qwen/qwen3.6-27b
 thinking: low
 tools: [read, write]
 ---
