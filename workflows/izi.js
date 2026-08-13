@@ -957,18 +957,61 @@ async function reviewing() {
 // repair means the repair did not take, and another round would only spend the same tokens again.
 function blockerKey(b) { return `${b.code}|${b.node}`; }
 
-async function band() {
-  let from = 6, edges = [], fromCritic = "", planned = "";
+// FUNCTION_CONTRACT: bandStart — which step of the band this run must begin at
+//   Input:        —
+//   Dependencies: EXTERNAL — checkFrd, readText. Called AFTER graph(), never before: the FRD is judged
+//                 against TODAY's map, so a repository that moved invalidates it exactly as it should
+//   Antecedent:   .agent/appgraph.xml exists (step 5 just wrote it)
+//   Consequent:   success: 6 | 9 | 11 | 12 — the first step whose artifact is not GREEN NOW
+//   Purity:       io (host functions)
+//
+// A STEP IS CLOSED BY A GREEN GUARDRAIL, NOT BY A FILE THAT EXISTS. The same rule `reuse` already
+// applies to a cached swarm part (ext/index.mjs): a part that would not close the step today does not
+// close it because it once did. Existence alone lies in both directions here — `checkBrd`/`checkFrd`
+// leave YESTERDAY's artifact on disk when a check comes back red (they promote, they do not erase), so
+// a run that died inside step 6 leaves an frd.xml that belongs to a previous version of the task.
+//
+// Only the four steps a ROLE writes are judged. Steps 3-5 describe the REPOSITORY rather than the
+// change, and cost no tokens at all — the swarm comes out of .izi/parts — so they always re-run and
+// the map is today's. That also disposes of every half-written state they could leave behind: a
+// partial graph-parts/, a focus.json out of step with the plan, a missing graph-computed.xml.
+//
+// Steps 7, 8 and 10 are host functions with no role. They are NOT judged, and the ladder in band()
+// still skips them when the band starts later — deliberately: step 8's gate ERASES the design pair
+// (ext/index.mjs::design), so re-running ripple on a run resumed at step 11 would delete the very
+// design its plan was built from.
+async function bandStart() {
+  const frd = await checkFrd({ path: ".agent/frd.xml" });
+  if (!frd.ok) return 6;
+
+  const graph = await readText({ path: ".agent/design-graph.xml" });
+  const flow = await readText({ path: ".agent/data-flow.md" });
+  const skipped = (await readText({ path: ".agent/design" })).trim() === "skip";
+  // Step 9's receipt is the PAIR, or step 8's decision that there is nothing to synchronise. Judging
+  // the graph by its own guardrail is not possible from here: design({path}) promotes and erases, so
+  // asking it "is this green" would consume the answer.
+  if (!skipped && !(graph && flow)) { log(`resume: шаг 6 закрыт — .agent/frd.xml зелен сейчас (дельт ${frd.deltas})`); return 9; }
+
+  const verdict = await readText({ path: ".agent/review.xml" });
+  if (!/verdict="Pass"/.test(verdict)) { log("resume: шаги 6 и 9 закрыты — их артефакты зелены сейчас"); return 11; }
+  log("resume: полоса уже пройдена — вердикт шага 11 Pass");
+  return 12;
+}
+
+async function band(from0) {
+  let from = from0, edges = [], fromCritic = "", planned = ".agent/plan-index.json";
   const repaired = new Set();
 
   for (let round = 0; ; round++) {
-    if (from <= 6) {
-      phase("intake"); await intake(fromCritic);
-      phase("weight"); await weigh();
-      phase("ripple"); await rippling();
-      phase("design"); await designing();
-    }
-    phase("plan"); planned = await planning(edges);
+    // A LADDER, not one gate: everything from `from` onward runs, everything before it is already
+    // green. With a single `from <= 6` a run resumed at step 9 skipped the designer too — the one
+    // role it existed to re-run.
+    if (from <= 6) { phase("intake"); await intake(fromCritic); }
+    if (from <= 7) { phase("weight"); await weigh(); }
+    if (from <= 8) { phase("ripple"); await rippling(); }
+    if (from <= 9) { phase("design"); await designing(); }
+    if (from <= 10) { phase("plan"); planned = await planning(edges); }
+    if (from >= 12) return planned;
     phase("review"); const verdict = await reviewing();
     if (verdict.verdict === "Pass") return planned;
 
@@ -1041,7 +1084,15 @@ try {
   if (fresh.dirty > 0) log(`run: рабочее дерево грязное — ${fresh.dirty} файлов не в коммите; разведка отобразит их КАК ЕСТЬ`);
 
   phase("task"); await task();
-  phase("brd"); await brd();
+
+  // Step 2 is judged before anything downstream of it runs, and by its OWN guardrail — the same
+  // "green now, not green once" rule bandStart() applies to the band. It cannot wait for the map the
+  // way the FRD does: the BRD's subjects choose the focus, so re-running gilb would move the swarm,
+  // the map, and with them every artifact the band was about to reuse.
+  const brdNow = await checkBrd({ path: ".agent/brd.md" });
+  if (brdNow.ok) log(`resume: шаг 2 закрыт — .agent/brd.md зелен сейчас (требований ${brdNow.requirements})`);
+  else { phase("brd"); await brd(); }
+
   phase("survey-plan"); await surveyPlan();
   phase("focus"); await focusing();
   phase("scope"); await scope();
@@ -1049,7 +1100,7 @@ try {
   // Steps 6-11 are ONE statement now: the critic's verdict decides whether they run again, and which
   // of them do (band(), above). Everything before them is a fact of the repository — the survey does
   // not change because a plan was rejected.
-  bandEnds(await band());                       // always exits — the band's end is one statement,
+  bandEnds(await band(await bandStart()));      // always exits — the band's end is one statement,
   return ok({});                                // in one place; the return is the next phase's slot
 } catch (e) {
   if (e instanceof Exit) return e.result;

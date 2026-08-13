@@ -271,6 +271,31 @@ test("every budget of core/budgets.mjs is declared in the host's output schema",
   assert.equal(out.intakeLoops, DEFAULT_BUDGETS.intakeLoops)
 })
 
+// --- the judges a resumed run leans on must be NON-DESTRUCTIVE --------------------------------
+//
+// S34: a run now starts at the first step whose artifact is not GREEN NOW (workflows/izi.js::
+// bandStart), and it asks that question by running the step's own guardrail over the PROMOTED
+// artifact. That only works while the guardrail merely judges: `design({path})` promotes and erases
+// (ext/index.mjs — copyFileSync then rmSync), so asking it "is this green" would consume the answer.
+// This test holds checkBrd and checkFrd to the other contract.
+
+test("checkBrd and checkFrd judge a promoted artifact without consuming it", () => {
+  const root = tempRoot()
+  writeFileSync(join(root, "TASK.md"), "Лимит бронирования не более 20 штук.\n")
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  const brd = ["R1 Лимит бронирования", "   fit: не более 20", "   verify: unit test",
+    "subjects[]: лимит · бронь · штук", "analogue: PromptSnippet\nopen-questions: 0", ""].join("\n")
+  writeFileSync(join(root, ".agent", "brd.md"), brd)
+
+  assert.equal(checkBrd.run({ path: ".agent/brd.md" }, ctx(root)).ok, true)
+  assert.equal(readFileSync(join(root, ".agent", "brd.md"), "utf8"), brd)  // still there, byte for byte
+  assert.equal(checkBrd.run({ path: ".agent/brd.md" }, ctx(root)).ok, true) // and the SAME answer twice
+
+  // A missing artifact is a refusal, never a throw: that is what makes "not green now" a legal answer
+  // for a step that simply has not run yet.
+  assert.equal(checkFrd.run({ path: ".agent/frd.xml" }, ctx(root)).ok, false)
+})
+
 // --- carried: the memory of a repair loop reaches the sandbox --------------------------------
 
 test("carried hands the workflow the lines already red in this run, not just the last check", () => {
