@@ -11,6 +11,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { parseValues, checkValues } from "./values.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 
@@ -75,6 +76,67 @@ test("rule 8: a failure declared by the FRD that the dictionary does not carry",
   assert.deepEqual(blockersOf(VALUES.replace("409 SLOT_TAKEN", "409 SLOT_TAKEN {slotId}")), [])
   // An FRD that declares no failure at all says nothing here: F6 of step 6 judges that, not this.
   assert.deepEqual(blockersOf(VALUES, parseFrd(FRD_XML.replace(/<failure .*\/>/, ""))), [])
+})
+
+// --- D7: the role of pass A and its order. THE SEAMS THE SLICE KEEPS OUTSIDE THE CORE ----------
+//
+// Same pair as `steps/design/design.test.mjs` keeps for the designer and `steps/scope/part.test.mjs`
+// for its own slice — the order carries exactly the keys the workflow passes, and the role's
+// frontmatter survives YAML — plus one seam this pass can afford and the others cannot: pass A's
+// artifact is small enough that its EXAMPLE is a whole artifact, so the example is run through the
+// real guardrail instead of being read by eye.
+
+const role = () => readFileSync(new URL("valuer.md", import.meta.url), "utf8")
+const ORDER_KEYS = ["FRD", "RIPPLE", "FEEDBACK", "STAGING", "CHECK"]
+
+// No ANSWERS, no MODE, no DELTA_FORMS: the dictionary has no question rail (docs/design-step-by-step.md
+// §7 leaves it to B and C), and neither the weight nor the vocabulary of `delta` reaches a file whose
+// root element carries no attribute at all.
+test("order-values.tpl uses exactly the keys the workflow passes", () => {
+  const tpl = readFileSync(new URL("order-values.tpl", import.meta.url), "utf8")
+  const keys = [...tpl.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
+  assert.deepEqual([...new Set(keys)].sort(), [...ORDER_KEYS].sort())
+})
+
+// BUG_FIX_CONTEXT: the first launch of step 9 never reached the role at all — pi refused the whole
+//   workflow at metadata validation, because `description:` carried a second «: » inside an unquoted
+//   YAML scalar, which YAML reads as a nested mapping. The cost is the whole run before a single token
+//   is spent (steps/design/design.test.mjs keeps the same seam for the designer), so every new role of
+//   this slice buys the millisecond too.
+test("role frontmatter: the description carries no bare colon — YAML would read it as a nested mapping", () => {
+  const line = (role().match(/^description:.*$/m) || [""])[0]
+  assert.doesNotMatch(line.slice("description:".length), /:\s/)
+})
+
+// standards/role.md, constraint 2: a prohibition that names no machine check is decoration, and
+// decoration is what a weak tier ignores first. Deleting the check's name from any bullet reddens this.
+test("every prohibition of the role names the check that catches it", () => {
+  const block = (role().match(/\$START_FORBIDDEN\n([\s\S]*?)\$END_FORBIDDEN/) || ["", ""])[1]
+  const bullets = block.split(/\n- /).map((b) => b.replace(/^- /, "").trim()).filter((b) => b.startsWith("Do NOT"))
+  assert.equal(bullets.length, 5)
+  for (const b of bullets) {
+    assert.match(b, /checkValues|rule 8|parseValues|design\(\{pass:/, `prohibition with no check: ${b.slice(0, 60)}`)
+  }
+})
+
+// The seam this pass can afford: the example IS an artifact, so it is judged by the artifact's judge.
+// A role whose worked example does not pass its own guardrail teaches the form of a red run — and the
+// FRD of the same example supplies rule 8's operand, so the example proves the pair, not one half.
+test("the role's own example passes the real guardrail with zero blockers", () => {
+  const text = role()
+  const xml = (text.match(/<values>[\s\S]*?<\/values>/) || [""])[0]
+  const frdXml = (text.match(/<frd\b[\s\S]*?<\/frd>/) || [""])[0]
+  const values = parseValues(xml)
+  const frd = parseFrd(frdXml)
+
+  assert.equal(values.size, 8)
+  assert.equal(frd.failures.length, 1)
+  assert.deepEqual(checkValues({ values, frd }), [])
+
+  // …and the example carries none of the shapes the role is forbidden to write: a `<module>` or a
+  // `<route>` inside the dictionary would be the prepared answer a live run copies (standards/role.md,
+  // constraint 3 — this has happened).
+  assert.doesNotMatch(xml, /<module|<route|<contract|<dep/)
 })
 
 test("totality: garbage, undefined and no argument at all are read as an empty dictionary, not thrown", () => {

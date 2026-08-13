@@ -13,6 +13,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { parseNodes, checkGraph, cards } from "./nodes.mjs"
 import { parseValues, checkValues } from "./values.mjs"
 import { parseFrd } from "../intake/frd.mjs"
@@ -183,6 +184,94 @@ test("the card is total: absence is shown, never dropped — no delta, no neighb
 
   assert.equal(cards(), "")
   assert.equal(cards(parseValues(VALUES_XML), parseNodes(undefined)), "")
+})
+
+// --- D8: the role of this pass and its order ------------------------------------------------------
+//
+// The two seams the slice keeps outside the core, in the shape design.test.mjs and part.test.mjs use:
+// the order carries exactly the keys the band passes, and the role names the checks it claims. Both
+// are here rather than in design.test.mjs because `designer.md` is now the role of THIS pass and
+// `checkGraph` above is the judge of what it writes.
+const ROLE = readFileSync(new URL("designer.md", import.meta.url), "utf8")
+const ORDER_NODES = readFileSync(new URL("order-nodes.tpl", import.meta.url), "utf8")
+
+// The keys the band substitutes for pass B (backlog D10 writes `designing()`; this list is the
+// contract it must satisfy). VALUES is the one the pass exists for: the dictionary arrives as DATA,
+// so a contract's name is READ, not recalled (docs/design-step-by-step.md §4.A).
+const ORDER_KEYS = ["VALUES", "FRD", "RIPPLE", "ANSWERS", "MODE", "DELTA_FORMS", "FEEDBACK", "STAGING", "CHECK"]
+
+test("order-nodes.tpl uses exactly the keys the band passes, and names no delta word of its own", () => {
+  const keys = [...ORDER_NODES.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
+  assert.deepEqual([...new Set(keys)].sort(), [...ORDER_KEYS].sort())
+
+  // Discrepancy C: the vocabulary arrives SUBSTITUTED, and neither file spells it out a second time.
+  for (const text of [ROLE, ORDER_NODES]) assert.doesNotMatch(text, /delta="(add|change|remove)"/)
+  assert.match(ORDER_NODES, /{DELTA_FORMS}/)
+})
+
+// BUG_FIX_CONTEXT: the first launch of step 9 never reached the role at all — pi refused the whole
+//   workflow at metadata validation: «Invalid role frontmatter: Nested mappings are not allowed in
+//   compact mappings at line 1, column 14». The `description:` line carried a second «: » inside an
+//   unquoted YAML scalar, which YAML reads as a nested mapping. The cost is the whole run, before a
+//   single token is spent, and the message names YAML rather than the file's purpose — so the seam
+//   is here, where it costs a millisecond. (Moved from design.test.mjs with the role, backlog D8.)
+test("role frontmatter: the description carries no bare colon — YAML would read it as a nested mapping", () => {
+  const line = (ROLE.match(/^description:.*$/m) || [""])[0]
+  assert.doesNotMatch(line.slice("description:".length), /:\s/)
+})
+
+// The two rules the concept STRIKES from this role (docs/design-step-by-step.md §5, backlog D8), and
+// the projection it stops writing. Each assertion below goes red by putting the deleted line back:
+//   LAW 3 — «`out` never repeats an `in` of the same node»: it had no check of its own, and it is
+//     FALSE for a transit interface — the live IGlossaryStore hands on the five calls it received;
+//   LAW 2 — «copy that string, character for character»: there is nothing left to copy, the value is
+//     declared once in the dictionary and named by id;
+//   `<route>` — time is pass C's only subject, and a graph that also carries routes is the 23,5 KB
+//     generation this whole slice was cut out of (BUG_FIX_CONTEXT of nodes.mjs).
+test("the role of pass B writes a graph: no routes, no positions, and neither struck law", () => {
+  assert.doesNotMatch(ROLE, /<route/)
+  assert.doesNotMatch(ROLE, /`out` never repeats an `in`|repeats an `in` of the same node/)
+  assert.doesNotMatch(ROLE, /character for character|COPY that string/)
+
+  // A position is what pass A abolished: nothing in this role may show `path#n` or an alternative's
+  // number, or the role would teach the very reference `cards` exists to replace.
+  assert.doesNotMatch(ROLE, /#\d/)
+  assert.doesNotMatch(ROLE, /NUMBER of (its |an )?`?(out|in)`? alternative/)
+
+  // standards/role.md, constraint 2: every prohibition names the machine check that catches it.
+  // Rule 6 keeps its number (docs/data-flow.md §6); the three checks the graph owns have no number,
+  // so the role names them by what the blocker says.
+  assert.match(ROLE, /as rule 6/)
+  assert.match(ROLE, /которого нет в словаре/)
+  assert.match(ROLE, /edge leading out of the graph|nothing to step onto/)
+  // The unit list is the script's projection of the routes — the role writes no count (docs/design.md §2).
+  assert.match(ROLE, /Do NOT write a number of tests/)
+})
+
+// The strongest seam available to a role file: its EXAMPLE is run through the real guardrail. A role
+// whose own example blocks teaches the model exactly the artifact the check refuses — and that is not
+// a hypothetical, it is discrepancy A's shape one layer up (a fixture that invented its own form).
+test("the role's example is a green graph — parseNodes + checkGraph, zero blockers", () => {
+  const xml = [...ROLE.matchAll(/```xml\n([\s\S]*?)```/g)].map((m) => m[1])
+  assert.equal(xml.length, 2, "the example shows the dictionary it reads and the graph it writes")
+
+  const exValues = parseValues(xml[0])
+  const exNodes = parseNodes(xml[1])
+  assert.equal(exNodes.size, 4)
+
+  // The FRD and the subgraph of the example's own prose: `COUPON_EXPIRED` is its failure, and the two
+  // nodes it says come from the ripple subgraph are what `known` may contain.
+  const exFrd = parseFrd(`<frd grammar="1" goal="купоны на чекауте">
+    <failure code="COUPON_EXPIRED" status="410" client="показать срок" operator="—" from="UC1/1a"/>
+  </frd>`)
+  const exKnown = new Set(["src/CouponRepo.java", "src/Coupon.java"])
+
+  assert.deepEqual(checkGraph({ nodes: exNodes, values: exValues, frd: exFrd, known: exKnown }), [])
+
+  // …and the guardrail really ran on it: take the failure's value out of the dictionary and the same
+  // call reddens twice — an unknown id in a contract, and rule 8's half that lives here.
+  const short = parseValues(xml[0].replace(/<value id="v12"[^>]*\/>/, ""))
+  assert.equal(checkGraph({ nodes: exNodes, values: short, frd: exFrd, known: exKnown }).length, 1)
 })
 
 test("totality: garbage, undefined and no argument at all are read as an empty graph, not thrown", () => {

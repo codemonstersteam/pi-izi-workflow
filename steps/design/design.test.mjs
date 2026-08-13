@@ -113,9 +113,9 @@ test("the entry of a route is a copy of the named alternative, never in[0] by po
 // a test that no code change can turn red is a comment (standards/code.md). D5 replaces the function
 // with `assemble` and the round trip that proves it.
 
-// The two seams the SLICE keeps outside the core: the order carries exactly the keys the workflow
-// passes, and the role names no rule twice. `steps/scope/part.test.mjs` keeps the same pair for its
-// own slice — the device is the repository's, not this file's invention.
+// The seam the SLICE keeps outside the core: the order carries exactly the keys the workflow passes.
+// `steps/scope/part.test.mjs` keeps the same one for its own slice — the device is the repository's,
+// not this file's invention.
 const ORDER_KEYS = ["FRD", "RIPPLE", "ANSWERS", "MODE", "DELTA_FORMS", "FEEDBACK", "STAGING", "CHECK"]
 
 test("order.tpl uses exactly the keys the workflow passes", () => {
@@ -124,39 +124,26 @@ test("order.tpl uses exactly the keys the workflow passes", () => {
   assert.deepEqual([...new Set(keys)].sort(), [...ORDER_KEYS].sort())
 })
 
-// BUG_FIX_CONTEXT: the first launch of step 9 never reached the role at all — pi refused the whole
-//   workflow at metadata validation: «Invalid role frontmatter: Nested mappings are not allowed in
-//   compact mappings at line 1, column 14». The `description:` line carried a second «: » inside an
-//   unquoted YAML scalar, which YAML reads as a nested mapping. The cost is the whole run, before a
-//   single token is spent, and the message names YAML rather than the file's purpose — so the seam
-//   is here, where it costs a millisecond.
-test("role frontmatter: the description carries no bare colon — YAML would read it as a nested mapping", () => {
-  const role = readFileSync(new URL("designer.md", import.meta.url), "utf8")
-  const line = (role.match(/^description:.*$/m) || [""])[0]
-  assert.doesNotMatch(line.slice("description:".length), /:\s/)
-})
-
-test("role and order: one vocabulary, and no number of tests anywhere", () => {
-  // The role file is named by ROLE, not by step: pi resolves `agent({role: "designer"})` by FILENAME
-  // inside the declared roleDirectories (ext/index.mjs), so design/role.md would install as "role".
-  const role = readFileSync(new URL("designer.md", import.meta.url), "utf8")
+// One vocabulary: the slice used to carry its own words for a delta's form in three prose places
+// (discrepancy C). The vocabulary arrives SUBSTITUTED, and the seam is that the template does not
+// spell it out again. Its twin for the pass-B order lives in steps/design/nodes.test.mjs.
+test("order.tpl names no delta word of its own — the vocabulary is substituted", () => {
   const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
-
-  // Discrepancy C: the slice used to carry its own words for a delta's form in three prose places.
-  // The vocabulary now arrives SUBSTITUTED, and the seam is that neither file spells it out again.
-  for (const text of [role, tpl]) assert.doesNotMatch(text, /delta="(add|change|remove)"/)
+  assert.doesNotMatch(tpl, /delta="(add|change|remove)"/)
   assert.match(tpl, /{DELTA_FORMS}/)
-
-  // standards/role.md: every prohibition names the machine check that catches it.
-  assert.match(role, /machine-checked as rule 6|as rule 6/)
-  assert.match(role, /as rule 7/)
-  // The entry is a NUMBER in both the law and the prohibition — the one place a value could be typed
-  // a second time (design.mjs::parseRoutes, why `entry` is not text).
-  assert.match(role, /`entry` is the NUMBER of an `in` alternative, never its text/)
-  assert.match(role, /machine-checked as rule 1 against the first node's contract/)
-  // The unit list is the script's projection of the routes — the role writes no count (docs/design.md §2).
-  assert.match(role, /Do NOT write a number of tests/)
 })
+
+// THE ROLE'S SEAMS ARE NOT IN THIS FILE ANY MORE EITHER (backlog D8). `designer.md` became the role
+// of pass B — it writes the GRAPH and no routes — so the assertions that grepped it moved to
+// steps/design/nodes.test.mjs, BESIDE the guardrail that now judges what they claim:
+//   the `description:` colon (the YAML trap that cost a whole run), the delta vocabulary,
+//   «as rule 6» and «Do NOT write a number of tests» — moved as they were;
+//   «`entry` is the NUMBER of an `in` alternative» and «machine-checked as rule 1 …» — DELETED with
+//     the routes: rule 1 and rule 7 judge `staging/routes.xml` (steps/design/routes.mjs), and the
+//     role that must name them is `router.md`, which backlog D9 writes. Asserting them against a
+//     role that no longer writes a route would be asserting that the pass did not happen;
+//   «as rule 7» — the same, and one step further: rule 7 blames the ROUTE, not the graph
+//     (docs/design-step-by-step.md §7, the table of blame), so pass B may not claim it at all.
 
 test("totality of parsing: garbage and undefined are read as an empty graph, not thrown", () => {
   assert.equal(parseDesign(undefined).size, 0)
