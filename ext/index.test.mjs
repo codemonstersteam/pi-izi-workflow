@@ -18,8 +18,9 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, checkFrd, carried, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
+import { DEFAULT_BUDGETS } from "../core/budgets.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
 const ctx = (cwd) => ({ run: { cwd } })
@@ -249,6 +250,25 @@ test("a number that stands in a requirement's verify is sourced — the BRD slic
   assert.equal(r.ok, false)
   assert.match(r.blockers, /418/)
   assert.match(r.blockers, /<question>/)
+})
+
+// --- budgets: the host validates OUTPUT, so a budget missing from the schema crashes the run ----
+//
+// This defect has now happened twice on the same line — maxParallel (run 657fcd98) and intakeLoops
+// (run c8bd1294) — because the fix each time was a comment. `additionalProperties: false` turns a key
+// declared in core/budgets.mjs but not here into "Invalid output from budgets": a crash at `izi: start`
+// naming no key. The assertion below is over the KEY SET, so it fails for a budget that does not exist
+// yet, which is the only version of this seam worth having.
+
+test("every budget of core/budgets.mjs is declared in the host's output schema", () => {
+  const declared = Object.keys(budgets.output.properties)
+  for (const k of Object.keys(DEFAULT_BUDGETS)) assert.ok(declared.includes(k), `бюджет ${k} не объявлен в схеме budgets`)
+
+  const root = tempRoot()
+  const out = budgets.run({}, ctx(root))
+  const validate = Compile(budgets.output)   // the host's own check, run here instead of at launch
+  assert.equal(validate.Check(out), true, JSON.stringify(out))
+  assert.equal(out.intakeLoops, DEFAULT_BUDGETS.intakeLoops)
 })
 
 // --- carried: the memory of a repair loop reaches the sandbox --------------------------------
