@@ -24,6 +24,7 @@
 //             not restated here in prose
 // Interface:  parseNodes(xml) -> Map<path, Node>
 //             checkGraph({ nodes, values, frd, known }) -> string[]  — blockers, empty = green
+//             cards(values, nodes) -> string  — the data block of pass C's order
 //
 // BUG_FIX_CONTEXT: live run 0bbf7054-3b8c-400f-b46f-83625777e097 (sandbox/runbox/eddi).
 //   Previous: one generation wrote the dictionary, the nodes and the routes into one 23,5 KB artifact.
@@ -154,4 +155,57 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
   }
 
   return B
+}
+
+// The card is read by a ROLE, so it speaks the language of the order — Russian (standards/code.md,
+// constraint 8: English is what a machine reads, and this text is not read by one).
+const NO_TEXT = "(нет в словаре)"
+const NOTHING = "—"
+const SEP = " · "
+// The label column is padded so the three rows line up under each other: the role scans DOWN one
+// column for the name it needs, which is the whole reason the card exists rather than a sentence.
+const LABEL = "принимает:".length
+const row = (label, cells) => `  ${(label + ":").padEnd(LABEL)} ${cells.length ? cells.join(SEP) : NOTHING}`
+
+// FUNCTION_CONTRACT: cards — the frozen passes A and B as the data block of pass C's order
+//   Input:        values — the dictionary AS steps/design/values.mjs::parseValues returns it: Map<id, text>
+//                 nodes  — the graph AS parseNodes returns it: Map<path, Node>
+//   Dependencies: row, NO_TEXT/NOTHING/SEP — private
+//   Antecedent:   any value — a missing dictionary is an empty one and a missing graph an empty card
+//                 block; totality is what keeps a malformed artifact a red check instead of a crash,
+//                 exactly as for parseNodes above
+//   Consequent:   success: one card per node in the graph's order, cards separated by a blank line.
+//                          A card is a path with its delta, then `принимает:` / `отдаёт:` — the
+//                          contract's alternatives, EACH AS A PAIR `<id> <text>` — then `соседи:`,
+//                          the `<dep>` paths in full. An empty side is `—`, never a dropped row; an
+//                          id the dictionary does not carry is `<id> (нет в словаре)`, never the bare
+//                          id — the pair is the invariant, and a half of it would be the very shape
+//                          this function exists to abolish. No positional `#n` is produced anywhere
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    cards(values?: Map<id, text>, nodes?: Map<path, Node>) -> string
+//
+//   BUG_FIX_CONTEXT: live run 0bbf7054-3b8c-400f-b46f-83625777e097 (sandbox/runbox/eddi), rule 1's
+//     blockers: «нет альтернативы #12», 5 and 6 lines of them. The order carried `ripple.xml` and no
+//     contracts, so a route's step could only refer to a value BY POSITION — and the position was
+//     counted by the role in its own freshly written string, over `|` separators, from memory. The
+//     card replaces `ripple.xml` in that order whole (docs/design-step-by-step.md §4.C): the role
+//     picks a name it SEES. This is the same device as `izi_answer` reading a question's number out
+//     of `.agent/pending.json` instead of recalling it (CLAUDE.md, constraint 4).
+//
+// The neighbours are printed as FULL paths where docs/design-step-by-step.md §4.C abbreviates them
+// to `…/IGlossaryStore.java`. The doc is illustrating the shape on a 60-character Java path; a route
+// step is written `path@v9` with that very path, so an abbreviated neighbour would be a name the
+// role cannot copy — and copying it is the point.
+export function cards(values = new Map(), nodes = new Map()) {
+  const named = (id) => `${id} ${(values && values.get(id)) || NO_TEXT}`
+  return [...nodes.values()].map((n) => [
+    // A node with no delta is not a node with an empty one: it is TRANSIT, copied from the ripple
+    // subgraph (docs/data-flow.md §4), and the word says so instead of leaving empty brackets that
+    // read as a broken card. The delta words themselves are FRD_FORM's and are printed verbatim.
+    `${n.path}   (${n.delta || "транзит"})`,
+    row("принимает", n.in.map(named)),
+    row("отдаёт", n.out.map(named)),
+    row("соседи", [...n.deps]),
+  ].join("\n")).join("\n\n")
 }

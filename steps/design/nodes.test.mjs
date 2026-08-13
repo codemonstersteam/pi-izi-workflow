@@ -13,7 +13,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { parseNodes, checkGraph } from "./nodes.mjs"
+import { parseNodes, checkGraph, cards } from "./nodes.mjs"
 import { parseValues, checkValues } from "./values.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 
@@ -139,6 +139,50 @@ test("the failure the dictionary carries is named by SOME node's out — the hol
   assert.deepEqual(blockersOf(xml, { values: VALUES_XML.replace('text="409 SLOT_TAKEN"', 'text="409 {conflict}"') }), [])
   // An FRD that declares no failure at all says nothing here.
   assert.deepEqual(blockersOf(xml, { frd: parseFrd(FRD_XML.replace(/<failure .*\/>/, "")) }), [])
+})
+
+// The card is what pass C's order carries INSTEAD of ripple.xml (docs/design-step-by-step.md §4.C).
+// Its one job is that every value stands as a PAIR — the id the route will write and the text that
+// says what it is — so the role picks a name it sees instead of counting `|` separators in its own
+// string. That is the seam of rule 1, and it is proven by taking a half of the pair away.
+test("the card names every value by id AND text, and never by position", () => {
+  const block = cards(parseValues(VALUES_XML), parseNodes(GRAPH))
+
+  assert.equal(block.split("\n\n")[2], [
+    "src/SlotLock.java   (Added)",
+    "  принимает: v3 lock(slotId,ttl) · v10 Saved",
+    "  отдаёт:    v5 Taken · v9 save(slotId,lock) · v11 Lock",
+    "  соседи:    src/SlotRepo.java",
+  ].join("\n"))
+
+  // Rule 1's disease: a positional reference. Nothing in the card may offer one.
+  assert.doesNotMatch(block, /#\d/)
+
+  // And the pair is the invariant of EVERY cell, not of the one asserted above: strip the id or
+  // strip the text in `cards` and this goes red on the whole block.
+  const cells = block.split("\n").filter((l) => /(принимает|отдаёт):/.test(l))
+    .flatMap((l) => l.split(/:\s+/)[1].split(" · "))
+  assert.equal(cells.length, 19)
+  for (const c of cells) assert.match(c, /^v\d+ \S/, `значение показано половиной пары: "${c}"`)
+})
+
+test("the card is total: absence is shown, never dropped — no delta, no neighbours, no such id", () => {
+  // A transit node: no delta (it is COPIED from the ripple subgraph, docs/data-flow.md §4), no
+  // `<dep>` at all. Both absences are printed, because a missing row reads as a broken card and the
+  // role would look for the neighbour it is not allowed to step to.
+  assert.equal(cards(parseValues(VALUES_XML), parseNodes(GRAPH)).split("\n\n")[3], [
+    "src/SlotRepo.java   (транзит)",
+    "  принимает: v9 save(slotId,lock)",
+    "  отдаёт:    v10 Saved",
+    "  соседи:    —",
+  ].join("\n"))
+
+  // An id the dictionary does not carry — checkGraph blocks that graph, so the card is only ever
+  // built on a green one; it still may not answer with a bare id, which is the shape rule 1 died of.
+  assert.match(cards(new Map(), parseNodes(GRAPH)), /принимает: v1 \(нет в словаре\)/)
+
+  assert.equal(cards(), "")
+  assert.equal(cards(parseValues(VALUES_XML), parseNodes(undefined)), "")
 })
 
 test("totality: garbage, undefined and no argument at all are read as an empty graph, not thrown", () => {
