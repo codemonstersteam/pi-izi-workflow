@@ -10,6 +10,7 @@
 // Invariants: parseMap and mapMeasure are total — any input, including undefined, yields an empty
 //             parse and never throws; the cap is a CONSTANT here and nowhere else.
 // Interface:  MAP_CAP_BYTES — the reading ceiling, in bytes
+//             MAP_BYTES_PER_NODE — what one node of the map costs, ESTIMATED
 //             parseMap(xml) -> { nodes, tests, entries: Set<string>, edges: Edge[], count,
 //                                nodeTests: Map, suites: Suite[], spine: {…}, cycles: Set<string> }
 //             mapMeasure(xml, cap?) -> { bytes, nodes, overCap }
@@ -28,6 +29,22 @@ import { attrs, elem, tag } from "../../core/xml.mjs"
 // (docs/graph.md §7, live run c166bd87) that is ≈306 nodes. The number lives HERE — the workflow and
 // the role receive it through the host, they do not carry a copy.
 export const MAP_CAP_BYTES = 115 * 1024
+
+// MAP_BYTES_PER_NODE — the same 417 B, as a number the code may multiply by.
+//
+// It lives next to the cap because the two are one arithmetic: "does the map fit" is `nodes ×
+// per-node ≤ cap`, and splitting the halves across two modules would give one fact two homes.
+// Step 3b (steps/focus/focus.mjs) is its only consumer today: it decides BEFORE the swarm whether
+// the map the swarm would produce can be read at all, which is the whole point of measuring instead
+// of finding out after 39 batches (docs/big-projects-problems.md §2).
+//
+// It is an ESTIMATE, and the estimate's source is named: a live run on a 15-node, 27-declaration
+// form (docs/graph.md §7, run c166bd87). A `<module>` block grows with its `<dep>` count, so on a
+// monolith — eddi holds 8253 edges over 1850 files — the real cost is likelier above this than
+// below. Nothing is padded "for safety": narrowing the focus by a number taken from someone's head
+// is exactly the invented-default the pipeline refuses. The miss is caught where it already was —
+// mapMeasure() below, after the swarm, with the byte count in hand.
+export const MAP_BYTES_PER_NODE = 417
 
 // FUNCTION_CONTRACT: parseMap — the map's node keys
 //   Input:        xml — text of `.agent/appgraph.xml`; type unconstrained
