@@ -11,6 +11,7 @@
 //             parse and never throws; the cap is a CONSTANT here and nowhere else.
 // Interface:  MAP_CAP_BYTES — the reading ceiling, in bytes
 //             MAP_NODE_BYTES · MAP_EDGE_BYTES — what a node and an edge of the map cost
+//             MAP_EST_SLACK — how far the estimate may be under the truth, measured
 //             parseMap(xml) -> { nodes, tests, entries: Set<string>, edges: Edge[], count,
 //                                nodeTests: Map, suites: Suite[], spine: {…}, cycles: Set<string> }
 //             mapMeasure(xml, cap?) -> { bytes, nodes, overCap }
@@ -61,6 +62,28 @@ export const MAP_CAP_BYTES = 115 * 1024
 // mapMeasure() below, after the swarm, on the real bytes.
 export const MAP_NODE_BYTES = 468
 export const MAP_EDGE_BYTES = 88
+
+// MAP_EST_SLACK — the estimate above is a MODEL of a file the model has not written yet, and this
+// number is how wrong that model has been measured to be. Step 3b divides the ceiling by it instead
+// of comparing to the ceiling directly.
+//
+// BUG_FIX_CONTEXT: live run fa8def32 (eddi). The focus estimated 110 099 B, the map came out
+//   121 384 B against a 117 760 B ceiling, and step 6 refused an artifact that missed by 3%. The
+//   swarm had already run. Two things the estimate cannot know were the whole gap: `<role>` is a
+//   sentence a scout writes in its own words, and the number of `<api>` rows depends on what the
+//   scouts found (26 here, 12 in the previous run over the same repository).
+//
+// Measured error of the model on every live map there is: 0% (t3, run 23644036), +0.3%
+// (a3597dd3, 113 678 estimated against 114 072), −10% (fa8def32). The slack is the worst of those,
+// rounded to the tenth, and its BOUNDS were measured too — by replaying newFocus over the saved
+// artifacts of fa8def32:
+//   ×1.05 changes nothing, the run still dies;
+//   ×1.10 drops `helm` — 18 files of infrastructure yaml, no code — and the map fits at ≈117 043;
+//   ×1.20 drops `modules/templating`, 11 nodes of the actual work. Too much.
+// So the working range is ×1.07…×1.19 and this is the middle of it, not a round number chosen for
+// comfort. The asymmetry that justifies erring high at all is named: under-counting costs the whole
+// swarm, over-counting costs a few cells of the map.
+export const MAP_EST_SLACK = 1.1
 
 // FUNCTION_CONTRACT: parseMap — the map's node keys
 //   Input:        xml — text of `.agent/appgraph.xml`; type unconstrained

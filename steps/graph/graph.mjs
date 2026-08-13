@@ -476,7 +476,26 @@ export function graphXml(graph) {
     L.push("  </module>")
   }
 
-  for (const e of g.edges || []) L.push(`  <edge from="${esc(e.from)}" to="${esc(e.to)}" via="${esc(e.via)}"${e.by ? attr("by", e.by) : ""}/>`)
+  // `via` is the EVIDENCE of an edge — and half of it says nothing the edge does not already say.
+  //
+  // BUG_FIX_CONTEXT: live run fa8def32 (eddi). The map came out 121 384 B against a 117 760 B
+  //   ceiling — over by 3% — and step 6 refused after the swarm had been paid for. Of that file,
+  //   edges were 41 417 B and their `via` 11 901 B; 93 of the 185 carried nothing but
+  //   `import ai.labs.eddi.configs.snippets.model.PromptSnippet;` — the fully qualified name of the
+  //   node the `to` attribute already names, one fact written twice (standards/code.md §1). Dropping
+  //   exactly those brought the map to 115 698 B: it fits, with every cell and every node kept.
+  //   The alternative measured against this one was a safety margin on the focus estimate, and it
+  //   was worse: the value that saved the run (×1.2) also dropped `modules/templating`, real work.
+  // The other 92 keep theirs: a signature or an `extends` line is not derivable from two paths, and
+  // it is what lets a role say WHY a node depends on another.
+  const restatesTo = (e) => {
+    const fq = String(e.to).replace(/^.*java\//, "").replace(/\.java$/, "").replace(/\//g, ".")
+    return /^import\s+(static\s+)?[\w.]+;?$/.test(String(e.via || "").trim()) && String(e.via).includes(fq)
+  }
+  for (const e of g.edges || []) {
+    const via = restatesTo(e) ? "" : esc(e.via)
+    L.push(`  <edge from="${esc(e.from)}" to="${esc(e.to)}"${via ? ` via="${via}"` : ""}${e.by ? attr("by", e.by) : ""}/>`)
+  }
 
   L.push("  <surface>")
   for (const a of g.surface || []) L.push(`    <api name="${esc(a.name)}" kind="${esc(a.kind)}" at="${esc(a.at)}"/>`)

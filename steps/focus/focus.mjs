@@ -13,7 +13,7 @@
 //             newFocus({ slices, anchors, cells, edges, cap }) -> Result<Focus, …>
 
 import { ok, err } from "../../core/result.mjs"
-import { MAP_CAP_BYTES, MAP_NODE_BYTES, MAP_EDGE_BYTES } from "../intake/map.mjs"
+import { MAP_CAP_BYTES, MAP_NODE_BYTES, MAP_EDGE_BYTES, MAP_EST_SLACK } from "../intake/map.mjs"
 
 // names — the anchor rule of step 3b, and it is NOT the anchor rule of step 3.
 //
@@ -91,6 +91,10 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 // printed in the run's log. An anchor whose files ended outside comes back as `found="outside"` in
 // the map, so step 6's role meets an honest Unknown instead of a guess.
 export function newFocus({ slices = [], anchors = [], cells = [], edges = [], cap = MAP_CAP_BYTES } = {}) {
+  // The budget is the ceiling MINUS the measured error of the estimate below (steps/intake/map.mjs::
+  // MAP_EST_SLACK). Comparing to the ceiling itself is what killed run fa8def32: the estimate was
+  // 10% low, the map missed by 3%, and the swarm had already been paid for.
+  const budget = Math.floor(cap / MAP_EST_SLACK)
   const plan = (cells || []).filter((c) => c && c.id)
   if (!plan.length) return err("no-plan", ".agent/survey-plan.json не несёт ни одной клетки — шаг 3 не отработал")
 
@@ -112,7 +116,7 @@ export function newFocus({ slices = [], anchors = [], cells = [], edges = [], ca
   }
 
   const allFiles = filesOf(plan)
-  if (bytesOf(plan) <= cap) {
+  if (bytesOf(plan) <= budget) {
     return ok(Object.freeze({
       why: "whole-plan",
       chosen: slices.map((s) => s.id),
@@ -147,7 +151,7 @@ export function newFocus({ slices = [], anchors = [], cells = [], edges = [], ca
   const add = (paths) => {
     const before = new Set(taken)
     for (const p of paths) { const c = cellOf.get(p); if (c) taken.add(c) }
-    if (cost() > cap) { taken.clear(); for (const c of before) taken.add(c); return false }
+    if (cost() > budget) { taken.clear(); for (const c of before) taken.add(c); return false }
     return true
   }
 

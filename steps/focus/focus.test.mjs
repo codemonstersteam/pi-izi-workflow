@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs"
 import { newSlices } from "./slices.mjs"
 import { newFocus, names } from "./focus.mjs"
 import { newPlan } from "../survey-plan/plan.mjs"
-import { MAP_NODE_BYTES } from "../intake/map.mjs"
+import { MAP_NODE_BYTES, MAP_EST_SLACK } from "../intake/map.mjs"
 
 const FX = JSON.parse(readFileSync(new URL("./fixture-eddi.json", import.meta.url), "utf8"))
 const ENTRY = FX.entry                       // …/configs/agents/IRestCapabilityRegistry.java — cone of 5
@@ -58,6 +58,21 @@ test("names: the anchor NAMES the file — by its PATH, case-insensitively", () 
   assert.equal(names(undefined, undefined), false)
 })
 
+test("the budget is the ceiling MINUS the estimate's own measured error", () => {
+  // BUG_FIX_CONTEXT run fa8def32 (eddi): the focus estimated 110 099 B against a 117 760 B ceiling
+  // and the map came out 121 384 — 3% over, and the swarm was already paid for. The estimate models
+  // a file a scout has not written yet, so it cannot be exact; the ceiling is therefore divided by
+  // the measured worst error (steps/intake/map.mjs::MAP_EST_SLACK).
+  const est = newFocus({ slices, cells: CELLS, edges: EDGES }).value.estBytes
+
+  // a ceiling exactly equal to the estimate is NOT enough any more — that is the whole fix
+  const exact = newFocus({ slices, cells: CELLS, edges: EDGES, cap: est, anchors: ["capabilityregistry"] })
+  assert.notEqual(exact.ok && exact.value.why, "whole-plan", "the ceiling alone no longer admits the whole plan")
+
+  // …with the slack accounted for, it is
+  assert.equal(newFocus({ slices, cells: CELLS, edges: EDGES, cap: Math.ceil(est * MAP_EST_SLACK) }).value.why, "whole-plan")
+})
+
 test("the whole plan fits — the focus IS the plan, and nothing is dropped", () => {
   const r = focus({})                        // no cap given: the real 115 KB arrives from map.mjs
   assert.equal(r.value.why, "whole-plan")
@@ -93,12 +108,12 @@ test("an anchor on an orphan brings its cell — else a config could never be su
 test("two phases: the CELL of a named file first, the CONE after — and the rest is COUNTED", () => {
   // Measured order, not an argued one (see focus.mjs): naming a file is the cheapest, most precise
   // thing an anchor buys; a cone is structure and costs an order of magnitude more.
-  const tight = newFocus({ slices, cells: CELLS, edges: EDGES, anchors: ["capabilityregistry", "irestaction"], cap: 5 * MAP_NODE_BYTES })
+  const tight = newFocus({ slices, cells: CELLS, edges: EDGES, anchors: ["capabilityregistry", "irestaction"], cap: 6 * MAP_NODE_BYTES })
   assert.equal(tight.value.why, "anchors")
   assert.deepEqual(tight.value.chosen, [], "no cone fits under this ceiling…")
   assert.ok(tight.value.cells.length > 1, "…but the cells of the named files are in")
   assert.equal(tight.value.dropped.slices, 2, "and the cones that did not fit are counted")
-  assert.ok(tight.value.estBytes <= 5 * MAP_NODE_BYTES, "the ceiling is never exceeded to fit one more")
+  assert.ok(tight.value.estBytes <= 6 * MAP_NODE_BYTES, "the ceiling is never exceeded to fit one more")
 
   // give it room and the cones follow the cells, cheapest cone first
   const roomy = newFocus({ slices, cells: CELLS, edges: EDGES, anchors: ["capabilityregistry", "irestaction"], cap: 14 * MAP_NODE_BYTES })

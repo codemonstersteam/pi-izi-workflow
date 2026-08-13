@@ -248,6 +248,23 @@ test("a narrowed map declares its boundary, and an anchor left outside it is not
   assert.equal(xml.includes('name="berry" found="no"'), false)
 })
 
+test("an edge's via is dropped when it only restates the node the edge already names", () => {
+  // BUG_FIX_CONTEXT run fa8def32: 93 of eddi's 185 edges carried `import <fq name of `to`>;` and
+  // nothing else — 5 686 B of one fact written twice, in a map that missed its ceiling by 3 624 B.
+  const g = newGraph({ parts: PARTS, computedXml: COMPUTED, plan: PLAN }).value
+  const xml = graphXml(g)
+
+  // the edge is still there, and still says which two nodes it joins
+  assert.match(xml, new RegExp(`<edge from="${M}/FruitResource\\.java" to="${M}/Fruit\\.java"`))
+
+  // …but the evidence that merely repeats `to` is gone, while a real one survives
+  const restating = `<edge from="${M}/A.java" to="${M}/Fruit.java" via="import org.acme.rest.json.Fruit;"/>`
+  const carrying = `<edge from="${M}/A.java" to="${M}/Fruit.java" via="private Set&lt;Fruit&gt; fruits"/>`
+  const one = (edge) => graphXml(newGraph({ parts: PARTS, computedXml: COMPUTED.replace("</computed>", `  ${edge}\n</computed>`), plan: PLAN }).value)
+  assert.equal(one(restating).includes('via="import org.acme.rest.json.Fruit;"'), false)
+  assert.ok(one(carrying).includes("private Set"))
+})
+
 test("an edge with an end outside the map is not written — the map is not the repository", () => {
   // `computed` is written by step 3, which walks the WHOLE tree; the modules of this map are the
   // cells of the focus. Serialising every computed edge is what made step 3b pointless on a
