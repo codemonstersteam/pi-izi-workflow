@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs"
 import { newSlices } from "./slices.mjs"
 import { newFocus, names } from "./focus.mjs"
 import { newPlan } from "../survey-plan/plan.mjs"
-import { MAP_BYTES_PER_NODE } from "../intake/map.mjs"
+import { MAP_NODE_BYTES } from "../intake/map.mjs"
 
 const FX = JSON.parse(readFileSync(new URL("./fixture-eddi.json", import.meta.url), "utf8"))
 const ENTRY = FX.entry                       // …/configs/agents/IRestCapabilityRegistry.java — cone of 5
@@ -21,6 +21,7 @@ const OTHER = FX.otherEntry                  // …/configs/dictionary/IRestActi
 const ORPHAN = FX.nodes.find((p) => p.endsWith(".descriptor.json"))
 
 const { slices, orphans } = newSlices(FX)
+const idOf = (entry) => slices.find((s) => s.entry === entry).id   // ids run by cone SIZE: never hard-code them
 
 // `cellFiles: 2` cuts the extract into nine cells instead of one. It is not a knob the pipeline
 // turns — the real width is CELL_FILES = 20 — but a twelve-file tree lands in a SINGLE cell at that
@@ -34,7 +35,9 @@ const plan = newPlan({
 const CELLS = plan.cells
 const SPINE = CELLS.find((c) => c.kind === "spine").id
 
-const TIGHT = 8 * MAP_BYTES_PER_NODE         // the whole plan is 13 files: it cannot meet this
+const EDGES = FX.edges
+const focusIn = (over) => newFocus({ slices, cells: CELLS, edges: EDGES, ...over })
+const TIGHT = 8 * MAP_NODE_BYTES         // the whole plan estimates at 13613 B: it cannot meet this
 const focus = (over) => newFocus({ slices, orphans, cells: CELLS, ...over })
 
 test("names: the anchor NAMES the file — by its PATH, case-insensitively", () => {
@@ -68,7 +71,7 @@ test("the whole plan fits — the focus IS the plan, and nothing is dropped", ()
 test("above the ceiling the anchor picks the cone that NAMES it, and the cell comes whole", () => {
   const r = focus({ cap: TIGHT, anchors: ["capabilityregistry"] })
   assert.equal(r.value.why, "anchors")
-  assert.deepEqual(r.value.chosen, ["s1"])
+  assert.deepEqual(r.value.chosen, [idOf(ENTRY)])
   assert.ok(r.value.cells.length < CELLS.length, "the focus is narrower than the plan")
   assert.ok(r.value.cells.includes(SPINE), "the spine is in every focus: its six questions are not about a slice")
   assert.ok(r.value.estBytes <= TIGHT)
@@ -87,14 +90,20 @@ test("an anchor on an orphan brings its cell — else a config could never be su
   assert.ok(r.value.cells.includes(cellOfOrphan), "…and yet the named orphan's cell is in the focus")
 })
 
-test("what does not fit is COUNTED, not silently absent — cheapest named cone first", () => {
-  const tighter = 4 * MAP_BYTES_PER_NODE
-  const r = newFocus({ slices, orphans, cells: CELLS, cap: tighter, anchors: ["capabilityregistry", "irestaction"] })
+test("two phases: the CELL of a named file first, the CONE after — and the rest is COUNTED", () => {
+  // Measured order, not an argued one (see focus.mjs): naming a file is the cheapest, most precise
+  // thing an anchor buys; a cone is structure and costs an order of magnitude more.
+  const tight = newFocus({ slices, cells: CELLS, edges: EDGES, anchors: ["capabilityregistry", "irestaction"], cap: 5 * MAP_NODE_BYTES })
+  assert.equal(tight.value.why, "anchors")
+  assert.deepEqual(tight.value.chosen, [], "no cone fits under this ceiling…")
+  assert.ok(tight.value.cells.length > 1, "…but the cells of the named files are in")
+  assert.equal(tight.value.dropped.slices, 2, "and the cones that did not fit are counted")
+  assert.ok(tight.value.estBytes <= 5 * MAP_NODE_BYTES, "the ceiling is never exceeded to fit one more")
 
-  assert.equal(r.value.why, "anchors")
-  assert.deepEqual(r.value.chosen, ["s2"], "s2 costs 2 cells and s1 costs 4: the cheaper one gets in")
-  assert.equal(r.value.dropped.slices, 1, "and the one that did not fit is counted")
-  assert.ok(r.value.estBytes <= tighter, "the ceiling is never exceeded to fit one more")
+  // give it room and the cones follow the cells, cheapest cone first
+  const roomy = newFocus({ slices, cells: CELLS, edges: EDGES, anchors: ["capabilityregistry", "irestaction"], cap: 14 * MAP_NODE_BYTES })
+  assert.deepEqual(roomy.value.chosen, [idOf(OTHER), idOf(ENTRY)], "IRestAction's cone is the cheaper one")
+  assert.deepEqual(roomy.value.dropped, { slices: 0, cells: 0 })
 
   // The count is what makes this a decision rather than a default (standards/code.md §3): step 5
   // carries it into <focus>, and the anchors whose files stayed out come back as found="outside".
@@ -104,16 +113,16 @@ test("no plan, no entry, no cone that fits — three different refusals, and all
   assert.equal(newFocus().error.cls, "no-plan")
   assert.equal(newFocus({ cells: [] }).error.cls, "no-plan")
 
-  const noEntry = newFocus({ slices: [], orphans: FX.nodes, cells: CELLS, cap: TIGHT })
+  const noEntry = newFocus({ slices: [], cells: CELLS, edges: EDGES, cap: TIGHT })
   assert.equal(noEntry.error.cls, "no-entry")
   assert.match(noEntry.error.detail, /сузить нечем/)
 
   // …but a SMALL repository of such a language never meets that refusal: it leaves by the whole-plan
   // branch above, because its plan fits. The order of the two checks is the rule.
-  assert.equal(newFocus({ slices: [], orphans: FX.nodes, cells: CELLS }).value.why, "whole-plan")
+  assert.equal(newFocus({ slices: [], cells: CELLS, edges: EDGES }).value.why, "whole-plan")
 
   // a ceiling under the cheapest cone: nothing can be surveyed, and saying so costs zero tokens
-  const over = newFocus({ slices, orphans, cells: CELLS, cap: 2 * MAP_BYTES_PER_NODE, anchors: ["capabilityregistry"] })
+  const over = newFocus({ slices, cells: CELLS, edges: EDGES, cap: 2 * MAP_NODE_BYTES, anchors: ["capabilityregistry"] })
   assert.equal(over.error.cls, "over-cap")
   assert.match(over.error.detail, /ключ кэша/)
 })

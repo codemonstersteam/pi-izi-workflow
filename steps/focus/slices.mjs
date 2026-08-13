@@ -12,8 +12,6 @@
 // Interface:  TEST_PATHS — the path shapes this step reads as "test"
 //             newSlices({ nodes, edges, routes }) -> { slices, orphans }
 
-import { newLevels } from "../graph/levels.mjs"
-
 // TEST_PATHS — "test" as a PATH, and there can be no other definition at this step.
 //
 // The pipeline's real rule for "this node is a test" lives in steps/graph/graph.mjs and reads the
@@ -46,8 +44,9 @@ const isTest = (p) => TEST_PATHS.some((re) => re.test(p))
 //                          rules — on which the anchor rule of §7 depends
 //                 edges  — [{ from, to }], directed, as parseComputed returns them
 //                 routes — [string], the files with a route computed from annotations (api[].at)
-//   Dependencies: newLevels (steps/graph/levels.mjs) — fanin is counted THERE, there is no second
-//                 count of it here; TEST_PATHS, isTest
+//   Dependencies: TEST_PATHS, isTest. newLevels is deliberately NOT used: this step needs "called by
+//                 production code", and `fanin` counts every edge including a test's — the very
+//                 conflation the BUG_FIX_CONTEXT below was bought by
 //   Antecedent:   any values; missing ones read as empty lists
 //   Consequent:   success: {
 //                   slices  — [{ id, entry, kind, nodes }] sorted by size desc then by entry path;
@@ -77,12 +76,22 @@ export function newSlices({ nodes, edges, routes } = {}) {
   for (const p of known) { out.set(p, []); inn.set(p, []) }
   for (const e of es) { out.get(e.from).push(e.to); inn.get(e.to).push(e.from) }
 
-  const { fanin } = newLevels({ nodes: [...known], edges: es })
   const routed = new Set((routes || []).map((r) => String(r || "")).filter((p) => known.has(p)))
 
+  // A head is a node NO PRODUCTION CODE calls. Counting a test as a caller is the same mistake as
+  // counting a test as an entry, and TEST_PATHS already refuses the second.
+  //
+  // BUG_FIX_CONTEXT: eddi, runs e90d9ce1 and 01d0b023. The rule was `fanin === 0` with `fanin` from
+  //   newLevels — every edge, tests included. `RestImportService.java` has fanin 8 and all eight
+  //   callers are its tests, so it was neither a head nor reachable from any cone: a well-tested
+  //   implementation is invisible to this step by construction. Measured on the benchmark's oracle
+  //   (tasks/bench-glossary-eddi.md §3): 10 of its 10 existing files were orphans, 0 were entries,
+  //   0 were in any cone. With this rule the tree yields 250 entries instead of 84 and 797 orphans
+  //   instead of 1406 — the code a change actually lands in becomes addressable.
+  const calledByCode = (p) => inn.get(p).some((f) => !isTest(f))
   const entries = [...known]
     .filter((p) => !isTest(p))
-    .filter((p) => routed.has(p) || (fanin[p] === 0 && (out.get(p).length || inn.get(p).length)))
+    .filter((p) => routed.has(p) || (!calledByCode(p) && (out.get(p).length || inn.get(p).length)))
     .sort()
 
   const cone = (entry) => {

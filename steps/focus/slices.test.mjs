@@ -6,6 +6,8 @@
 // graph proves nothing about a monolith — the price of that was already paid at step 9
 // (docs/design.md, header). What the extract carries, and why each piece is in it:
 //   · a real route entry (IRestCapabilityRegistry) with a 4-node cone below it;
+//   · a real IMPLEMENTATION (backup/impl/RestExportService) whose only callers are its two tests —
+//     the shape that was invisible to this step until runs e90d9ce1/01d0b023 (see slices.mjs);
 //   · a second route entry (IRestAction) whose cone SHARES a node with the first;
 //   · the entry's own test (ConfigStoreRoleGateTest → entry) — an edge test → entry;
 //   · four tests of a NEIGHBOUR of the entry (…→ AgentConfiguration) — the §2в seam;
@@ -30,30 +32,52 @@ const NEIGHBOUR = "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfigur
 test("happy: every entry gets its cone, ids run by SIZE, and what no cone reached is orphaned", () => {
   const { slices, orphans } = newSlices(FX)
 
-  assert.deepEqual(slices.map((s) => s.entry), [ENTRY, OTHER])
-  assert.deepEqual(slices.map((s) => s.id), ["s1", "s2"])
-  assert.deepEqual(slices.map((s) => s.kind), ["route", "route"])
-  assert.equal(slices[0].nodes.length, FX.entryNodes)          // 5: the entry, three below it, its test
-  assert.ok(slices[0].nodes.length > slices[1].nodes.length)   // s1 is the bigger cone, not the first path
+  assert.deepEqual(slices.map((s) => s.id), ["s1", "s2", "s3", "s4"])
+  assert.deepEqual(slices.map((s) => s.kind), ["head", "route", "route", "route"])
+  assert.equal(slices.find((s) => s.entry === ENTRY).nodes.length, FX.entryNodes)  // 5: entry, three below, its test
+  assert.ok(slices[0].nodes.length >= slices[1].nodes.length)   // ids run by SIZE, not by path
 
   // the cone descends: a node two edges below the entry is in it
-  assert.ok(slices[0].nodes.includes("src/main/java/ai/labs/eddi/configs/hitl/HitlTimeoutPolicy.java"))
+  const reg = slices.find((s) => s.entry === ENTRY)
+  assert.ok(reg.nodes.includes("src/main/java/ai/labs/eddi/configs/hitl/HitlTimeoutPolicy.java"))
 
   // Orphans are everything no cone reached, and they come in two kinds — both of them expected:
   // the configs no edge touches (the only way an anchor on a `.json` can ever be surveyed —
   // docs/big-projects-solution.md §7), and the tests of NEIGHBOURS, which are entries of nothing and
   // the target of nothing. On the whole tree this is the larger half: 1406 orphans of 1850 files,
   // mostly tests and languages with no edge rules.
-  assert.deepEqual(orphans, [...FX.nodes.filter((p) => p.endsWith(".json")), ...FX.nodes.filter((p) => p.includes("/backup/impl/"))])
+  assert.deepEqual(orphans, [
+    ...FX.nodes.filter((p) => p.endsWith(".json")),
+    ...FX.nodes.filter((p) => p.includes("RemoteApiResourceSource")),
+  ])
 
   // the partition holds: every node is in some cone or in orphans, never in neither
   const reached = new Set(slices.flatMap((s) => s.nodes))
   for (const p of FX.nodes) assert.equal(reached.has(p) || orphans.includes(p), true, p)
 })
 
+test("an implementation called only by its tests IS an entry", () => {
+  const { slices, orphans } = newSlices(FX)
+  const impl = FX.implOnlyTests
+
+  // BUG_FIX_CONTEXT runs e90d9ce1 / 01d0b023: with `fanin === 0` this file had fanin 2 — both its
+  // own tests — so it was neither a head nor reachable from any cone, and landed in `orphans`.
+  // On eddi that shape covers ALL TEN existing files of the benchmark's oracle.
+  const s = slices.find((x) => x.entry === impl)
+  assert.ok(s, "the implementation is an entry")
+  assert.equal(s.kind, "head", "…a head: nothing in production code calls it")
+  assert.equal(orphans.includes(impl), false)
+
+  // …and its tests are in its cone, by the same reverse-edge rule the entry's own test uses
+  assert.equal(s.nodes.filter((p) => p.includes("RestExportServiceBranchTest")).length, 1)
+
+  // the rule did not swallow the interface it implements: that one is still its own route entry
+  assert.ok(slices.some((x) => x.entry === FX.iface && x.kind === "route"))
+})
+
 test("a test joins the cone only when it is the test OF THE ENTRY", () => {
   const { slices } = newSlices(FX)
-  const cone = slices[0].nodes
+  const cone = slices.find((s) => s.entry === ENTRY).nodes
 
   assert.ok(cone.includes(OWN_TEST), "edge test → entry pulls the entry's own test in")
   assert.ok(cone.includes(NEIGHBOUR), "the neighbour itself is in the cone")
@@ -72,8 +96,8 @@ test("a test path is never an entry, and an isolated node is not a head", () => 
   // heads — fanin 0 with an edge each. On the whole tree that is where the 220-node, 203 KB cone of
   // JsonResponseFormatThreadingTest comes from (docs/big-projects-solution.md §2).
   const heads = FX.nodes.filter((p) => !FX.edges.some((e) => e.to === p) && FX.edges.some((e) => e.from === p))
-  assert.equal(heads.every((p) => p.includes("/test/")), true, "the fixture's only heads ARE tests")
-  assert.equal(slices.some((s) => heads.includes(s.entry)), false, "…and not one of them is an entry")
+  assert.ok(heads.some((p) => p.includes("/test/")), "the fixture holds tests with no caller")
+  assert.equal(slices.some((s) => s.entry.includes("/test/")), false, "…and not one of them is an entry")
 
   // an isolated node has fanin 0 too, and declares nothing: it is an orphan, never a head
   for (const p of orphans.filter((p) => p.endsWith(".json"))) {

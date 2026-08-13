@@ -172,14 +172,32 @@ export function mergeGraph({ parts = [], computed = {}, plan = {}, focus = null 
     if (!providers.has(p)) providers.set(p, new Set())
     providers.get(p).add(a.at)
   }
-  const edges = (computed.edges || []).map((e) => ({ from: e.from, to: e.to, via: e.via, by: "" }))
+  const paths = [...byPath.keys()].sort()
+
+  // Only edges with BOTH ends in the map. `computed` covers the whole repository — it is written by
+  // step 3, which walks the tree before anything is narrowed — while the modules of this map are the
+  // cells of the FOCUS. An edge to a node the reader cannot see says nothing it can act on.
+  //
+  // BUG_FIX_CONTEXT: this is the defect that made step 3b pointless on a monolith, and the numbers
+  //   are eddi's. Previous: every computed edge was serialised. On the acceptance forms that is
+  //   invisible — t3 has 17 modules and 8 edges, none of them dangling, so this filter is a
+  //   byte-for-byte identity there. On eddi it is 8253 edges ≈ 1855 KB against a 115 KB ceiling: the
+  //   map could not be read no matter how narrow the focus, and the refusal would arrive at step 6,
+  //   AFTER the swarm — precisely the cost step 3b exists to avoid. Filtered: ≈246 edges ≈ 56 KB.
+  // The rule is not new, only unenforced: `<focus local="level fanin fanout component">` already
+  // declares that this map's numbers are computed from what got in, and both readers of the grammar
+  // tolerate a dangling end (steps/intake/map.mjs::parseMap keeps them, levels.mjs ignores them).
+  const inMap = new Set(paths)
+  const edges = (computed.edges || [])
+    .filter((e) => inMap.has(e.from) && inMap.has(e.to))
+    .map((e) => ({ from: e.from, to: e.to, via: e.via, by: "" }))
   for (const u of computed.use || []) {
+    if (!inMap.has(u.at)) continue
     for (const to of providers.get(u.path) || []) {
-      if (to !== u.at) edges.push({ from: u.at, to, via: u.via, by: "use" })
+      if (to !== u.at && inMap.has(to)) edges.push({ from: u.at, to, via: u.via, by: "use" })
     }
   }
 
-  const paths = [...byPath.keys()].sort()
   const L = newLevels({ nodes: paths, edges })
 
   const declAt = new Map()
@@ -301,9 +319,12 @@ export function mergeGraph({ parts = [], computed = {}, plan = {}, focus = null 
           of: planCells.length,
           nodes: modules.length,
           repo: focus.repoFiles || 0,
-          // What the ceiling left out, carried from step 3b. Zero is written too: "nothing was
-          // dropped" and "nobody counted" must not read the same in a file a human diagnoses from.
+          // What the ceiling left out, carried from step 3b — BOTH numbers. Zero is written too:
+          // "nothing was dropped" and "nobody counted" must not read the same in a file a human
+          // diagnoses from. Cells matter more than cones here: on eddi a run dropped 5 cones and 144
+          // cells, and a map that reported only the cones told the smaller half of the truth.
           dropped: (focus.dropped && focus.dropped.slices) || 0,
+          droppedCells: (focus.dropped && focus.dropped.cells) || 0,
         })
       : null,
     gaps: Object.freeze(gaps),
@@ -419,7 +440,7 @@ export function graphXml(graph) {
   // `local` names the numbers computed from what got in, so a `level` or a `component` in this map
   // never silently claims to speak about the whole tree.
   if (g.focus) {
-    L.push(`  <focus slices="${esc(g.focus.slices)}" cells="${g.focus.cells}" of="${g.focus.of}" nodes="${g.focus.nodes}" repo="${g.focus.repo}" dropped="${g.focus.dropped}" local="level fanin fanout component"/>`)
+    L.push(`  <focus slices="${esc(g.focus.slices)}" cells="${g.focus.cells}" of="${g.focus.of}" nodes="${g.focus.nodes}" repo="${g.focus.repo}" dropped="${g.focus.dropped}" dropped-cells="${g.focus.droppedCells}" local="level fanin fanout component"/>`)
   }
 
   L.push(answerXml("artifact", (g.answers || {}).artifact))

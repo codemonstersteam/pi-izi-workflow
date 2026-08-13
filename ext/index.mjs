@@ -742,7 +742,7 @@ export const focus = {
     // run e90d9ce1 that rule named 83 of eddi's 84 entries on the anchor `import`
     // (steps/focus/focus.mjs::names).
     const { slices, orphans } = newSlices({ nodes, edges: computed.edges, routes: computed.api.map((a) => a.at) })
-    const r = newFocus({ slices, orphans, anchors: p.plan.subjects || [], cells: p.cells })
+    const r = newFocus({ slices, anchors: p.plan.subjects || [], cells: p.cells, edges: computed.edges })
     if (!r.ok) {
       drop()
       return { ok: false, why: `${r.error.cls}: ${r.error.detail}`, slices: slices.length, entries: slices.length }

@@ -225,14 +225,14 @@ const FOCUS_PLAN = {
     { id: "left-out", kind: "survey", subjects: ["berry"] },   // real files, and the focus dropped them
   ],
 }
-const FOCUS = { chosen: ["s1"], cells: ["spine", "root"], repoFiles: 40, dropped: { slices: 2, cells: 0, bytes: 90000 } }
+const FOCUS = { chosen: ["s1"], cells: ["spine", "root"], repoFiles: 40, dropped: { slices: 2, cells: 7 } }
 
 test("a narrowed map declares its boundary, and an anchor left outside it is not 'found'", () => {
   const r = newGraph({ parts: PARTS, computedXml: COMPUTED, plan: FOCUS_PLAN, focus: FOCUS })
   assert.equal(r.ok, true, r.ok ? "" : r.error && r.error.detail)
   const g = r.value
 
-  assert.deepEqual(g.focus, { slices: "s1", cells: 2, of: 3, nodes: g.modules.length, repo: 40, dropped: 2 })
+  assert.deepEqual(g.focus, { slices: "s1", cells: 2, of: 3, nodes: g.modules.length, repo: 40, dropped: 2, droppedCells: 7 })
   assert.deepEqual(g.subjects, [
     { name: "fruit", found: "" },                     // its cell is in the focus
     { name: "search", found: "no" },                  // no file in the repository at all
@@ -240,12 +240,30 @@ test("a narrowed map declares its boundary, and an anchor left outside it is not
   ])
 
   const xml = graphXml(g)
-  assert.match(xml, /<focus slices="s1" cells="2" of="3" nodes="\d+" repo="40" dropped="2" local="level fanin fanout component"\/>/)
+  assert.match(xml, /<focus slices="s1" cells="2" of="3" nodes="\d+" repo="40" dropped="2" dropped-cells="7" local="level fanin fanout component"\/>/)
   assert.match(xml, /<subject name="berry" found="outside"\/>/)
 
   // …and `outside` must not collapse into `no`: step 6's role answers Unknown on the first and asks
   // nothing about the second, and step 7 carries the difference to the operator (docs/weight.md §5).
   assert.equal(xml.includes('name="berry" found="no"'), false)
+})
+
+test("an edge with an end outside the map is not written — the map is not the repository", () => {
+  // `computed` is written by step 3, which walks the WHOLE tree; the modules of this map are the
+  // cells of the focus. Serialising every computed edge is what made step 3b pointless on a
+  // monolith: 8253 edges ≈ 1855 KB of eddi's map against a 115 KB ceiling, no matter how narrow the
+  // focus — and the refusal lands at step 6, after the swarm has been paid for.
+  const outside = `${COMPUTED.slice(0, -12)}
+  <edge from="${M}/FruitResource.java" to="src/main/java/org/acme/absent/NotSurveyed.java" via="import"/>
+  <edge from="src/main/java/org/acme/absent/NotSurveyed.java" to="${M}/Fruit.java" via="import"/>
+</computed>`
+  const g = newGraph({ parts: PARTS, computedXml: outside, plan: FOCUS_PLAN, focus: FOCUS }).value
+
+  assert.equal(g.edges.some((e) => e.from.includes("absent") || e.to.includes("absent")), false)
+  assert.equal(graphXml(g).includes("NotSurveyed"), false)
+
+  // …and the edges that DO belong are untouched: this is a filter, not a rewrite
+  assert.equal(g.edges.length, newGraph({ parts: PARTS, computedXml: COMPUTED, plan: FOCUS_PLAN, focus: FOCUS }).value.edges.length)
 })
 
 test("a focus that names EVERY cell is not a narrowing — the map says nothing new", () => {

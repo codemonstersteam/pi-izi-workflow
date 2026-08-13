@@ -7,13 +7,13 @@
 // io:         none
 // Invariants: total — any input, including undefined, yields a Result; a chosen focus never names a
 //             cell the plan does not carry; the spine cell is in every focus; the estimate is
-//             `files × MAP_BYTES_PER_NODE`, and cells are taken WHOLE; what did not fit is COUNTED
+//             the map's own arithmetic over nodes AND edges, and cells are taken WHOLE; what did not fit is COUNTED
 //             and returned, never silently absent.
 // Interface:  names(anchor, path) -> boolean   — the anchor→file rule of THIS step
-//             newFocus({ slices, orphans, anchors, cells, cap, perNode }) -> Result<Focus, …>
+//             newFocus({ slices, anchors, cells, edges, cap }) -> Result<Focus, …>
 
 import { ok, err } from "../../core/result.mjs"
-import { MAP_CAP_BYTES, MAP_BYTES_PER_NODE } from "../intake/map.mjs"
+import { MAP_CAP_BYTES, MAP_NODE_BYTES, MAP_EDGE_BYTES } from "../intake/map.mjs"
 
 // names — the anchor rule of step 3b, and it is NOT the anchor rule of step 3.
 //
@@ -54,8 +54,9 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 //                 orphans — [string], the nodes no cone reached
 //                 anchors — [string], the BRD's anchors (plan.subjects) — NAMES, not paths
 //                 cells   — the plan's cells: [{ id, kind, files: [{ path }] }]
+//                 edges   — [{ from, to }] of graph-computed.xml: the estimate prices them, because
+//                           on a monolith they are the larger half of the map
 //                 cap     — the reading ceiling; MAP_CAP_BYTES when absent
-//                 perNode — the estimated cost of one node; MAP_BYTES_PER_NODE when absent
 //   Dependencies: ok, err (core/result.mjs), names, kb
 //   Antecedent:   any values; missing ones read as empty. `cells` empty is the "no plan" case, not
 //                 an empty focus
@@ -69,7 +70,7 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 //                                        anchors, not a choice among 84 candidates
 //                          "over-cap"  — even the cheapest named cone does not fit beside the spine
 //   Purity:       pure
-//   Interface:    newFocus({ slices, orphans, anchors, cells, cap, perNode }) -> Result
+//   Interface:    newFocus({ slices, anchors, cells, edges, cap }) -> Result
 //
 // WHY NO QUESTION TO THE OPERATOR, and the two reasons are not the same reason.
 //
@@ -89,19 +90,35 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 // that everything which did not fit is COUNTED in `dropped`, carried into `<focus>` by step 5 and
 // printed in the run's log. An anchor whose files ended outside comes back as `found="outside"` in
 // the map, so step 6's role meets an honest Unknown instead of a guess.
-export function newFocus({ slices = [], orphans = [], anchors = [], cells = [], cap = MAP_CAP_BYTES, perNode = MAP_BYTES_PER_NODE } = {}) {
+export function newFocus({ slices = [], anchors = [], cells = [], edges = [], cap = MAP_CAP_BYTES } = {}) {
   const plan = (cells || []).filter((c) => c && c.id)
   if (!plan.length) return err("no-plan", ".agent/survey-plan.json не несёт ни одной клетки — шаг 3 не отработал")
 
   const filesOf = (cs) => cs.reduce((n, c) => n + (c.files || []).length, 0)
+
+  // The estimate, and it is the map's own arithmetic rather than a rule of thumb: every node costs
+  // its overhead plus its PATH, every edge costs its overhead plus the two paths it names. Both
+  // constants are measured on a live artifact (steps/intake/map.mjs). The path is not averaged away
+  // because a monolith's paths are twice a form's, and an edge names two of them — averaging is what
+  // made the previous estimate under-count eddi by 2.3×.
+  const bytesOf = (cs) => {
+    const inMap = new Set(cs.flatMap((c) => (c.files || []).map((f) => f.path)))
+    let n = 0
+    for (const p of inMap) n += MAP_NODE_BYTES + p.length
+    for (const e of edges || []) {
+      if (inMap.has(e.from) && inMap.has(e.to)) n += MAP_EDGE_BYTES + e.from.length + e.to.length
+    }
+    return n
+  }
+
   const allFiles = filesOf(plan)
-  if (allFiles * perNode <= cap) {
+  if (bytesOf(plan) <= cap) {
     return ok(Object.freeze({
       why: "whole-plan",
       chosen: slices.map((s) => s.id),
       cells: plan.map((c) => c.id),
       files: allFiles,
-      estBytes: allFiles * perNode,
+      estBytes: bytesOf(plan),
       dropped: Object.freeze({ slices: 0, cells: 0 }),
       slices,
       entries: slices.length,
@@ -109,7 +126,7 @@ export function newFocus({ slices = [], orphans = [], anchors = [], cells = [], 
   }
 
   if (!slices.length) {
-    return err("no-entry", `план не влезает в карту (${allFiles} файлов ≈ ${kb(allFiles * perNode)} при потолке ${kb(cap)}), а сузить нечем: ни одного входа — ни маршрута, ни головы графа`)
+    return err("no-entry", `план не влезает в карту (${allFiles} файлов ≈ ${kb(bytesOf(plan))} при потолке ${kb(cap)}), а сузить нечем: ни одного входа — ни маршрута, ни головы графа`)
   }
 
   // Which cell holds which path — built once. A cell is taken WHOLE: its composition is the key of
@@ -117,18 +134,16 @@ export function newFocus({ slices = [], orphans = [], anchors = [], cells = [], 
   // coverage invariant (docs/big-projects-solution.md §5).
   const cellOf = new Map()
   for (const c of plan) for (const f of c.files || []) cellOf.set(f.path, c)
-  const named = (path) => (anchors || []).some((a) => names(a, path))
+  const isNamed = (path) => (anchors || []).some((a) => names(a, path))
 
-  const anchored = slices.filter((s) => named(s.entry))
-  const namedOrphans = (orphans || []).filter(named)
-  if (!anchored.length && !namedOrphans.length) {
-    return err("no-anchor", `ни один якорь BRD не называет вход среза (входов ${slices.length}, якорей ${(anchors || []).length}: ${(anchors || []).join(" · ")}). Сузить не по чему — правится формулировка требований, а не выбор среза`)
+  const namedFiles = plan.flatMap((c) => (c.files || []).map((f) => f.path)).filter(isNamed)
+  const anchored = slices.filter((s) => isNamed(s.entry))
+  if (!namedFiles.length) {
+    return err("no-anchor", `ни один якорь BRD не называет ни одного файла (файлов ${allFiles}, якорей ${(anchors || []).length}: ${(anchors || []).join(" · ")}). Сузить не по чему — правится формулировка требований, а не выбор среза`)
   }
 
-  // The budget is filled in one pass, cheapest first, and what did not fit is counted. The spine is
-  // not a candidate: its six questions are not about a slice, so it is in every focus by definition.
-  const taken = new Set(plan.filter((c) => c.kind === "spine"))
-  const cost = () => filesOf([...taken]) * perNode
+  const taken = new Set(plan.filter((c) => c.kind === "spine"))   // the spine is not a candidate
+  const cost = () => bytesOf([...taken])
   const add = (paths) => {
     const before = new Set(taken)
     for (const p of paths) { const c = cellOf.get(p); if (c) taken.add(c) }
@@ -136,15 +151,34 @@ export function newFocus({ slices = [], orphans = [], anchors = [], cells = [], 
     return true
   }
 
-  // Orphans first: an anchor that NAMES a file it can reach no other way (a config, a template) is
-  // the most direct evidence there is — no cone will ever pull it in (docs/big-projects-solution.md §7).
-  let droppedOrphans = 0
-  for (const p of [...namedOrphans].sort()) if (!add([p])) droppedOrphans++
+  // TWO PHASES, and the order between them is measured, not argued.
+  //
+  // Phase one takes the CELL of every file an anchor NAMES. That is the cheapest and most precise
+  // thing an anchor buys: the file itself, without opening anything. Phase two takes the CONES of
+  // the named entries — structure, bought after the facts.
+  //
+  // Measured on eddi over three real anchor sets (two written by the role in live runs, one with the
+  // broadest word removed), scored against the oracle of tasks/bench-glossary-eddi.md §3, worst set
+  // first — because the anchors are written by a role and cannot be relied on:
+  //   named cells → cones   6 / 6 / 7 of 10   ← this
+  //   cones first             2 / 6 / 4
+  //   by cost, mixed          1 / 6 / 2
+  //   by anchor rarity        2 / 6 / 2
+  //   orphan-cells first      0 / 6 / 2
+  // The gap is not a tie: opening a cone costs an order of magnitude more than naming a file, and on
+  // a monolith the budget it eats is budget the named files do not get. This also removes `orphans`
+  // as a case of its own — an orphan an anchor names is simply a named file no cone reaches.
+  const cellsByCost = [...new Set(namedFiles.map((p) => cellOf.get(p)).filter(Boolean))]
+    .sort((a, b) => (a.files || []).length - (b.files || []).length || a.id.localeCompare(b.id))
+  let droppedCells = 0
+  for (const c of cellsByCost) {
+    if (taken.has(c)) continue
+    if (!add((c.files || []).map((f) => f.path))) droppedCells++
+  }
 
   const ordered = anchored
-    .map((s) => ({ s, bytes: filesOf([...new Set(s.nodes.map((n) => cellOf.get(n)).filter(Boolean))]) * perNode }))
+    .map((s) => ({ s, bytes: bytesOf([...new Set(s.nodes.map((n) => cellOf.get(n)).filter(Boolean))]) }))
     .sort((a, b) => a.bytes - b.bytes || a.s.entry.localeCompare(b.s.entry))
-
   const chosen = []
   let droppedSlices = 0
   for (const { s } of ordered) {
@@ -152,19 +186,19 @@ export function newFocus({ slices = [], orphans = [], anchors = [], cells = [], 
     else droppedSlices++
   }
 
-  if (!chosen.length && !namedOrphans.length) {
-    return err("over-cap", `самый дешёвый названный конус не влезает: ${kb(ordered[0].bytes)} при потолке ${kb(cap)}. Клетка берётся целиком, и разрезать её здесь нельзя — это ключ кэша .izi/parts`)
+  const cs = [...taken]
+  if (cs.every((c) => c.kind === "spine")) {
+    return err("over-cap", `ни одна названная клетка не влезает под потолок ${kb(cap)}: самая дешёвая — ${kb(bytesOf([cellsByCost[0]]))}. Клетка берётся целиком, и разрезать её здесь нельзя — это ключ кэша .izi/parts`)
   }
 
-  const cs = [...taken]
   const files = filesOf(cs)
   return ok(Object.freeze({
     why: "anchors",
     chosen: chosen.map((s) => s.id),
     cells: cs.map((c) => c.id),
     files,
-    estBytes: files * perNode,
-    dropped: Object.freeze({ slices: droppedSlices, cells: droppedOrphans }),
+    estBytes: bytesOf(cs),
+    dropped: Object.freeze({ slices: droppedSlices, cells: droppedCells }),
     slices,
     entries: slices.length,
   }))

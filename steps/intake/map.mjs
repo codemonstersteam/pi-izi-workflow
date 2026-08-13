@@ -10,7 +10,7 @@
 // Invariants: parseMap and mapMeasure are total — any input, including undefined, yields an empty
 //             parse and never throws; the cap is a CONSTANT here and nowhere else.
 // Interface:  MAP_CAP_BYTES — the reading ceiling, in bytes
-//             MAP_BYTES_PER_NODE — what one node of the map costs, ESTIMATED
+//             MAP_NODE_BYTES · MAP_EDGE_BYTES — what a node and an edge of the map cost
 //             parseMap(xml) -> { nodes, tests, entries: Set<string>, edges: Edge[], count,
 //                                nodeTests: Map, suites: Suite[], spine: {…}, cycles: Set<string> }
 //             mapMeasure(xml, cap?) -> { bytes, nodes, overCap }
@@ -30,21 +30,29 @@ import { attrs, elem, tag } from "../../core/xml.mjs"
 // the role receive it through the host, they do not carry a copy.
 export const MAP_CAP_BYTES = 115 * 1024
 
-// MAP_BYTES_PER_NODE — the same 417 B, as a number the code may multiply by.
+// MAP_NODE_BYTES / MAP_EDGE_BYTES — what the map costs, as two numbers the code may multiply by.
 //
-// It lives next to the cap because the two are one arithmetic: "does the map fit" is `nodes ×
-// per-node ≤ cap`, and splitting the halves across two modules would give one fact two homes.
-// Step 3b (steps/focus/focus.mjs) is its only consumer today: it decides BEFORE the swarm whether
-// the map the swarm would produce can be read at all, which is the whole point of measuring instead
-// of finding out after 39 batches (docs/big-projects-problems.md §2).
+// They live next to the cap because the three are one arithmetic: "does the map fit" is
+// `Σ nodes + Σ edges ≤ cap`. Step 3b (steps/focus/focus.mjs) is their only consumer: it decides
+// BEFORE the swarm whether the map the swarm would produce can be read at all, which is the whole
+// point of measuring instead of finding out after 39 batches (docs/big-projects-problems.md §2).
 //
-// It is an ESTIMATE, and the estimate's source is named: a live run on a 15-node, 27-declaration
-// form (docs/graph.md §7, run c166bd87). A `<module>` block grows with its `<dep>` count, so on a
-// monolith — eddi holds 8253 edges over 1850 files — the real cost is likelier above this than
-// below. Nothing is padded "for safety": narrowing the focus by a number taken from someone's head
-// is exactly the invented-default the pipeline refuses. The miss is caught where it already was —
-// mapMeasure() below, after the swarm, with the byte count in hand.
-export const MAP_BYTES_PER_NODE = 417
+// MEASURED on a live artifact, not on a form's node count: `.agent/appgraph.xml` of run 23644036
+// (t3, 10310 B, 17 modules, 8 edges). Split by element:
+//   edges   1528 B over 8   → 191 B each, of which 103 B is the two paths  → 88 B + the paths
+//   the rest 8782 B over 17 → 516 B each, of which  48 B is the path       → 468 B + the path
+// The PATH is not folded into the constant, and that is the correction that matters: a java monolith
+// writes `src/main/java/ai/labs/eddi/backup/impl/RestExportService.java` where the form writes
+// `src/main/java/org/acme/rest/json/Fruit.java`, and an edge names two of them. Folding an average
+// path length into one number is what made the previous constant (417 B/node, no edges at all)
+// under-count eddi by 2.3× — 114 KB estimated against 259 KB real.
+//
+// Reproduces its own source: 17×(468+48) + 8×(88+103) = 10300 against 10310 measured, 0.1%.
+// What it still cannot know is `<role>` — the scout writes it, and it does not exist yet. That is
+// inside the 468 as an average of one live run, and it is why the last honest check stays where it
+// has always been: mapMeasure() below, after the swarm, on the real bytes.
+export const MAP_NODE_BYTES = 468
+export const MAP_EDGE_BYTES = 88
 
 // FUNCTION_CONTRACT: parseMap — the map's node keys
 //   Input:        xml — text of `.agent/appgraph.xml`; type unconstrained
