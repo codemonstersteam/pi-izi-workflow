@@ -126,7 +126,12 @@ $START_FORBIDDEN
   scenario runs through, in order: step 8 cuts the change's subgraph from it and step 9 owes a
   contract to every node of it, so a node you leave out is one nobody will design.
 - Do NOT write a number that stands in none of the order's sources, and do NOT name a source outside
-  that list — machine-checked as `F5`.
+  that list — machine-checked as `F5`. Two ways a number arrives without one, and both look like
+  knowledge. A measurement that belongs to a NAMED format is the format's, not the requirement's:
+  name the format and let it carry its own numbers — `domain="ObjectId"`, never `domain="hex 24
+  chars"`. And the analogue is a PLACE, not a source: it says the quantity exists and where it is
+  written, never what it equals. A value you can defend only with "the analogue does it this way" is
+  an open `<question>`.
 - Do NOT invent a failure code the repository has no idiom for, and do NOT leave the failure map
   silently empty — machine-checked as `F6`.
 - Do NOT declare a test file as a delta or as `<touched>`: the test is the DoD of the change and
