@@ -211,6 +211,57 @@ test("invalid-graph: a duplicated path and a lost anchor are broken INVARIANTS, 
   assert.equal(r.value.subjects.length, 2)              // this is what copying produces
 })
 
+// --- the focus: a map that covers part of the repository must SAY so ---------------------------
+//
+// Step 3b may narrow the survey to the cones the BRD points at (docs/big-projects-solution.md). Two
+// things then stop being true by construction and have to be written down instead: the map is no
+// longer the repository, and an anchor may exist in the tree while being absent from the map.
+const FOCUS_PLAN = {
+  subjects: ["fruit", "search", "berry"],
+  gaps: ["search"],                                   // matched no file ANYWHERE — the old meaning of found="no"
+  cells: [
+    { id: "spine", kind: "spine", subjects: [] },
+    { id: "root", kind: "survey", subjects: ["fruit"] },
+    { id: "left-out", kind: "survey", subjects: ["berry"] },   // real files, and the focus dropped them
+  ],
+}
+const FOCUS = { chosen: ["s1"], cells: ["spine", "root"], repoFiles: 40 }
+
+test("a narrowed map declares its boundary, and an anchor left outside it is not 'found'", () => {
+  const r = newGraph({ parts: PARTS, computedXml: COMPUTED, plan: FOCUS_PLAN, focus: FOCUS })
+  assert.equal(r.ok, true, r.ok ? "" : r.error && r.error.detail)
+  const g = r.value
+
+  assert.deepEqual(g.focus, { slices: "s1", cells: 2, of: 3, nodes: g.modules.length, repo: 40 })
+  assert.deepEqual(g.subjects, [
+    { name: "fruit", found: "" },                     // its cell is in the focus
+    { name: "search", found: "no" },                  // no file in the repository at all
+    { name: "berry", found: "outside" },              // files exist — the focus left them out
+  ])
+
+  const xml = graphXml(g)
+  assert.match(xml, /<focus slices="s1" cells="2" of="3" nodes="\d+" repo="40" local="level fanin fanout component"\/>/)
+  assert.match(xml, /<subject name="berry" found="outside"\/>/)
+
+  // …and `outside` must not collapse into `no`: step 6's role answers Unknown on the first and asks
+  // nothing about the second, and step 7 carries the difference to the operator (docs/weight.md §5).
+  assert.equal(xml.includes('name="berry" found="no"'), false)
+})
+
+test("a focus that names EVERY cell is not a narrowing — the map says nothing new", () => {
+  const whole = { ...FOCUS, cells: ["spine", "root", "left-out"] }
+  const g = newGraph({ parts: PARTS, computedXml: COMPUTED, plan: FOCUS_PLAN, focus: whole }).value
+
+  assert.equal(g.focus, null, "'the focus is everything' and 'there is no focus' are the same map")
+  assert.equal(graphXml(g).includes("<focus"), false)
+  assert.equal(g.subjects.find((s) => s.name === "berry").found, "", "nothing is outside when nothing was dropped")
+
+  // the regression that matters most: with no focus at all — every form the pipeline is green on
+  // today — the artifact is byte-for-byte what it was before step 3b existed
+  const before = graphXml(newGraph({ parts: PARTS, computedXml: COMPUTED, plan: FOCUS_PLAN }).value)
+  assert.equal(before, graphXml(g))
+})
+
 test("suiteFor: the deepest folder wins, an unbreakable tie stays UNBOUND rather than guessed", () => {
   const suites = [
     { id: "unit", path: "src/test", match: "" },

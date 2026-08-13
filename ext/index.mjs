@@ -813,9 +813,15 @@ export const cells = {
     const root = runRoot(context)
     const r = readPlanCells(root)
     if (!r.ok) return { ok: false, why: r.why }
+    // The swarm surveys the FOCUS, not the plan. A missing .agent/focus.json is terminal rather than
+    // a quiet fallback to every cell: "there is no focus" must never become "the focus is
+    // everything" — on a monolith that is the difference between 3-6 cells and 306
+    // (standards/code.md §2).
+    const f = readFocus(root)
+    if (!f.ok) return { ok: false, why: f.why }
     return {
       ok: true,
-      cells: r.cells.map((c) => ({
+      cells: r.cells.filter((c) => f.cells.has(c.id)).map((c) => ({
         id: c.id,
         kind: c.kind,
         subjects: [...(c.subjects || [])],
@@ -973,7 +979,7 @@ const DESIGN_PATH = ".agent/design"
 const RIPPLE_PATH = ".agent/ripple.xml"
 
 export const buildGraph = {
-  description: "Merge every graph part and the script's computed facts into .agent/appgraph.xml — steps/graph/graph.mjs::newGraph wired to disk. Parts are read by the PLAN, so a missing one is named instead of silently shrinking the graph. Written only after a green merge.",
+  description: "Merge every graph part and the script's computed facts into .agent/appgraph.xml — steps/graph/graph.mjs::newGraph wired to disk. Parts are read by the FOCUS (.agent/focus.json), so a missing part of a focused cell is named instead of silently shrinking the graph, while a cell the focus left out is not expected to have one. A narrowed map declares its own boundary in a <focus> element. Written only after a green merge.",
   input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
   output: {
     type: "object",
@@ -1000,17 +1006,22 @@ export const buildGraph = {
     const root = runRoot(context)
     const p = readPlanCells(root)
     if (!p.ok) return { ok: false, why: p.why }
+    // The FOCUS decides which cells must be closed, and it is a refusal when it is absent — the same
+    // rule step 4 follows. "There is no focus" and "the focus is everything" are different facts:
+    // falling back to the plan here would survey by one list and merge by another.
+    const f = readFocus(root)
+    if (!f.ok) return { ok: false, why: f.why }
 
     const parts = []
-    for (const c of p.cells) {
+    for (const c of p.cells.filter((c) => f.cells.has(c.id))) {
       const from = `.agent/graph-parts/${c.id}.xml`
       if (!existsSync(at(root, from))) {
-        return { ok: false, why: `${from} не существует — клетка ${c.id} плана не закрыта частью, поддерево потеряно` }
+        return { ok: false, why: `${from} не существует — клетка ${c.id} ФОКУСА не закрыта частью, поддерево потеряно` }
       }
       parts.push({ id: c.id, kind: c.kind, xml: readFileSync(at(root, from), "utf8") })
     }
 
-    const r = newGraph({ parts, computedXml: readIfExists(root, COMPUTED_PATH), plan: p.plan })
+    const r = newGraph({ parts, computedXml: readIfExists(root, COMPUTED_PATH), plan: p.plan, focus: f.focus })
     if (!r.ok) return { ok: false, why: r.error.detail }
 
     const g = r.value

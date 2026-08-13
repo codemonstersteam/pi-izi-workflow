@@ -18,7 +18,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, focus, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
 import { FOCUS_QUESTION } from "../steps/focus/focus.mjs"
 
@@ -263,6 +263,56 @@ test("the question rail: ask:true carries the constant subject, the candidates g
   assert.equal(r.subject, FOCUS_QUESTION)                                     // verbatim, never rebuilt
   assert.ok(r.evidence.includes("Кандидаты:"))
   assert.equal(existsSync(join(root, ".agent", "focus.json")), false)
+})
+
+// --- steps 4 and 5 read the FOCUS, and they do it in one change --------------------------------
+//
+// Parts are read by the plan in ONE place — buildGraph — and the cells the swarm surveys come from
+// another (`cells`). Narrowing only the first would leave the second demanding a part for every cell
+// of the plan and refusing "поддерево потеряно" on each one the focus dropped: the pipeline would be
+// red BETWEEN the two commits. That is why this is one naryad, and these two tests are its seam.
+const SPINE_PART = `<part cell="spine" kind="spine">
+  <artifact name="acme" root="."/>
+  <suite id="unit" kind="unit" cmd="mvn test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <build cmd="mvn package"/>
+  <toggles found="no"/><branching found="no"/><contract found="no"/><integrations found="no"/>
+</part>`
+
+const focusAt = (root, cells) => {
+  writeFileSync(join(root, ".agent", "focus.json"), JSON.stringify({ why: "anchors", chosen: ["s1"], cells, files: 1, repoFiles: 2, estBytes: 417, slices: [] }))
+  return root
+}
+
+test("cells: no .agent/focus.json is a REFUSAL, never a quiet fallback to the whole plan", () => {
+  const root = planAt(tempRoot(), ["src/A.java", "src/B.java"])
+  const missing = cells.run({ path: "" }, ctx(root))
+  assert.equal(missing.ok, false)
+  assert.match(missing.why, /шаг 3b focus не отработал/)
+
+  // …and with a focus the swarm sees only what the focus named
+  focusAt(root, ["spine", "c1"])
+  const r = cells.run({ path: "" }, ctx(root))
+  assert.deepEqual(r.cells.map((c) => c.id), ["spine", "c1"])
+})
+
+test("buildGraph demands a part for every cell OF THE FOCUS, and for no other", () => {
+  const root = planAt(tempRoot(), ["src/A.java", "src/B.java"])
+  mkdirSync(join(root, ".agent", "graph-parts"), { recursive: true })
+  writeFileSync(join(root, ".agent", "graph-parts", "spine.xml"), SPINE_PART)
+
+  // c1 is IN the focus and has no part: the subtree is lost and the step refuses, naming the cell
+  focusAt(root, ["spine", "c1"])
+  const lost = buildGraph.run({ path: ".agent/appgraph.xml" }, ctx(root))
+  assert.equal(lost.ok, false)
+  assert.match(lost.why, /клетка c1 ФОКУСА не закрыта частью/)
+
+  // the same tree, the same missing parts — but now the focus does not name them, and their absence
+  // is a decision rather than a loss. Before this change c1 and c2 were demanded here too.
+  focusAt(root, ["spine"])
+  const narrowed = buildGraph.run({ path: ".agent/appgraph.xml" }, ctx(root))
+  assert.equal(narrowed.ok, true, narrowed.why)
+  const xml = readFileSync(join(root, ".agent", "appgraph.xml"), "utf8")
+  assert.match(xml, /<focus slices="s1" cells="1" of="3"/)         // the boundary is declared, not implied
 })
 
 // --- weight: "no weight" must mean "no file" ---------------------------------------------------
