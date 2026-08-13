@@ -47,6 +47,10 @@ export const BRD_FORM = {
   // language (PROMPT_LANG). So the rule is written in it too: translating it "in place", in the
   // template, would bring back two texts of one requirement — what this registry exists against.
   subjectRule: "greppable: one word, not a phrase; in the language of the repository, not of the request",
+  // The analogue obeys the subject rule for the same reason — step 3b greps the repository with it —
+  // and adds the one thing a subject has no use for: an explanation, which travels after a dash and
+  // is not searched with.
+  analogueRule: "greppable: one word, not a phrase; the explanation follows after a dash",
 }
 
 // An optional document may not exist (the first exchange with the operator). Absence is DECLARED

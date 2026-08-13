@@ -329,6 +329,7 @@ async function brd() {
       SUBJECTS_MIN: FORM.subjectsMin,
       SUBJECTS_MAX: FORM.subjectsMax,
       SUBJECT_RULE: FORM.subjectRule,
+      ANALOGUE_RULE: FORM.analogueRule,
     });
     const env = await agent(order, { role: "gilb", outputSchema: ENVELOPE });
 

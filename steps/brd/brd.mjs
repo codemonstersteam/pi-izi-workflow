@@ -418,7 +418,7 @@ export function newBrd(text, sources = []) {
     blockers.push('analogue: none без причины — «образца нет» это вывод из репозитория, а не пропуск строки')
   }
   else if (anTerm && /\s/.test(anTerm)) {
-    blockers.push(`analogue «${anTerm}» — ${BRD_FORM.subjectRule}. Пояснение пиши после тире: analogue: PromptSnippet — по образцу него CRUD и экспорт`)
+    blockers.push(`analogue «${anTerm}» — ${BRD_FORM.analogueRule}`)
   }
 
   let subj = null

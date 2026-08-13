@@ -66,16 +66,14 @@ replies in one word. Return the question shape and stop.
 **Step 5 — subjects[].** 3..7 grep anchors. The anchor rule arrives in the order — apply it
 verbatim, do not restate it from memory.
 
-**Step 5b — analogue.** Name the EXISTING mechanism this work is modelled on, in ONE word, the way
-a subject is written: `analogue: PromptSnippet — CRUD, storage and export are built after it`. The
-repository is searched with that word, so a phrase finds nothing; the explanation goes after the
-dash. The request usually names it outright («по образцу X», "like the existing Y"). If the request
-names none and the repository holds nothing comparable, say that instead: `analogue: none — <why>`.
-Never invent one to fill the line.
+**Step 5b — analogue.** Name what this work is modelled on: the thing that already exists and whose
+place the new one takes. It is the only handle the repository offers — what is being built has no
+name there yet, so the anchors of step 5 match nothing of it, and that is correct. The word's rule
+arrives in the order; apply it verbatim. If the request names no model and the repository holds
+nothing that plays that part, declare it — `analogue: none — <why>` — the way every absence here is
+declared.
 
-Why this line exists at all: the thing being built does not exist in the repository yet, so its own
-name matches no file. What it is modelled on DOES exist, and the work is to plug the new thing into
-every place the old one sits.
+    analogue: ScheduledJob — the nightly report is registered and run the way one is
 
 **Step 6 — if the order carries FEEDBACK, fix EXACTLY what it names, first.** A redelegation exists
 because the check found a defect and named the `R` it lives in. Repair that `R` before anything

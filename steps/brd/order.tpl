@@ -20,9 +20,8 @@ $END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
-- analogue: the existing mechanism this work is modelled on — ONE word, same rule as a subject,
-  because step 3b greps the repository with it; an explanation may follow after a dash. If there is
-  no model to follow, say so: `none — <why>`
+- analogue: the existing mechanism this work is modelled on — {ANALOGUE_RULE}. No model to follow —
+  `none — <why>`
 - subjects[]: {SUBJECTS_MIN}..{SUBJECTS_MAX} of them; each one — {SUBJECT_RULE}
 - an anchor is a NOUN from the request, not your evaluation of it: `record`, not `retention` —
   step 3 greps it over the repository, and an evaluation matches no file

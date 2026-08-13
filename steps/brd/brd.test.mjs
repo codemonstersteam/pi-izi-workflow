@@ -248,7 +248,7 @@ test("G9: the example teaches TRANSLATION, not labelling — no invented categor
 // the values workflows/izi.js passes (execution.ts throws "Missing prompt value"/"Unused prompt
 // value" at LAUNCH). 2: G9e — a rule copied into the template instead of substituted is a second
 // text of one requirement, and the guardrail refuses in the words of the REGISTRY, not of the copy.
-const ORDER_KEYS = ["TASK", "ANSWERS", "FEEDBACK", "STAGING", "CHECK", "SUBJECTS_MIN", "SUBJECTS_MAX", "SUBJECT_RULE"]
+const ORDER_KEYS = ["TASK", "ANSWERS", "FEEDBACK", "STAGING", "CHECK", "SUBJECTS_MIN", "SUBJECTS_MAX", "SUBJECT_RULE", "ANALOGUE_RULE"]
 
 test("order.tpl: exactly the keys the workflow passes, and the anchor rule is SUBSTITUTED not copied", () => {
   const tpl = readFileSync(join(HERE, "order.tpl"), "utf8")

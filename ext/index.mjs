@@ -194,7 +194,7 @@ export const checkBrd = {
 //   diagnosis in words its order never used. The sandbox has no import, so the only way the workflow
 //   can reach a constant of this repository is a host function: this one.
 export const brdForm = {
-  description: "The BRD's form as data (subjectsMin, subjectsMax, subjectRule, absentDoc) from core/form.mjs — the order SUBSTITUTES these, it does not restate them.",
+  description: "The BRD's form as data (subjectsMin, subjectsMax, subjectRule, analogueRule, absentDoc) from core/form.mjs — the order SUBSTITUTES these, it does not restate them.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -202,9 +202,10 @@ export const brdForm = {
       subjectsMin: { type: "number" },
       subjectsMax: { type: "number" },
       subjectRule: { type: "string" },
+      analogueRule: { type: "string" },
       absentDoc: { type: "string" },
     },
-    required: ["subjectsMin", "subjectsMax", "subjectRule", "absentDoc"],
+    required: ["subjectsMin", "subjectsMax", "subjectRule", "analogueRule", "absentDoc"],
     additionalProperties: false,
   },
   run() {
@@ -212,6 +213,7 @@ export const brdForm = {
       subjectsMin: BRD_FORM.subjectsMin,
       subjectsMax: BRD_FORM.subjectsMax,
       subjectRule: BRD_FORM.subjectRule,
+      analogueRule: BRD_FORM.analogueRule,
       absentDoc: ABSENT_DOC,
     }
   },
