@@ -326,7 +326,9 @@ test("no sources supplied — the number rule stays silent, the rest still judge
 // The order is a file the host reads, not code, but prompt() demands an EXACT bidirectional match
 // between its placeholders and the values the workflow passes (execution.ts: "Missing prompt value" /
 // "Unused prompt value" both throw) — a mismatch kills the run at launch, not at review.
-const ORDER_KEYS = ["BRD", "MAP", "ANSWERS", "FEEDBACK", "STAGING", "CHECK", "DELTA_FORMS", "SOURCES", "QUESTIONS_LEFT"]
+// S33: `QUESTIONS_LEFT` is gone with the budget of questions itself. A count handed to a role as
+// "left in this run" is read as an allowance to spend, and two live runs spent it (core/budgets.mjs).
+const ORDER_KEYS = ["BRD", "MAP", "ANSWERS", "FEEDBACK", "STAGING", "CHECK", "DELTA_FORMS", "SOURCES"]
 const placeholders = (tpl) =>
   [...tpl.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
 
@@ -364,6 +366,18 @@ test("role and order: questions travel in a BATCH, not one per exchange", () => 
   // the example must not carry a count for the role to imitate.
   assert.doesNotMatch(role, /"questions":/)
   assert.doesNotMatch(role, /You do number them/)
+
+  // S33 — the batch has no QUOTA. "thirty is normal" was a DESCRIPTIVE figure out of S21's budget
+  // rationale (git log -S'thirty is normal' → 8157407) that arrived in the strategy as a prescription,
+  // and both live runs landed on it: e132f0a1 asked 25 in one batch, e4a583a7 asked 12 and wanted 18
+  // more, a third of them step 9's business. What bounds elicitation is completeness, not a count.
+  assert.doesNotMatch(role, /thirty is normal|questions left in the/)
+  assert.doesNotMatch(tpl, /questions left in this run/)
+  assert.match(role, /gap that BLOCKS the artifact/)
+  // And the gap that stays open is an OUTPUT, the way the role's source puts it
+  // (rationaldev-ai-sdlc-skills/skills/lib/requirements-intake/SKILL.md) — not a pause to spend.
+  assert.match(role, /first-class\s+OUTPUT/)
+  assert.match(role, /Pause the run only for a\s+gap you cannot write the FRD around/)
   // The CLI key path is gone from this role: an answer_cmd carrying a six-line key is unusable, and
   // the answer travels by NUMBER through the chat tool (run 46edab60).
   assert.doesNotMatch(role, /answer_cmd/)

@@ -50,7 +50,6 @@
 // "the loop is exhausted after N attempts" a statement about nothing.
 let LOOPS;              // gilb/scout/designer/critic redelegations after a RED check, NOT questions
 let INTAKE_LOOPS;       // step 6 alone — one file answers to seven rules there (core/budgets.mjs)
-let QUESTIONS;          // QUESTIONS allowed in one run — not exchanges: intake asks them in BATCHES
 let QUESTION_ROUNDS;    // trips to the operator allowed in one run — the round is what costs context
 let CHECKPOINT_RETRIES; // re-pauses on the SAME question when no matching answer showed up
 let MAX_PARALLEL;       // swarm batch size at step 4 — see scope() for why the sandbox needs one
@@ -59,7 +58,7 @@ let REVIEW_ROUNDS;      // rewinds of steps 6-11 ordered by the critic — see b
 // The two counters the operator's budgets are actually spent from. They are MODULE state, not phase
 // state, because since S30 a phase can run more than once in a run: the critic rewinds the band to
 // the step that owns the artifact it blamed (docs/review.md §6). Counters living inside intake()
-// were reset by that rewind and handed the role a second full QUESTIONS budget — the same class of
+// were reset by that rewind and handed the role a second full round budget — the same class of
 // defect as a checkpoint name that repeats, and invisible to every unit, since a unit calls a phase
 // once.
 //
@@ -85,7 +84,6 @@ const ENVELOPE = {
     track: { type: "string", enum: ["ok", "err"] },
     artifact: { type: "string" },
     requirements: { type: "number" },
-    questions: { type: "number" },
     modules: { type: "number" },
     gaps: { type: "number" },
     deltas: { type: "number" },
@@ -282,30 +280,44 @@ async function askOperator(env, n, step, role) {
 //   Purity:       io (through the host)
 //
 // Two budgets, never mixed: a question does not spend LOOPS (it costs the operator's time, not the
-// model's), and a red check does not spend QUESTIONS. Both counters are data, not prose.
+// model's), and a red check does not spend a round. Both counters are data, not prose.
 //
 // BUG_FIX_CONTEXT: S14 — the exhaustion exit used to say "retries exhausted" and nothing else.
 //   Problem:  it threw away the only useful thing the run knew: WHY the check was red. The operator
 //             got a count instead of a diagnosis the guardrail had already written.
 //   Fix:      `feedback` here IS check.blockers from the last red iteration, so the exit carries it.
-// FUNCTION_CONTRACT: charge — spend the run's question budgets for one exchange
-//   Input:        env — the role's question envelope; step — the step's id, for the diagnosis
-//   Dependencies: EXTERNAL — none; ROUND_N, ASKED_N, QUESTIONS, QUESTION_ROUNDS
+// FUNCTION_CONTRACT: charge — spend one trip to the operator
+//   Input:        env — the role's question envelope
+//   Dependencies: EXTERNAL — none; ROUND_N, ASKED_N, QUESTION_ROUNDS
 //   Antecedent:   env.items is the batch as a LIST, or absent for a single question
-//   Consequent:   success: returns the ordinal of THIS trip, already counted; the budgets are spent
-//                 failure: exits err("question") naming which of the two budgets ran out
-//   Purity:       io (through exit)
+//   Consequent:   success: { n — the ordinal of THIS trip, already counted; spent — the trip is over
+//                            the budget, and what to do about it is the CALLER's, since it depends on
+//                            whether that step's artifact can carry an unresolved gap }
+//                 failure: none — total; it no longer exits (S33)
+//   Purity:       io (module counters)
 //
-// One place spends them, so "how many questions has this run asked" has one answer even when a phase
-// runs twice. The SIZE of a batch is its list's length and nothing else — the envelope's `questions`
-// field is not read here (BUG_FIX_CONTEXT of intake, run 6350f09b).
-function charge(env, step) {
-  const asked = (env.items && env.items.length) || 1;
-  if (++ROUND_N > QUESTION_ROUNDS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `кругов уточнения за прогон больше ${QUESTION_ROUNDS} (шаг ${step})` }));
-  if (ASKED_N + asked > QUESTIONS) exit(err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `вопросов за прогон больше ${QUESTIONS} (задано ${ASKED_N}, в пакете ещё ${asked})` }));
-  ASKED_N += asked;
-  return ROUND_N;
+// One place counts them, so "how many trips has this run made" has one answer even when a phase runs
+// twice. ASKED_N is now a pure tally for the log — nothing fails on it. The SIZE of a batch is its
+// list's length and nothing else — the envelope's `questions` field was deleted (it was read nowhere;
+// BUG_FIX_CONTEXT of intake, run 6350f09b).
+// S33: the ceiling of rounds is a REFUSAL, not a death — `charge` no longer exits, it reports. Run
+// e4a583a7 escalated on the fourth trip carrying twelve answered questions, a built map and a whole
+// surveyed swarm, and left no artifact at all; the honest alternative is to tell the role its trips
+// are over and take the FRD it can write, with the rest standing in it as `<question>` (see
+// core/findings.mjs::OUT_OF_ROUNDS). There is no budget of QUESTIONS at all any more: S21's own
+// reasoning — "the round, not the question, is what costs context" — names the cheap axis, and a
+// number shown to a role as "left in this run" is read as an allowance to spend.
+//
+// ONLY STEP 6 SURVIVES ITS CEILING, and the artifacts say why. The FRD's grammar carries `<question>`
+// and its guardrail accepts one (steps/intake/frd.mjs). A BRD may not ship with a gap at all —
+// steps/brd/brd.mjs:402 refuses anything but `open-questions: 0`; the design graph has no such element
+// in its grammar; and step 10 asks for a key with no role and no artifact to put it in. Where an
+// unresolved gap has no home, the ceiling stays fatal, and each caller says so itself.
+function charge(env) {
+  ASKED_N += (env.items && env.items.length) || 1;
+  return { n: ++ROUND_N, spent: ROUND_N > QUESTION_ROUNDS };
 }
+const noRoundsLeft = (env, step) => err("question", { subject: env.subject, evidence: env.evidence, diagnosis: `кругов уточнения за прогон больше ${QUESTION_ROUNDS} (шаг ${step}), а ${step} не сдаётся с открытым вопросом` });
 
 async function brd() {
   const orderTpl = await readText({ path: "steps/brd/order.tpl" });
@@ -336,8 +348,10 @@ async function brd() {
 
     if (env.track === "err" && env.kind === "question") {
       // gilb asks ONE question per exchange, so its round IS its question (unlike intake, which
-      // batches — see intake() below). Both budgets are spent in one place, charge().
-      await askOperator(env, charge(env, "brd"), "brd", "gilb");
+      // batches — see intake() below). The rounds are spent in one place, charge().
+      const q = charge(env);
+      if (q.spent) exit(noRoundsLeft(env, "brd"));   // a BRD may not ship with a gap — brd.mjs:402
+      await askOperator(env, q.n, "brd", "gilb");
       continue; // a question does not spend the redelegation budget
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
@@ -617,7 +631,7 @@ async function graph() {
 // guess, so a gap the BRD does not settle costs the operator's time, not a redelegation — and asking
 // 25-30 gaps ONE PER TRIP would cost a re-read of the BRD and the map per question, which is why the
 // role hands over the whole batch at once (docs/intake.md §2). Three budgets, three meanings: LOOPS
-// (red checks), QUESTIONS (questions asked), QUESTION_ROUNDS (trips to the operator). `Unknown` stays
+// (red checks) and QUESTION_ROUNDS (trips to the operator). `Unknown` stays
 // for what even an answer cannot fix: an operation that does not land on the map at all.
 async function intake(fromCritic) {
   const map = await graphMap({});
@@ -654,7 +668,6 @@ async function intake(fromCritic) {
       CHECK,
       DELTA_FORMS: FORM.deltaForms,
       SOURCES: FORM.sources,
-      QUESTIONS_LEFT: String(QUESTIONS - ASKED_N),
     });
     const env = await agent(order, { role: "intake", outputSchema: ENVELOPE });
 
@@ -672,9 +685,18 @@ async function intake(fromCritic) {
     //   Fix:      the size IS the list. `questions` is not read here at all — nothing can disagree
     //             with a length.
     if (env.track === "err" && env.kind === "question") {
-      const n = charge(env, "intake");
-      log(`intake: круг ${n} — вопросов в пакете ${(env.items && env.items.length) || 1}, всего ${ASKED_N} из ${QUESTIONS}`);
-      await askOperator(env, n, "intake", "intake");
+      const q = charge(env);
+      // The ceiling refuses instead of killing: the role is redelegated and writes what it can, with
+      // every unresolved gap standing in the FRD as <question>. It costs one attempt, so it is bounded.
+      if (q.spent) {
+        const carry = await carried({ blockers: "", seen: wasRed, outOfRounds: true });
+        feedback = carry.text; wasRed = carry.seen;
+        log(`intake: кругов к оператору больше нет (${QUESTION_ROUNDS}) — остаток пойдёт в артефакт как <question>`);
+        attempt++;
+        continue;
+      }
+      log(`intake: круг ${q.n} — вопросов в пакете ${(env.items && env.items.length) || 1}, всего задано ${ASKED_N}`);
+      await askOperator(env, q.n, "intake", "intake");
       continue; // a question does not spend the redelegation budget
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
@@ -798,9 +820,10 @@ async function designing() {
     const env = await agent(order, { role: "designer", outputSchema: ENVELOPE });
 
     if (env.track === "err" && env.kind === "question") {
-      const n = charge(env, "design");
-      log(`design: вопрос ${n} — «${env.subject}»`);
-      await askOperator(env, n, "design", "designer");
+      const q = charge(env);
+      if (q.spent) exit(noRoundsLeft(env, "design"));   // no <question> in the design grammar
+      log(`design: вопрос ${q.n} — «${env.subject}»`);
+      await askOperator(env, q.n, "design", "designer");
       continue; // a question does not spend the redelegation budget
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
@@ -850,7 +873,9 @@ async function planning(edges) {
       return ".agent/plan-index.json";
     }
     if (!p.ask) exit(err("blocked", { subject: p.why, evidence: ".agent/plan-index.json не написан" }));
-    await askOperator({ subject: p.subject, evidence: "" }, charge({ subject: p.subject }, "plan"), "plan", "plan");
+    const q = charge({ subject: p.subject });
+    if (q.spent) exit(noRoundsLeft({ subject: p.subject, evidence: "" }, "plan"));
+    await askOperator({ subject: p.subject, evidence: "" }, q.n, "plan", "plan");
   }
 }
 
@@ -989,9 +1014,9 @@ log("izi: start");
 try {
   const b = await budgets({});
   if (!b.ok) exit(err("blocked", { subject: b.why })); // a broken config is a refusal, not a default
-  LOOPS = b.loops; INTAKE_LOOPS = b.intakeLoops; QUESTIONS = b.questions; QUESTION_ROUNDS = b.questionRounds;
+  LOOPS = b.loops; INTAKE_LOOPS = b.intakeLoops; QUESTION_ROUNDS = b.questionRounds;
   CHECKPOINT_RETRIES = b.checkpointRetries; MAX_PARALLEL = b.maxParallel; REVIEW_ROUNDS = b.reviewRounds;
-  log(`budgets: loops=${LOOPS} intakeLoops=${INTAKE_LOOPS} questions=${QUESTIONS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} reviewRounds=${REVIEW_ROUNDS} (${b.source})`);
+  log(`budgets: loops=${LOOPS} intakeLoops=${INTAKE_LOOPS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} reviewRounds=${REVIEW_ROUNDS} (${b.source})`);
 
   // Observability is declared out loud, never assumed: with herdr unavailable the herdr extension
   // does not register at all and stays SILENT, so a run from an ordinary terminal looks exactly like

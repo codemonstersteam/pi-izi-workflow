@@ -40,6 +40,21 @@ test("a demand that is red right now is not also shown as carried — two copies
   assert.match(r.text, /F4 S1: uc пуст/)
 })
 
+// S33: the ceiling of rounds refuses instead of killing. Run e4a583a7 escalated on the fourth trip
+// with twelve answered questions and no artifact at all.
+test("out of rounds — the refusal LEADS the feedback and names the artifact's own home for the gap", () => {
+  const r = carriedBlockers({ blockers: "", outOfRounds: true })
+  assert.match(r.text, /^guardrail: кругов уточнения/)
+  assert.match(r.text, /<question/)          // the element the FRD grammar already carries
+  assert.deepEqual(r.seen.length, 1)
+
+  // It leads: a role repairs the top of the list first, and "stop asking" changes what it must DO.
+  const withRed = carriedBlockers({ blockers: "F5 поле id: 24", seen: ["F4 S1: uc пуст"], outOfRounds: true })
+  assert.match(withRed.text.split("\n")[0], /кругов уточнения/)
+  assert.match(withRed.text, /F5 поле id: 24/)
+  assert.match(withRed.text, /F4 S1: uc пуст/)   // and the run's memory still travels with it
+})
+
 test("nothing red before and nothing red now — the text is the blockers verbatim, and seen only grows", () => {
   assert.equal(carriedBlockers({ blockers: "F7 ни одной дельты" }).text, "F7 ни одной дельты")
   assert.deepEqual(carriedBlockers({ blockers: "", seen: [] }), { text: "", seen: [] })

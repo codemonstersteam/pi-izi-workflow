@@ -100,10 +100,24 @@ export function adviceLines(text) {
 // WHICH number and WHERE. A rule code tells a model which law it broke; only the line tells it what to
 // leave alone.
 
+// THE CEILING OF ROUNDS IS A REFUSAL, NOT A DEATH.
+//
+// Until S33 the trip that exceeded `questionRounds` killed the run: live run e4a583a7 escalated with
+// twelve answered questions, a built map, a whole surveyed swarm — and no artifact at all. Nothing
+// about that is truer than the alternative: the role is told the trips are over and writes the FRD it
+// can write, with every unresolved gap standing in it as a `<question>`. The grammar has carried that
+// element from the start (steps/intake/frd.mjs::parseFrd → questions[]) and the workflow already
+// reports how many an accepted artifact holds — an open question is an OUTPUT, which is exactly what
+// the role's source says it is (requirements-intake/SKILL.md: "a first-class output, not a blocker to
+// hide"). The refusal costs one redelegation, so the loop stays bounded.
+export const OUT_OF_ROUNDS =
+  "guardrail: кругов уточнения к оператору больше нет. Всё, что осталось невыясненным, — <question subject=\"…\" why=\"…\"/> в артефакте: отданный обратно пробел это результат, а пауза, которой не будет, — нет."
+
 // FUNCTION_CONTRACT: carriedBlockers — the feedback of a redelegation: what is red NOW, plus what was
 //                    red EARLIER in this run and must not come back
 //   Input:        { blockers — the current red check's text; seen — lines already red in this run, in
-//                  first-seen order }
+//                  first-seen order; outOfRounds — the trips to the operator ran out, and the refusal
+//                  leads the feedback because it changes what the role must DO, not just fix }
 //   Dependencies: —
 //   Antecedent:   any values; `blockers` may be empty (nothing red now) and `seen` may be absent
 //   Consequent:   success: { text — the FEEDBACK to hand the role, `seen` — the accumulated lines,
@@ -114,16 +128,17 @@ export function adviceLines(text) {
 //                          blocker read as two defects.
 //                 failure: none — total
 //   Purity:       pure
-//   Interface:    carriedBlockers({ blockers, seen }) -> { text: string, seen: string[] }
-export function carriedBlockers({ blockers, seen = [] }) {
+//   Interface:    carriedBlockers({ blockers, seen, outOfRounds }) -> { text: string, seen: string[] }
+export function carriedBlockers({ blockers, seen = [], outOfRounds = false }) {
   const linesOf = (t) => String(t || "").split("\n").map((l) => l.trim()).filter(Boolean)
-  const now = linesOf(blockers)
+  const now = linesOf(outOfRounds ? `${OUT_OF_ROUNDS}\n${String(blockers || "")}` : blockers)
   const before = (Array.isArray(seen) ? seen : []).map((l) => String(l).trim()).filter(Boolean)
 
   const carried = before.filter((l) => !now.includes(l))
+  const head = now.join("\n")
   const text = carried.length
-    ? `${String(blockers || "").trim()}\n\nAlready red earlier in this run — repairing the above must not bring them back:\n${carried.map((l) => `  ${l}`).join("\n")}`
-    : String(blockers || "").trim()
+    ? `${head}\n\nAlready red earlier in this run — repairing the above must not bring them back:\n${carried.map((l) => `  ${l}`).join("\n")}`
+    : head
 
   const next = []
   for (const l of [...before, ...now]) if (!next.includes(l)) next.push(l)

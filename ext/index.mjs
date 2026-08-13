@@ -228,7 +228,7 @@ export const carried = {
   description: "The feedback of a redelegation: the current red check plus the lines already red earlier in this run, which repairing the current one must not bring back (core/findings.mjs::carriedBlockers).",
   input: {
     type: "object",
-    properties: { blockers: { type: "string" }, seen: { type: "array", items: { type: "string" } } },
+    properties: { blockers: { type: "string" }, seen: { type: "array", items: { type: "string" } }, outOfRounds: { type: "boolean" } },
     required: ["blockers"],
     additionalProperties: false,
   },
@@ -238,8 +238,8 @@ export const carried = {
     required: ["text", "seen"],
     additionalProperties: false,
   },
-  run({ blockers, seen }) {
-    return carriedBlockers({ blockers, seen })
+  run({ blockers, seen, outOfRounds }) {
+    return carriedBlockers({ blockers, seen, outOfRounds })
   },
 }
 
@@ -265,7 +265,7 @@ export const frdForm = {
 }
 
 export const budgets = {
-  description: "Run budgets from the project's izi.config.json (loops, questions, questionRounds, checkpointRetries, maxParallel, reviewRounds). A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
+  description: "Run budgets from the project's izi.config.json (loops, intakeLoops, questionRounds, checkpointRetries, maxParallel, reviewRounds). A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -274,7 +274,6 @@ export const budgets = {
       why: { type: "string" },
       loops: { type: "number" },
       intakeLoops: { type: "number" },
-      questions: { type: "number" },
       questionRounds: { type: "number" },
       checkpointRetries: { type: "number" },
       // maxParallel is declared here as well as in core/budgets.mjs for a reason the host makes

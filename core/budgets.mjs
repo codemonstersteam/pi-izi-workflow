@@ -16,18 +16,24 @@
 
 import { ok, err } from "./result.mjs"
 
-// loops — redelegations of a role after a RED guardrail check; questions — QUESTIONS per run, not
-// exchanges; questionRounds — how many times a role may come out to the operator at all;
-// checkpointRetries — re-asks of one pause when no answer showed up in answers.md. Four distinct
-// counters, never to be confused: a question does not spend loops (workflows/izi.js::brd).
+// loops — redelegations of a role after a RED guardrail check; questionRounds — how many times a role
+// may come out to the operator at all; checkpointRetries — re-asks of one pause when no answer showed
+// up in answers.md. Distinct counters, never to be confused: a question does not spend loops
+// (workflows/izi.js::brd).
 //
-// WHY QUESTIONS AND ROUNDS ARE TWO NUMBERS (S21, the operator's decision). Frying a requirement on a
-// real project is a grilling session of 25-30 questions, and asking them ONE PER EXCHANGE makes the
-// role re-read the BRD and the map on every one of them — the round, not the question, is what costs
-// context. So `intake` asks them in ONE BATCH, and the two limits mean different things: 60 questions
-// is how much may be asked, 3 rounds is how many times the pipeline may come back for more. With a
-// single counter of 60 the role could take sixty round trips — exactly the price the batch exists to
-// remove.
+// WHY THERE IS NO BUDGET OF QUESTIONS, only of rounds (S33). S21 introduced both, on this reasoning:
+// asking ONE PER EXCHANGE makes the role re-read the BRD and the whole map every time — "the round,
+// not the question, is what costs context". That reasoning names the cheap axis itself, and we capped
+// it anyway; the expensive one, the round, is the only real limit.
+//
+// The cap did not merely fail to help. S21's own commit body described a real grilling as "25-30
+// questions per round", and that DESCRIPTIVE figure travelled into the role's strategy as the
+// PRESCRIPTION "thirty is normal". Two live runs then landed on it exactly — e132f0a1 asked 25 in one
+// batch, e4a583a7 asked 12 and wanted 18 more — and a third of the last batch was step 9's business
+// (a resolver's CDI scope, a cache's key) or answered itself by the analogue. A number shown to a
+// role as "left in this run" is read as an allowance, not as a ceiling. So the number is gone, and
+// what bounds elicitation now is the completeness the guardrail judges anyway: a question is a gap
+// F1..F7 would name.
 //
 // reviewRounds — how many times the band may be REWOUND by step 11's critic (docs/review.md §6). It
 // is not `loops` and not `questionRounds`: a rewind re-runs steps 6-11 on the artifact whose owner
@@ -46,7 +52,7 @@ import { ok, err } from "./result.mjs"
 // from done. Round 3 repaired that line and lost a rule from round 1, and the run escalated on the
 // third of three. Step 6 is the only place where one file answers to seven rules at once; the other
 // four loops (brd, scope, design, review) judge a narrower artifact and keep the shared `loops`.
-export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, intakeLoops: 6, questions: 60, questionRounds: 3, checkpointRetries: 2, maxParallel: 8, reviewRounds: 2 })
+export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, intakeLoops: 6, questionRounds: 5, checkpointRetries: 2, maxParallel: 8, reviewRounds: 2 })
 export const BUDGETS_PATH = "izi.config.json"
 
 const KEYS = Object.keys(DEFAULT_BUDGETS)

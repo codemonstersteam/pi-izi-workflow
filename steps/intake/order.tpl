@@ -30,8 +30,8 @@ $END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
-- questions left in this run: {QUESTIONS_LEFT}. Ask every gap you have IN ONE BATCH, not one per
-  exchange: each exchange costs a full re-read of the BRD and of the map
+- ask IN ONE BATCH every gap that blocks the artifact, and nothing else: each exchange costs a full
+  re-read of the BRD and of the map, and a gap you cannot close is a <question> in the artifact
 - a delta's form is one of: {DELTA_FORMS} — nothing else is a form
 - a quantity (range, enum, format, limit) carries `source`, and it is one of: {SOURCES}. A source is a
   file that CONTAINS the value — name a format rather than its measurements, and a quantity you cannot
