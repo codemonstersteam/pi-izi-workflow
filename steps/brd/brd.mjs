@@ -166,6 +166,7 @@ export function parseBrd(text) {
   let cur = null
   let subjects = null
   let openQuestions = null
+  let analogue = null
   lines.forEach((line, i) => {
     const r = /^\s*(R\d+)\b[.:)\s]*(.*)$/.exec(line)
     if (r) { cur = { id: r[1], statement: r[2].trim(), fit: null, verify: null, line: i + 1 }; requirements.push(cur); return }
@@ -177,12 +178,14 @@ export function parseBrd(text) {
     if (sub) { subjects = sub[1].split(/[·,;]/).map((s) => s.trim()).filter(Boolean); return }
     const oq = /^\s*open-questions\s*:\s*(.*)$/i.exec(line)
     if (oq) { openQuestions = oq[1].trim(); return }
+    const an = /^\s*analogue\s*:\s*(.*)$/i.exec(line)
+    if (an) { analogue = an[1].trim(); return }
     // a continuation of the requirement's wording (a wrapped line), until fit/verify begin
-    if (cur && !cur.fit && line.trim() && !/^\s*(R\d+|subjects|open-questions)/i.test(line)) {
+    if (cur && !cur.fit && line.trim() && !/^\s*(R\d+|subjects|open-questions|analogue)/i.test(line)) {
       cur.statement = (cur.statement + " " + line.trim()).trim()
     }
   })
-  return { requirements, subjects, openQuestions }
+  return { requirements, subjects, openQuestions, analogue }
 }
 
 // opts.sources — the texts a criterion's numbers are ALLOWED to come from: TASK.md and the operator's
@@ -346,7 +349,7 @@ export function languageDrifted(fit, source) {
 //   Consequent:   success: a frozen BRD plus the evidence (advice) that does NOT fail acceptance
 //                 failure: "invalid-brd" — the detail carries EVERY blocker at once, one per line
 export function newBrd(text, sources = []) {
-  const { requirements, subjects, openQuestions } = parseBrd(text)
+  const { requirements, subjects, openQuestions, analogue } = parseBrd(text)
   const blockers = []
 
   if (!requirements.length) blockers.push("в BRD нет ни одного требования R")
@@ -373,6 +376,22 @@ export function newBrd(text, sources = []) {
   if (openQuestions === null) blockers.push("нет строки open-questions — сдаваемый BRD обязан её нести")
   else if (openQuestions !== BRD_FORM.openQuestions) blockers.push(`open-questions: ${openQuestions} — BRD не сдаётся с открытыми вопросами`)
 
+  // ANALOGUE — what this work is modelled on, and why it is a FIELD rather than a lucky anchor.
+  //
+  // BUG_FIX_CONTEXT: eddi, runs 9a98f081 and 256e1830 — the same TASK.md, which says «по образцу
+  //   Prompt Snippet» in its own words. One run's role turned that into an anchor and step 3b hit 8
+  //   of the 10 files the change actually needs; the other run's role did not, and it hit 2. The
+  //   thing a change is modelled on is the only handle a repository offers for work whose own name
+  //   does not exist in it yet — `glossary` matched no file at all, correctly. Leaving that handle to
+  //   whether a model happens to mention it is what those two numbers cost.
+  // Absence is DECLARED, never inferred: `analogue: none — <why>`, the same device as
+  // `<failures found="no" why>` and `<subject found="no">`.
+  if (analogue === null) blockers.push('нет строки analogue — по образцу чего делается работа; если образца нет, так и напиши: analogue: none — <почему>')
+  else if (!analogue) blockers.push('analogue пуст — назови существующий механизм-образец или объяви analogue: none — <почему>')
+  else if (/^none\b/i.test(analogue) && !/\S/.test(analogue.replace(/^none\b/i, "").replace(/^[\s—:-]+/, ""))) {
+    blockers.push('analogue: none без причины — «образца нет» это вывод из репозитория, а не пропуск строки')
+  }
+
   let subj = null
   if (!subjects) blockers.push("нет subjects[] — рою нечем грепать репо")
   else {
@@ -386,6 +405,7 @@ export function newBrd(text, sources = []) {
     requirements: Object.freeze(built),
     subjects: subj,
     openQuestions,
+    analogue,
     advice: Object.freeze(built.flatMap(adviceFor)),
   }))
 }

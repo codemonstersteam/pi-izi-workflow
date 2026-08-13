@@ -53,6 +53,8 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 //   Input:        slices  — [{ id, entry, kind, nodes }] as newSlices returns them
 //                 orphans — [string], the nodes no cone reached
 //                 anchors — [string], the BRD's anchors (plan.subjects) — NAMES, not paths
+//                 analogue — the existing mechanism this work is modelled on (BRD `analogue:`), or
+//                           "" / "none …" when the BRD declared there is none
 //                 cells   — the plan's cells: [{ id, kind, files: [{ path }] }]
 //                 edges   — [{ from, to }] of graph-computed.xml: the estimate prices them, because
 //                           on a monolith they are the larger half of the map
@@ -70,7 +72,7 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 //                                        anchors, not a choice among 84 candidates
 //                          "over-cap"  — even the cheapest named cone does not fit beside the spine
 //   Purity:       pure
-//   Interface:    newFocus({ slices, anchors, cells, edges, cap }) -> Result
+//   Interface:    newFocus({ slices, anchors, analogue, cells, edges, cap }) -> Result
 //
 // WHY NO QUESTION TO THE OPERATOR, and the two reasons are not the same reason.
 //
@@ -90,7 +92,7 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 // that everything which did not fit is COUNTED in `dropped`, carried into `<focus>` by step 5 and
 // printed in the run's log. An anchor whose files ended outside comes back as `found="outside"` in
 // the map, so step 6's role meets an honest Unknown instead of a guess.
-export function newFocus({ slices = [], anchors = [], cells = [], edges = [], cap = MAP_CAP_BYTES } = {}) {
+export function newFocus({ slices = [], anchors = [], analogue = "", cells = [], edges = [], cap = MAP_CAP_BYTES } = {}) {
   // The budget is the ceiling MINUS the measured error of the estimate below (steps/intake/map.mjs::
   // MAP_EST_SLACK). Comparing to the ceiling itself is what killed run fa8def32: the estimate was
   // 10% low, the map missed by 3%, and the swarm had already been paid for.
@@ -157,9 +159,9 @@ export function newFocus({ slices = [], anchors = [], cells = [], edges = [], ca
 
   // TWO PHASES, and the order between them is measured, not argued.
   //
-  // Phase one takes the CELL of every file an anchor NAMES. That is the cheapest and most precise
-  // thing an anchor buys: the file itself, without opening anything. Phase two takes the CONES of
-  // the named entries — structure, bought after the facts.
+  // Then the CELL of every file an anchor NAMES — the cheapest and most precise thing an anchor
+  // buys: the file itself, without opening anything. Last, the CONES of the named entries —
+  // structure, bought after the facts.
   //
   // Measured on eddi over three real anchor sets (two written by the role in live runs, one with the
   // broadest word removed), scored against the oracle of tasks/bench-glossary-eddi.md §3, worst set
@@ -172,6 +174,39 @@ export function newFocus({ slices = [], anchors = [], cells = [], edges = [], ca
   // The gap is not a tie: opening a cone costs an order of magnitude more than naming a file, and on
   // a monolith the budget it eats is budget the named files do not get. This also removes `orphans`
   // as a case of its own — an orphan an anchor names is simply a named file no cone reaches.
+  // PHASE ONE — whoever USES the model this work follows. It runs FIRST, and the order is measured.
+  //
+  // The change's own name does not exist in the repository yet, so no anchor can find the files it
+  // lands in. The BRD names what it is modelled on (`analogue`), that thing DOES exist, and the work
+  // is to plug the new one into every socket the old one sits in. So: the files the analogue names,
+  // then one step BACKWARDS along the edges — who calls them.
+  //
+  // Measured on eddi (runs 9a98f081 / 256e1830, same TASK.md): all 10 existing files of the
+  // benchmark's oracle are among the 50 callers of the snippet code, and not one of them is an entry
+  // or a node of any cone — a forward walk cannot reach them at all. With this phase the worst
+  // anchor set goes from 2 of 10 to 9 of 10, inside the same budget.
+  //
+  // One step, not a closure: the callers' own cones are what the last phase is for, and pulling them
+  // here cost 233 KB against a 115 KB ceiling when it was measured.
+  //
+  // WHY FIRST. Run second — after the cells the anchors name — it bought nothing on the worst anchor
+  // set: broad words (`resource`, `store`) had already spent the budget, and the run stayed at 2 of
+  // 10. Moved ahead of them, the three real anchor sets of the three live runs give the SAME answer:
+  // 9 of 10, 14 cells, 104 KB, all three. That is the point of the phase — the focus stops depending
+  // on which words a role happened to write, and starts depending on what the work is modelled on.
+  const an = /^none\b/i.test(String(analogue).trim()) ? "" : String(analogue).trim()
+  const analogueFiles = new Set(an ? [...cellOf.keys()].filter((p) => names(an, p)) : [])
+  const callers = analogueFiles.size
+    ? [...new Set((edges || []).filter((e) => analogueFiles.has(e.to)).map((e) => e.from))]
+    : []
+  const callerCells = [...new Set(callers.map((p) => cellOf.get(p)).filter(Boolean))]
+    .sort((a, b) => (a.files || []).length - (b.files || []).length || a.id.localeCompare(b.id))
+  let droppedCallers = 0
+  for (const c of callerCells) {
+    if (taken.has(c)) continue
+    if (!add((c.files || []).map((f) => f.path))) droppedCallers++
+  }
+
   const cellsByCost = [...new Set(namedFiles.map((p) => cellOf.get(p)).filter(Boolean))]
     .sort((a, b) => (a.files || []).length - (b.files || []).length || a.id.localeCompare(b.id))
   let droppedCells = 0
@@ -202,7 +237,7 @@ export function newFocus({ slices = [], anchors = [], cells = [], edges = [], ca
     cells: cs.map((c) => c.id),
     files,
     estBytes: bytesOf(cs),
-    dropped: Object.freeze({ slices: droppedSlices, cells: droppedCells }),
+    dropped: Object.freeze({ slices: droppedSlices, cells: droppedCells + droppedCallers }),
     slices,
     entries: slices.length,
   }))

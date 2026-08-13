@@ -78,7 +78,7 @@ test("checkBrd reads staging AND TASK.md from context.run.cwd", () => {
       "   fit: не более 20",
       "   verify: unit test",
       "subjects[]: лимит · бронь · штук",
-      "open-questions: 0",
+      "analogue: PromptSnippet\nopen-questions: 0",
       "",
     ].join("\n"),
   )
@@ -192,7 +192,7 @@ test("the defect this closes: a number answered in a DEAD run no longer passes i
     "   fit: не более 50 записей",
     "   verify: GET /fruits?q=a → записей ≤ 50",
     "subjects[]: поиск · имя · предел",
-    "open-questions: 0",
+    "analogue: PromptSnippet\nopen-questions: 0",
     "",
   ].join("\n")
   mkdirSync(join(root, ".agent", "staging"), { recursive: true })

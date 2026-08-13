@@ -8,10 +8,10 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { newFit, newRequirement, newSubjects, adviceFor, newBrd, numbersIn, languageDrifted, BRD_FORM } from "./brd.mjs"
+import { newFit, newRequirement, newSubjects, adviceFor, newBrd, numbersIn, languageDrifted, BRD_FORM, parseBrd } from "./brd.mjs"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const BRD = (fit) => `R1 Размер ответа ограничен\n   fit:    ${fit}\n   verify: GET /x\n\nsubjects[]: a · b · c\nopen-questions: 0\n`
+const BRD = (fit) => `R1 Размер ответа ограничен\n   fit:    ${fit}\n   verify: GET /x\n\nsubjects[]: a · b · c\nanalogue: PromptSnippet\nopen-questions: 0\n`
 const R = (over) => ({ id: "R1", statement: "Размер ответа ограничен", fit: "20 записей", verify: "GET /x", line: 1, ...over })
 
 // --- newFit: 1 happy + 2 distinguishable outcomes ---------------------------------------------------------
@@ -163,7 +163,7 @@ test("BRD builds and carries requirements and anchors", () => {
 })
 
 test("with not a single R it does not pass", () => {
-  assert.match(newBrd("subjects[]: a · b · c\nopen-questions: 0\n").error.detail, /нет ни одного требования/)
+  assert.match(newBrd("subjects[]: a · b · c\nanalogue: PromptSnippet\nopen-questions: 0\n").error.detail, /нет ни одного требования/)
 })
 
 test("an open question does not pass", () => {
@@ -172,7 +172,7 @@ test("an open question does not pass", () => {
 })
 
 test("the open-questions line is missing entirely", () => {
-  const t = BRD("20 записей").replace("\nopen-questions: 0\n", "\n")
+  const t = BRD("20 записей").replace("\nanalogue: PromptSnippet\nopen-questions: 0\n", "\n")
   assert.match(newBrd(t).error.detail, /обязан её нести/)
 })
 
@@ -191,7 +191,7 @@ test("all blockers are handed out at once, not just the first", () => {
 // Advice rides on SUCCESS: a judgment rule has no authority to fail acceptance and command a
 // redelegation to the artifact's owner.
 test("advice does not fail acceptance, it rides along with the built BRD", () => {
-  const t = "R1 Реализация в src/x.go\n   fit:    20 записей\n   verify: GET /x\n\nsubjects[]: a · b · c\nopen-questions: 0\n"
+  const t = "R1 Реализация в src/x.go\n   fit:    20 записей\n   verify: GET /x\n\nsubjects[]: a · b · c\nanalogue: PromptSnippet\nopen-questions: 0\n"
   const b = newBrd(t)
   assert.equal(b.ok && b.value.advice[0].code, "design-leak")
 })
@@ -207,7 +207,7 @@ test("the predicate fit from live run ed1d4094 no longer fails", () => {
     + "R2 Ответ ограничен по размеру\n"
     + "   fit:    не более 10 записей\n"
     + "   verify: GET /fruits?name=a → count ≤ 10\n\n"
-    + "subjects[]: fruit · search · limit\nopen-questions: 0\n"
+    + "subjects[]: fruit · search · limit\nanalogue: PromptSnippet\nopen-questions: 0\n"
   const r = newBrd(t, ["UI тянет весь список фруктов", "- вопрос: предел?\n  ответ: 10"])
   assert.equal(r.ok, true)
   assert.equal(r.value.requirements.length, 2)
@@ -305,7 +305,7 @@ test("the run-6 artifact fails on language drift instead of passing green", () =
   const t = "R1 Пользователи ищутся по подстроке в имени/фамилии, без учёта регистра\n"
     + "   fit:    match = substring at any position in name/surname, case folded; result true | false\n"
     + "   verify: search query with partial name returns matching users\n\n"
-    + "subjects[]: users · search · errors\nopen-questions: 0\n"
+    + "subjects[]: users · search · errors\nanalogue: PromptSnippet\nopen-questions: 0\n"
   const r = newBrd(t, [RU])
   assert.match(r.error.detail, /R1 \[language-drift\]/)
 })
@@ -316,6 +316,26 @@ test("verify is not judged by language — it is a command, not prose", () => {
   const t = "R1 Пользователи ищутся по подстроке в имени\n"
     + "   fit:    подстрока в любой позиции, без учёта регистра; результат — да | нет\n"
     + "   verify: GET /users?q=part returns matching users\n\n"
-    + "subjects[]: users · search · errors\nopen-questions: 0\n"
+    + "subjects[]: users · search · errors\nanalogue: PromptSnippet\nopen-questions: 0\n"
   assert.equal(newBrd(t, [RU]).ok, true)
+})
+
+// BUG_FIX_CONTEXT eddi, runs 9a98f081 / 256e1830: the same TASK.md says «по образцу Prompt Snippet».
+// One role turned that into an anchor and step 3b reached 8 of the 10 files the change needs; the
+// other did not and reached 2. The thing a change is modelled on is the only handle a repository
+// offers when the change's own name does not exist in it yet.
+test("analogue: the model this work follows is a FIELD, and its absence is declared", () => {
+  const withField = BRD("20 записей")
+  assert.equal(newBrd(withField, ["20 записей"]).ok, true)
+
+  const without = withField.replace("analogue: PromptSnippet\n", "")
+  assert.match(newBrd(without, ["20 записей"]).error.detail, /нет строки analogue/)
+
+  const bare = withField.replace("analogue: PromptSnippet", "analogue: none")
+  assert.match(newBrd(bare, ["20 записей"]).error.detail, /none без причины/)
+
+  const declared = withField.replace("analogue: PromptSnippet", "analogue: none — в репозитории нет ничего похожего")
+  assert.equal(newBrd(declared, ["20 записей"]).ok, true)
+
+  assert.equal(parseBrd(withField).analogue, "PromptSnippet")
 })

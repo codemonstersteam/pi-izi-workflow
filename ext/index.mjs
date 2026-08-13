@@ -742,7 +742,12 @@ export const focus = {
     // run e90d9ce1 that rule named 83 of eddi's 84 entries on the anchor `import`
     // (steps/focus/focus.mjs::names).
     const { slices, orphans } = newSlices({ nodes, edges: computed.edges, routes: computed.api.map((a) => a.at) })
-    const r = newFocus({ slices, anchors: p.plan.subjects || [], cells: p.cells, edges: computed.edges })
+    // The analogue comes from the BRD — one line, read with the ONE parser this repository has for
+    // that file (parseBrd, steps/brd). This is not the anchor rule read twice: anchors were already
+    // resolved to files by step 3 and arrive through the plan; `analogue` is a single term that
+    // exists nowhere else.
+    const brd = parseBrd(readIfExists(root, ".agent/brd.md"))
+    const r = newFocus({ slices, anchors: p.plan.subjects || [], analogue: brd.analogue || "", cells: p.cells, edges: computed.edges })
     if (!r.ok) {
       drop()
       return { ok: false, why: `${r.error.cls}: ${r.error.detail}`, slices: slices.length, entries: slices.length }
