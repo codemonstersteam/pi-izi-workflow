@@ -46,7 +46,7 @@ schema:
   R<N> <statement: what, not how>
      fit:    <value | range | enum | format | predicate>
      verify: <command | artifact>
-  analogue: <OneWord> — по образцу чего делается работа (или: none — почему образца нет)
+  analogue: <OneWord> — <what makes it the model>   (or: none — <why there is none>)
   subjects[]: <term> · <term> · …
   open-questions: 0
 check: {CHECK}

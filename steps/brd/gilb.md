@@ -66,6 +66,17 @@ replies in one word. Return the question shape and stop.
 **Step 5 — subjects[].** 3..7 grep anchors. The anchor rule arrives in the order — apply it
 verbatim, do not restate it from memory.
 
+**Step 5b — analogue.** Name the EXISTING mechanism this work is modelled on, in ONE word, the way
+a subject is written: `analogue: PromptSnippet — CRUD, storage and export are built after it`. The
+repository is searched with that word, so a phrase finds nothing; the explanation goes after the
+dash. The request usually names it outright («по образцу X», "like the existing Y"). If the request
+names none and the repository holds nothing comparable, say that instead: `analogue: none — <why>`.
+Never invent one to fill the line.
+
+Why this line exists at all: the thing being built does not exist in the repository yet, so its own
+name matches no file. What it is modelled on DOES exist, and the work is to plug the new thing into
+every place the old one sits.
+
 **Step 6 — if the order carries FEEDBACK, fix EXACTLY what it names, first.** A redelegation exists
 because the check found a defect and named the `R` it lives in. Repair that `R` before anything
 else; a question is not a repair, and a question about a DIFFERENT requirement leaves the blocker
