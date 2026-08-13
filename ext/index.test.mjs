@@ -591,12 +591,15 @@ test("a red check leaves the artifacts absent and hands the blockers back as tex
   const root = designRoot()
   const staging = join(".agent", "staging", "design-graph.xml")
   design.run({}, ctx(root))   // the gate runs first in the phase, and it is what erased yesterday's pair
-  // The subgraph knows no such module, and it carries no delta: rule 6 — a transit node invented.
-  writeFileSync(join(root, staging), STAGED.replaceAll("src/ParcelRepo.java", "src/Nope.java"))
+  // The route steps into a module the graph does not carry: rule 1 — an invented node. The defect
+  // used to be written as rule 6 («a transit node invented»), and that rule now lives one pass
+  // earlier (steps/design/nodes.mjs, backlog D2) — what this test proves is the PIPE, not the rule:
+  // a red check writes nothing and leaves staging where it was.
+  writeFileSync(join(root, staging), STAGED.replace("src/ParcelRepo.java#1", "src/Nope.java#1"))
 
   const r = design.run({ path: staging }, ctx(root))
   assert.equal(r.ok, false)
-  assert.match(r.blockers, /6 узел без delta вне подграфа ряби — src\/Nope\.java/)
+  assert.match(r.blockers, /1 S1#2: узла нет в дизайн-графе — src\/Nope\.java/)
   assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false)
   assert.equal(existsSync(join(root, ".agent", "data-flow.md")), false)
   assert.equal(existsSync(join(root, staging)), true)  // the rejected file stays where it was written

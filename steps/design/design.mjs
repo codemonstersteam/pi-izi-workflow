@@ -22,12 +22,9 @@ import { ok, err } from "../../core/result.mjs"
 // grammar for two slices is read by one piece of code, otherwise part-parsing and design-parsing would drift apart.
 // The same file holds the BUG_FIX_CONTEXT for ATTRS' quote-resilience.
 import { attrs, ATTRS, tag } from "../../core/xml.mjs"
-// EXTERNAL_DEPENDENCY: steps/intake/frd.mjs::FRD_FORM — the vocabulary of a delta's FORM is ONE
-// vocabulary for the whole pipeline, declared at step 6 and weighed at step 7 (steps/weight/weight.mjs).
-// This slice used to carry a second one of its own (`add|change|remove`) in the role's prose, the order
-// template and the doc — three copies of a fact the artifact already carries, and `Fixed` in none of
-// them, which made a `patch` design inexpressible (docs/design.md §3, discrepancy C).
-import { FRD_FORM } from "../intake/frd.mjs"
+// The slice's dependency on steps/intake/frd.mjs::FRD_FORM moved with rule 6 to
+// steps/design/nodes.mjs (backlog D2) — the vocabulary of a delta's FORM is read where the delta is
+// judged, and importing it here for nobody would be a second claim on the same fact.
 
 const alts = (s) => String(s || "").split("|").map((x) => x.trim()).filter(Boolean)
 
@@ -189,16 +186,16 @@ export function expand(nodes, routes) {
 //                 frd — the parse of `.agent/frd.xml` AS steps/intake/frd.mjs::parseFrd returns it:
 //                       `scenarios` are the ELEMENTS (an id lives in `.id`), `touched` are paths.
 //                       Parsing that file belongs to the intake slice; here it is a DEPENDENCY
-//                 known — Set<path> of the ripple subgraph's nodes (steps/intake/map.mjs::parseMap
-//                       over `.agent/ripple.xml`), or null when no subgraph was supplied — then
-//                       rule 6's transit half stays silent, the discipline F5 keeps without sources
-//   Dependencies: FRD_FORM
+//                 known — accepted and UNUSED since rule 6 moved to steps/design/nodes.mjs
+//                       (backlog D2); see the note at the end of the body for why the parameter
+//                       stays. Callers keep passing the ripple subgraph's Set<path>
+//   Dependencies: —
 //   Antecedent:   nodes — parseDesign's Map; routes — its array; frd — an object with two arrays
 //                 (missing fields are read as empty)
 //   Consequent:   success: string[] of blockers, empty = green. The rules and their numbers are the
-//                          same as in docs/data-flow.md §6, NOT restated here in prose — rules 1-7,
-//                          the ones the two PROJECTIONS decide; rule 8 is judged one artifact
-//                          earlier (steps/design/values.mjs::checkValues), see the note at the end
+//                          same as in docs/data-flow.md §6, NOT restated here in prose — rules
+//                          1, 2, 3, 4, 5 and 7, the ones that need BOTH projections on the table;
+//                          rules 6 and 8 are judged one artifact earlier, see the note at the end
 //                 failure: none — total, "the design is bad" is DATA, not a function failure
 //   Purity:       pure
 //   BUG_FIX_CONTEXT: this slice was written BEFORE steps 6 and 8 existed, and its fixture was
@@ -264,19 +261,6 @@ export function checkDesign({ nodes, routes = [], frd = {}, known = null }) {
   for (const t of frd.touched || []) if (!used.has(t)) B.push(`5 touched FRD не встречен ни в одном маршруте — ${t}`)
 
   for (const n of nodes.values()) {
-    // Rule 6, first half — the vocabulary. One word for one fact across the whole pipeline: the form
-    // is DECIDED at step 6 and weighed at step 7, so a design that renames it makes the two artifacts
-    // unjoinable by anything but a translation table.
-    if (n.delta && !FRD_FORM.deltaForms.includes(n.delta)) {
-      B.push(`6 узел ${n.path}: delta="${n.delta}" — допустимо ${FRD_FORM.deltaForms.join(" | ")}`)
-    }
-    // Rule 6, second half — a transit node cannot be invented. A node WITH a delta may legitimately
-    // be absent from the subgraph: that is a NEW module, and inventing one is exactly the designer's
-    // judgement. A node WITHOUT a delta is a claim about what already exists, and the only place it
-    // may come from is the subgraph the order carried.
-    if (!n.delta && known && !known.has(n.path)) {
-      B.push(`6 узел без delta вне подграфа ряби — ${n.path}: транзитный узел копируется из .agent/ripple.xml, выдумать его нельзя`)
-    }
     // Rule 7. An `out` alternative no route takes is either a dead branch of the contract or a missing
     // FRD scenario — and it would silently shorten the node's unit list, which IS the `<dod>` of its
     // ticket (docs/design.md §2). Only nodes with a delta are judged: an existing node keeps as many
@@ -289,12 +273,17 @@ export function checkDesign({ nodes, routes = [], frd = {}, known = null }) {
     }
   }
 
-  // Rule 8 is NOT here: it moved whole to steps/design/values.mjs::checkValues (backlog D1), number
-  // unchanged. Its operand moved with it — the dictionary of pass A is the earliest artifact in which
-  // a declared failure is decidable, and everything after it refers to values by id. What that move
-  // costs is named where it is repaid: over a flat dictionary the rule only says "declared
-  // somewhere", so "produced by SOME node's out" is checkGraph's, in the same pass that owns the
-  // contracts (backlog, «Что концепт обещает, а код не подтвердил», п. 2).
+  // Rules 6 and 8 are NOT here any more, and neither number was reused:
+  //   8 → steps/design/values.mjs::checkValues (backlog D1). The dictionary of pass A is the earliest
+  //     artifact in which a declared failure is decidable, and everything after it refers to values by
+  //     id. What that move costs is repaid in checkGraph: over a flat dictionary the rule only says
+  //     "declared somewhere", so "produced by SOME node's out" is judged there, in the pass that owns
+  //     the contracts (backlog, «Что концепт обещает, а код не подтвердил», п. 2).
+  //   6 → steps/design/nodes.mjs::checkGraph (backlog D2), whole, both halves. It reads only NODES,
+  //     never a route, so it belongs to the pass whose only subject is the graph. `known` is the one
+  //     input it consumed; the parameter stays in this signature because ext/index.mjs still passes
+  //     it, and this whole function is deleted in D5 — a signature change here would be a second edit
+  //     of the same code.
 
   return B
 }

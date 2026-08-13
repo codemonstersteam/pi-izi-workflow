@@ -174,23 +174,9 @@ test("rule 5: an FRD scenario without a route, and touched outside all routes", 
   ])
 })
 
-test("rule 6: a transit node cannot be invented, a new module can", () => {
-  // The subgraph forgot SlotRepo: a node with no delta claims something about what EXISTS, and the
-  // order carried only one source for that claim.
-  const b = blockersOf(GRAPH, FRD, new Set(["src/BookingResource.java", "src/BookingService.java"]))
-  assert.deepEqual(b, ["6 узел без delta вне подграфа ряби — src/SlotRepo.java: транзитный узел копируется из .agent/ripple.xml, выдумать его нельзя"])
-  // The mirror case is already green in the happy test: SlotLock is absent from KNOWN too, and it
-  // passes — because it carries a delta and is therefore declared NEW.
-
-  // With no subgraph supplied at all the rule stays silent — the discipline F5 keeps without sources.
-  assert.deepEqual(blockersOf(GRAPH, FRD, null), [])
-})
-
-test("rule 6: one vocabulary for the pipeline — the word comes from step 6, not from the designer", () => {
-  const b = blockersOf(GRAPH.replace('delta="Added"', 'delta="add"'))
-  assert.equal(b.length, 1)
-  assert.match(b[0], /^6 узел src\/SlotLock\.java: delta="add" — допустимо Added \| Changed \| Removed \| Fixed \| Unknown$/)
-})
+// Rule 6's seams are NOT here any more: both halves moved whole to steps/design/nodes.mjs (backlog
+// D2) and their tests moved with them — a seam lives beside the rule it proves, or the next reader
+// deletes the rule and watches a green suite. steps/design/nodes.test.mjs, the two "rule 6" tests.
 
 test("rule 7: an out alternative no route takes has no unit in the ticket", () => {
   const b = blockersOf(GRAPH.replace('out="Taken | save(slotId,lock) | Lock"', 'out="Taken | save(slotId,lock) | Lock | Expired"'))
