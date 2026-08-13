@@ -65,6 +65,9 @@ schema:
       <post>the success guarantee</post>
       <step n="1">…</step>
       <ext id="1a" error="CODE" outcome="…"/>
+      <ext id="1b" error="none" outcome="…"/>   <!-- a branch that fails WITHOUT a code of its own:
+                                                     say `none`, never invent a code this repository
+                                                     has no idiom for -->
     </usecase>
     <field name="…" in="the operation or entity" type="…" domain="range | enum | format"
            required="yes|no" error="CODE" source="…"/>

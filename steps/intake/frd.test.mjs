@@ -272,6 +272,22 @@ test("F6: the failure map and the extensions must be 1:1 in both directions", ()
     /F6 код «TRACK_TOO_SHORT» карты отказов не встречен/)
 })
 
+// BUG_FIX_CONTEXT live run a3597dd3 (eddi): the operator decided a missing glossary term resolves to
+// an empty string — no error at all — and the role wrote `error="none"`. The rule read it as a code,
+// found no such row in the failure map, and refused an artifact that was RIGHT. The legal move was to
+// omit the attribute, but the order's example carries `error="CODE"` on every <ext>, so the role
+// declared the absence the way this repository declares every other one.
+test("F6b: a branch that fails without a code says so — error=\"none\" is an answer, not a code", () => {
+  const lenient = FRD.replace('error="TRACK_TOO_SHORT" outcome', 'error="none" outcome')
+    .replace(/\n\s*<failure [^>]*\/>/, "")
+    .replace("</frd>", '  <failures found="no" why="ветка отдаёт пустой результат, кода ошибки у неё нет"/>\n</frd>')
+  assert.deepEqual(blockersOf(lenient), [])
+
+  // …and it is not a licence: a code that IS named still has to appear in the failure map
+  assert.match(blockersOf(lenient.replace('error="none"', 'error="TRACK_UNKNOWN"')).join("\n"),
+    /F6 код «TRACK_UNKNOWN» из <ext> не описан/)
+})
+
 // Live run e82192db: an artifact with no <failure> and no `error` anywhere passed, because the rule
 // above compared two EMPTY sets. The service was then read by hand and had no failure modes at all —
 // so the answer is not "invent a code" but "say so", the way the map says found="no".

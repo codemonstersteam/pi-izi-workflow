@@ -77,4 +77,12 @@ $START_SUCCESS
 - A live run reaches its artifact in a project **other than** this repository — that is the only
   test that catches cwd-anchoring and installation defects.
 - Diagnosis comes from `journal.json`, never from what the launching model printed.
+- **A guardrail's refusal is re-tested by REPLAYING it over the artifact the run saved, not by
+  running again.** A guardrail is a pure function of the artifact and the map, both of which survive
+  in `.agent/` and `.agent/staging/` — so `checkX(parse(saved), map)` answers "does this rule still
+  refuse this artifact" deterministically, in seconds, for zero tokens. A live run answers a
+  DIFFERENT question — whether the role converges within its budgets — and it answers it with one
+  sample of a stochastic process, which is why it must not be used to decide what a rule does.
+  Live cost of learning this: run `a3597dd3` died on 19 blockers; replaying the guardrail over its
+  own `staging/frd.xml` after two rule fixes left ZERO, and no run was needed to establish that.
 $END_SUCCESS

@@ -375,7 +375,20 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   if (frd.failuresFound === "no" && !frd.failuresWhy) {
     B.push('F6 <failures found="no"> без why — «распознаваемых отказов нет» это вывод из репозитория, а не пропуск раздела')
   }
-  const errs = new Set(frd.usecases.flatMap((u) => u.exts.map((e) => e.error).filter(Boolean)))
+  // NO_CODE — the branch that fails without a code of its own, said OUT LOUD.
+  //
+  // BUG_FIX_CONTEXT: live run a3597dd3 (eddi). The operator had decided that a missing glossary term
+  //   resolves to an empty string — lenient, no error at all — and the role wrote
+  //   `<ext id="4a" error="none" outcome="term не найден …"/>`. This rule read "none" as a CODE, the
+  //   failure map had no such row, and the artifact was refused. The legal move existed — leave
+  //   `error` off — but nothing said so: the order's example carries `error="CODE"` on every `<ext>`.
+  //   So the role did what this repository does everywhere else and DECLARED the absence, the way
+  //   `<failures found="no">`, `<toggles found="no">`, `<subject found="no">` and `Unknown why` do.
+  //   The form was missing a word, not the role a rule: replaying this guardrail over that same
+  //   artifact leaves zero blockers once "none" means what the role meant by it.
+  // An omitted `error` keeps meaning the same thing — F6 has always judged only the codes that exist.
+  const NO_CODE = "none"
+  const errs = new Set(frd.usecases.flatMap((u) => u.exts.map((e) => e.error).filter((e) => e && e !== NO_CODE)))
   const codes = new Set(frd.failures.map((f) => f.code).filter(Boolean))
   for (const e of errs) if (!codes.has(e)) B.push(`F6 код «${e}» из <ext> не описан в карте отказов`)
   for (const c of codes) if (!errs.has(c)) B.push(`F6 код «${c}» карты отказов не встречен ни одним <ext>`)
