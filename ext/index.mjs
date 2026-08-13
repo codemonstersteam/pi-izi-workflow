@@ -78,7 +78,7 @@ import { newRipple } from "../steps/ripple/ripple.mjs"
 import { newDesign, parseDesign, parseRoutes } from "../steps/design/design.mjs"
 import { newPlanIndex } from "../steps/plan/plan.mjs"
 import { newReview, CODES } from "../steps/review/review.mjs"
-import { parseMap, mapMeasure, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
+import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
 import { newBudgets, BUDGETS_PATH } from "../core/budgets.mjs"
@@ -1058,7 +1058,7 @@ export const buildGraph = {
 // the number instead of degrading into a form whose price nobody has measured — the reasoning, and
 // what would bring the index form back, is docs/intake.md §3.
 export const graphMap = {
-  description: "Read .agent/appgraph.xml for step 6 and measure what it costs to hand it to a role (steps/intake/map.mjs). Above the reading ceiling the map is NOT trimmed — ok:false with the byte count, so the step refuses rather than silently degrading.",
+  description: "Read .agent/appgraph.xml for step 6 and measure what it costs to hand it to a role (steps/intake/map.mjs). Above the reading ceiling the map DEGRADES to its index form — nodes, their kind and their <api>, without declarations, prose or edges — and says so in the artifact it hands over (form=\"index\"). Only an index that is itself over the ceiling is a refusal.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -1069,6 +1069,8 @@ export const graphMap = {
       bytes: { type: "number" },
       nodes: { type: "number" },
       cap: { type: "number" },
+      form: { type: "string" },
+      fullBytes: { type: "number" },
     },
     required: ["ok"],
     additionalProperties: false,
@@ -1080,10 +1082,22 @@ export const graphMap = {
     }
     const text = readFileSync(at(root, GRAPH_PATH), "utf8")
     const m = mapMeasure(text)
-    if (m.overCap) {
-      return { ok: false, why: `карта ${m.bytes} Б на ${m.nodes} узлов — выше потолка чтения ${MAP_CAP_BYTES} Б: индексной формы этот срез не строит (docs/intake.md §3)`, bytes: m.bytes, nodes: m.nodes, cap: MAP_CAP_BYTES }
+    if (!m.overCap) return { ok: true, text, bytes: m.bytes, nodes: m.nodes, cap: MAP_CAP_BYTES }
+
+    // Above the ceiling the map DEGRADES instead of refusing — and it says so. The full file stays on
+    // disk for steps 8 and 10; what changes is only what step 6's role is handed.
+    //
+    // BUG_FIX_CONTEXT: runs fa8def32 and fb57f506 died here, 2-3% over, with the swarm already paid
+    //   for. Refusing was honest and final; degrading is honest and lets the run continue, which is
+    //   the whole point of measuring before the swarm instead of after it. The index declares
+    //   `form="index" without="decl role io edge"`, so the role can never mistake "no edges written"
+    //   for "no dependencies exist".
+    const index = mapIndex(text)
+    const mi = mapMeasure(index)
+    if (mi.overCap) {
+      return { ok: false, why: `карта ${m.bytes} Б и даже её индекс ${mi.bytes} Б выше потолка чтения ${MAP_CAP_BYTES} Б на ${mi.nodes} узлах — сузить фокус нечем, читать нечем`, bytes: m.bytes, nodes: m.nodes, cap: MAP_CAP_BYTES }
     }
-    return { ok: true, text, bytes: m.bytes, nodes: m.nodes, cap: MAP_CAP_BYTES }
+    return { ok: true, text: index, bytes: mi.bytes, nodes: mi.nodes, cap: MAP_CAP_BYTES, form: "index", fullBytes: m.bytes }
   },
 }
 export const checkFrd = {

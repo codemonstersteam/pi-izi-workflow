@@ -619,7 +619,12 @@ async function graph() {
 async function intake(fromCritic) {
   const map = await graphMap({});
   if (!map.ok) exit(err("blocked", { subject: map.why }));
-  log(`intake: карта ${map.bytes} Б на ${map.nodes} узлов, потолок ${map.cap} Б — едет роли целиком`);
+  // The map may arrive DEGRADED — its index form, without declarations, prose or edges — and that is
+  // said out loud here, because a role reading an index is a different fact about the run than a role
+  // reading the map (ext/index.mjs::graphMap, steps/intake/map.mjs::mapIndex).
+  log(map.form === "index"
+    ? `intake: карта ${map.fullBytes} Б выше потолка ${map.cap} Б — роли едет ИНДЕКС ${map.bytes} Б на ${map.nodes} узлов: узлы и их <api>, без объявлений, прозы и рёбер`
+    : `intake: карта ${map.bytes} Б на ${map.nodes} узлов, потолок ${map.cap} Б — едет роли целиком`);
 
   const orderTpl = await readText({ path: "steps/intake/order.tpl" });
   const BRD = await readText({ path: ".agent/brd.md" });

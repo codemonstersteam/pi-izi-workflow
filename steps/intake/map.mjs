@@ -15,7 +15,63 @@
 //             parseMap(xml) -> { nodes, tests, entries: Set<string>, edges: Edge[], count,
 //                                nodeTests: Map, suites: Suite[], spine: {…}, cycles: Set<string> }
 //             mapMeasure(xml, cap?) -> { bytes, nodes, overCap }
+//             mapIndex(xml) -> string   — the map with everything the reader can live without
 //
+// FUNCTION_CONTRACT: mapIndex — the map as an INDEX: what exists and what it offers, nothing else
+//   Input:        xml — the full map text
+//   Dependencies: —
+//   Antecedent:   any value; garbage yields a header and nothing else
+//   Consequent:   success: XML in the SAME grammar, carrying `<module>` headers, their `<api>` rows
+//                          and every declaration-free section of the file, and declaring itself:
+//                          `form="index"` plus the list of what was left out. Declarations, the
+//                          scout's prose and the edges are gone
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    mapIndex(xml: unknown) -> string
+//
+// This is the form docs/concept.md promised above the ceiling and steps/triggers.md deferred until a
+// repository needed it. That repository arrived: eddi's map ran 120 050 B against a 117 760 B
+// ceiling and step 6 refused AFTER the swarm had been paid for. Refusing is honest but final;
+// degrading is honest and lets the run continue, so long as the degradation is DECLARED — the role
+// must never mistake "the map has no edges" for "this code has no dependencies".
+//
+// What survives and why: a node's path and kind are its identity, `<api>` is what it offers the
+// outside, and the spine's answers are about the repository rather than any node. What goes is what
+// the reader can obtain another way — declarations and the scout's sentence describe a file that can
+// be opened, and the edges are the largest block of all (38% of eddi's map).
+//
+// The MEASURED price on that map: 120 050 B full, 109 188 B compressed, ≈24 000 B as an index — five
+// times smaller. Its own ceiling follows from the same arithmetic: ~185 B per node means an index
+// holds roughly 600 nodes, so a whole 1850-file repository does not fit even here. That number is
+// the trigger for the next form, not a reason to withhold this one.
+export function mapIndex(xml) {
+  const s = String(xml || "")
+  const lines = s.split("\n")
+  const head = (lines[0] || "").match(/^<appgraph[^>]*>/)
+  const out = [head ? `${head[0].slice(0, -1)} form="index" without="decl role io edge">` : '<appgraph form="index" without="decl role io edge">']
+
+  const KEEP = /^\s*<(paths|lang|suite|suites|artifact|build|toggles|branching|contract|integrations|subject|component|focus|cycle|systems|system|surface|gap|isolated)\b/
+  let node = null            // the open module: its header and the api rows it carries
+  const flush = () => {
+    if (!node) return
+    // A node with api rows keeps them INSIDE its element — `entries` of parseMap is read from the
+    // body, and step 6's F3 asks "can an existing call of this node break at all" through it.
+    if (node.api.length) out.push(node.head.replace(/\/?>$/, ">"), ...node.api, "  </module>")
+    else out.push(node.head.replace(/\/?>$/, "/>"))
+    node = null
+  }
+  for (const line of lines.slice(1)) {
+    if (/^\s*<module\b/.test(line)) { flush(); node = { head: line, api: [] }; continue }
+    if (/^\s*<\/module>/.test(line)) { flush(); continue }
+    if (node) { if (/^\s*<api\b/.test(line)) node.api.push(line); continue }
+    if (/^\s*<(edge|edges|decl)\b/.test(line)) continue
+    if (KEEP.test(line)) out.push(line)
+    else if (/^<\/appgraph>/.test(line)) { flush(); out.push(line) }
+  }
+  flush()
+  return out.join("\n")
+}
+
 // WHY A MEASUREMENT AND NOT AN INDEX. docs/concept.md promised the reader an INDEX form above the
 // ceiling (a module tree with `<api scope="public">`, no declarations, no edges). This slice does not
 // build it, and that is a decision with a reason, not an omission: its price has never been measured

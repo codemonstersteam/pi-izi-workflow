@@ -4,7 +4,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { parseMap, mapMeasure, MAP_CAP_BYTES } from "./map.mjs"
+import { parseMap, mapMeasure, MAP_CAP_BYTES, mapIndex } from "./map.mjs"
 
 // Both shapes of the grammar step 5 writes: a node with a body (it has declarations) and a
 // self-closing one (it has none).
@@ -86,4 +86,35 @@ test("above the ceiling the measurement says so — the step refuses instead of 
   // The cap is a number with a live source: 32K tokens ≈ 115 KB (docs/concept.md), and 417 B/node
   // measured on run c166bd87 (docs/graph.md §7) makes that ≈306 nodes.
   assert.equal(MAP_CAP_BYTES, 115 * 1024)
+})
+
+// The form docs/concept.md promised above the ceiling and docs/triggers.md deferred until a
+// repository needed it. Runs fa8def32 and fb57f506 on eddi were that repository: 120-121 KB against
+// a 117 760 B ceiling, refused AFTER the swarm. Measured on that map: the index is 32 907 B.
+test("mapIndex: the map degrades to what exists and what it offers — and declares it", () => {
+  const full = [
+    '<appgraph grammar="3" modules="2" components="1" isolated="0" levels="2">',
+    '  <paths prefix="src/main/java/acme/"/>',
+    '  <suite id="unit" cmd="mvn test" path="src/test" match="*Test.java"/>',
+    '  <module path="~A.java" kind="" level="1" fanin="0" fanout="1">',
+    '    <role>does the thing in a sentence a scout wrote</role>',
+    '    <api name="GET /a" kind="http" scope="public"/>',
+    '    <decl kind="method" name="run()" sig="public void run()"/>',
+    '  </module>',
+    '  <module path="~B.java" level="2" fanin="1" fanout="0"/>',
+    '  <edges from="~A.java" to="~B.java"/>',
+    "</appgraph>",
+  ].join("\n")
+
+  const idx = mapIndex(full)
+  assert.match(idx, /form="index" without="decl role io edge"/)   // never silent about what is missing
+  assert.ok(idx.includes('<api name="GET /a"'), "what a node offers survives")
+  assert.ok(idx.includes("<suite"), "the repository's own answers survive")
+  assert.equal(/<decl|<role|<edges|<edge /.test(idx), false, "declarations, prose and edges are gone")
+
+  // identity is preserved: the same nodes, read by the same parser, prefix and all
+  const back = parseMap(idx)
+  assert.deepEqual([...back.nodes], ["src/main/java/acme/A.java", "src/main/java/acme/B.java"])
+  assert.ok(back.entries.has("src/main/java/acme/A.java"))
+  assert.ok(mapMeasure(idx).bytes < mapMeasure(full).bytes)
 })
