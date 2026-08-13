@@ -301,6 +301,9 @@ export function mergeGraph({ parts = [], computed = {}, plan = {}, focus = null 
           of: planCells.length,
           nodes: modules.length,
           repo: focus.repoFiles || 0,
+          // What the ceiling left out, carried from step 3b. Zero is written too: "nothing was
+          // dropped" and "nobody counted" must not read the same in a file a human diagnoses from.
+          dropped: (focus.dropped && focus.dropped.slices) || 0,
         })
       : null,
     gaps: Object.freeze(gaps),
@@ -416,7 +419,7 @@ export function graphXml(graph) {
   // `local` names the numbers computed from what got in, so a `level` or a `component` in this map
   // never silently claims to speak about the whole tree.
   if (g.focus) {
-    L.push(`  <focus slices="${esc(g.focus.slices)}" cells="${g.focus.cells}" of="${g.focus.of}" nodes="${g.focus.nodes}" repo="${g.focus.repo}" local="level fanin fanout component"/>`)
+    L.push(`  <focus slices="${esc(g.focus.slices)}" cells="${g.focus.cells}" of="${g.focus.of}" nodes="${g.focus.nodes}" repo="${g.focus.repo}" dropped="${g.focus.dropped}" local="level fanin fanout component"/>`)
   }
 
   L.push(answerXml("artifact", (g.answers || {}).artifact))

@@ -20,7 +20,6 @@ import { join } from "node:path"
 import { Compile } from "typebox/compile"
 import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
-import { FOCUS_QUESTION } from "../steps/focus/focus.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
 const ctx = (cwd) => ({ run: { cwd } })
@@ -254,15 +253,26 @@ test("no .agent/survey-plan.json at the run root: refusal naming step 3, and no 
   assert.equal(existsSync(join(root, ".agent", "focus.json")), false)
 })
 
-test("the question rail: ask:true carries the constant subject, the candidates go in evidence", () => {
+test("the anchor is matched against the SURFACE, not the file's text", () => {
+  // BUG_FIX_CONTEXT run e90d9ce1 (eddi): the surface is built HERE, out of graph-computed.xml, and
+  // that is the whole repair — under step 3's marking rule the anchor `import` named 83 of 84
+  // entries, because every java file opens with a block of imports.
   const root = planAt(tempRoot(), Array.from({ length: 400 }, (_, i) => `src/n${i}.java`))
-  writeFileSync(join(root, ".agent", "focus.json"), '{"cells":["c1"]}')
+  writeFileSync(join(root, ".agent", "focus.json"), '{"cells":["c1"]}')       // yesterday's focus
+
   const r = focus.run({}, ctx(root))
   assert.equal(r.ok, false)
-  assert.equal(r.ask, true)
-  assert.equal(r.subject, FOCUS_QUESTION)                                     // verbatim, never rebuilt
-  assert.ok(r.evidence.includes("Кандидаты:"))
-  assert.equal(existsSync(join(root, ".agent", "focus.json")), false)
+  assert.match(r.why, /no-anchor/)                       // the plan's anchor names no entry here
+  assert.equal(existsSync(join(root, ".agent", "focus.json")), false, "a refusal erases the artifact")
+
+  // …and when an anchor DOES name an entry, the focus is written and narrower than the plan
+  const named = planAt(tempRoot(), ["src/GlossaryStore.java", "src/Other.java", ...Array.from({ length: 398 }, (_, i) => `src/n${i}.java`)])
+  writeFileSync(join(named, ".agent", "survey-plan.json"), readFileSync(join(named, ".agent", "survey-plan.json"), "utf8").replace('"subjects":["якорь"],"gaps"', '"subjects":["Glossary"],"gaps"'))
+  const ok2 = focus.run({}, ctx(named))
+  assert.equal(ok2.ok, true, ok2.why)
+  assert.equal(ok2.why, "anchors")
+  assert.ok(ok2.cells < 401, "narrower than the plan")
+  assert.equal(typeof ok2.droppedSlices, "number")
 })
 
 // --- steps 4 and 5 read the FOCUS, and they do it in one change --------------------------------

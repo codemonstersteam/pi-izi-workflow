@@ -708,22 +708,21 @@ function readFocus(root) {
 }
 
 export const focus = {
-  description: "Step 3b. Decide WHICH cells of .agent/survey-plan.json the swarm surveys, before it runs and for zero tokens: every cell while the plan's map fits the reading cap, otherwise the entry cones the BRD's anchors point at (steps/focus/slices.mjs, steps/focus/focus.mjs). Writes .agent/focus.json — the cones, the choice and the cells. ok:false with ask:true carries a question for the operator VERBATIM in `subject` with the candidate list in `evidence`; any refusal REMOVES the artifact, so step 4 can never survey yesterday's focus.",
+  description: "Step 3b. Decide WHICH cells of .agent/survey-plan.json the swarm surveys, before it runs and for zero tokens: every cell while the plan's map fits the reading cap, otherwise the entry cones the BRD's anchors NAME (steps/focus/slices.mjs, steps/focus/focus.mjs). Writes .agent/focus.json — the cones, the choice, the cells and what the ceiling dropped. There is no operator rail: the choice is made here, its order is stated, and what did not fit is counted. Any refusal REMOVES the artifact, so step 4 can never survey yesterday's focus.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
     properties: {
       ok: { type: "boolean" },
       why: { type: "string" },
-      ask: { type: "boolean" },
-      subject: { type: "string" },
-      evidence: { type: "string" },
       slices: { type: "number" },
       entries: { type: "number" },
       chosen: { type: "number" },
       cells: { type: "number" },
       files: { type: "number" },
       estBytes: { type: "number" },
+      droppedSlices: { type: "number" },
+      droppedCells: { type: "number" },
     },
     required: ["ok"],
     additionalProperties: false,
@@ -737,21 +736,15 @@ export const focus = {
 
     const computed = parseComputed(readIfExists(root, COMPUTED_PATH))
     const nodes = p.cells.flatMap((c) => (c.files || []).map((f) => f.path))
-    const marked = p.cells.flatMap((c) => (c.files || []).filter((f) => (f.subjects || []).length).map((f) => f.path))
 
+    // The anchors reach the choice as NAMES and are matched against the file's PATH — step 3's rule
+    // (the anchor's text anywhere in the file, hitsFor below) stays where it belongs, MARKING. On
+    // run e90d9ce1 that rule named 83 of eddi's 84 entries on the anchor `import`
+    // (steps/focus/focus.mjs::names).
     const { slices, orphans } = newSlices({ nodes, edges: computed.edges, routes: computed.api.map((a) => a.at) })
-    const r = newFocus({
-      slices,
-      orphans,
-      marked,
-      cells: p.cells,
-      answers: parsedAnswers(readIfExists(root, ANSWERS_PATH)).value || [],
-    })
+    const r = newFocus({ slices, orphans, anchors: p.plan.subjects || [], cells: p.cells })
     if (!r.ok) {
       drop()
-      if (r.error.cls === "ask") {
-        return { ok: false, ask: true, why: "фокус не выбран — нужен ответ оператора", subject: r.error.detail.subject, evidence: r.error.detail.evidence, slices: slices.length, entries: slices.length }
-      }
       return { ok: false, why: `${r.error.cls}: ${r.error.detail}`, slices: slices.length, entries: slices.length }
     }
 
@@ -767,11 +760,12 @@ export const focus = {
       files: v.files,
       repoFiles: nodes.length,
       estBytes: v.estBytes,
+      dropped: v.dropped,
       slices: v.slices.map((s) => ({ id: s.id, entry: s.entry, kind: s.kind, nodes: s.nodes.length })),
     }
     mkdirSync(dirname(at(root, FOCUS_PATH)), { recursive: true })   // written AFTER the decision to accept
     writeFileSync(at(root, FOCUS_PATH), JSON.stringify(artifact, null, 2))
-    return { ok: true, why: v.why, slices: v.slices.length, entries: v.entries, chosen: v.chosen.length, cells: v.cells.length, files: v.files, estBytes: v.estBytes }
+    return { ok: true, why: v.why, slices: v.slices.length, entries: v.entries, chosen: v.chosen.length, cells: v.cells.length, files: v.files, estBytes: v.estBytes, droppedSlices: v.dropped.slices, droppedCells: v.dropped.cells }
   },
 }
 

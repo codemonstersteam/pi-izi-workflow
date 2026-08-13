@@ -383,40 +383,35 @@ async function surveyPlan() {
 
 // FUNCTION_CONTRACT: focusing — step 3b: WHAT the swarm surveys, decided before it runs
 //   Input:        —
-//   Dependencies: EXTERNAL — focus (the host function), askOperator, charge, log, exit
+//   Dependencies: EXTERNAL — focus (the host function), log, exit
 //   Antecedent:   step 3 left .agent/survey-plan.json and .agent/graph-computed.xml
 //   Consequent:   success: RETURNS the artifact path; .agent/focus.json names the cells step 4 will
 //                          survey — every cell of the plan while the map fits the reading cap
-//                 failure: exits — err("blocked") on a refusal that no answer can repair
-//                          (`no-plan`, `no-entry`), err("question") through charge() when the
-//                          operator's rounds ran out
+//                 failure: exits err("blocked") — `no-plan`, `no-entry`, `no-anchor`, `over-cap`.
+//                          All four are repaired by a human editing TASK.md or the BRD, never by a
+//                          choice inside the run
 //   Purity:       io (through the host)
 //
-// The SECOND script step with an operator, after step 10, and the shape is the same one: there is no
-// role here to re-delegate to, so the answer is applied by the script itself and the "loop" is the
-// same host call made again over the same disk. It spends QUESTION_ROUNDS and never LOOPS — a round
-// costs the operator's time, not the model's.
+// NO OPERATOR RAIL, and this phase used to have one. The first live firing killed it (run e90d9ce1,
+// eddi): over the ceiling the step asked which cones to survey and offered twelve candidates — every
+// one of them priced at 685-689 KB, because any choice also carried every anchor-marked orphan. No
+// answer the operator could give changed the total. A question that cannot be acted on is worse than
+// no question, so the choice moved into steps/focus/focus.mjs, where its ORDER is stated and what did
+// not fit is COUNTED and declared — in this log, in .agent/focus.json and in the map's <focus>.
 //
-// charge() is not decoration on the loop, it IS the loop's exit: it is the one place where the
-// question budgets are spent (its own contract, above), and there is no terminal exit after the for
-// below — the run ends inside charge() when the rounds are gone. Copying planning()'s shape without
-// it would give a phase whose declared budget asserts nothing and a loop that can fall through.
-//
-// On every form the pipeline is green on today this phase opens NO checkpoint at all: 15-20 files
-// estimate at ~8 KB against a 115 KB cap, so focus() answers "whole-plan" on its first call and the
-// operator never learns the step exists (docs/big-projects-solution.md §3).
+// On every form the pipeline is green on today this phase is silent: 19 files estimate at ~8 KB
+// against a 115 KB cap, so focus() answers "whole-plan" and nothing is narrowed at all
+// (docs/big-projects-solution.md §3).
 async function focusing() {
-  for (let round = 1; round <= QUESTION_ROUNDS + 1; round++) {
-    const f = await focus({});
-    if (f.ok) {
-      log(`focus: ${f.why} — срезов ${f.slices}, выбрано ${f.chosen}, клеток ${f.cells} из плана, файлов ${f.files} ≈ ${Math.round(f.estBytes / 1024)} КБ`);
-      return ".agent/focus.json";
-    }
-    if (!f.ask) exit(err("blocked", { subject: f.why, evidence: ".agent/focus.json не написан" }));
-    // The candidate list travels in `evidence` — .agent/pending.json, where the operator reads it —
-    // and never in the question, whose text is the KEY an answer is matched by (steps/focus/focus.mjs).
-    await askOperator({ subject: f.subject, evidence: f.evidence }, charge({ subject: f.subject }, "focus"), "focus", "focus");
+  const f = await focus({});
+  if (!f.ok) exit(err("blocked", { subject: f.why, evidence: ".agent/focus.json не написан" }));
+  log(`focus: ${f.why} — срезов ${f.slices}, выбрано ${f.chosen}, клеток ${f.cells} из плана, файлов ${f.files} ≈ ${Math.round(f.estBytes / 1024)} КБ`);
+  // What the ceiling left out is printed where the operator reads it. A narrowing that stays inside
+  // the artifact is indistinguishable from a repository that had nothing more in it.
+  if (f.droppedSlices || f.droppedCells) {
+    log(`focus: не влезло — срезов ${f.droppedSlices}, клеток-сирот ${f.droppedCells}; их якоря приедут в карту как found="outside"`);
   }
+  return ".agent/focus.json";
 }
 
 // FUNCTION_CONTRACT: scout — one plan cell → one fragment of the application graph

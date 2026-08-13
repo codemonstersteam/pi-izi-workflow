@@ -225,14 +225,14 @@ const FOCUS_PLAN = {
     { id: "left-out", kind: "survey", subjects: ["berry"] },   // real files, and the focus dropped them
   ],
 }
-const FOCUS = { chosen: ["s1"], cells: ["spine", "root"], repoFiles: 40 }
+const FOCUS = { chosen: ["s1"], cells: ["spine", "root"], repoFiles: 40, dropped: { slices: 2, cells: 0, bytes: 90000 } }
 
 test("a narrowed map declares its boundary, and an anchor left outside it is not 'found'", () => {
   const r = newGraph({ parts: PARTS, computedXml: COMPUTED, plan: FOCUS_PLAN, focus: FOCUS })
   assert.equal(r.ok, true, r.ok ? "" : r.error && r.error.detail)
   const g = r.value
 
-  assert.deepEqual(g.focus, { slices: "s1", cells: 2, of: 3, nodes: g.modules.length, repo: 40 })
+  assert.deepEqual(g.focus, { slices: "s1", cells: 2, of: 3, nodes: g.modules.length, repo: 40, dropped: 2 })
   assert.deepEqual(g.subjects, [
     { name: "fruit", found: "" },                     // its cell is in the focus
     { name: "search", found: "no" },                  // no file in the repository at all
@@ -240,7 +240,7 @@ test("a narrowed map declares its boundary, and an anchor left outside it is not
   ])
 
   const xml = graphXml(g)
-  assert.match(xml, /<focus slices="s1" cells="2" of="3" nodes="\d+" repo="40" local="level fanin fanout component"\/>/)
+  assert.match(xml, /<focus slices="s1" cells="2" of="3" nodes="\d+" repo="40" dropped="2" local="level fanin fanout component"\/>/)
   assert.match(xml, /<subject name="berry" found="outside"\/>/)
 
   // …and `outside` must not collapse into `no`: step 6's role answers Unknown on the first and asks
