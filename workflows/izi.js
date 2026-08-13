@@ -9,7 +9,7 @@
 //               reads or writes goes through a host function listed below.
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
 //               GLOBALS — readText · answers · brdForm · frdForm · budgets · herdrStatus · newRun · checkTask ·
-//               checkBrd · promote · setPending · clearPending · survey · cells · digest · reuse ·
+//               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
 //               plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
@@ -379,6 +379,44 @@ async function surveyPlan() {
   // not a rail to stop on.
   if (p.gaps.length) log(`survey-plan: якорей без единого файла — ${p.gaps.length} из ${p.subjects}: ${p.gaps.join(" · ")}`);
   if (p.skipped.length) log(`survey-plan: не прочитано (крупнее потолка): ${p.skipped.join(", ")}`);
+}
+
+// FUNCTION_CONTRACT: focusing — step 3b: WHAT the swarm surveys, decided before it runs
+//   Input:        —
+//   Dependencies: EXTERNAL — focus (the host function), askOperator, charge, log, exit
+//   Antecedent:   step 3 left .agent/survey-plan.json and .agent/graph-computed.xml
+//   Consequent:   success: RETURNS the artifact path; .agent/focus.json names the cells step 4 will
+//                          survey — every cell of the plan while the map fits the reading cap
+//                 failure: exits — err("blocked") on a refusal that no answer can repair
+//                          (`no-plan`, `no-entry`), err("question") through charge() when the
+//                          operator's rounds ran out
+//   Purity:       io (through the host)
+//
+// The SECOND script step with an operator, after step 10, and the shape is the same one: there is no
+// role here to re-delegate to, so the answer is applied by the script itself and the "loop" is the
+// same host call made again over the same disk. It spends QUESTION_ROUNDS and never LOOPS — a round
+// costs the operator's time, not the model's.
+//
+// charge() is not decoration on the loop, it IS the loop's exit: it is the one place where the
+// question budgets are spent (its own contract, above), and there is no terminal exit after the for
+// below — the run ends inside charge() when the rounds are gone. Copying planning()'s shape without
+// it would give a phase whose declared budget asserts nothing and a loop that can fall through.
+//
+// On every form the pipeline is green on today this phase opens NO checkpoint at all: 15-20 files
+// estimate at ~8 KB against a 115 KB cap, so focus() answers "whole-plan" on its first call and the
+// operator never learns the step exists (docs/big-projects-solution.md §3).
+async function focusing() {
+  for (let round = 1; round <= QUESTION_ROUNDS + 1; round++) {
+    const f = await focus({});
+    if (f.ok) {
+      log(`focus: ${f.why} — срезов ${f.slices}, выбрано ${f.chosen}, клеток ${f.cells} из плана, файлов ${f.files} ≈ ${Math.round(f.estBytes / 1024)} КБ`);
+      return ".agent/focus.json";
+    }
+    if (!f.ask) exit(err("blocked", { subject: f.why, evidence: ".agent/focus.json не написан" }));
+    // The candidate list travels in `evidence` — .agent/pending.json, where the operator reads it —
+    // and never in the question, whose text is the KEY an answer is matched by (steps/focus/focus.mjs).
+    await askOperator({ subject: f.subject, evidence: f.evidence }, charge({ subject: f.subject }, "focus"), "focus", "focus");
+  }
 }
 
 // FUNCTION_CONTRACT: scout — one plan cell → one fragment of the application graph
@@ -973,6 +1011,7 @@ try {
   phase("task"); await task();
   phase("brd"); await brd();
   phase("survey-plan"); await surveyPlan();
+  phase("focus"); await focusing();
   phase("scope"); await scope();
   phase("graph"); await graph();
   // Steps 6-11 are ONE statement now: the critic's verdict decides whether they run again, and which
