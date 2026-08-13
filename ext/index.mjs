@@ -62,7 +62,7 @@ import { dirname, join } from "node:path"
 import { Type } from "typebox"
 import { registerWorkflowExtension, herdrAvailable, herdrPaneId, loadSettings } from "pi-extensible-workflows"
 import { checkTaskText } from "../steps/task/task.mjs"
-import { newBrd, parseBrd } from "../steps/brd/brd.mjs"
+import { newBrd, parseBrd, analogueTerm } from "../steps/brd/brd.mjs"
 import { newPlan } from "../steps/survey-plan/plan.mjs"
 import { skipDir, skipFile } from "../steps/survey-plan/skip.mjs"
 import { newSlices } from "../steps/focus/slices.mjs"
@@ -747,7 +747,7 @@ export const focus = {
     // resolved to files by step 3 and arrive through the plan; `analogue` is a single term that
     // exists nowhere else.
     const brd = parseBrd(readIfExists(root, ".agent/brd.md"))
-    const r = newFocus({ slices, anchors: p.plan.subjects || [], analogue: brd.analogue || "", cells: p.cells, edges: computed.edges })
+    const r = newFocus({ slices, anchors: p.plan.subjects || [], analogue: analogueTerm(brd.analogue), cells: p.cells, edges: computed.edges })
     if (!r.ok) {
       drop()
       return { ok: false, why: `${r.error.cls}: ${r.error.detail}`, slices: slices.length, entries: slices.length }

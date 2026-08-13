@@ -113,6 +113,7 @@ R<N> <statement: what, not how>
    fit:    <value | range | enum | format | predicate>
    verify: <command | artifact>
 
+analogue: <OneWord> — <why it is the model>
 subjects[]: <term> · <term> · <term>
 open-questions: 0
 ```
@@ -168,7 +169,8 @@ The key in `--q=` is the subject VERBATIM. Note also: the alternatives you list 
 the operator's — a number from them is not a source. Only what the operator answers is.
 
 Next call carries the answers block: `- вопрос: срок хранения записей — 90 дней по умолчанию (альтернативы: 30, 180)?  ответ: 90`.
-Step 4: fold into R1. Step 5: `subjects[]: audit · record · rotation`. Step 6: no FEEDBACK — this
+Step 4: fold into R1. Step 5: `subjects[]: audit · record · rotation` and
+`analogue: none — в репозитории нет ничего похожего`. Step 6: no FEEDBACK — this
 is the first attempt, nothing to repair. Step 7 writes `.agent/staging/brd.md`:
 
 ```
@@ -184,6 +186,7 @@ R3 Существующие выгрузки не ломаются
    fit:    формат ответа GET /audit — unchanged | changed, обязан быть unchanged
    verify: существующий контрактный тест остаётся зелёным
 
+analogue: none — в репозитории нет ничего похожего
 subjects[]: audit · record · rotation
 open-questions: 0
 ```

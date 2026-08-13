@@ -8,7 +8,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { newFit, newRequirement, newSubjects, adviceFor, newBrd, numbersIn, languageDrifted, BRD_FORM, parseBrd } from "./brd.mjs"
+import { newFit, newRequirement, newSubjects, adviceFor, newBrd, numbersIn, languageDrifted, BRD_FORM, parseBrd, analogueTerm } from "./brd.mjs"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BRD = (fit) => `R1 Размер ответа ограничен\n   fit:    ${fit}\n   verify: GET /x\n\nsubjects[]: a · b · c\nanalogue: PromptSnippet\nopen-questions: 0\n`
@@ -338,4 +338,15 @@ test("analogue: the model this work follows is a FIELD, and its absence is decla
   assert.equal(newBrd(declared, ["20 записей"]).ok, true)
 
   assert.equal(parseBrd(withField).analogue, "PromptSnippet")
+
+  // BUG_FIX_CONTEXT eddi, the first live run with this field: the role wrote a SENTENCE —
+  // `Prompt Snippet (PromptSnippetService, …) — по образцу него …` — and step 3b grepped the tree
+  // for that whole string. Nothing matched, the phase did nothing, and the focus fell to 1 of 10.
+  const prose = withField.replace("analogue: PromptSnippet", "analogue: Prompt Snippet (PromptSnippetService) — по образцу него CRUD")
+  assert.match(newBrd(prose, ["20 записей"]).error.detail, /analogue «Prompt Snippet»/)
+
+  const withWhy = withField.replace("analogue: PromptSnippet", "analogue: PromptSnippet — по образцу него CRUD, хранилище и экспорт")
+  assert.equal(newBrd(withWhy, ["20 записей"]).ok, true)
+  assert.equal(analogueTerm(withWhy.match(/analogue: (.*)/)[1]), "PromptSnippet")
+  assert.equal(analogueTerm("none — ничего похожего"), "")
 })

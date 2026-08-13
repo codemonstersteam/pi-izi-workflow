@@ -128,6 +128,31 @@ export function numbersIn(text) {
   return out
 }
 
+// FUNCTION_CONTRACT: analogueTerm — the greppable head of the `analogue:` line
+//   Input:        text — the raw value of the line, or null
+//   Dependencies: —
+//   Antecedent:   any value
+//   Consequent:   success: the term before the first separator, trimmed; "" for a declared absence
+//                          (`none …`) and for nothing at all
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    analogueTerm(text: unknown) -> string
+//
+// The line carries a NAME and, after a dash, whatever the role wants to say about it. Step 3b greps
+// the repository with the name, so the name must be one word — the same rule subjects[] obey, and
+// for the same reason.
+//
+// BUG_FIX_CONTEXT: eddi, the first run with this field. The role wrote
+//   `analogue: Prompt Snippet (PromptSnippetService, eddi://ai.labs.snippet) — по образцу него …`
+//   and step 3b searched the repository for that WHOLE STRING: no path contains it, the phase found
+//   nothing, and the focus fell to 1 of the 10 files the change needs. The field was free text and
+//   the consumer wanted a token — that gap is closed here and by the blocker in newBrd.
+export function analogueTerm(text) {
+  const raw = String(text == null ? "" : text).trim()
+  if (!raw || /^none\b/i.test(raw)) return ""
+  return raw.split(/[—(,:]|\s+-\s+/)[0].trim()
+}
+
 // FUNCTION_CONTRACT: parseBrd — parses a raw BRD text into requirements, subjects and open-questions
 //   Input:        text — the raw text of a BRD document
 //   Dependencies: —
@@ -386,10 +411,14 @@ export function newBrd(text, sources = []) {
   //   whether a model happens to mention it is what those two numbers cost.
   // Absence is DECLARED, never inferred: `analogue: none — <why>`, the same device as
   // `<failures found="no" why>` and `<subject found="no">`.
+  const anTerm = analogueTerm(analogue)
   if (analogue === null) blockers.push('нет строки analogue — по образцу чего делается работа; если образца нет, так и напиши: analogue: none — <почему>')
   else if (!analogue) blockers.push('analogue пуст — назови существующий механизм-образец или объяви analogue: none — <почему>')
   else if (/^none\b/i.test(analogue) && !/\S/.test(analogue.replace(/^none\b/i, "").replace(/^[\s—:-]+/, ""))) {
     blockers.push('analogue: none без причины — «образца нет» это вывод из репозитория, а не пропуск строки')
+  }
+  else if (anTerm && /\s/.test(anTerm)) {
+    blockers.push(`analogue «${anTerm}» — ${BRD_FORM.subjectRule}. Пояснение пиши после тире: analogue: PromptSnippet — по образцу него CRUD и экспорт`)
   }
 
   let subj = null
