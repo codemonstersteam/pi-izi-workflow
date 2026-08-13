@@ -263,6 +263,10 @@ test("F5: a number with no source among the sources, and a source outside the vo
   // The counting window is narrow ON PURPOSE: status/step/grammar numbers are not the requirement's
   // quantities, and counting them would fail an honest artifact (docs/intake.md §5, run ed1d4094).
   assert.deepEqual(blockersOf(FRD.replace('status="400"', 'status="418"')), [])
+
+  // The refusal names the way out. Run e132f0a1: told only that 24 had no source, the role KEPT the
+  // number and moved `source` to the name of the analogue — a second breach of the same rule.
+  assert.match(blockersOf(invented).join("\n"), /назови формат вместо его меры.*сними число.*<question>/)
 })
 
 test("F6: the failure map and the extensions must be 1:1 in both directions", () => {
@@ -340,6 +344,11 @@ test("role: intake.md names the machine check behind each of its prohibitions", 
   for (const rule of ["F1", "F2", "F3", "F4", "F5", "F6", "F7"]) assert.match(role, new RegExp(`machine-checked as\\s+\`${rule}\``))
   assert.match(role, /Unknown/)            // the form that carries "could not classify" to the operator
   assert.doesNotMatch(role, /\bmvn\b|@GET|src\/main\//)   // no design, no repository idiom in the role
+
+  // `edit` is a REQUIREMENT of the order, not a convenience: it says "repair EXACTLY the rule and the
+  // element it names, and change nothing else", and with `write` alone the role can only rewrite the
+  // whole artifact — which is how run e132f0a1 lost a rule it had already repaired.
+  assert.match(role, /^tools: \[read, edit, write\]$/m)
 })
 
 // S21, the operator's decision: grilling a requirement takes 25-30 questions, and the ROUND is what

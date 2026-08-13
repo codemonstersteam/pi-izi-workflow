@@ -83,6 +83,7 @@ import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
 import { newBudgets, BUDGETS_PATH } from "../core/budgets.mjs"
 import { BRD_FORM, ABSENT_DOC } from "../core/form.mjs"
+import { carriedBlockers } from "../core/findings.mjs"
 import { writeAnswer } from "../bin/write-answer.mjs"
 
 // runRoot — the anchor itself: context.run.cwd for sandbox functions, process.cwd() for izi_answer
@@ -216,6 +217,29 @@ export const brdForm = {
       analogueRule: BRD_FORM.analogueRule,
       absentDoc: ABSENT_DOC,
     }
+  },
+}
+
+// carried — the memory of a repair loop, computed OUTSIDE the sandbox because the rule is pure and
+// wants a test: the sandbox cannot import, and a rule written inline in workflows/izi.js would have no
+// seam at all (`workflows/` is covered by no test in this repository). The rule itself and the run
+// that paid for it live in core/findings.mjs.
+export const carried = {
+  description: "The feedback of a redelegation: the current red check plus the lines already red earlier in this run, which repairing the current one must not bring back (core/findings.mjs::carriedBlockers).",
+  input: {
+    type: "object",
+    properties: { blockers: { type: "string" }, seen: { type: "array", items: { type: "string" } } },
+    required: ["blockers"],
+    additionalProperties: false,
+  },
+  output: {
+    type: "object",
+    properties: { text: { type: "string" }, seen: { type: "array", items: { type: "string" } } },
+    required: ["text", "seen"],
+    additionalProperties: false,
+  },
+  run({ blockers, seen }) {
+    return carriedBlockers({ blockers, seen })
   },
 }
 
@@ -1101,7 +1125,7 @@ export const graphMap = {
   },
 }
 export const checkFrd = {
-  description: "Judge a staged FRD by steps/intake/frd.mjs::newFrd. Node keys come from .agent/appgraph.xml; a number in a field's domain or an NFR's fit must occur in TASK.md, in the VALUES of operator answers, in a BRD requirement's fit, or in the map itself.",
+  description: "Judge a staged FRD by steps/intake/frd.mjs::newFrd. Node keys come from .agent/appgraph.xml; a number in a field's domain or an NFR's fit must occur in TASK.md, in the VALUES of operator answers, in a BRD requirement's fit or verify, or in the map itself.",
   input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
   output: {
     type: "object",
@@ -1131,7 +1155,11 @@ export const checkFrd = {
     // The provenance of a number: the task, the VALUES of the operator's answers (never the wording
     // of a question — the alternatives an offer lists are the role's own words), the fit criteria of
     // the BRD, and the map. The BRD arrives through parseBrd — one parser, from steps/brd.
-    const fits = parseBrd(readIfExists(root, ".agent/brd.md")).requirements.map((r) => r.fit || "").join("\n")
+    // BOTH `fit` and `verify`. Live run e132f0a1: the BRD said `R1 verify: … возвращают 200`, the
+    // slice took `fit` alone, and F5 told the role the number 200 stood "nowhere in the BRD" — so the
+    // role deleted a correct number to satisfy a blocker that was wrong. A number in the criterion by
+    // which a requirement is CHECKED is that requirement's number just as much as one in its fit.
+    const fits = parseBrd(readIfExists(root, ".agent/brd.md")).requirements.map((r) => `${r.fit || ""}\n${r.verify || ""}`).join("\n")
     const sources = [readIfExists(root, TASK_PATH), ...(ans.ok ? ans.value.map((a) => a.text) : []), fits, mapText]
 
     const map = parseMap(mapText)
@@ -1618,8 +1646,8 @@ export default function extension(pi) {
   registerWorkflowExtension({
     version: "1.12.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
-    description: "readText/answers/brdForm/frdForm/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, plan, review },
+    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, plan, review },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

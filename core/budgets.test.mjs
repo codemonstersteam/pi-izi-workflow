@@ -22,6 +22,16 @@ test("no file at all — the defaults entire, never a refusal", () => {
   // S30: a rewind of the band by the critic is a THIRD kind of round — it costs role calls, not the
   // operator's time and not a redelegation of one role (docs/review.md §6).
   assert.equal(DEFAULT_BUDGETS.reviewRounds, 2)
+  // S32: step 6 redelegates on its OWN budget. Run e132f0a1 came back from round 2 with a single
+  // blocker — one attribute from green — and escalated on the third of three (core/budgets.mjs).
+  assert.equal(DEFAULT_BUDGETS.intakeLoops, 6)
+  assert.ok(DEFAULT_BUDGETS.intakeLoops > DEFAULT_BUDGETS.loops)
+})
+
+test("intakeLoops is a budget like any other — configurable, and a typo in it is still a refusal", () => {
+  assert.equal(newBudgets('{"intakeLoops": 2}').value.intakeLoops, 2)
+  assert.equal(newBudgets('{"intakeLoops": 2}').value.loops, DEFAULT_BUDGETS.loops) // the other four loops are untouched
+  assert.match(newBudgets('{"intakeLoop": 2}').error.detail, /неизвестный ключ/)
 })
 
 test("a broken config is a refusal, never a silent default", () => {

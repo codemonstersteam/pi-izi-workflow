@@ -33,7 +33,9 @@ $START_CONSTRAINTS
 - questions left in this run: {QUESTIONS_LEFT}. Ask every gap you have IN ONE BATCH, not one per
   exchange: each exchange costs a full re-read of the BRD and of the map
 - a delta's form is one of: {DELTA_FORMS} — nothing else is a form
-- a quantity (range, enum, format, limit) carries `source`, and it is one of: {SOURCES}
+- a quantity (range, enum, format, limit) carries `source`, and it is one of: {SOURCES}. A source is a
+  file that CONTAINS the value — name a format rather than its measurements, and a quantity you cannot
+  point at in one of these files is a `<question>`, never a source named from memory
 - one external input — one `<usecase>`; one alternate or failing branch — one `<ext>`; one `<ext>`
   code — one `<failure>` row, in both directions
 - a `<scenario>` states what happens before the change and what happens after, and the two differ

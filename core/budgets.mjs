@@ -40,7 +40,13 @@ import { ok, err } from "./result.mjs"
 // exists because the workflow sandbox has no limiter at all: `parallel` is `Promise.all`
 // (pi-extensible-workflows/packages/core/src/execution.ts:245-266), so a hundred cells would go to
 // the model at once. The default 8 is pi's own concurrency ceiling.
-export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, questions: 60, questionRounds: 3, checkpointRetries: 2, maxParallel: 8, reviewRounds: 2 })
+// intakeLoops — `loops` for step 6 ALONE, and the one budget that is not shared. Live run e132f0a1
+// measured the difference: `checkFrd` is total, so a round's blocker list is the WHOLE remaining
+// distance to green, and round 2 came back with exactly one line — the artifact was one attribute
+// from done. Round 3 repaired that line and lost a rule from round 1, and the run escalated on the
+// third of three. Step 6 is the only place where one file answers to seven rules at once; the other
+// four loops (brd, scope, design, review) judge a narrower artifact and keep the shared `loops`.
+export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, intakeLoops: 6, questions: 60, questionRounds: 3, checkpointRetries: 2, maxParallel: 8, reviewRounds: 2 })
 export const BUDGETS_PATH = "izi.config.json"
 
 const KEYS = Object.keys(DEFAULT_BUDGETS)

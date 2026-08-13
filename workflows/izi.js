@@ -8,7 +8,7 @@
 //               NO timers (pi-extensible-workflows/packages/core/src/execution.ts) — every byte it
 //               reads or writes goes through a host function listed below.
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
-//               GLOBALS — readText · answers · brdForm · frdForm · budgets · herdrStatus · newRun · checkTask ·
+//               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
 //               plan · review · reviewForm. They are not
@@ -48,7 +48,8 @@
 
 // Budgets are assigned ONCE, before any phase. A budget that could change mid-run would make
 // "the loop is exhausted after N attempts" a statement about nothing.
-let LOOPS;              // gilb/scout/intake redelegations after a RED guardrail check, NOT questions
+let LOOPS;              // gilb/scout/designer/critic redelegations after a RED check, NOT questions
+let INTAKE_LOOPS;       // step 6 alone — one file answers to seven rules there (core/budgets.mjs)
 let QUESTIONS;          // QUESTIONS allowed in one run — not exchanges: intake asks them in BATCHES
 let QUESTION_ROUNDS;    // trips to the operator allowed in one run — the round is what costs context
 let CHECKPOINT_RETRIES; // re-pauses on the SAME question when no matching answer showed up
@@ -315,7 +316,7 @@ async function brd() {
   // the template: the guardrail quotes that same registry in its refusal, and two texts of one rule
   // drift apart in silence (backlog G9e, standards/code.md §1).
   const FORM = await brdForm({});
-  let feedback = "(none — first attempt)", attempt = 0;
+  let feedback = "(none — first attempt)", attempt = 0, wasRed = [];
 
   while (attempt < LOOPS) {
     const seen = await answers({});
@@ -347,7 +348,8 @@ async function brd() {
       log(`brd: ok, requirements=${check.requirements}`);
       return;
     }
-    feedback = check.blockers;
+    const carry = await carried({ blockers: check.blockers, seen: wasRed });
+    feedback = carry.text; wasRed = carry.seen;   // the loop's memory is the RUN, not the round
     attempt++;
   }
   exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
@@ -437,7 +439,7 @@ async function focusing() {
 async function scout(cell, orderTpl, BRD) {
   const STAGING = `.agent/staging/graph-parts/${cell.id}.xml`;
   const CHECK = "checkPart({path, cell}) — steps/scope/part.mjs::newPart; the cell's file list is read from .agent/survey-plan.json, not from your part";
-  let feedback = "(none — first attempt)";
+  let feedback = "(none — first attempt)", wasRed = [];
 
   // The cache is asked FIRST, before a single token is spent. It answers "yes" only when composition,
   // sha1 and grammar version all match AND the stored part passes the guardrail NOW (ext/index.mjs::
@@ -474,7 +476,8 @@ async function scout(cell, orderTpl, BRD) {
       await remember({ cell: cell.id });   // only a PROMOTED part is worth remembering
       return { ok: true, modules: check.modules, gaps: check.gaps, hit: false };
     }
-    feedback = check.blockers;
+    const carry = await carried({ blockers: check.blockers, seen: wasRed });
+    feedback = carry.text; wasRed = carry.seen;
   }
   return { ok: false, why: `${cell.id}: цикл исчерпан за ${LOOPS} попыток — ${feedback}` };
 }
@@ -637,9 +640,9 @@ async function intake(fromCritic) {
   // are marked as such. A blocker of the guardrail is numbered by a RULE and repaired pointwise; a
   // blocker of the critic names a code and a node and asks for the CONTENT to be reconsidered. The
   // role reacts to the two differently, so it is told which it is holding (docs/review.md §6).
-  let feedback = fromCritic || "(none — first attempt)", attempt = 0;
+  let feedback = fromCritic || "(none — first attempt)", attempt = 0, wasRed = [];
 
-  while (attempt < LOOPS) {
+  while (attempt < INTAKE_LOOPS) {
     const seen = await answers({});
     const ANSWERS = answersBlock(seen, "(no operator answers yet)");
     const order = prompt(orderTpl, {
@@ -686,10 +689,11 @@ async function intake(fromCritic) {
       if (check.questions) log(`intake: открытых вопросов в артефакте — ${check.questions}`);
       return; // S22: intake is no longer the end of the run — the weight is weighed next
     }
-    feedback = check.blockers;
+    const carry = await carried({ blockers: check.blockers, seen: wasRed });
+    feedback = carry.text; wasRed = carry.seen;   // the loop's memory is the RUN, not the round
     attempt++;
   }
-  exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
+  exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${INTAKE_LOOPS} попыток` }));
 }
 
 // FUNCTION_CONTRACT: weigh — step 7: the forms of the FRD's deltas → one word of SemVer
@@ -777,7 +781,7 @@ async function designing() {
   // The vocabulary of a delta's form is SUBSTITUTED from steps/intake/frd.mjs, never retyped in the
   // template — the same device the intake order uses, for the same reason (ext/index.mjs::frdForm).
   const FORM = await frdForm({});
-  let feedback = "(none — first attempt)", attempt = 0;
+  let feedback = "(none — first attempt)", attempt = 0, wasRed = [];
 
   while (attempt < LOOPS) {
     const seen = await answers({});
@@ -806,7 +810,8 @@ async function designing() {
       log(`design: узлов ${check.nodes}, маршрутов ${check.routes}, списков юнитов ${check.units} → .agent/design-graph.xml + .agent/data-flow.md`);
       return ".agent/data-flow.md";
     }
-    feedback = check.blockers;
+    const carry = await carried({ blockers: check.blockers, seen: wasRed });
+    feedback = carry.text; wasRed = carry.seen;   // the loop's memory is the RUN, not the round
     attempt++;
   }
   exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
@@ -873,7 +878,7 @@ async function reviewing() {
   // The vocabulary is SUBSTITUTED from steps/review/review.mjs, never retyped in the template — the
   // same device the intake and design orders use (ext/index.mjs::reviewForm).
   const FORM = await reviewForm({});
-  let feedback = "(none — first attempt)", attempt = 0;
+  let feedback = "(none — first attempt)", attempt = 0, wasRed = [];
 
   while (attempt < LOOPS) {
     const order = prompt(orderTpl, { PLAN, FRD, CODES: FORM.codes, FEEDBACK: feedback, STAGING, CHECK });
@@ -885,7 +890,8 @@ async function reviewing() {
       log(`review: ${check.verdict}${(check.findings || []).length ? ` — блокеров ${check.findings.length}` : ""}`);
       return { verdict: check.verdict, findings: check.findings || [] };
     }
-    feedback = check.blockers;   // the FORM was wrong, not the judgement — the finding is kept, its address is fixed
+    const carry = await carried({ blockers: check.blockers, seen: wasRed });
+    feedback = carry.text; wasRed = carry.seen;   // the FORM was wrong, not the judgement — the finding is kept, its address is fixed
     attempt++;
   }
   exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
@@ -983,9 +989,9 @@ log("izi: start");
 try {
   const b = await budgets({});
   if (!b.ok) exit(err("blocked", { subject: b.why })); // a broken config is a refusal, not a default
-  LOOPS = b.loops; QUESTIONS = b.questions; QUESTION_ROUNDS = b.questionRounds;
+  LOOPS = b.loops; INTAKE_LOOPS = b.intakeLoops; QUESTIONS = b.questions; QUESTION_ROUNDS = b.questionRounds;
   CHECKPOINT_RETRIES = b.checkpointRetries; MAX_PARALLEL = b.maxParallel; REVIEW_ROUNDS = b.reviewRounds;
-  log(`budgets: loops=${LOOPS} questions=${QUESTIONS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} reviewRounds=${REVIEW_ROUNDS} (${b.source})`);
+  log(`budgets: loops=${LOOPS} intakeLoops=${INTAKE_LOOPS} questions=${QUESTIONS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} reviewRounds=${REVIEW_ROUNDS} (${b.source})`);
 
   // Observability is declared out loud, never assumed: with herdr unavailable the herdr extension
   // does not register at all and stays SILENT, so a run from an ordinary terminal looks exactly like

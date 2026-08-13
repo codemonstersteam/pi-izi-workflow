@@ -137,7 +137,12 @@ function provenance(at, value, source, known) {
   if (known) {
     const invented = [...numbersIn(value)].filter((n) => !known.has(n))
     if (invented.length) {
-      out.push(`F5 ${at} [invented-default]: число ${invented.join(", ")} не встречается ни в задаче, ни в ответах оператора, ни в BRD, ни в карте`)
+      // THE BLOCKER NAMES ITS EXITS. A refusal that states only the law leaves the role to invent a
+      // repair, and live run e132f0a1 shows what it invents: told the number 24 had no source, the
+      // role kept the number and changed `source` to the name of the analogue it had read it from —
+      // a second violation of the same rule. Naming the three legal exits is not politeness; a rule
+      // and the way out of it are one decision, and it belongs in one place, this one.
+      out.push(`F5 ${at} [invented-default]: число ${invented.join(", ")} не встречается ни в задаче, ни в ответах оператора, ни в BRD, ни в карте — назови формат вместо его меры, или сними число, или оставь <question>: источником может быть только файл из списка, но не память`)
     }
   }
   return out

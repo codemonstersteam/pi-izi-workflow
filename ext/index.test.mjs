@@ -18,7 +18,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, checkFrd, carried, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
@@ -208,6 +208,56 @@ test("the defect this closes: a number answered in a DEAD run no longer passes i
   const r = checkBrd.run({ path: ".agent/staging/brd.md" }, ctx(root))
   assert.equal(r.ok, false)
   assert.match(r.blockers, /50/)
+})
+
+test("a number that stands in a requirement's verify is sourced — the BRD slice is fit AND verify", () => {
+  const root = tempRoot()
+  writeFileSync(join(root, "TASK.md"), "Отдавать глоссарий агента по HTTP.\n")   // no numbers at all
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  writeFileSync(join(root, ".agent", "appgraph.xml"),
+    '<appgraph><module path="src/GlossaryResource.java" kind="rest"><api name="GET /glossary"/></module></appgraph>')
+  writeFileSync(join(root, ".agent", "brd.md"), [
+    "R1 Эндпоинт глоссария отвечает успешно",
+    "   fit: эндпоинт отвечает успешным статусом",   // the NUMBER is deliberately NOT here
+    "   verify: GET /glossary возвращает 200",
+    "subjects[]: глоссарий · агент",
+    "analogue: PromptSnippet\nopen-questions: 0",
+  ].join("\n"))
+  const frd = (status) => `<frd grammar="1" goal="отдавать глоссарий агента">
+  <actor name="admin-ui" kind="human" via="HTTP GET /glossary"/>
+  <usecase id="UC1" actor="admin-ui" goal="получить глоссарий">
+    <pre>агент существует</pre><post>вернулся глоссарий</post>
+    <step n="1">клиент шлёт GET /glossary</step>
+    <ext id="1a" error="none" outcome="глоссария нет — пустой список"/>
+  </usecase>
+  <field name="status" in="GET /glossary" type="int" domain="${status}" required="yes" error="none" source="brd.md"/>
+  <failures found="no" why="изменение не вводит кодов отказа"/>
+  <delta op="GET /glossary" form="Changed" node="src/GlossaryResource.java" from="404" to="глоссарий"/>
+  <scenario id="S1" uc="UC1" before="GET /glossary не отвечает" after="отдаёт глоссарий" nodes="src/GlossaryResource.java"/>
+  <touched path="src/GlossaryResource.java" why="появляется чтение глоссария"/>
+</frd>`
+
+  // Live run e132f0a1 died on exactly this: the number stood in `verify`, F5 said "nowhere in the
+  // BRD", and the role deleted a correct number to obey a blocker that was wrong.
+  writeFileSync(join(root, ".agent", "staging", "frd.xml"), frd("200"))
+  assert.deepEqual(checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root)).ok, true)
+
+  // The rule still bites: a number in neither fit nor verify is still invented, and the refusal now
+  // names the ways out instead of leaving the role to invent one.
+  writeFileSync(join(root, ".agent", "staging", "frd.xml"), frd("418"))
+  const r = checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root))
+  assert.equal(r.ok, false)
+  assert.match(r.blockers, /418/)
+  assert.match(r.blockers, /<question>/)
+})
+
+// --- carried: the memory of a repair loop reaches the sandbox --------------------------------
+
+test("carried hands the workflow the lines already red in this run, not just the last check", () => {
+  const first = carried.run({ blockers: "F4 S1: uc пуст\nF5 поле id: 24" })
+  const second = carried.run({ blockers: "F4 S1: uc пуст", seen: first.seen })
+  assert.match(second.text, /F5 поле id: 24/)
+  assert.equal(second.text.match(/F4 S1: uc пуст/g).length, 1)
 })
 
 // --- focus (step 3b): the artifact is written from the RUN's plan, and a refusal erases it -------

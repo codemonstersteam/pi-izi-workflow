@@ -16,6 +16,8 @@
 //             constant, not a function)
 //             severityOf(code) -> "blocker" | "advice"
 //             adviceLines(text) -> string[] — the evidence a guardrail printed, out of its output
+//             carriedBlockers({ blockers, seen }) -> { text, seen } — a repair loop's feedback,
+//             carrying what was already red in this run
 //
 // The pipeline maps "a red check" onto "redelegate the artifact's owner". So the price of a WRONG
 // rule is higher than a red lamp: it ORDERS the role to spoil a correct artifact in order to fit the
@@ -77,6 +79,55 @@ export function adviceLines(text) {
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => /^⚠\s*\[/.test(l))
+}
+
+// THE MEMORY OF A REPAIR LOOP IS THE RUN, NOT THE ROUND.
+//
+// A redelegation hands the role the LAST check's blockers and nothing else. That is the whole truth
+// about the artifact as it stands — every guardrail here is total, so the list is the entire distance
+// left to green — and it is still not enough to repair by, because the role does not PATCH the file:
+// it writes it again from the order. Everything the last check did not name is re-derived, and a
+// requirement satisfied on round N is at the mercy of the same reasoning that got it wrong on N-1.
+//
+// Live run e132f0a1 spent its budget exactly there. Round 1: `F4 uc="UC1,UC4"` plus `F5` on two
+// invented numbers. Round 2: one line left, `F4` alone — the artifact was one attribute from done.
+// Round 3 repaired that attribute and brought both `F5` numbers back, in the same field, word for
+// word. The escalation was not a role that could not converge; it was a role with a memory one round
+// long.
+//
+// TEXTS, NOT RULE NUMBERS. The regressed element came back identical (`<field name="id">`, the number
+// 24), so round 1's line stayed applicable verbatim, and it carried two facts a bare `F5` does not:
+// WHICH number and WHERE. A rule code tells a model which law it broke; only the line tells it what to
+// leave alone.
+
+// FUNCTION_CONTRACT: carriedBlockers — the feedback of a redelegation: what is red NOW, plus what was
+//                    red EARLIER in this run and must not come back
+//   Input:        { blockers — the current red check's text; seen — lines already red in this run, in
+//                  first-seen order }
+//   Dependencies: —
+//   Antecedent:   any values; `blockers` may be empty (nothing red now) and `seen` may be absent
+//   Consequent:   success: { text — the FEEDBACK to hand the role, `seen` — the accumulated lines,
+//                            first-seen order, deduplicated, current lines appended }
+//                          The carried block is omitted entirely when nothing was red before or when
+//                          the earlier lines are all repeated in the current check: a role must never
+//                          be shown a demand it is already being asked to fix, as two copies of one
+//                          blocker read as two defects.
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    carriedBlockers({ blockers, seen }) -> { text: string, seen: string[] }
+export function carriedBlockers({ blockers, seen = [] }) {
+  const linesOf = (t) => String(t || "").split("\n").map((l) => l.trim()).filter(Boolean)
+  const now = linesOf(blockers)
+  const before = (Array.isArray(seen) ? seen : []).map((l) => String(l).trim()).filter(Boolean)
+
+  const carried = before.filter((l) => !now.includes(l))
+  const text = carried.length
+    ? `${String(blockers || "").trim()}\n\nAlready red earlier in this run — repairing the above must not bring them back:\n${carried.map((l) => `  ${l}`).join("\n")}`
+    : String(blockers || "").trim()
+
+  const next = []
+  for (const l of [...before, ...now]) if (!next.includes(l)) next.push(l)
+  return { text, seen: next }
 }
 
 // blockersOf and adviceOf were removed: phase 8 made them dead. Evidence now travels on the BUILT BRD
