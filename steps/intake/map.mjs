@@ -37,8 +37,8 @@ export const MAP_CAP_BYTES = 115 * 1024
 // BEFORE the swarm whether the map the swarm would produce can be read at all, which is the whole
 // point of measuring instead of finding out after 39 batches (docs/big-projects-problems.md §2).
 //
-// MEASURED on a live artifact, not on a form's node count: `.agent/appgraph.xml` of run 23644036
-// (t3, 10310 B, 17 modules, 8 edges). Split by element:
+// MEASURED on a live artifact — but read the correction below before trusting the second decimal.
+// The split was taken on `runbox/s31-before-t3/appgraph.xml` (10310 B, 17 modules, 8 edges):
 //   edges   1528 B over 8   → 191 B each, of which 103 B is the two paths  → 88 B + the paths
 //   the rest 8782 B over 17 → 516 B each, of which  48 B is the path       → 468 B + the path
 // The PATH is not folded into the constant, and that is the correction that matters: a java monolith
@@ -47,10 +47,18 @@ export const MAP_CAP_BYTES = 115 * 1024
 // path length into one number is what made the previous constant (417 B/node, no edges at all)
 // under-count eddi by 2.3× — 114 KB estimated against 259 KB real.
 //
-// Reproduces its own source: 17×(468+48) + 8×(88+103) = 10300 against 10310 measured, 0.1%.
-// What it still cannot know is `<role>` — the scout writes it, and it does not exist yet. That is
-// inside the 468 as an average of one live run, and it is why the last honest check stays where it
-// has always been: mapMeasure() below, after the swarm, on the real bytes.
+// CORRECTION, and it is the kind this file exists to prevent. That 10310 B file is the snapshot
+// taken BEFORE run 23644036, not its result: the run's own artifact is 10253 B, so the formula
+// reproduces its source to 0.50%, not to the 0.1% first claimed here and in commit 67ea8b2.
+//
+// Two things are folded into the 468 and both make it OVER-count a small focus: the map's fixed
+// preamble (the header, `<lang>`, `<suite>`, the spine's answers — 2153 B on t3, 11498 B on eddi)
+// and `<role>`, which the scout writes and which does not exist before the swarm. Measured against
+// eddi's real map (run a3597dd3, 114072 B over 126 nodes and 199 edges) the per-element numbers are
+// 409 and 84, and the formula lands at 110745 — 2.9% low, because the preamble it never modelled is
+// larger there than the per-node slack it carries. The estimate is therefore a two-sided
+// approximation, not a bound, and the last honest check stays where it has always been:
+// mapMeasure() below, after the swarm, on the real bytes.
 export const MAP_NODE_BYTES = 468
 export const MAP_EDGE_BYTES = 88
 

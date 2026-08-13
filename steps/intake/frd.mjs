@@ -184,6 +184,21 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   //   "TDD in one ticket" (docs/concept.md, step 15). The map already binds a module to its test
   //   (`<test path suite>`), which is where step 10 takes both the file and the check command from.
   const touched = new Set(frd.touched)
+  // A DELTA'S NODE IS NOT REQUIRED IN `<touched>`, and the rule that required it is gone.
+  //
+  // BUG_FIX_CONTEXT: live run a3597dd3 (eddi, 1850 files). Two of the three rounds that killed the
+  //   step were nothing but this bookkeeping: `checkFrd/1` — five F2 on `<touched>` paths spelled
+  //   `eddi/glossary/…` while the deltas said `eddi/configs/glossary/…`; `checkFrd/3` — six F3n on
+  //   the same six created modules, "не объявлен <touched>". Eleven blockers of nineteen, and the
+  //   role was being asked to keep six INVENTED paths byte-identical in two places at once —
+  //   exactly what CLAUDE.md constraint 4 forbids: a key is COPIED BY THE MACHINE.
+  //   The blocker also argued its case with something false: «шаг 8 не досчитает рябь».
+  //   steps/ripple/ripple.mjs::changeWidth is `deltaNodes ∪ touched` — step 8 counts a delta's node
+  //   whether or not it was declared touched, and the seam for that is ripple.test.mjs's own
+  //   `touched: []` case.
+  // `<touched>` keeps the job it was actually bought for (run 9a8821a7): a node that CHANGES but
+  // carries no delta — a page, a template, a build script, anything with no contract to move. There
+  // the `why` is the only statement of the work, and F2b/F2c below still demand it.
   // The nodes this change CREATES. Declared once, on the delta — `<touched>` and `<scenario nodes>`
   // derive it from here rather than repeating the attribute, because two places for one fact disagree
   // on the first artifact where the role marks only one of them (CLAUDE.md, constraint 5).
@@ -271,19 +286,17 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     }
     if (!d.node) { B.push(`F3 ${at}: ${d.form} без node — дельта обязана опираться на узел карты`); continue }
     // F3n — the module this change CREATES. Everything the rules below ask of a delta is asked of it
-    // too — a `<touched>` of its own with a `why`, a scenario that runs through it — except the one
-    // thing that cannot be true of a file that does not exist yet: being in the map. The two claims
-    // are checked in the opposite direction, and the form is pinned: a module that is not there yet
-    // cannot have its contract Changed, Removed or Fixed — there is nothing to move.
+    // too, except the one thing that cannot be true of a file that does not exist yet: being in the
+    // map. The two claims are checked in the opposite direction, and the form is pinned: a module
+    // that is not there yet cannot have its contract Changed, Removed or Fixed — nothing to move.
     if (d.new === "yes") {
       if (nodes.has(d.node)) B.push(`F3 ${at}: new="yes", но узел «${d.node}» ЕСТЬ в карте — это не новый модуль, сними признак`)
       if (d.form !== "Added") B.push(`F3 ${at}: new="yes" с формой ${d.form} — у модуля, которого ещё нет, контракт двигаться не может: новый модуль это Added`)
-      if (!touched.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» не объявлен <touched> — шаг 8 не досчитает рябь`)
       continue
     }
     if (!nodes.has(d.node)) B.push(`F3 ${at}: узла «${d.node}» нет в карте — либо это Unknown, либо путь выдуман, либо модуль создаётся этим изменением и тогда дельта несёт new="yes"`)
     else if (tests.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» — тест: тест это <dod> изменения, а не изменение; назови модуль, который меняется, тест приедет с ним в один тикет (<test> карты, шаг 10)`)
-    else if (!touched.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» не объявлен <touched> — шаг 8 не досчитает рябь`)
+
     // `Changed`/`Removed` are defined BY THEIR EFFECT ON AN EXISTING CALL (steps/intake/intake.md,
     // STRATEGY §8), so they are only sayable about a node that HAS one: an `<api>` of its own, or an
     // incoming edge from another module. About a node with neither, "the existing call breaks" is a

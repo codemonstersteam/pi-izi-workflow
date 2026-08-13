@@ -76,6 +76,10 @@ schema:
     <delta op="the operation" form="Unknown" why="why it could not be classified"/>
     <scenario id="S1" uc="UC1" before="…" after="…" nodes="path path"/>
     <touched path="path from the map" why="what changes in this node"/>
+                                     <!-- ONLY for a node that changes and carries NO <delta>: a page,
+                                          a template, a build script — something with no contract to
+                                          move. A node you already named in a <delta> must NOT be
+                                          repeated here: step 8 counts it either way. -->
     <nfr subject="…" fit="…" source="…"/>
     <question subject="…" why="…"/>
   </frd>

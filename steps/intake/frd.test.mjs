@@ -7,6 +7,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { newFrd, parseFrd, checkFrd, FRD_FORM } from "./frd.mjs"
+import { changeWidth } from "../ripple/ripple.mjs"
 
 // Fixture: a DIFFERENT domain from any live input (parcels, not fruits) — the same reason the role's
 // own EXAMPLE is foreign: a fixture indistinguishable from live input stops testing the code.
@@ -109,8 +110,15 @@ test("F3: an invented form, an Unknown without why, a node outside the map and o
   assert.match(blockersOf(FRD.replace('form="Added"', 'form="Modified"')).join("\n"), /F3 findByTrack: form="Modified"/)
   assert.match(blockersOf(FRD.replace('form="Added" node="src/ParcelRepo.java"', 'form="Unknown"')).join("\n"), /F3 findByTrack: Unknown без why/)
   assert.match(blockersOf(FRD.replace('node="src/ParcelRepo.java"', 'node="src/Invented.java"')).join("\n"), /F3 findByTrack: узла «src\/Invented\.java» нет в карте/)
-  // In the map, but never declared touched — step 8 would not reach it when computing the ripple.
-  assert.match(blockersOf(FRD.replace('node="src/ParcelRepo.java"', 'node="src/Parcel.java"')).join("\n"), /не объявлен <touched>/)
+  // In the map and NOT declared touched — green, and this is a seam, not an omission.
+  //
+  // BUG_FIX_CONTEXT run a3597dd3 (eddi): the rule that demanded it cost eleven blockers of the
+  // nineteen that killed step 6, and argued its case with something false — «шаг 8 не досчитает
+  // рябь». changeWidth is `deltaNodes ∪ touched`, so step 8 reaches a delta's node either way; the
+  // assertion below is that expression, called for real rather than quoted.
+  const undeclared = FRD.replace('  ' + REPO_TOUCHED + '\n', '')
+  assert.deepEqual(blockersOf(undeclared), [])
+  assert.ok(changeWidth({ frd: parseFrd(undeclared), tests: new Set() }).has("src/ParcelRepo.java"))
   // `Fixed` is a form like the other three — it carries a node and passes. Without it a
   // contract-stable bug fix would have to be declared `Changed`, and step 7 could never weigh a
   // `patch` (docs/weight.md §3).
