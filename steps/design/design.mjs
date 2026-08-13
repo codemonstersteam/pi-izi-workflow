@@ -196,7 +196,9 @@ export function expand(nodes, routes) {
 //   Antecedent:   nodes — parseDesign's Map; routes — its array; frd — an object with two arrays
 //                 (missing fields are read as empty)
 //   Consequent:   success: string[] of blockers, empty = green. The rules and their numbers are the
-//                          same as in docs/data-flow.md §6, NOT restated here in prose
+//                          same as in docs/data-flow.md §6, NOT restated here in prose — rules 1-7,
+//                          the ones the two PROJECTIONS decide; rule 8 is judged one artifact
+//                          earlier (steps/design/values.mjs::checkValues), see the note at the end
 //                 failure: none — total, "the design is bad" is DATA, not a function failure
 //   Purity:       pure
 //   BUG_FIX_CONTEXT: this slice was written BEFORE steps 6 and 8 existed, and its fixture was
@@ -287,26 +289,12 @@ export function checkDesign({ nodes, routes = [], frd = {}, known = null }) {
     }
   }
 
-  // Rule 8. A failure the requirement DECLARED and no contract names. Rule 7 already forces a route
-  // through every `out` alternative a node declares, so a failure written into a contract cannot go
-  // unrouted — but a failure written into NO contract is invisible to all seven rules above. It then
-  // travels no route, expands into no unit of `$START_TESTS`, and reaches step 15 as a `<failure>`
-  // nobody implements: the error path dies silently between step 6 and the ticket.
-  //
-  // The check is a set membership, which is why it lives here and not in a role: the failure's `code`
-  // is a literal of the FRD (`FRUIT_NOT_FOUND`) and the contract carries that same literal inside an
-  // alternative (`404 FRUIT_NOT_FOUND`). SUBSTRING, not equality: the alternative names the failure
-  // AND how it leaves the module, and prescribing that wording would be inventing a second grammar
-  // for something the role already writes in one.
-  const declared = (frd.failures || []).map((f) => String((f && f.code) || "").trim()).filter(Boolean)
-  if (declared.length) {
-    const alts = [...nodes.values()].flatMap((n) => n.out)
-    for (const code of declared) {
-      if (!alts.some((a) => String(a).includes(code))) {
-        B.push(`8 отказ ${code} объявлен в FRD, но не назван ни в одном out — маршрута у него не будет, значит не будет и юнита; объяви альтернативу, которой узел его отдаёт`)
-      }
-    }
-  }
+  // Rule 8 is NOT here: it moved whole to steps/design/values.mjs::checkValues (backlog D1), number
+  // unchanged. Its operand moved with it — the dictionary of pass A is the earliest artifact in which
+  // a declared failure is decidable, and everything after it refers to values by id. What that move
+  // costs is named where it is repaid: over a flat dictionary the rule only says "declared
+  // somewhere", so "produced by SOME node's out" is checkGraph's, in the same pass that owns the
+  // contracts (backlog, «Что концепт обещает, а код не подтвердил», п. 2).
 
   return B
 }

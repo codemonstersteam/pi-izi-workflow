@@ -197,23 +197,9 @@ test("rule 7: an out alternative no route takes has no unit in the ticket", () =
   assert.deepEqual(b, ['7 узел src/SlotLock.java с delta="Added": альтернатива out «Expired» не пройдена ни одним маршрутом — она мертва либо сценария FRD не хватает'])
 })
 
-// Rule 8 (S30-1). Rule 7 catches a failure that a contract declares and no route takes; NOTHING
-// caught a failure the FRD declares and no contract mentions at all — it travels no route, expands
-// into no unit, and reaches the ticket as an error path nobody implements. Delete the rule 8 block
-// and the first half goes red.
-test("rule 8: a declared failure that no contract names", () => {
-  const frdXml = FRD_XML.replace("</frd>", '  <failure code="SLOT_TAKEN" status="409" client="показать занятость" operator="—" from="UC1/1a"/>\n</frd>')
-  const frd = parseFrd(frdXml)
-
-  const b = blockersOf(GRAPH, frd)
-  assert.deepEqual(b, ["8 отказ SLOT_TAKEN объявлен в FRD, но не назван ни в одном out — маршрута у него не будет, значит не будет и юнита; объяви альтернативу, которой узел его отдаёт"])
-
-  // named inside the alternative the module answers with — a SUBSTRING, because the alternative says
-  // both which failure it is and how it leaves the module
-  assert.deepEqual(blockersOf(GRAPH.replace("409 {conflict}", "409 SLOT_TAKEN"), frd), [])
-  // and an FRD that declares no failure at all says nothing here: F6 of step 6 judges that, not this
-  assert.deepEqual(blockersOf(GRAPH), [])
-})
+// Rule 8's seam is NOT here any more: the rule moved whole to steps/design/values.mjs (backlog D1)
+// and its test moved with it — a seam lives beside the rule it proves, or the next reader deletes
+// the rule and watches a green suite. steps/design/values.test.mjs, "rule 8".
 
 // The two seams the SLICE keeps outside the core: the order carries exactly the keys the workflow
 // passes, and the role names no rule twice. `steps/scope/part.test.mjs` keeps the same pair for its

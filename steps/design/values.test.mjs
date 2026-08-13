@@ -1,0 +1,86 @@
+// Pass A of the slice `design`: the dictionary of values — a PURE core; its io lives in ext/index.mjs
+// (standards/code.md: an io pipe is not unit-tested). Formula: 1 happy + Σ antecedent branches with a
+// DISTINGUISHABLE consequent. The branches are the two checks the dictionary owns (a name is declared
+// once, a name carries a text) plus rule 8 of docs/data-flow.md §6, which moved here whole from
+// steps/design/design.mjs — number unchanged, operand now the dictionary instead of the `out`
+// alternatives. Each was built by REINTRODUCING the defect into a green fixture.
+//
+// The FRD fixture is PARSED, not typed: `frd` reaches this core exactly as steps/intake/frd.mjs hands
+// it over, and a fixture that invents its own shape is how discrepancy A got in (steps/design/design.mjs,
+// BUG_FIX_CONTEXT of checkDesign: rule 5 reddening on every real artifact with «[object Object]»).
+
+import test from "node:test"
+import assert from "node:assert/strict"
+import { parseValues, checkValues } from "./values.mjs"
+import { parseFrd } from "../intake/frd.mjs"
+
+// The dictionary of the booking change: an external entry point, two domain calls and the failure the
+// FRD declares — the four sources §4a names, one row each. The failure's text carries BOTH the code
+// and how the module hands it out, which is why rule 8 compares by substring.
+const VALUES = `<values>
+  <value id="v1" text="POST /bookings {slotId,userId}"/>
+  <value id="v2" text="book(slotId,userId)"/>
+  <value id="v3" text="lock(slotId,ttl)"/>
+  <value id="v4" text="409 SLOT_TAKEN"/>
+</values>`
+
+const FRD_XML = `<frd grammar="1" goal="бронь слота с блокировкой">
+  <usecase id="UC1" actor="client" goal="забронировать слот">
+    <post>слот забронирован либо отказ 409</post>
+    <step n="1">клиент отправляет POST /bookings</step>
+  </usecase>
+  <delta op="POST /bookings" form="Changed" node="src/BookingResource.java" from="бронь без блокировки" to="бронь с блокировкой слота"/>
+  <scenario id="S1" uc="UC1" before="двойная бронь проходит" after="вторая бронь получает 409" nodes="src/BookingResource.java"/>
+  <failure code="SLOT_TAKEN" status="409" client="показать занятость" operator="—" from="UC1/1a"/>
+</frd>`
+
+const FRD = parseFrd(FRD_XML)
+const blockersOf = (xml, frd = FRD) => checkValues({ values: parseValues(xml), frd })
+
+test("happy: every value is a name and a text, and the failure the FRD declared is among them", () => {
+  const values = parseValues(VALUES)
+  assert.equal(values.size, 4)
+  // The text is the whole value, punctuation included — a later pass substitutes it verbatim.
+  assert.equal(values.get("v3"), "lock(slotId,ttl)")
+  assert.equal(values.get("v1"), "POST /bookings {slotId,userId}")
+  assert.deepEqual(values.dups, [])
+  assert.deepEqual(checkValues({ values, frd: FRD }), [])
+})
+
+test("one name, one value: a repeated id makes every reference to it ambiguous", () => {
+  const b = blockersOf(VALUES.replace('id="v3"', 'id="v2"'))
+  assert.deepEqual(b, ["значение v2 объявлено дважды — имя выдаётся один раз, иначе ссылка из контракта неоднозначна"])
+  // The FIRST declaration survives: resolving a repeat by write order is what the collection avoids.
+  assert.equal(parseValues(VALUES.replace('id="v3"', 'id="v2"')).get("v2"), "book(slotId,userId)")
+})
+
+test("both halves are load-bearing: no text, and no id at all", () => {
+  assert.deepEqual(blockersOf(VALUES.replace('text="lock(slotId,ttl)"', 'text=""')),
+    ["значение v3 без text — подставлять при сборке нечего"])
+  // A row with no id is not dropped from the parse: the role has to repair the artifact it wrote,
+  // and a silently swallowed row is a defect nobody is told about.
+  const b = blockersOf(VALUES.replace('id="v3" ', ""))
+  assert.deepEqual(b, ['значение без id: text="lock(slotId,ttl)" — на него нечем сослаться из контракта, имя обязательно'])
+})
+
+// Rule 8 (S30-1), moved here whole from design.mjs. There it read the `out` alternatives of the
+// design graph; the dictionary is the EARLIEST place the failure is decidable, and everything
+// downstream refers to values by id — a failure absent from here is one no contract can name.
+// Delete the rule 8 block and the first half goes red.
+test("rule 8: a failure declared by the FRD that the dictionary does not carry", () => {
+  assert.deepEqual(blockersOf(VALUES.replace('text="409 SLOT_TAKEN"', 'text="409 {conflict}"')), [
+    "8 отказ SLOT_TAKEN объявлен в FRD, но не назван ни одним значением — маршрута у него не будет, значит не будет и юнита; объяви значение, которым узел его отдаёт",
+  ])
+  // A SUBSTRING, because the value says both which failure it is and how it leaves the module.
+  assert.deepEqual(blockersOf(VALUES.replace("409 SLOT_TAKEN", "409 SLOT_TAKEN {slotId}")), [])
+  // An FRD that declares no failure at all says nothing here: F6 of step 6 judges that, not this.
+  assert.deepEqual(blockersOf(VALUES, parseFrd(FRD_XML.replace(/<failure .*\/>/, ""))), [])
+})
+
+test("totality: garbage, undefined and no argument at all are read as an empty dictionary, not thrown", () => {
+  assert.equal(parseValues(undefined).size, 0)
+  assert.equal(parseValues(null).size, 0)
+  assert.deepEqual(parseValues("<design><module path=\"a.js\"/></design>").dups, [])
+  assert.deepEqual(checkValues({}), [])
+  assert.deepEqual(checkValues(), [])
+})
