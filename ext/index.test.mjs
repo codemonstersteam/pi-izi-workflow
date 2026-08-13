@@ -18,8 +18,9 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, setPending, clearPending, promote, newRun, focus, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
+import { FOCUS_QUESTION } from "../steps/focus/focus.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
 const ctx = (cwd) => ({ run: { cwd } })
@@ -208,6 +209,60 @@ test("the defect this closes: a number answered in a DEAD run no longer passes i
   const r = checkBrd.run({ path: ".agent/staging/brd.md" }, ctx(root))
   assert.equal(r.ok, false)
   assert.match(r.blockers, /50/)
+})
+
+// --- focus (step 3b): the artifact is written from the RUN's plan, and a refusal erases it -------
+//
+// Same rule as `.agent/mode` below and for the same reason: newRun leaves artifacts alone, so
+// yesterday's focus would outlive today's refusal and step 4 would survey it. Seam: drop the
+// `drop()` calls in ext/index.mjs::focus and the third test here goes red.
+//
+// The anchor rule is the OTHER thing under test. `focus` never reads .agent/brd.md — it takes the
+// anchors from the plan's own files[].subjects — so a run whose plan marks nothing must ask, even
+// when this repository's own .agent/brd.md is full of anchors.
+const planAt = (root, files, marked = []) => {
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  const cell = (id, kind, paths) => ({ id, kind, subjects: [], bytes: paths.length * 1000, files: paths.map((path) => ({ path, bytes: 1000, sha1: "", subjects: marked.includes(path) ? ["якорь"] : [] })) })
+  writeFileSync(join(root, ".agent", "survey-plan.json"), JSON.stringify({
+    files: files.length, bytes: files.length * 1000, subjects: ["якорь"], gaps: [],
+    cells: [cell("spine", "spine", ["README.md"]), ...files.map((p, i) => cell(`c${i + 1}`, "survey", [p]))],
+  }))
+  // one route on the first file and one edge from it to the second: the smallest graph that yields
+  // an entry with a cone, so the branches below differ by the ANCHORS and not by the shape
+  writeFileSync(join(root, ".agent", "graph-computed.xml"), `<computed grammar="1">\n<edge from="${files[0]}" to="${files[1]}"/>\n<api at="${files[0]}" name="GET /x" kind="http" scope="public" via="jaxrs"/>\n</computed>\n`)
+  return root
+}
+
+test("focus writes .agent/focus.json under context.run.cwd — the whole plan while it fits", () => {
+  const root = planAt(tempRoot(), ["src/A.java", "src/B.java"])
+  const r = focus.run({}, ctx(root))
+  assert.equal(r.ok, true)
+  assert.equal(r.why, "whole-plan")
+  const f = JSON.parse(readFileSync(join(root, ".agent", "focus.json"), "utf8"))
+  assert.equal(f.cells.length, 3)                       // spine + both cells: nothing is narrowed
+  assert.deepEqual(f.slices.map((s) => s.entry), ["src/A.java"])   // …and the cone is computed anyway
+  assert.equal(f.slices[0].nodes, 2)                    // a COUNT: the node list has no reader
+})
+
+test("no .agent/survey-plan.json at the run root: refusal naming step 3, and no focus left behind", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "focus.json"), '{"cells":["c1"]}')       // yesterday's focus
+  const r = focus.run({}, ctx(root))
+  assert.equal(r.ok, false)
+  assert.match(r.why, /шаг 3 survey-plan не отработал/)
+  assert.equal(existsSync(join(root, ".agent", "focus.json")), false)
+})
+
+test("the question rail: ask:true carries the constant subject, the candidates go in evidence", () => {
+  const root = planAt(tempRoot(), Array.from({ length: 400 }, (_, i) => `src/n${i}.java`))
+  writeFileSync(join(root, ".agent", "focus.json"), '{"cells":["c1"]}')
+  const r = focus.run({}, ctx(root))
+  assert.equal(r.ok, false)
+  assert.equal(r.ask, true)
+  assert.equal(r.subject, FOCUS_QUESTION)                                     // verbatim, never rebuilt
+  assert.ok(r.evidence.includes("Кандидаты:"))
+  assert.equal(existsSync(join(root, ".agent", "focus.json")), false)
 })
 
 // --- weight: "no weight" must mean "no file" ---------------------------------------------------

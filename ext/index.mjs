@@ -50,7 +50,7 @@
 // Interface:    default export — extension(pi): registers the izi_answer tool on pi AND calls
 //               registerWorkflowExtension (pi-extensible-workflows contract) for the sandbox
 //               functions and role directories. readText/answers/brdForm/checkTask/checkBrd/promote/
-//               setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph are ALSO named exports — pi-extensible-workflows never
+//               setPending/clearPending/survey/focus/cells/digest/reuse/remember/checkPart/buildGraph are ALSO named exports — pi-extensible-workflows never
 //               exercises run(input, context) itself (it is the caller, not test scaffolding), so
 //               ext/index.test.mjs imports these directly and calls run() with a fabricated
 //               { run: { cwd } } context to prove the anchor without a live pi/workflow harness.
@@ -65,6 +65,8 @@ import { checkTaskText } from "../steps/task/task.mjs"
 import { newBrd, parseBrd } from "../steps/brd/brd.mjs"
 import { newPlan } from "../steps/survey-plan/plan.mjs"
 import { skipDir, skipFile } from "../steps/survey-plan/skip.mjs"
+import { newSlices } from "../steps/focus/slices.mjs"
+import { newFocus } from "../steps/focus/focus.mjs"
 import { newPart, GRAMMAR_VERSION } from "../steps/scope/part.mjs"
 import { readSource } from "../steps/scope/source.mjs"
 import { newComputed, computedXml, parseComputed } from "../steps/scope/computed.mjs"
@@ -671,6 +673,106 @@ function readPlanCells(root) {
     return { ok: false, why: `${PLAN_PATH} не несёт ни одной клетки — картировать нечего` }
   }
   return { ok: true, cells: plan.cells, plan }
+}
+
+// --- focus: step 3b — WHAT the swarm surveys, decided before the swarm runs ----------------------
+//
+// The whole of step 3b: no role, no token, one artifact. It reads what steps 2-3 already left on
+// disk and answers one question — does the map this run would build fit the reader's window, and if
+// not, which entry cones does the BRD point at. Today that answer arrives at step 6, after 306 scout
+// calls and ≈10M input tokens have been spent on a map nobody can read (docs/big-projects-problems.md
+// §2); here it costs zero.
+//
+// `.agent/brd.md` is deliberately NOT read: step 3 already resolved every anchor to the files that
+// carry it (`files[].subjects`), and a second resolution here would be a second copy of the anchor
+// rule plus a re-read of the whole tree — 37 MB on eddi — inside a step that promises no io.
+const FOCUS_PATH = ".agent/focus.json"
+
+// readFocus — the focus as data, or a refusal with a diagnosis. THREE functions read this file
+// (focus itself, cells, buildGraph), and in all three the difference between "there is no focus" and
+// "the focus is everything" decides whether a step may run at all (standards/code.md §2). Deciding
+// it once, here, is the same discipline readPlanCells above follows for the plan.
+function readFocus(root) {
+  const raw = readIfExists(root, FOCUS_PATH)
+  if (!raw.trim()) return { ok: false, why: `${FOCUS_PATH} не существует — шаг 3b focus не отработал` }
+  let f
+  try {
+    f = JSON.parse(raw)
+  } catch (e) {
+    return { ok: false, why: `${FOCUS_PATH} не разбирается как JSON — ${e.message}` }
+  }
+  if (!f || !Array.isArray(f.cells) || !f.cells.length) {
+    return { ok: false, why: `${FOCUS_PATH} не несёт ни одной клетки — разведывать нечего` }
+  }
+  return { ok: true, focus: f, cells: new Set(f.cells) }
+}
+
+export const focus = {
+  description: "Step 3b. Decide WHICH cells of .agent/survey-plan.json the swarm surveys, before it runs and for zero tokens: every cell while the plan's map fits the reading cap, otherwise the entry cones the BRD's anchors point at (steps/focus/slices.mjs, steps/focus/focus.mjs). Writes .agent/focus.json — the cones, the choice and the cells. ok:false with ask:true carries a question for the operator VERBATIM in `subject` with the candidate list in `evidence`; any refusal REMOVES the artifact, so step 4 can never survey yesterday's focus.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      ask: { type: "boolean" },
+      subject: { type: "string" },
+      evidence: { type: "string" },
+      slices: { type: "number" },
+      entries: { type: "number" },
+      chosen: { type: "number" },
+      cells: { type: "number" },
+      files: { type: "number" },
+      estBytes: { type: "number" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_input, context) {
+    const root = runRoot(context)
+    const drop = () => { if (existsSync(at(root, FOCUS_PATH))) rmSync(at(root, FOCUS_PATH)) }
+
+    const p = readPlanCells(root)
+    if (!p.ok) { drop(); return { ok: false, why: p.why } }
+
+    const computed = parseComputed(readIfExists(root, COMPUTED_PATH))
+    const nodes = p.cells.flatMap((c) => (c.files || []).map((f) => f.path))
+    const marked = p.cells.flatMap((c) => (c.files || []).filter((f) => (f.subjects || []).length).map((f) => f.path))
+
+    const { slices, orphans } = newSlices({ nodes, edges: computed.edges, routes: computed.api.map((a) => a.at) })
+    const r = newFocus({
+      slices,
+      orphans,
+      marked,
+      cells: p.cells,
+      answers: parsedAnswers(readIfExists(root, ANSWERS_PATH)).value || [],
+    })
+    if (!r.ok) {
+      drop()
+      if (r.error.cls === "ask") {
+        return { ok: false, ask: true, why: "фокус не выбран — нужен ответ оператора", subject: r.error.detail.subject, evidence: r.error.detail.evidence, slices: slices.length, entries: slices.length }
+      }
+      return { ok: false, why: `${r.error.cls}: ${r.error.detail}`, slices: slices.length, entries: slices.length }
+    }
+
+    const v = r.value
+    // The artifact carries the cones as FACTS about the run, not as a graph: an entry, its kind and
+    // its size. The node lists themselves have no reader — the address of a node in the map is
+    // deferred with a trigger (docs/big-projects-solution.md §6.2) — and writing 84 of them would be
+    // bytes nobody parses.
+    const artifact = {
+      why: v.why,
+      chosen: v.chosen,
+      cells: v.cells,
+      files: v.files,
+      repoFiles: nodes.length,
+      estBytes: v.estBytes,
+      slices: v.slices.map((s) => ({ id: s.id, entry: s.entry, kind: s.kind, nodes: s.nodes.length })),
+    }
+    mkdirSync(dirname(at(root, FOCUS_PATH)), { recursive: true })   // written AFTER the decision to accept
+    writeFileSync(at(root, FOCUS_PATH), JSON.stringify(artifact, null, 2))
+    return { ok: true, why: v.why, slices: v.slices.length, entries: v.entries, chosen: v.chosen.length, cells: v.cells.length, files: v.files, estBytes: v.estBytes }
+  },
 }
 
 export const cells = {
@@ -1485,7 +1587,7 @@ export default function extension(pi) {
     version: "1.12.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
     description: "readText/answers/brdForm/frdForm/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, plan, review },
+    functions: { readText, answers, brdForm, frdForm, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, plan, review },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;
