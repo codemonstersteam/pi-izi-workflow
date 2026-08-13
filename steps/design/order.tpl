@@ -1,6 +1,6 @@
 $START_TASK
 Design the decided change as two aligned projections: the modules it touches with their contracts,
-and one route per FRD scenario.
+and one route per BRANCH of every FRD scenario.
 $END_TASK
 
 $START_DATA
