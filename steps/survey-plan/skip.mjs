@@ -62,13 +62,30 @@ export const SKIP_NAMES = new Set([
 //
 // Every rule answers "what shape can this repository's own source NOT have":
 //   generated — the tool that wrote it rewrites it; a ticket editing it is undone by the next build
-//   bundled   — output of a bundler, keyed by a content hash: `app.4f3c2b1a.js`
+//   bundled   — output of a bundler, keyed by a content hash: `app.4f3c2b1a.js`, `index-CeAE4N_O.js`
 //   minified  — one line, no structure a scout can read, and a copy of source that IS in the tree
 //   asset     — bytes with no code in them at all: fonts, images, media, archives, binaries
 //   sourcemap — a machine index into a file already in the tree
 const RULES = Object.freeze([
   Object.freeze(["generated", /(^|\/)(zz_)?generated[_.]|(^|\/)mock_[^/]*$|\.pb(\.gw)?\.go$|_pb2\.py$|\.g\.dart$|\.generated\.[^/]+$/]),
-  Object.freeze(["bundled", /\.[0-9a-f]{8,32}\.(js|mjs|cjs|css|map)$/]),
+  // `bundled` carries TWO hash shapes, and the second one is bought by a measurement, not by taste.
+  //
+  // BUG_FIX_CONTEXT: the eddi survey (docs/big-projects-problems.md §4). This rule was
+  //   `\.[0-9a-f]{8,32}\.` — a DOT and lowercase hex, which is what webpack 4 wrote. Vite writes a
+  //   DASH and base64url: `index-CeAE4N_O.js`. Result: ~20 cells of minified frontend went into the
+  //   swarm — 97 files, 18.5 MB, half of the 37.3 MB survey tree, the most expensive cells of the run
+  //   and not one line of this repository's code among them.
+  //
+  // The second alternative therefore reads: separator DOT OR DASH, alphabet base64url, and — the
+  // load-bearing part — **at least one uppercase letter in the hash**. Without that letter the rule
+  // eats source: `landing-redirect.js` has a dash and `redirect` is exactly 8 legal characters, so
+  // "8..32 of base64url" alone would drop a hand-written file. Skipping is a false-NEGATIVE risk by
+  // construction (see Invariants), and this is where that invariant is paid for.
+  //
+  // The accepted miss is named: `r-j7ic8hl3.js` — a real bundle whose hash happens to hold no
+  // uppercase — stays in the survey. One cell of noise costs less than one lost source file, and
+  // skip.test.mjs pins it so that widening the rule cannot happen silently.
+  Object.freeze(["bundled", /(\.[0-9a-f]{8,32}|[.-](?=[0-9A-Za-z_-]{8,32}\.)[0-9A-Za-z_-]*[A-Z][0-9A-Za-z_-]*)\.(js|mjs|cjs|css|map)$/]),
   Object.freeze(["minified", /\.min\.(js|mjs|css)$/]),
   Object.freeze(["sourcemap", /\.map$/]),
   Object.freeze(["asset", new RegExp(

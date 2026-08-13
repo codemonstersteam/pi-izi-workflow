@@ -30,8 +30,13 @@ test("files: every rule drops its shape and keeps the source that merely resembl
     ["internal/mockingbird.go", ""],                 // `mock_` is a prefix, not a substring
     ["src/generation.go", ""],
 
-    ["static/app.4f3c2b1a.js", "bundled"],
+    ["static/app.4f3c2b1a.js", "bundled"],           // webpack: dot + lowercase hex
     ["static/main.0badc0de9f1e.css", "bundled"],
+    ["assets/index-CeAE4N_O.js", "bundled"],         // vite: DASH + base64url — 18.5 MB of the eddi survey
+    ["assets/chat-ui.DZ5NqRHZ.css", "bundled"],      // …the same alphabet behind a dot
+    ["src/landing-redirect.js", ""],                 // `redirect` is 8 legal chars: the uppercase rule saves it
+    ["src/my-component.js", ""],
+    ["assets/r-j7ic8hl3.js", ""],                    // the NAMED miss: a real bundle with no uppercase in its hash
     ["src/app.config.js", ""],                       // a dotted segment that is not a content hash
     ["src/app.js", ""],
 
