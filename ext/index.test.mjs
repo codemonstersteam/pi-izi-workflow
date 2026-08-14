@@ -877,3 +877,43 @@ test("review names the step that did not run instead of reading an absent artifa
   rmSync(join(root, ".agent", "plan-index.json"))
   assert.match(review.run({ path: ".agent/staging/review.xml" }, ctx(root)).blockers, /шаг 10 plan не отработал/)
 })
+
+// --- D10: the phase of step 9 is a LADDER of three passes, and it is read out of izi.js ----------
+//
+// `workflows/` is covered by no test of its own — it runs in a host vm sandbox with no imports — so
+// the only seam available for its structure is the one the ENVELOPE test above already uses: read the
+// source and hold it to what the passes require. Three claims, each of which a live run would
+// otherwise be the first to check.
+
+const IZI = readFileSync(new URL("../workflows/izi.js", import.meta.url), "utf8")
+
+test("the band hands the design phase where it STARTED, and the phase re-runs pass A on a rewind", () => {
+  // Without the argument a rewind to step 6 would rebuild the FRD and then reuse a dictionary
+  // extracted from the previous one — structurally green, and about another change.
+  assert.match(IZI, /await designing\(from\)/)
+  assert.match(IZI, /from <= 6 \? \[\] : \(gate\.reused \|\| \[\]\)/)
+})
+
+test("three passes, three roles, three orders — and the role names are the ones pi resolves by FILENAME", () => {
+  for (const [id, role, tpl] of [
+    ["values", "valuer", "order-values.tpl"],
+    ["nodes", "designer", "order-nodes.tpl"],
+    ["routes", "router", "order-routes.tpl"],
+  ]) {
+    assert.match(IZI, new RegExp(`id: "${id}",\\s+role: "${role}",\\s+tpl: "steps/design/${tpl}"`), id)
+    assert.equal(existsSync(new URL(`../steps/design/${role}.md`, import.meta.url).pathname), true, role)
+    assert.equal(existsSync(new URL(`../steps/design/${tpl}`, import.meta.url).pathname), true, tpl)
+  }
+  // The one-generation order died with the phase that read it.
+  assert.equal(existsSync(new URL("../steps/design/order.tpl", import.meta.url).pathname), false)
+})
+
+test("a red pass is blamed by its RULE NUMBER, and the third address exists", () => {
+  // Rules 3 and 4 are the graph's fault, not the route's — the donor's "return to Step 5".
+  assert.match(IZI, /pass === "routes" && lines\.some\(\(l\) => \/\^\[34\] \/\.test\(l\)\)\) return "nodes"/)
+  // And a graph naming an id the frozen dictionary does not carry is pass A's fault: pass B cannot
+  // repair it however many times it is re-delegated (backlog D8).
+  assert.match(IZI, /pass === "nodes" && lines\.some\(\(l\) => \/которого нет в словаре\/\.test\(l\)\)\) return "values"/)
+  // The valuer returns a count, so the envelope must carry it — additionalProperties is false.
+  assert.match(IZI, /values: \{ type: "number" \}/)
+})

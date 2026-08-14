@@ -21,13 +21,15 @@
 //               core/budgets.mjs and are NOT copied here. A broken config is a refusal, never a
 //               silent default.
 // EXTERNAL_DEPENDENCY: roles `gilb` (steps/brd/gilb.md), `scout` (steps/scope/scout.md), `intake`
-//               (steps/intake/intake.md), `designer` (steps/design/designer.md) and `critic`
-//               (steps/review/critic.md) resolved by pi
+//               (steps/intake/intake.md), the THREE roles of step 9 — `valuer`
+//               (steps/design/valuer.md), `designer` (steps/design/designer.md) and `router`
+//               (steps/design/router.md) — and `critic` (steps/review/critic.md) resolved by pi
 //               from the extension's roleDirectories BY FILENAME (validation.js scanRoleFiles).
 //               Renaming a role file breaks agent({role}) with no other symptom.
 // EXTERNAL_DEPENDENCY: order templates read from disk at run time — steps/brd/order.tpl,
 //               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl, steps/intake/order.tpl,
-//               steps/design/order.tpl, steps/review/order.tpl.
+//               steps/design/order-values.tpl, steps/design/order-nodes.tpl,
+//               steps/design/order-routes.tpl (three passes, one order each), steps/review/order.tpl.
 //               prompt() demands an
 //               EXACT bidirectional match between a template's placeholders and the values passed
 //               here: an added key with no placeholder, or a placeholder with no key, throws at
@@ -84,6 +86,7 @@ const ENVELOPE = {
     track: { type: "string", enum: ["ok", "err"] },
     artifact: { type: "string" },
     requirements: { type: "number" },
+    values: { type: "number" },
     modules: { type: "number" },
     gaps: { type: "number" },
     deltas: { type: "number" },
@@ -764,80 +767,119 @@ async function rippling() {
   log(`ripple: design=${r.design} узлов ${r.nodes} из ${r.total} (затравок ${r.seeds}, mode=${r.mode})`);
 }
 
-// FUNCTION_CONTRACT: designing — step 9: the change as two aligned projections, by role `designer`
-//   Input:        —
-//   Dependencies: EXTERNAL — design (the host function; the local name differs because a sandbox
-//                 global cannot be shadowed by the function that calls it), readText, answers,
-//                 frdForm, agent(role "designer"), prompt; askOperator
-//   Antecedent:   step 8 left .agent/design, .agent/ripple.xml; steps 6 and 7 left .agent/frd.xml and
-//                 .agent/mode; steps/design/order.tpl exists in the run's cwd; LOOPS ≥ 1
-//   Consequent:   success: EXITS ok — either with .agent/design-graph.xml and .agent/data-flow.md
-//                          promoted after a GREEN check, or with the design skipped by step 8's flag.
-//                          In both cases NEITHER artifact is left over from a previous run: the gate
-//                          call erases them before anything else happens (docs/design.md §5)
-//                 failure: exits — err("blocked") when step 8 wrote no flag or an unknown word,
-//                          err(kind) on a role error rail, err("escalate") when LOOPS redelegations
-//                          were spent, carrying the LAST guardrail diagnosis
-//   Purity:       io (through the host)
+// FUNCTION_CONTRACT: designing — step 9 in three passes: dictionary, graph, routes
+//   Input:        from — the step the BAND started at (workflows/izi.js::bandStart). `from <= 6`
+//                 means the FRD was rewritten, and then nothing extracted from the old one is reused
+//   Dependencies: EXTERNAL — design (gate, cards, and the guardrail of each pass), readText, answers,
+//                 frdForm, agent(roles "valuer" | "designer" | "router"), prompt, carried;
+//                 askOperator, charge
+//   Antecedent:   step 8 left .agent/design and .agent/ripple.xml; step 7 left .agent/mode; LOOPS ≥ 1
+//   Consequent:   success: RETURNS ".agent/data-flow.md" with the pair promoted, or ".agent/design"
+//                          when step 8 said `skip` and no role was called at all
+//                 failure: exits — err("escalate") when one PASS spent its LOOPS, naming which
+//   Purity:       io (host functions, roles)
+// THE PASSES OF STEP 9, AND WHO IS BLAMED WHEN THEY DISAGREE.
 //
-// The role gets the FRD and the ripple SUBGRAPH, never the whole map: the reachable part was computed
-// at step 8 precisely so this window stays affordable on a live repository (docs/ripple.md §4).
+// Step 9 stopped being one generation because one generation could not hold it: live run 0bbf7054
+// wrote the values, the graph and the routes in one 23 KB artifact and came back with 81 and 91
+// blocker lines carrying 48 and 42 facts, whose overlap between attempts was 17 % — the role was not
+// repairing, it was writing the whole thing again (docs/design-step-by-step.md §1).
 //
-// The question rail is the one brd and intake use, with one difference: a question here is SINGLE, not
-// a batch. The designer does not elicit a requirement — it runs into one node whose contract nothing
-// in its order determines (docs/design.md §7), and that is one question with one answer.
-async function designing() {
-  const gate = await design({});                 // ALWAYS erases yesterday's pair — in both branches
+// Three passes, three roles, three guardrails, and the ladder here is the same device as the band's:
+// a pass is skipped when its artifact is green NOW, and the gate is what judged that
+// (ext/index.mjs::design). The one thing the gate cannot know is whether the FRD under it was
+// rewritten — so `from` says it: a rewind to step 6 re-runs pass A whatever the dictionary looks
+// like, because a dictionary extracted from yesterday's FRD is structurally green and about another
+// change.
+const PASSES = [
+  { id: "values", role: "valuer",   tpl: "steps/design/order-values.tpl", out: ".agent/staging/values.xml" },
+  { id: "nodes",  role: "designer", tpl: "steps/design/order-nodes.tpl",  out: ".agent/staging/design-nodes.xml" },
+  { id: "routes", role: "router",   tpl: "steps/design/order-routes.tpl", out: ".agent/staging/routes.xml" },
+]
+
+// WHOSE FAULT IS A RED PASS. The blocker's own rule number decides, because the number IS the
+// declaration of what the rule judges (docs/data-flow.md §6):
+//   · rules 1, 2, 5, 7 — the route names what no node produces, walks nothing, misses a scenario or
+//     leaves a branch untaken. The graph is fine; pass C wrote it wrong.
+//   · rules 3, 4 — the route asked for an edge that is not declared, or handed a neighbour what it
+//     does not accept. The ROUTE cannot fix that: the donor calls this "return to Step 5"
+//     (program-design/reference/step-09-contracts-graph.md), and here it is pass B.
+//   · a graph naming an id the dictionary does not carry — pass B cannot fix it either, because the
+//     dictionary is frozen for it. Found while writing role B (backlog D8): §7 of the concept knew
+//     only two addresses, and this is the third.
+const blameOf = (pass, blockers) => {
+  const lines = String(blockers || "").split("\n").map((l) => l.trim()).filter(Boolean)
+  if (pass === "nodes" && lines.some((l) => /которого нет в словаре/.test(l))) return "values"
+  if (pass === "routes" && lines.some((l) => /^[34] /.test(l))) return "nodes"
+  return pass
+}
+
+async function designing(from = 6) {
+  const gate = await design({});
   if (!gate.ok) exit(err("blocked", { subject: gate.why, evidence: ".agent/design-graph.xml не написан" }));
   if (gate.design === "skip") {
-    log("design: skip — шаг 8 решил, что синхронизировать нечего (patch на одном узле); роль не зовётся, 0 токенов");
+    log("design: skip — шаг 8 решил, что синхронизировать нечего (patch на одном узле); роли не зовутся, 0 токенов");
     return ".agent/design"; // the flag file IS the receipt of the skip — there is no second artifact
   }
 
-  const orderTpl = await readText({ path: "steps/design/order.tpl" });
   const FRD = await readText({ path: ".agent/frd.xml" });
   const RIPPLE = await readText({ path: ".agent/ripple.xml" });
   const MODE = (await readText({ path: ".agent/mode" })).trim();
-  const STAGING = ".agent/staging/design-graph.xml";
-  const CHECK = "design({path}) — steps/design/design.mjs::newDesign по staging: узлы подграфа из .agent/ripple.xml, сценарии и touched из .agent/frd.xml";
-  // The vocabulary of a delta's form is SUBSTITUTED from steps/intake/frd.mjs, never retyped in the
-  // template — the same device the intake order uses, for the same reason (ext/index.mjs::frdForm).
   const FORM = await frdForm({});
-  let feedback = "(none — first attempt)", attempt = 0, wasRed = [];
+  const tpl = {};
+  for (const p of PASSES) tpl[p.id] = await readText({ path: p.tpl });
 
-  while (attempt < LOOPS) {
+  // A rewind to step 6 rewrote the FRD, so nothing extracted from the old one may be reused.
+  const reused = from <= 6 ? [] : (gate.reused || []);
+  let i = reused.includes("values") ? (reused.includes("nodes") ? 2 : 1) : 0;
+  if (i) log(`design: проходы ${reused.join(" и ")} закрыты — их артефакты зелены сейчас`);
+
+  const attempt = { values: 0, nodes: 0, routes: 0 };
+  const feedback = { values: "(none — first attempt)", nodes: "(none — first attempt)", routes: "(none — first attempt)" };
+  const wasRed = { values: [], nodes: [], routes: [] };
+
+  while (i < PASSES.length) {
+    const p = PASSES[i];
+    if (attempt[p.id] >= LOOPS) exit(err("escalate", { subject: feedback[p.id], evidence: `проход ${p.id} шага 9: цикл исчерпан за ${LOOPS} попыток` }));
+
     const seen = await answers({});
-    const order = prompt(orderTpl, {
-      FRD,
-      RIPPLE,
-      ANSWERS: answersBlock(seen, "(no operator answers yet)"),
-      MODE,
-      DELTA_FORMS: FORM.deltaForms,
-      FEEDBACK: feedback,
-      STAGING,
-      CHECK,
-    });
-    const env = await agent(order, { role: "designer", outputSchema: ENVELOPE });
+    const VALUES = i > 0 ? await readText({ path: ".agent/values.xml" }) : "";
+    const CARDS = p.id === "routes" ? (await design({ pass: "routes", cards: true })).text : "";
+    const keys = {
+      values: { FRD, RIPPLE, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"values", path}) — steps/design/values.mjs::checkValues по staging` },
+      nodes: { VALUES, FRD, RIPPLE, ANSWERS: answersBlock(seen, "(no operator answers yet)"), MODE, DELTA_FORMS: FORM.deltaForms, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"nodes", path}) — steps/design/nodes.mjs::checkGraph по staging` },
+      routes: { FRD, CARDS, ANSWERS: answersBlock(seen, "(no operator answers yet)"), FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"routes", path}) — steps/design/routes.mjs::checkRoutes по staging` },
+    }[p.id];
+    const env = await agent(prompt(tpl[p.id], keys), { role: p.role, outputSchema: ENVELOPE });
 
     if (env.track === "err" && env.kind === "question") {
       const q = charge(env);
-      if (q.spent) exit(noRoundsLeft(env, "design"));   // no <question> in the design grammar
-      log(`design: вопрос ${q.n} — «${env.subject}»`);
-      await askOperator(env, q.n, "design", "designer");
+      if (q.spent) exit(noRoundsLeft(env, `design/${p.id}`));   // no <question> in the design grammar
+      log(`design/${p.id}: вопрос ${q.n} — «${env.subject}»`);
+      await askOperator(env, q.n, `design-${p.id}`, p.role);
       continue; // a question does not spend the redelegation budget
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
 
-    const check = await design({ path: STAGING }); // the check runs ON STAGING, before any promote
+    const check = await design({ pass: p.id, path: p.out }); // the check runs ON STAGING, before promote
     if (check.ok) {
-      log(`design: узлов ${check.nodes}, маршрутов ${check.routes}, списков юнитов ${check.units} → .agent/design-graph.xml + .agent/data-flow.md`);
-      return ".agent/data-flow.md";
+      log(p.id === "routes"
+        ? `design: узлов ${check.nodes}, маршрутов ${check.routes}, списков юнитов ${check.units} → .agent/design-graph.xml + .agent/data-flow.md`
+        : `design/${p.id}: зелен — ${p.id === "values" ? `значений ${check.values}` : `узлов ${check.nodes}`}`);
+      i++;
+      continue;
     }
-    const carry = await carried({ blockers: check.blockers, seen: wasRed });
-    feedback = carry.text; wasRed = carry.seen;   // the loop's memory is the RUN, not the round
-    attempt++;
+
+    attempt[p.id]++;
+    const blame = blameOf(p.id, check.blockers);
+    const carry = await carried({ blockers: check.blockers, seen: wasRed[blame] });
+    feedback[blame] = carry.text; wasRed[blame] = carry.seen;   // the loop's memory is the RUN, not the round
+    if (blame !== p.id) {
+      log(`design/${p.id}: красный по вине прохода ${blame} — возврат туда, а маршруты переживут: они называют значения ИМЕНЕМ`);
+      i = PASSES.findIndex((x) => x.id === blame);
+    }
   }
-  exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
+  return ".agent/data-flow.md";
 }
 
 // FUNCTION_CONTRACT: planning — step 10: the accepted change as an ordered DAG of work
@@ -1009,7 +1051,7 @@ async function band(from0) {
     if (from <= 6) { phase("intake"); await intake(fromCritic); }
     if (from <= 7) { phase("weight"); await weigh(); }
     if (from <= 8) { phase("ripple"); await rippling(); }
-    if (from <= 9) { phase("design"); await designing(); }
+    if (from <= 9) { phase("design"); await designing(from); }
     if (from <= 10) { phase("plan"); planned = await planning(edges); }
     if (from >= 12) return planned;
     phase("review"); const verdict = await reviewing();

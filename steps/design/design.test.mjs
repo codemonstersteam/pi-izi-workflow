@@ -118,33 +118,11 @@ test("the entry of a route is a copy of the named alternative, never in[0] by po
 // not this file's invention.
 const ORDER_KEYS = ["FRD", "RIPPLE", "ANSWERS", "MODE", "DELTA_FORMS", "FEEDBACK", "STAGING", "CHECK"]
 
-test("order.tpl uses exactly the keys the workflow passes", () => {
-  const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
-  const keys = [...tpl.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
-  assert.deepEqual([...new Set(keys)].sort(), [...ORDER_KEYS].sort())
-})
-
-// One vocabulary: the slice used to carry its own words for a delta's form in three prose places
-// (discrepancy C). The vocabulary arrives SUBSTITUTED, and the seam is that the template does not
-// spell it out again. Its twin for the pass-B order lives in steps/design/nodes.test.mjs.
-test("order.tpl names no delta word of its own — the vocabulary is substituted", () => {
-  const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
-  assert.doesNotMatch(tpl, /delta="(add|change|remove)"/)
-  assert.match(tpl, /{DELTA_FORMS}/)
-})
-
-// THE ROLE'S SEAMS ARE NOT IN THIS FILE ANY MORE EITHER (backlog D8). `designer.md` became the role
-// of pass B — it writes the GRAPH and no routes — so the assertions that grepped it moved to
-// steps/design/nodes.test.mjs, BESIDE the guardrail that now judges what they claim:
-//   the `description:` colon (the YAML trap that cost a whole run), the delta vocabulary,
-//   «as rule 6» and «Do NOT write a number of tests» — moved as they were;
-//   «`entry` is the NUMBER of an `in` alternative» and «machine-checked as rule 1 …» — DELETED with
-//     the routes: rule 1 and rule 7 judge `staging/routes.xml` (steps/design/routes.mjs), and the
-//     role that must name them is `router.md`, which backlog D9 writes. Asserting them against a
-//     role that no longer writes a route would be asserting that the pass did not happen;
-//   «as rule 7» — the same, and one step further: rule 7 blames the ROUTE, not the graph
-//     (docs/design-step-by-step.md §7, the table of blame), so pass B may not claim it at all.
-
+// The two tests that stood here judged `steps/design/order.tpl` — the order of the ONE-generation
+// step 9. The file is deleted with D10: the phase now reads three orders, one per pass, and each is
+// judged beside the guardrail that owns it (order-values.tpl in values.test.mjs, order-nodes.tpl in
+// nodes.test.mjs, order-routes.tpl in routes.test.mjs). A test for a file nobody reads is a test for
+// a claim nobody makes.
 test("totality of parsing: garbage and undefined are read as an empty graph, not thrown", () => {
   assert.equal(parseDesign(undefined).size, 0)
   assert.deepEqual(parseRoutes(null), [])
