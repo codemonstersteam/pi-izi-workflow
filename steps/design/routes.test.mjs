@@ -13,8 +13,9 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { parseRoutes, checkRoutes } from "./routes.mjs"
-import { parseNodes } from "./nodes.mjs"
+import { parseNodes, cards } from "./nodes.mjs"
 import { parseValues } from "./values.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 
@@ -202,6 +203,138 @@ test("rule 7: an out branch no route takes has no unit in the ticket", () => {
     }),
     ['7 узел src/SlotLock.java с delta="Added": значение v12 «Expired» в out не пройдено ни одним маршрутом — ветка мертва либо сценария FRD не хватает'],
   )
+})
+
+// --- D9: the role of this pass and its order ------------------------------------------------------
+//
+// Same two seams as pass B keeps (steps/design/nodes.test.mjs, D8): the order carries exactly the keys
+// the band passes, and the role names the checks it claims — plus one this pass alone can afford, the
+// role's own EXAMPLE run through the real guardrail.
+const ROLE = readFileSync(new URL("router.md", import.meta.url), "utf8")
+const ORDER_ROUTES = readFileSync(new URL("order-routes.tpl", import.meta.url), "utf8")
+
+// The keys the band substitutes for pass C (backlog D10 writes `designing()`; this list is the
+// contract it must satisfy). CARDS is the key the whole pass exists for — and RIPPLE is the key that
+// must NOT be here: the cards replace the subgraph WHOLE (docs/design-step-by-step.md §4.C), and that
+// is the only reason this order is four times lighter than pass B's. Put `{RIPPLE}` back into the
+// template and this goes red.
+const ORDER_KEYS = ["FRD", "CARDS", "ANSWERS", "FEEDBACK", "STAGING", "CHECK"]
+
+test("order-routes.tpl uses exactly the keys the band passes — cards instead of the ripple subgraph", () => {
+  const keys = [...ORDER_ROUTES.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
+  assert.deepEqual([...new Set(keys)].sort(), [...ORDER_KEYS].sort())
+  assert.doesNotMatch(ORDER_ROUTES, /RIPPLE|ripple\.xml/)
+  // …and the role says the same thing, so a model that remembers yesterday's order does not go
+  // looking for a file that is not there.
+  assert.match(ROLE, /ripple subgraph is NOT in your order/)
+})
+
+// BUG_FIX_CONTEXT: the first launch of step 9 never reached the role at all — pi refused the whole
+//   workflow at metadata validation: «Invalid role frontmatter: Nested mappings are not allowed in
+//   compact mappings at line 1, column 14». The `description:` line carried a second «: » inside an
+//   unquoted YAML scalar, which YAML reads as a nested mapping. The cost is the whole run, before a
+//   single token is spent, and the message names YAML rather than the file's purpose.
+test("role frontmatter: the description carries no bare colon — YAML would read it as a nested mapping", () => {
+  const line = (ROLE.match(/^description:.*$/m) || [""])[0]
+  assert.doesNotMatch(line.slice("description:".length), /:\s/)
+})
+
+test("the role of pass C writes a step as `path@v9` and shows no position anywhere", () => {
+  assert.match(ROLE, /`path@id`/)
+  assert.match(ROLE, /@v\d/)
+  // The position is what this pass abolished. Nothing in the role may show a path with a number glued
+  // to it, or the role would teach the very reference the cards exist to replace — five and six lines
+  // of «нет альтернативы #12» in live run 0bbf7054.
+  assert.doesNotMatch(ROLE, /#\d/)
+  assert.doesNotMatch(ROLE, /path#|@\d/)
+  // `entry` is a NAME, not a number: rule 1's second half (steps/design/design.mjs, walk's
+  // BUG_FIX_CONTEXT — `in[0]` taken by position turned a user's click into a Fruit).
+  assert.match(ROLE, /`entry` names the value/)
+})
+
+// The rule this pass carries alone, and the one live run 0bbf7054 broke twice over: the role invented
+// `S1_get`, `S1_notfound`, `S1_keydup` and left all three FRD scenarios without a route at all. The
+// id is DERIVED — the scenario's own id, then the same id plus a letter — and the role must say so
+// with the blocker that catches the alternative.
+test("rule 5 in the role: a route id is derived from the FRD scenario, never composed", () => {
+  assert.match(ROLE, /DERIVED from the FRD, never invented/)
+  assert.match(ROLE, /CHARACTER FOR CHARACTER/)
+  assert.match(ROLE, /`S1b`, `S1c`/)
+  assert.match(ROLE, /S1_get|S1_notfound/)
+  assert.match(ROLE, /у сценария\s+FRD S1 нет маршрута/)
+})
+
+// standards/role.md, constraint 2: every prohibition names the machine check that catches it. Rule 1
+// is the one whose grep left pass B's role together with the routes (backlog D8/D9) and must live
+// here; rules 2, 3, 4 and 7 keep the numbers of docs/data-flow.md §6.
+test("the role names the checks it claims — rule 1 by its blocker, rules 2, 3, 4 and 7 by number", () => {
+  assert.match(ROLE, /нет значения … в out/)
+  assert.match(ROLE, /узла нет в дизайн-графе/)
+  assert.match(ROLE, /нет значения … в in/)
+  assert.match(ROLE, /rule 2/)
+  assert.match(ROLE, /rule 3/)
+  assert.match(ROLE, /rule 4/)
+  assert.match(ROLE, /rule 7/)
+  // The unit list is the script's projection of these very routes — the role writes no count
+  // (docs/design.md §2).
+  assert.match(ROLE, /Do NOT write a number of tests/)
+})
+
+// The strongest seam available to a role file: its EXAMPLE is run through the real guardrail — and
+// here through TWO of them, because pass C's order is a DERIVED document. The cards printed in the
+// role must be the cards `cards()` really emits, or the role teaches a shape no run will ever hand
+// it; and the routes it shows must pass `checkRoutes` on those very cards.
+const EX_VALUES = `<values>
+  <value id="v1" text="POST /doors/{id}/open {badgeId}"/>
+  <value id="v2" text="open(doorId,badgeId)"/>
+  <value id="v3" text="findBadge(badgeId)"/>
+  <value id="v4" text="Badge(badgeId,revoked)"/>
+  <value id="v5" text="Opened(doorId)"/>
+  <value id="v6" text="Revoked(badgeId)"/>
+  <value id="v7" text="200 {doorId}"/>
+  <value id="v8" text="403 BADGE_REVOKED"/>
+</values>`
+
+const EX_GRAPH = `<design mode="minor" base=".agent/appgraph.xml">
+  <module path="src/AccessGate.java" delta="Changed">
+    <role>door endpoint</role>
+    <contract in="v1 | v5 | v6" out="v2 | v7 | v8"/>
+    <dep path="src/AccessPolicy.java"/>
+  </module>
+  <module path="src/AccessPolicy.java" delta="Added">
+    <role>badge rules</role>
+    <contract in="v2 | v4" out="v3 | v5 | v6"/>
+    <dep path="src/BadgeRepo.java"/>
+  </module>
+  <module path="src/BadgeRepo.java">
+    <role>badge storage</role>
+    <contract in="v3" out="v4"/>
+  </module>
+</design>`
+
+test("the role's example is a green set of routes — parseRoutes + checkRoutes, zero blockers", () => {
+  const xml = [...ROLE.matchAll(/```xml\n([\s\S]*?)```/g)].map((m) => m[1])
+  assert.equal(xml.length, 2, "the example shows the FRD it reads and the routes it writes")
+  const exValues = parseValues(EX_VALUES)
+  const exNodes = parseNodes(EX_GRAPH)
+  const exFrd = parseFrd(xml[0])
+
+  // The card block of the example is not prose: it is the output of the host function that builds
+  // pass C's order. Reformat a row by hand and this goes red.
+  const block = (ROLE.match(/```\n(src\/AccessGate\.java[\s\S]*?)```/) || ["", ""])[1].trimEnd()
+  assert.equal(block, cards(exValues, exNodes))
+
+  const exRoutes = parseRoutes(xml[1])
+  assert.deepEqual(exRoutes.map((r) => r.scenario), ["S1", "S1b"])
+  assert.deepEqual(checkRoutes({ routes: exRoutes, nodes: exNodes, values: exValues, frd: exFrd }), [])
+
+  // …and the guardrail really ran on it: compose the first route's id the way live run 0bbf7054 did
+  // and exactly one blocker comes back — the scenario the FRD declared has no route at all. The
+  // example is judged, not merely parsed, and the rule it exists to teach is the one that reddens.
+  const invented = parseRoutes(xml[1].replace('scenario="S1"', 'scenario="S1_ok"'))
+  assert.deepEqual(checkRoutes({ routes: invented, nodes: exNodes, values: exValues, frd: exFrd }), [
+    "5 у сценария FRD S1 нет маршрута",
+  ])
 })
 
 test("totality: garbage, undefined and no argument at all are read as no routes, not thrown", () => {
