@@ -21,8 +21,9 @@
 //             newRequirement(raw, known) -> Result<Requirement, "invalid-requirement">
 //             newSubjects(list) -> Result<Subjects, "invalid-subjects">
 //             adviceFor(r) -> Advice[]
-//             languageDrifted(fit, source) -> boolean
 //             newBrd(text, sources) -> Result<Brd, "invalid-brd">
+// The language of a `fit:` is judged by core/lang.mjs (sourceGate/vocabOf/freeWords/languageDrifted)
+// — this module only wires it to the requirements it built and names the blocker.
 
 // The front door's BRD acceptance (B1-S). PURE — no node:fs.
 //
@@ -52,7 +53,10 @@ import { severityOf } from "../../core/findings.mjs"
 // correct, and the rule failed it entirely), but it lived on in the templates' prose — and the role
 // dutifully enforced a rule that no longer existed. The registry declares the intent once: what is
 // checked and what is ordered are one entry.
-import { BRD_FORM, cyrillicRatio } from "../../core/form.mjs"
+import { BRD_FORM } from "../../core/form.mjs"
+// The artifact's language is judged where the decision lives, not here: core/lang.mjs owns both
+// directions and the gate that picks between them.
+import { sourceGate, vocabOf, freeWords, languageDrifted, FREE_WORDS_BLOCK } from "../../core/lang.mjs"
 
 export const SUBJECTS_MIN = BRD_FORM.subjectsMin
 export const SUBJECTS_MAX = BRD_FORM.subjectsMax
@@ -318,52 +322,6 @@ export function adviceFor(r) {
   return out
 }
 
-// Below the letter threshold a text carries no language at all: `fit: ≤ 200 мс` is two or three
-// alphabet characters beside a number and a comparison sign, and there is nothing to judge. That is
-// what the threshold is about, and it is NOT a defence against formulas: `format: ISO-8601 | null`
-// gives 13 letters and IS judged by the rule (see the FUNCTION_CONTRACT below).
-const MIN_LETTERS = 6
-
-// FUNCTION_CONTRACT: languageDrifted — is the criterion written in a language other than the source's
-//   Input:        fit — one requirement's fit wording; type unconstrained
-//   Dependencies: source — the text that sets the artifact's language (the task plus the operator's
-//                 answers); empty → the rule stays silent: there is nothing to compare against, and
-//                 silence is more honest than accusing at random
-//   Antecedent:   any values, both coerced to strings
-//   Consequent:   success: true when the source is decidedly in one alphabet (a Cyrillic share > 0.5
-//                          or < 0.1) and the fit decidedly in the other, AND the fit holds at least
-//                          MIN_LETTERS letters; false in every other case — a mixed source, a short
-//                          fit and an empty source are not judgeable
-//                 failure: none — total
-// F20 (run-6) and F16 (run-5): with a Russian task, the requirements' wordings came back in Russian
-// while `fit`/`verify` came back in English, because a role takes its FORM from the example and its
-// CONTENT from the input. The artifact is produced half out of the prompt; to the human accepting it
-// that is a document in two languages, and to acceptance it was indistinguishable.
-//
-// ONLY `fit` IS JUDGED. `verify` is declared as "a command | an artifact" (the role, the order), and
-// it is English by nature — a rule has no right to turn red on a correctly executed form.
-// `subjects[]` are excluded by the registry: BRD_FORM.subjectRule explicitly prescribes the
-// REPOSITORY's language for anchors, not the request's.
-//
-// AN HONEST BORDER: counting letters cannot tell a `fit` made of one formula
-// (`format: ISO-8601 | null`) from English prose — false positives on such criteria exist, and a
-// letter threshold does not remove them. The price is accepted deliberately: complying costs the role
-// one word (`формат: ISO-8601 | null` — the value and the token untouched), unlike the subjects[]
-// language rule removed on 01.08, where complying BROKE the artifact (an anchor must match a
-// repository identifier). Different breeds: there the rule ordered a spoiling, here a translation of
-// the prose around a value. The slack for a false red is the retry budget: LOOPS = 3.
-export function languageDrifted(fit, source) {
-  const src = String(source || "")
-  if (!src.trim()) return false
-  const f = String(fit || "")
-  if ((f.match(/\p{L}/gu) || []).length < MIN_LETTERS) return false
-  const rs = cyrillicRatio(src)
-  const rf = cyrillicRatio(f)
-  if (rs > 0.5) return rf < 0.1
-  if (rs < 0.1) return rf > 0.5
-  return false
-}
-
 // FUNCTION_CONTRACT: newBrd — a BRD fit to be handed in
 //   Input:        text — the bytes of .agent/brd.md
 //   Dependencies: sources — the texts a role may take numbers from (the task, the operator's
@@ -390,10 +348,20 @@ export function newBrd(text, sources = []) {
   }
 
   // The artifact's language is a property of the INPUT, not of the role: the rule is declared by the
-  // role ($START_LAW) and enforced here, against the task and the operator's answers.
+  // role ($START_LAW) and enforced here, against the task and the operator's answers. The INPUT also
+  // picks the measure (core/lang.mjs::sourceGate): a Russian request is judged word by word — a
+  // letter share cannot see one English word inserted into a Russian line — and an English request by
+  // the old share, which is the only measure that direction has.
   const source = src.join("\n")
+  const gate = sourceGate(source)
+  const vocab = gate === "free-words" ? vocabOf(src) : null
   for (const r of built) {
-    if (languageDrifted(r.fit, source)) {
+    if (gate === "free-words") {
+      const free = freeWords(r.fit, vocab)
+      if (free.length >= FREE_WORDS_BLOCK) {
+        blockers.push(`${r.id} [language-drift]: ${free.map((w) => `«${w}»`).join(", ")} — английские слова, которых нет ни в задаче, ни в ответах оператора; переведи fit — «${r.fit.slice(0, 60)}»`)
+      }
+    } else if (gate === "reverse" && languageDrifted(r.fit, source)) {
       blockers.push(`${r.id} [language-drift]: fit написан не на языке входа — «${r.fit.slice(0, 60)}»`)
     }
   }

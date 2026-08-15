@@ -32,6 +32,12 @@ import { numbersIn } from "../brd/brd.mjs"
 // the SAME set, on the FRD the role just rewrote. Not a cycle: review.mjs takes frd/plan as data and
 // never imports this module.
 import { frdIds } from "../review/review.mjs"
+// EXTERNAL_DEPENDENCY: steps/design/values.mjs::endsOf — "what are the ends of a use case" is answered
+// ONCE: step 9's pass A collapses the dictionary onto exactly this set, and F6c below judges the CAUSE
+// of that collapse on the artifact that feeds it. A second enumeration of the ends here would drift the
+// day an `<ext>` id gains a dot. Not a cycle: values.mjs takes the FRD as data and imports nothing but
+// core/xml.mjs.
+import { endsOf } from "../design/values.mjs"
 
 // THE FORM AS DATA, so the order can SUBSTITUTE it instead of restating it (ext/index.mjs::frdForm,
 // the same device as brdForm — see its BUG_FIX_CONTEXT G9e).
@@ -428,6 +434,75 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   const codes = new Set(frd.failures.map((f) => f.code).filter(Boolean))
   for (const e of errs) if (!codes.has(e)) B.push(`F6 код «${e}» из <ext> не описан в карте отказов`)
   for (const c of codes) if (!errs.has(c)) B.push(`F6 код «${c}» карты отказов не встречен ни одним <ext>`)
+
+  // F6c — one cause of failure, a different OBSERVATION on every layer. The ends are taken from
+  // `endsOf` (steps/design/values.mjs), side `out`: `UCx/post` and every `<ext outcome>` — exactly the
+  // set step 9's dictionary collapses onto, so the rule judges the cause of the dead end and not its
+  // symptom. Two ends of DIFFERENT use cases may not carry one text; two ends of ONE use case may (two
+  // branches of one layer with one observation is a legal shape, and step 9's dictionary rule judges
+  // it there).
+  //
+  // One blocker per COLLIDING END — each later end is paired with the first end carrying that text —
+  // so three use cases on one text cost two blockers, not nine: a role repairing an artifact pays a
+  // redelegation per round, not per line, and n² lines of one defect drown the other rules.
+  //
+  // BUG_FIX_CONTEXT: live run 9b019d80-d28e-4d40-bc94-15bb9b14fff6 (quarkus-rest-json-app-v2-t2). The
+  //   FRD declared UC1 (`actor="api-client"`) and UC2 (`actor="list-page-user"`), both with
+  //   `<ext error="FRUIT_NOT_FOUND" outcome="фрукт не найден, вернуто HTTP 404"/>` — VERBATIM the same
+  //   text. F6 compares only the presence of a code, so the artifact closed green and incomplete:
+  //   `{"ok":true,"deltas":1,"scenarios":2,"touched":1}`. The page had no end of its own for the
+  //   failure branch, and step 9's pass C span the fork «не доставить 404» (rule 10) against «ответить
+  //   карточкой» (rule 11) until it escalated — 212 107 tokens, $0.41. The missing thing was a
+  //   sentence in the FRD, not a rule of step 9.
+  const seen = new Map()
+  for (const e of endsOf(frd)) {
+    if (e.side !== "out") continue
+    const text = String(e.text || "").trim()
+    const first = seen.get(text)
+    if (!first) { seen.set(text, e); continue }
+    if (first.uc === e.uc) continue
+    B.push(`F6c ${first.token} и ${e.token} несут один текст конца «${text}» — это разные use case, а отказ и успех наблюдаются на каждом слое ПО-СВОЕМУ. outcome ветки — отрицание <post> СВОЕГО use case, словами своего актёра`)
+  }
+
+  // F6d — `from` names ALL the branches of its code. One `<failure>` row per code stays; its `from` is
+  // a LIST (`from="UC1/1a UC2/2a"`, separators — whitespace or comma), and coverage is checked both
+  // ways: every branch carrying the code is named by the row, every token of `from` resolves to an
+  // existing branch. Two of the three live forms already write the list (`t3`, `eddi`); the order's
+  // schema showed one token and said nothing about a list — which is where 9b019d80's gap came from.
+  //
+  // ONE DEFECT, ONE BLOCKER: only the codes F6 is silent about are judged here. A code missing from the
+  // failure map entirely — or a row whose code no `<ext>` raises — is already F6's blocker, and a
+  // second line about the same defect buys the role nothing but a longer FEEDBACK.
+  const judged = new Set([...codes].filter((c) => errs.has(c)))
+  // The token of a branch is built by the SAME expression as steps/review/review.mjs::frdIds — two
+  // spellings of one token drift the day an id changes shape.
+  const branchTokens = new Set()
+  const branches = []
+  for (const u of frd.usecases) {
+    for (const x of u.exts) {
+      if (!u.id || !x.id) continue
+      const token = `${u.id}/${x.id}`
+      branchTokens.add(token)
+      if (x.error && x.error !== NO_CODE) branches.push({ token, code: x.error })
+    }
+  }
+  const named = new Map()
+  for (const f of frd.failures) {
+    if (!judged.has(f.code)) continue
+    const tokens = String(f.from || "").split(/[\s,]+/).map((t) => t.trim()).filter(Boolean)
+    if (!named.has(f.code)) named.set(f.code, new Set())
+    for (const t of tokens) {
+      named.get(f.code).add(t)
+      if (!branchTokens.has(t)) {
+        B.push(`F6d <failure code="${f.code}"> ссылается на «${t}», а такой ветки нет: токен ветки это id use case и id её <ext> через косую черту (UC1/1a)`)
+      }
+    }
+  }
+  for (const b of branches) {
+    if (!judged.has(b.code)) continue
+    if (named.get(b.code) && named.get(b.code).has(b.token)) continue
+    B.push(`F6d ветка ${b.token} поднимает «${b.code}», но не названа в from его строки — <failure code="${b.code}" … from="…"/> перечисляет ВСЕ ветки этого кода: from="UC1/1a UC2/2a"`)
+  }
 
   // F9 — a rewind's SUBJECT survives the repair. `rewind` carries the previous review's blockers only
   // when it Rejected (ext/index.mjs::checkFrd reads .agent/review.xml); [] otherwise, and then this

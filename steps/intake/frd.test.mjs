@@ -283,7 +283,7 @@ test("F6: the failure map and the extensions must be 1:1 in both directions", ()
 // found no such row in the failure map, and refused an artifact that was RIGHT. The legal move was to
 // omit the attribute, but the order's example carries `error="CODE"` on every <ext>, so the role
 // declared the absence the way this repository declares every other one.
-test("F6b: a branch that fails without a code says so — error=\"none\" is an answer, not a code", () => {
+test("F6 error=\"none\": a branch that fails without a code says so — an answer, not a code", () => {
   const lenient = FRD.replace('error="TRACK_TOO_SHORT" outcome', 'error="none" outcome')
     .replace(/\n\s*<failure [^>]*\/>/, "")
     .replace("</frd>", '  <failures found="no" why="ветка отдаёт пустой результат, кода ошибки у неё нет"/>\n</frd>')
@@ -297,7 +297,7 @@ test("F6b: a branch that fails without a code says so — error=\"none\" is an a
 // Live run e82192db: an artifact with no <failure> and no `error` anywhere passed, because the rule
 // above compared two EMPTY sets. The service was then read by hand and had no failure modes at all —
 // so the answer is not "invent a code" but "say so", the way the map says found="no".
-test("F6a: an empty failure map is a blocker unless it is DECLARED empty, with a reason", () => {
+test("F6 found=\"no\": an empty failure map is a blocker unless it is DECLARED empty, with a reason", () => {
   const noFailures = FRD.replace(/\n\s*<failure [^>]*\/>/, "").replace(' error="TRACK_TOO_SHORT"', "")
   assert.match(blockersOf(noFailures).join("\n"), /F6 карта отказов пуста и не объявлена/)
 
@@ -460,7 +460,7 @@ test("the form the order substitutes is the SAME data the guardrail judges by", 
   assert.match(tpl, /На каждый `<usecase>` — свой `<scenario uc="…">`/)
   const selfcheck = tpl.match(/\$START_SELFCHECK[\s\S]*?\$END_SELFCHECK/)
   assert.ok(selfcheck, "наряд обязан нести блок $START_SELFCHECK")
-  assert.equal((selfcheck[0].match(/^\d\. /gm) || []).length, 7)
+  assert.equal((selfcheck[0].match(/^\d\. /gm) || []).length, 5)
   assert.match(role, /Не оставляй `<usecase>` без сценария.*`F4b`/)
 })
 
@@ -476,4 +476,348 @@ test("role and order: a FEEDBACK line names its source, and the two are repaired
     assert.match(text, /guardrail:/, `${what} must name the guardrail as a source of feedback`)
     assert.match(text, /critic:/, `${what} must name the critic as a source of feedback`)
   }
+})
+
+// --- F6c / F6d: один корень отказа, разные виды по слоям -----------------------------------------
+// Fixtures COPIED VERBATIM from `sandbox/runbox/<form>/.agent/frd.xml` — four forms that were really
+// written by the role, so the two rules are counted on live artifacts and not on a shape invented to
+// fit them. Only F6* is counted here: the maps of those forms do not travel with the XML, and F2/F3/F5
+// judge against a map by design.
+const FRD_9B019D80 = `<frd grammar="1" goal="новый эндпоинт GET /fruits/{name} отдаёт один фрукт по имени (case-insensitive substring), при отсутствии — 404; страница списка показывает карточку через этот эндпоинт">
+
+  <actor name="api-client" kind="system" via="HTTP GET /fruits/{name}"/>
+  <actor name="list-page-user" kind="human" via="fruits.html → HTTP GET /fruits/{name}"/>
+
+  <usecase id="UC1" actor="api-client" goal="получить один фрукт по имени">
+    <pre>фрукт существует в хранилище FruitResource</pre>
+    <post>вернуто HTTP 200 с JSON-объектом одного фрукта, содержащим все поля</post>
+    <step n="1">клиент шлёт GET /fruits/{name}</step>
+    <step n="2">FruitResource ищет фрукт по имени с case-insensitive substring match</step>
+    <step n="3">система возвращает HTTP 200 с JSON-объектом найденного фрукта</step>
+    <ext id="1a" error="FRUIT_NOT_FOUND" outcome="фрукт не найден, вернуто HTTP 404"/>
+  </usecase>
+
+  <usecase id="UC2" actor="list-page-user" goal="посмотреть карточку фрукта из списка">
+    <pre>пользователь на странице списка фруктов</pre>
+    <post>карточка выбранного фрукта отображена на странице</post>
+    <step n="1">пользователь кликает на фрукт в списке</step>
+    <step n="2">fruits.html выполняет GET /fruits/{name}</step>
+    <step n="3">FruitResource возвращает HTTP 200 с JSON-объектом фрукта</step>
+    <step n="4">fruits.html отображает карточку фрукта</step>
+    <ext id="2a" error="FRUIT_NOT_FOUND" outcome="фрукт не найден, вернуто HTTP 404"/>
+  </usecase>
+
+  <field name="name" in="GET /fruits/{name}" type="string" domain="any non-empty string" required="yes" error="FRUIT_NOT_FOUND" source="brd.md"/>
+  <field name="name" in="Fruit" type="string" domain="any string" required="yes" error="none" source="appgraph.xml"/>
+  <field name="description" in="Fruit" type="string" domain="any string" required="yes" error="none" source="appgraph.xml"/>
+
+  <failure code="FRUIT_NOT_FOUND" status="404" client="получить HTTP 404" operator="—" from="UC1/1a"/>
+
+  <delta op="GET /fruits/{name}" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java"/>
+
+  <scenario id="S1" uc="UC1" before="GET /fruits/{name} не существует; доступны только GET /fruits, POST /fruits, DELETE /fruits" after="GET /fruits/{name} возвращает HTTP 200 с JSON-объектом одного фрукта по имени (case-insensitive substring) или HTTP 404" nodes="src/main/java/org/acme/rest/json/FruitResource.java"/>
+
+  <scenario id="S2" uc="UC2" before="fruits.html не вызывает GET /fruits/{name} и не показывает карточку фрукта" after="fruits.html вызывает GET /fruits/{name} при клике и отображает карточку фрукта" nodes="src/main/resources/META-INF/resources/fruits.html src/main/java/org/acme/rest/json/FruitResource.java"/>
+
+  <touched path="src/main/resources/META-INF/resources/fruits.html" why="добавлен вызов GET /fruits/{name} и отображение карточки фрукта при клике"/>
+
+  <nfr subject="existing-endpoints" fit="GET /fruits, POST /fruits, DELETE /fruits, GET /legumes — формат и поведение unchanged" source="brd.md"/>
+</frd>`
+
+const FRD_T3 = `<frd grammar="1" goal="отдельная страница карточки фрукта со своим адресом, отображающая имя и описание">
+  <actor name="browser" kind="human" via="HTTP GET /fruit-card.html, GET /fruits/{id}"/>
+  <actor name="list-page" kind="system" via="HTML navigation link in fruits.html"/>
+
+  <usecase id="UC1" actor="browser" goal="получить данные одного фрукта по идентификатору">
+    <pre>фрукт с таким name существует в коллекции</pre>
+    <post>вернётся JSON с полями name и description одного фрукта, HTTP 200</post>
+    <step n="1">клиент отправляет GET /fruits/{id}, где {id} — имя фрукта</step>
+    <step n="2">FruitResource находит фрукт по name в коллекции</step>
+    <step n="3">FruitResource возвращает JSON {name, description} со статусом 200</step>
+    <ext id="2a" error="FRUIT_NOT_FOUND" outcome="фрукт с таким name не найден — HTTP 404"/>
+  </usecase>
+
+  <usecase id="UC2" actor="browser" goal="перейти на карточку фрукта из списка">
+    <pre>пользователь видит страницу списка фруктов (fruits.html)</pre>
+    <post>клик по имени фрукта открывает страницу карточки /fruit-card.html с параметром id</post>
+    <step n="1">fruits.html рендерит список фруктов, каждое имя — ссылка &lt;a&gt;</step>
+    <step n="2">ссылка ведёт на /fruit-card.html?id=&lt;fruitName&gt;</step>
+    <step n="3">браузер открывает страницу fruit-card.html</step>
+  </usecase>
+
+  <usecase id="UC3" actor="browser" goal="отобразить карточку фрукта">
+    <pre>пользователь открыл /fruit-card.html?id=&lt;fruitName&gt;</pre>
+    <post>на странице отображены name и description фрукта</post>
+    <step n="1">fruit-card.html считывает параметр id из URL</step>
+    <step n="2">страница отправляет GET /fruits/{id}</step>
+    <step n="3">при получении ответа страница отображает name и description</step>
+    <ext id="2a" error="FRUIT_NOT_FOUND" outcome="GET вернул 404 — страница показывает сообщение об отсутствии фрукта"/>
+  </usecase>
+
+  <field name="id" in="GET /fruits/{id}" type="string" domain="any fruit name present in collection" required="yes" error="FRUIT_NOT_FOUND" source="answers.md"/>
+
+  <failure code="FRUIT_NOT_FOUND" status="404" client="отобразить сообщение об отсутствии" operator="—" from="UC1/2a,UC3/2a"/>
+
+  <delta op="GET /fruits/{id}" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java" from="endpoint отсутствует" to="endpoint возвращает Fruit по name (200) или 404"/>
+  <delta op="GET /fruit-card.html" form="Added" node="src/main/resources/META-INF/resources/fruit-card.html" new="yes"/>
+  <delta op="list-page navigation" form="Added" node="src/main/resources/META-INF/resources/fruits.html" from="имя фрукта не кликабельно" to="имя фрукта — ссылка &lt;a href=&quot;/fruit-card.html?id={name}&quot;&gt;"/>
+
+  <scenario id="S1" uc="UC1" before="GET /fruits/{id} не существует — сервер возвращает 404 для любого path-параметра" after="GET /fruits/{id} возвращает JSON с name и description фрукта или 404 при отсутствии" nodes="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <scenario id="S2" uc="UC2" before="fruits.html не содержит ссылок на карточку фрукта" after="имя каждого фрукта в списке — кликабельная ссылка на /fruit-card.html?id={name}" nodes="src/main/resources/META-INF/resources/fruits.html"/>
+  <scenario id="S3" uc="UC3" before="файл fruit-card.html не существует, адрес /fruit-card.html недоступен" after="fruit-card.html загружает фрукт по GET /fruits/{id} и отображает name и description" nodes="src/main/resources/META-INF/resources/fruit-card.html src/main/java/org/acme/rest/json/FruitResource.java"/>
+
+  <touched path="src/main/java/org/acme/rest/json/FruitResource.java" why="добавлен метод findByName() с @PathParam для GET /fruits/{id}"/>
+  <touched path="src/main/resources/META-INF/resources/fruits.html" why="имя фрукта в списке обёрнуто в &lt;a&gt; со ссылкой на карточку"/>
+  <touched path="src/main/resources/META-INF/resources/fruit-card.html" why="новый HTML-файл страницы карточки, загружающий данные по GET /fruits/{id}"/>
+
+  <nfr subject="existing-contracts" fit="format ответа существующих endpoints unchanged" source="brd.md"/>
+</frd>`
+
+const FRD_EDDI = `<frd grammar="1" goal="ввести глобальный ресурс глоссарий с CRUD, подстановкой в промпты и поддержкой экспорта/импорта">
+  <actor name="operator-ui" kind="human" via="HTTP REST /glossarystore/glossaries"/>
+  <actor name="template-pipeline" kind="system" via="Qute namespace resolver glossary:termKey"/>
+
+  <usecase id="UC1" actor="operator-ui" goal="управлять глоссариями через REST CRUD">
+    <pre>оператор аутентифицирован</pre>
+    <post>глоссарий сохранён в MongoDB коллекцию glossaries с версионированием; URI-префикс eddi://ai.labs.glossary</post>
+    <step n="1">клиент отправляет POST /glossarystore/glossaries с телом {name, description?, terms[]}</step>
+    <step n="2">система проверяет уникальность name и уникальность term.key внутри глоссария</step>
+    <step n="3">система сохраняет глоссарий, генерирует id и version=1, возвращает 201 Created</step>
+    <step n="4">GET /glossarystore/glossaries/{id}?version=N читает глоссарий с версионированием</step>
+    <step n="5">PUT /glossarystore/glossaries/{id}?version=N обновляет глоссарий с проверкой версии</step>
+    <step n="6">DELETE /glossarystore/glossaries/{id}?version=N удаляет глоссарий</step>
+    <ext id="2a" error="GLOSSARY_NAME_CONFLICT" outcome="POST/PUT возвращает 409: name уже занят"/>
+    <ext id="2b" error="GLOSSARY_KEY_DUPLICATE" outcome="POST/PUT возвращает 400: term.key дублируется внутри глоссария"/>
+    <ext id="3a" error="GLOSSARY_NOT_FOUND" outcome="GET/PUT/DELETE возвращает 404: глоссарий с указанным id не найден"/>
+    <ext id="5a" error="GLOSSARY_VERSION_MISMATCH" outcome="PUT возвращает 412: версия не совпадает"/>
+  </usecase>
+
+  <usecase id="UC2" actor="template-pipeline" goal="разрешить {glossary.termKey} в Qute-шаблонах">
+    <pre>активные глоссарии загружены в кэш GlossaryService</pre>
+    <post>выражение {glossary.termKey} заменено на value соответствующего термина; неразрешённые ключи отдаются как пустая строка</post>
+    <step n="1">Qute engine встречает выражение {glossary.termKey}</step>
+    <step n="2">GlossaryNamespaceResolver.searchAllGlossaries(termKey) ищет термин по всем активным глоссариям</step>
+    <step n="3">если термин найден — возвращается value; иначе — пустая строка (lenient Qute)</step>
+    <ext id="3a" error="none" outcome="термин не найден ни в одном глоссарии → пустая строка, обработка продолжается"/>
+  </usecase>
+
+  <usecase id="UC3" actor="operator-ui" goal="включить глоссарии в экспорт и импорт агента">
+    <pre>ZIP-архив содержит {id}.glossary.json для каждого глоссария; импорт по name как у сниппетов</pre>
+    <post>глоссарии экспортированы в ZIP; при импорте существующие сопоставлены по name и обновлены, новые созданы, неизменённые пропущены</post>
+    <step n="1">экспорт: RestExportService собирает глобальные глоссарии и записывает {id}.glossary.json в ZIP</step>
+    <step n="2">импорт: ZipResourceSource.readGlossaries() читает {id}.glossary.json из распакованного ZIP</step>
+    <step n="3">StructuralMatcher сопоставляет глоссарии по name (buildExistingGlossaryNameMap)</step>
+    <step n="4">UpgradeExecutor применяет diff: CREATE для новых, UPDATE для изменённых, SKIP для неизменённых</step>
+    <ext id="4a" error="GLOSSARY_NAME_CONFLICT" outcome="создание дубликата возвращает 409"/>
+  </usecase>
+
+  <!-- Data Dictionary -->
+  <field name="name" in="Glossary" type="String" domain="required, unique across deployment" required="yes" error="GLOSSARY_NAME_CONFLICT" source="answers.md"/>
+  <field name="description" in="Glossary" type="String" domain="optional" required="no" error="none" source="answers.md"/>
+  <field name="terms" in="Glossary" type="List&lt;GlossaryTerm&gt;" domain="0..N" required="yes" error="none" source="answers.md"/>
+  <field name="key" in="GlossaryTerm" type="String" domain="pattern: ^[a-zA-Z_][a-zA-Z0-9_]*$, unique within glossary" required="yes" error="GLOSSARY_KEY_DUPLICATE" source="answers.md"/>
+  <field name="value" in="GlossaryTerm" type="String" domain="required" required="yes" error="none" source="answers.md"/>
+  <field name="version" in="Glossary CRUD" type="Integer" domain="&gt;=1" required="no" error="GLOSSARY_VERSION_MISMATCH" source="brd.md"/>
+  <field name="collection" in="Glossary persistence" type="String" domain="glossaries" required="yes" error="none" source="answers.md"/>
+  <field name="template-syntax" in="Glossary template resolution" type="String" domain="{glossary.termKey}" required="yes" error="none" source="answers.md"/>
+  <field name="match-key" in="Glossary import" type="String" domain="name (as StructuralMatcher.buildExistingSnippetNameMap)" required="yes" error="none" source="answers.md"/>
+
+  <!-- Failure Modes -->
+  <failure code="GLOSSARY_NOT_FOUND" status="404" client="вернуть пустой ответ" operator="—" from="UC1/3a"/>
+  <failure code="GLOSSARY_NAME_CONFLICT" status="409" client="отказать в операции" operator="—" from="UC1/2a, UC3/4a"/>
+  <failure code="GLOSSARY_KEY_DUPLICATE" status="400" client="отказать в операции, указать дублирующийся ключ" operator="—" from="UC1/2b"/>
+  <failure code="GLOSSARY_VERSION_MISMATCH" status="412" client="отказать в обновлении" operator="—" from="UC1/5a"/>
+
+  <!-- Deltas: new modules -->
+  <delta op="Glossary model POJO" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/model/Glossary.java" new="yes"/>
+  <delta op="IGlossaryStore CRUD interface" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/IGlossaryStore.java" new="yes"/>
+  <delta op="GET/POST/PUT/DELETE /glossarystore/glossaries/{id}" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/IRestGlossaryStore.java" new="yes"/>
+  <delta op="GlossaryStore MongoDB on glossaries" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/mongo/GlossaryStore.java" new="yes"/>
+  <delta op="RestGlossaryStore REST CRUD" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/rest/RestGlossaryStore.java" new="yes"/>
+  <delta op="GlossaryService cache and serve" form="Added" node="src/main/java/ai/labs/eddi/modules/llm/impl/GlossaryService.java" new="yes"/>
+  <delta op="Qute namespace resolver for glossary:" form="Added" node="src/main/java/ai/labs/eddi/modules/templating/impl/GlossaryNamespaceResolver.java" new="yes"/>
+
+  <!-- Deltas: existing modules -->
+  <delta op="IResourceSource.readGlossaries" form="Added" node="src/main/java/ai/labs/eddi/backup/IResourceSource.java" from="readAgent, readWorkflows, readSnippets" to="readAgent, readWorkflows, readSnippets, readGlossaries"/>
+  <delta op="RestExportService" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" from="экспорт без глоссариев" to="экспорт включает {id}.glossary.json"/>
+  <delta op="RestImportService" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" from="импорт без глоссариев" to="импорт читает и применяет глоссарии"/>
+  <delta op="ZipResourceSource.readGlossaries" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java" from="readAgent, readWorkflows, readSnippets" to="readAgent, readWorkflows, readSnippets, readGlossaries"/>
+  <delta op="RemoteApiResourceSource.readGlossaries" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java" from="readAgent, readWorkflows, readSnippets" to="readAgent, readWorkflows, readSnippets, readGlossaries"/>
+  <delta op="StructuralMatcher glossary matching" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java" from="matching без глоссариев" to="buildExistingGlossaryNameMap + glossary diff по name"/>
+  <delta op="UpgradeExecutor glossary apply" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java" from="применение без глоссариев" to="CREATE/UPDATE/SKIP глоссариев"/>
+  <delta op="TemplateEngineModule" form="Added" node="src/main/java/ai/labs/eddi/modules/templating/bootstrap/TemplateEngineModule.java" from="нет GlossaryNamespaceResolver" to="GlossaryNamespaceResolver зарегистрирован как CDI bean"/>
+  <delta op="ITemplatingEngine" form="Added" node="src/main/java/ai/labs/eddi/modules/templating/ITemplatingEngine.java" from="нет glossary namespace" to="поддержка {glossary.termKey} через GlossaryNamespaceResolver"/>
+
+  <!-- Scenarios -->
+  <scenario id="S1" uc="UC1" before="REST /glossarystore/glossaries не существует, глоссарии невозможно создать"
+            after="полный CRUD: POST создаёт, GET читает с version, PUT обновляет с проверкой версии, DELETE удаляет"
+            nodes="src/main/java/ai/labs/eddi/configs/glossary/model/Glossary.java src/main/java/ai/labs/eddi/configs/glossary/IGlossaryStore.java src/main/java/ai/labs/eddi/configs/glossary/IRestGlossaryStore.java src/main/java/ai/labs/eddi/configs/glossary/mongo/GlossaryStore.java src/main/java/ai/labs/eddi/configs/glossary/rest/RestGlossaryStore.java"/>
+
+  <scenario id="S2" uc="UC2" before="выражение {glossary.termKey} в шаблоне не разрешается"
+            after="GlossaryNamespaceResolver ищет термин по всем активным глоссариям и возвращает value"
+            nodes="src/main/java/ai/labs/eddi/modules/templating/impl/GlossaryNamespaceResolver.java src/main/java/ai/labs/eddi/modules/llm/impl/GlossaryService.java src/main/java/ai/labs/eddi/modules/templating/impl/TemplatingEngine.java src/main/java/ai/labs/eddi/modules/templating/ITemplatingEngine.java"/>
+
+  <scenario id="S3" uc="UC3" before="ZIP-экспорт не содержит глоссариев, импорт не обрабатывает .glossary.json"
+            after="экспорт включает {id}.glossary.json; импорт сопоставляет по name и применяет CREATE/UPDATE/SKIP"
+            nodes="src/main/java/ai/labs/eddi/backup/IResourceSource.java src/main/java/ai/labs/eddi/backup/impl/RestExportService.java src/main/java/ai/labs/eddi/backup/impl/RestImportService.java src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+
+  <!-- Touched: new modules -->
+  <touched path="src/main/java/ai/labs/eddi/configs/glossary/model/Glossary.java" why="новый POJO модели глоссария: name, description, terms[]"/>
+  <touched path="src/main/java/ai/labs/eddi/configs/glossary/IGlossaryStore.java" why="новый интерфейс CRUD для глоссариев"/>
+  <touched path="src/main/java/ai/labs/eddi/configs/glossary/IRestGlossaryStore.java" why="новый REST интерфейс: GET/POST/PUT/DELETE /glossarystore/glossaries/{id}"/>
+  <touched path="src/main/java/ai/labs/eddi/configs/glossary/mongo/GlossaryStore.java" why="новая MongoDB реализация на коллекции glossaries"/>
+  <touched path="src/main/java/ai/labs/eddi/configs/glossary/rest/RestGlossaryStore.java" why="новая REST реализация делегирующая в GlossaryStore"/>
+  <touched path="src/main/java/ai/labs/eddi/modules/llm/impl/GlossaryService.java" why="новый кэш и обслуживание глоссариев по паттерну PromptSnippetService"/>
+  <touched path="src/main/java/ai/labs/eddi/modules/templating/impl/GlossaryNamespaceResolver.java" why="новый Qute namespace resolver: glossary.termKey → value из всех активных глоссариев"/>
+
+  <!-- Touched: existing modules -->
+  <touched path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" why="новый метод readGlossaries() в интерфейсе ресурсного источника"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" why="добавлена запись {id}.glossary.json в ZIP-архив экспорта"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" why="добавлена обработка глоссариев в конвейере импорта"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java" why="новая реализация readGlossaries() для чтения .glossary.json из ZIP"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java" why="новая реализация readGlossaries() для чтения глоссариев через удалённый REST API"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java" why="добавлено сопоставление глоссариев по name (buildExistingGlossaryNameMap) и diff"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java" why="добавлено применение глоссарий: CREATE/UPDATE/SKIP по diff"/>
+  <touched path="src/main/java/ai/labs/eddi/modules/templating/bootstrap/TemplateEngineModule.java" why="GlossaryNamespaceResolver регистрируется как CDI bean для автообнаружения Qute"/>
+  <touched path="src/main/java/ai/labs/eddi/modules/templating/ITemplatingEngine.java" why="интерфейс расширяется поддержкой glossary namespace resolution"/>
+
+  <nfr subject="glossary-collection" fit="glossaries" source="answers.md"/>
+  <nfr subject="glossary-scope" fit="глобальный ресурс на весь деплой" source="answers.md"/>
+  <nfr subject="glossary-uri" fit="eddi://ai.labs.glossary" source="brd.md"/>
+  <nfr subject="import-match" fit="по name, как StructuralMatcher.buildExistingSnippetNameMap" source="answers.md"/>
+  <nfr subject="template-syntax" fit="{glossary.termKey} — Qute namespace resolver (одинарные скобки)" source="answers.md"/>
+</frd>`
+
+const FRD_T1_3 = `<frd grammar="1" goal="поиск фруктов по части имени с ограничением ответа до 10 записей">
+
+  <actor name="api-client" kind="system" via="HTTP GET /fruits"/>
+
+  <usecase id="UC1" actor="api-client" goal="поиск фруктов по части имени">
+    <pre>коллекция фруктов существует</pre>
+    <post>получены фрукты с подстрокой в имени без учёта регистра, не более 10 записей</post>
+    <step n="1">клиент отправляет GET /fruits?search=&lt;value&gt;</step>
+    <step n="2">система фильтрует фрукты по частичному совпадению name без учёта регистра</step>
+    <step n="3">система ограничивает результат до 10 записей</step>
+    <step n="4">система возвращает Set&lt;Fruit&gt; с совпавшими записями</step>
+  </usecase>
+
+  <usecase id="UC2" actor="api-client" goal="получить все фрукты без фильтрации">
+    <pre>коллекция фруктов существует</pre>
+    <post>получены все фрукты в коллекции, контракт не изменён</post>
+    <step n="1">клиент отправляет GET /fruits без параметра search</step>
+    <step n="2">система возвращает Set&lt;Fruit&gt; со всеми записями</step>
+  </usecase>
+
+  <field name="search" in="GET /fruits" type="string" domain="any string" required="no" error="—" source="brd.md"/>
+
+  <failures found="no" why="поиск возвращает пустой набор при отсутствии совпадений — нормальный результат, а не ошибка; лимит 10 применяется к результату без генерации ошибки"/>
+
+  <delta op="GET /fruits" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java" from="list() без параметров возвращает все фрукты" to="list(search) с опциональным query-параметром, фильтрацией по name без учёта регистра и лимитом 10 записей"/>
+
+  <scenario id="S1" uc="UC1" before="GET /fruits?search=any игнорирует неизвестный параметр и возвращает все фрукты" after="GET /fruits?search=apple возвращает только фрукты с подстрокой &quot;apple&quot; в name без учёта регистра, не более 10" nodes="src/main/java/org/acme/rest/json/FruitResource.java"/>
+
+  <touched path="src/main/java/org/acme/rest/json/FruitResource.java"/>
+
+  <nfr subject="search-response-limit" fit="10" source="answers.md"/>
+
+</frd>`
+
+// Every blocker of the rule family, on the artifact alone.
+const rule = (xml, n) => checkFrd({ frd: parseFrd(xml) }).filter((b) => b.startsWith(n))
+
+// The repair: UC2's branch says what the PAGE observes, and the one row of the code names BOTH branches.
+const FRD_9B_FIXED = FRD_9B019D80
+  .replace('<ext id="2a" error="FRUIT_NOT_FOUND" outcome="фрукт не найден, вернуто HTTP 404"/>',
+           '<ext id="2a" error="FRUIT_NOT_FOUND" outcome="карточка не открыта, на странице сообщение об отсутствии фрукта"/>')
+  .replace('from="UC1/1a"', 'from="UC1/1a UC2/2a"')
+
+test("F6c/F6d: FRD прогона 9b019d80 — ровно два блокера; разведённые outcome и составной from — зелено", () => {
+  assert.equal(rule(FRD_9B019D80, "F6c").length, 1)
+  assert.equal(rule(FRD_9B019D80, "F6d").length, 1)
+  assert.equal(rule(FRD_9B019D80, "F6").length, 2)          // F6 itself stays silent: the code IS in the map
+  assert.match(rule(FRD_9B019D80, "F6c")[0], /UC1\/1a и UC2\/2a несут один текст конца/)
+  assert.match(rule(FRD_9B019D80, "F6d")[0], /ветка UC2\/2a поднимает «FRUIT_NOT_FOUND»/)
+
+  assert.deepEqual(rule(FRD_9B_FIXED, "F6"), [])
+
+  // The three forms that were already writing the artifact the way the rules now demand.
+  for (const [form, xml] of [["t3", FRD_T3], ["eddi", FRD_EDDI], ["t1-3", FRD_T1_3]]) {
+    assert.deepEqual(rule(xml, "F6"), [], form)
+  }
+})
+
+test("F6d: разделители from — пробел, запятая, запятая с пробелом — покрывают одинаково", () => {
+  for (const sep of [" ", ",", ", "]) {
+    const xml = FRD_9B_FIXED.replace('from="UC1/1a UC2/2a"', `from="UC1/1a${sep}UC2/2a"`)
+    assert.deepEqual(rule(xml, "F6"), [], JSON.stringify(sep))
+  }
+  // …and the coverage is read in both directions: a token that resolves to no branch is a blocker too.
+  const dangling = rule(FRD_9B_FIXED.replace("UC2/2a", "UC2/9z"), "F6d").join("\n")
+  assert.match(dangling, /ссылается на «UC2\/9z», а такой ветки нет/)
+  assert.match(dangling, /ветка UC2\/2a поднимает «FRUIT_NOT_FOUND»/)
+})
+
+// Three layers on one code. The blocker is one per COLLIDING END, not one per ordered pair: a role
+// repairing the artifact pays a redelegation per round, and n² lines of one defect drown the rest.
+const THREE = `<frd grammar="1" goal="показать посылку по трек-номеру">
+  <usecase id="UC1" actor="api-client" goal="получить посылку по треку">
+    <pre>посылка с таким треком существует</pre>
+    <post>вернулась одна посылка</post>
+    <step n="1">клиент шлёт GET /parcels/{track}</step>
+    <ext id="1a" error="PARCEL_NOT_FOUND" outcome="посылка не найдена, вернуто HTTP 404"/>
+  </usecase>
+  <usecase id="UC2" actor="operator-ui" goal="открыть карточку посылки">
+    <pre>оператор на странице реестра</pre>
+    <post>карточка посылки открыта</post>
+    <step n="1">оператор кликает на строку реестра</step>
+    <ext id="2a" error="PARCEL_NOT_FOUND" outcome="карточка не открыта, на экране сообщение об отсутствии"/>
+  </usecase>
+  <usecase id="UC3" actor="courier-app" goal="показать посылку курьеру">
+    <pre>курьер отсканировал трек</pre>
+    <post>посылка показана в приложении курьера</post>
+    <step n="1">приложение шлёт GET /parcels/{track}</step>
+    <ext id="3a" error="PARCEL_NOT_FOUND" outcome="приложение показывает экран «посылка не в вашем маршруте»"/>
+  </usecase>
+  <failure code="PARCEL_NOT_FOUND" status="404" client="показать «не найдено»" operator="—" from="UC1/1a UC2/2a UC3/3a"/>
+</frd>`
+
+const ONE_TEXT = "посылка не найдена, вернуто HTTP 404"
+
+test("F6c: три use case на одном коде — два блокера, по одному на столкнувшийся конец, не n²", () => {
+  assert.deepEqual(rule(THREE, "F6"), [])           // three layers, three observations: legal
+
+  const merged = THREE
+    .replace("карточка не открыта, на экране сообщение об отсутствии", ONE_TEXT)
+    .replace("приложение показывает экран «посылка не в вашем маршруте»", ONE_TEXT)
+  assert.equal(rule(merged, "F6c").length, 2)
+  assert.deepEqual(rule(merged, "F6d"), [])         // покрытие полное — судится только текст
+
+  // …and the rule does NOT touch two branches of ONE use case carrying one observation: that is a
+  // legal shape, judged by the dictionary rule of step 9 and not here.
+  const twinsInOneUc = THREE
+    .replace('<ext id="1a" error="PARCEL_NOT_FOUND" outcome="' + ONE_TEXT + '"/>',
+             '<ext id="1a" error="PARCEL_NOT_FOUND" outcome="' + ONE_TEXT + '"/>\n    <ext id="1b" error="PARCEL_NOT_FOUND" outcome="' + ONE_TEXT + '"/>')
+    .replace('from="UC1/1a', 'from="UC1/1a UC1/1b')
+  assert.deepEqual(rule(twinsInOneUc, "F6"), [])
+})
+
+// A code that is missing from the failure map ENTIRELY is one defect and one blocker — F6's. F6d
+// judges only the codes F6 is silent about, otherwise every such branch would arrive twice in FEEDBACK.
+test("F6d молчит там, где судит F6: код вне карты отказов даёт один блокер, не два", () => {
+  const orphan = THREE.replace(/\n\s*<failure [^>]*\/>/, '\n  <failures found="no" why="кодов у изменения нет"/>')
+  const b = rule(orphan, "F6")
+  assert.equal(b.filter((x) => x.startsWith("F6d")).length, 0, b.join("\n"))
+  assert.equal(b.length, 1)                          // F6 speaks ONCE per code, and nothing else speaks
+  assert.match(b[0], /F6 код «PARCEL_NOT_FOUND» из <ext> не описан/)
+})
+
+test("роль и наряд несут свои строки про F6c/F6d", () => {
+  const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
+  const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
+  assert.match(role, /`outcome` ветки — отрицание `<post>` СВОЕГО use case/)
+  assert.match(role, /Не описывай отказ одного слоя словами другого[\s\S]*?`F6c`/)
+  assert.match(role, /Не оставляй ветку с кодом вне `from` строки её кода[\s\S]*?`F6d`/)
+  assert.match(tpl, /from="UC1\/1a UC2\/2a"/)
+  assert.match(tpl, /Два конца разных use case с одним текстом → F6c/)
+  assert.match(tpl, /Ветка с кодом, не названная в `from` строки этого кода → F6d/)
 })
