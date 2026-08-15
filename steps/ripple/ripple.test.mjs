@@ -5,8 +5,10 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { newRipple, DESIGN_TABLE } from "./ripple.mjs"
+import { newRipple, DESIGN_TABLE, blindNodes, waiverFor, BLIND_STEM, BLIND_TAIL, WAIVER_WORDS } from "./ripple.mjs"
 import { parseMap } from "../intake/map.mjs"
+import { parseFrd } from "../intake/frd.mjs"
+import { newExchange, newAnswers } from "../../core/answers.mjs"
 // The CONSUMER's parser, imported by the test and never by the module: `ripple.xml` is written for
 // step 9, so the cheapest proof that the two agree on the grammar is to read this file's output with
 // the code that will read it for real (steps/design/design.mjs::parseDesign).
@@ -183,4 +185,169 @@ test("total on garbage: no argument at all is a refusal, never a throw", () => {
     assert.equal(r.ok, false)
     assert.ok(r.error.cls.length > 0)
   }
+})
+
+// --- ГЕЙТ ШАГА 6: узлы изменения, которых не исполняет ни один сьют --------------------------------
+//
+// Фикстуры — ВЫПИСКИ ДОСЛОВНО с диска (sandbox/runbox/<форма>/.agent/), не синтетика: правило судит
+// репозиторий, и его цена измерена на этих самых артефактах (наряд D23). Из карты взяты сьюты, узлы
+// ширины со своими <test> и рёбра вокруг них; из FRD — <delta>, <scenario> и <touched> как есть.
+// Замер по ПОЛНЫМ файлам: слепых по всему репо 7 / 9 / 9 / 57 на t1-3 / t2 / t3 / eddi, ширина
+// 1 / 2 / 3 / 16, пересечение — 0 / 1 / 1 / None.
+
+// sandbox/runbox/quarkus-rest-json-app-v2-t2/.agent/appgraph.xml (строки 1, 3-4, 44-58, 79-81, 85-95,
+// 106, 108, 110). Карта формы t3 в этих узлах та же самая — обе выписки читают один репозиторий.
+const MAP_T2_XML = `<appgraph grammar="4" modules="17" components="2" isolated="7" levels="4">
+  <suite id="unit" kind="unit" cmd="mvn test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <suite id="component-native" kind="component" cmd="mvn verify -Pnative" one="-Dit.test={class}" path="src/test/java" match="*IT.java"/>
+  <module path="src/main/java/org/acme/rest/json/FruitResource.java" pkg="org.acme.rest.json" component="c1" level="3" fanin="2" fanout="1">
+    <role>JAX-RS REST resource for fruit CRUD operations with in-memory storage</role>
+    <api name="GET /fruits" kind="http" scope="public" via="@GET public Set&lt;Fruit&gt; list()"/>
+    <test path="src/test/java/org/acme/rest/json/FruitResourceTest.java" suite="unit"/>
+    <test path="src/test/java/org/acme/rest/json/FruitResourceIT.java" suite="component-native"/>
+  </module>
+  <module path="src/main/resources/META-INF/resources/fruits.html" component="c1" level="1" fanin="0" fanout="1">
+    <role>AngularJS-based HTML page for fruit management, consumes /fruits endpoints</role>
+  </module>
+  <module path="src/test/java/org/acme/rest/json/FruitResourceIT.java" pkg="org.acme.rest.json" kind="test" suite="component-native" component="c1" level="1" fanin="0" fanout="1">
+    <role>Integration test delegate for FruitResource, extends FruitResourceTest</role>
+  </module>
+  <module path="src/test/java/org/acme/rest/json/FruitResourceTest.java" pkg="org.acme.rest.json" kind="test" suite="unit" component="c1" level="2" fanin="1" fanout="1">
+    <role>Unit test for FruitResource endpoints using QuarkusTest</role>
+  </module>
+  <edge from="src/test/java/org/acme/rest/json/FruitResourceIT.java" to="src/test/java/org/acme/rest/json/FruitResourceTest.java" via="public class FruitResourceIT extends FruitResourceTest {"/>
+  <edge from="src/main/resources/META-INF/resources/fruits.html" to="src/main/java/org/acme/rest/json/FruitResource.java" via="url: '/fruits'," by="use"/>
+  <edge from="src/test/java/org/acme/rest/json/FruitResourceTest.java" to="src/main/java/org/acme/rest/json/FruitResource.java" via=".when().get(&quot;/fruits&quot;)" by="use"/>
+</appgraph>`
+
+const RESOURCE_JAVA = "src/main/java/org/acme/rest/json/FruitResource.java"
+const FRUITS_HTML = "src/main/resources/META-INF/resources/fruits.html"
+const CARD_HTML = "src/main/resources/META-INF/resources/fruit-card.html"
+
+// sandbox/runbox/quarkus-rest-json-app-v2-t2/.agent/frd.xml (строки 1, 29, 31-32, 34)
+const FRD_T2_XML = `<frd grammar="1" goal="новый эндпоинт отдаёт один фрукт по имени в пути, страница фруктов показывает карточку выбранного фрукта">
+  <delta op="GET /fruits/{name}" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <scenario id="S1" uc="UC1" before="GET /fruits/{name} не существует" after="GET /fruits/{name} возвращает 200 с одним фруктом или 404" nodes="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <scenario id="S2" uc="UC2" before="страница фруктов не показывает карточку отдельного фрукта" after="страница показывает карточку с name и description при выборе фрукта" nodes="src/main/resources/META-INF/resources/fruits.html src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <touched path="src/main/resources/META-INF/resources/fruits.html" why="добавляется карточка фрукта, запрашивающая GET /fruits/{name} и отображающая name и description"/>
+</frd>`
+
+// sandbox/runbox/quarkus-rest-json-app-v2-t3/.agent/frd.xml (строки 1, 35-37, 43-45): та же карта,
+// шире изменение — и третий узел ширины изменение СОЗДАЁТ (`new="yes"`).
+const FRD_T3_XML = `<frd grammar="1" goal="отдельная страница карточки фрукта со своим адресом, отображающая имя и описание">
+  <delta op="GET /fruits/{id}" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java" from="endpoint отсутствует" to="endpoint возвращает Fruit по name (200) или 404"/>
+  <delta op="GET /fruit-card.html" form="Added" node="src/main/resources/META-INF/resources/fruit-card.html" new="yes"/>
+  <delta op="list-page navigation" form="Added" node="src/main/resources/META-INF/resources/fruits.html" from="имя фрукта не кликабельно" to="имя фрукта — ссылка &lt;a href=&quot;/fruit-card.html?id={name}&quot;&gt;"/>
+  <touched path="src/main/java/org/acme/rest/json/FruitResource.java" why="добавлен метод findByName() с @PathParam для GET /fruits/{id}"/>
+  <touched path="src/main/resources/META-INF/resources/fruits.html" why="имя фрукта в списке обёрнуто в &lt;a&gt; со ссылкой на карточку"/>
+  <touched path="src/main/resources/META-INF/resources/fruit-card.html" why="новый HTML-файл страницы карточки, загружающий данные по GET /fruits/{id}"/>
+</frd>`
+
+// sandbox/runbox/quarkus-rest-json-app-v2-t1-3/.agent/frd.xml (строки 1, 24, 26, 28): изменение
+// трогает ОДИН узел, и у него есть свои тесты — правило обязано молчать.
+const FRD_T1_3_XML = `<frd grammar="1" goal="поиск фруктов по части имени с ограничением ответа до 10 записей">
+  <delta op="GET /fruits" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java" from="list() без параметров возвращает все фрукты" to="list(search) с опциональным query-параметром, фильтрацией по name без учёта регистра и лимитом 10 записей"/>
+  <scenario id="S1" uc="UC1" before="GET /fruits?search=any игнорирует неизвестный параметр и возвращает все фрукты" after="GET /fruits?search=apple возвращает только фрукты с подстрокой &quot;apple&quot; в name без учёта регистра, не более 10" nodes="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <touched path="src/main/java/org/acme/rest/json/FruitResource.java"/>
+</frd>`
+
+const T2 = { map: parseMap(MAP_T2_XML), frd: parseFrd(FRD_T2_XML) }
+const T3 = { map: parseMap(MAP_T2_XML), frd: parseFrd(FRD_T3_XML) }
+const T1_3 = { map: parseMap(MAP_T2_XML), frd: parseFrd(FRD_T1_3_XML) }
+
+test("шов 1: слепой узел ширины — ровно fruits.html, и создаваемый узел в счёт не идёт", () => {
+  // Форма t2: ширина — ресурс и страница. У ресурса есть свои <test> обоих сьютов; до страницы не
+  // доходит ни один тест — ребро идёт ОТ неё к ресурсу. Ровно этот узел остановил прогон 21dd9b34 на
+  // шаге 11, заплатив 167 805 токенов между зелёным шагом 6 и остановкой.
+  const t2 = blindNodes(T2)
+  assert.equal(t2.known, true)
+  assert.deepEqual([...t2.nodes], [FRUITS_HTML])
+
+  // Форма t3: ширина шире на узел, который изменение СОЗДАЁТ. Карта старше файла по построению —
+  // операнда у правила нет, и ответ обязан остаться одним узлом. Снять `map.nodes.has(p)` — и сюда
+  // приедет fruit-card.html, про который оператору сказать нечего.
+  const t3 = blindNodes(T3)
+  assert.equal(t3.known, true)
+  assert.deepEqual([...t3.nodes], [FRUITS_HTML])
+  assert.equal(t3.nodes.includes(CARD_HTML), false, "создаваемый узел карта содержать не может — судить его нечем")
+})
+
+test("шов 2: карта без единой привязки <test> мнения не имеет — None, а не «слепы все»", () => {
+  // sandbox/runbox/eddi/.agent/appgraph.xml — 92 узла, 57 code, и НИ ОДНОГО <test> внутри модуля
+  // (grep -c "<test " = 0). Выписка дословная: строки 1, 3, 5-6, 28-32, 69-70.
+  const EDDI_MAP = `<appgraph grammar="3" modules="92" components="4" isolated="8" levels="6">
+  <paths prefix="src/main/java/ai/labs/eddi/"/>
+  <suite id="unit" kind="unit" cmd="./mvnw test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <suite id="component" kind="component" cmd="./mvnw verify" one="-Dit.test={class}" path="src/test/java" match="*IT.java"/>
+  <module path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" pkg="ai.labs.eddi.backup" component="c1" level="5" fanin="9" fanout="1">
+    <role>Interface defining data source contracts for reading agent, workflow, and snippet backup resources</role>
+    <api name="IResourceSource.readAgent, readWorkflows, readSnippets" kind="lib" scope="internal"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" pkg="ai.labs.eddi.backup.impl" component="c1" level="1" fanin="0" fanout="6">
+    <role>REST service for exporting agent configurations to ZIP archives with preview support</role>
+    <api name="GET /backup/export/{agentFilename}" kind="http" scope="public"/>
+  </module>
+  <edges from="~backup/impl/RestExportService.java" to="~backup/IResourceSource.java"/>
+</appgraph>`
+  // sandbox/runbox/eddi/.agent/frd.xml (строки 1, 66, 99-100)
+  const EDDI_FRD = `<frd grammar="1" goal="ввести глобальный ресурс глоссарий с CRUD, подстановкой в промпты и поддержкой экспорта/импорта">
+  <delta op="IResourceSource.readGlossaries" form="Added" node="src/main/java/ai/labs/eddi/backup/IResourceSource.java" from="readAgent, readWorkflows, readSnippets" to="readAgent, readWorkflows, readSnippets, readGlossaries"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" why="новый метод readGlossaries() в интерфейсе ресурсного источника"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" why="добавлена запись {id}.glossary.json в ZIP-архив экспорта"/>
+</frd>`
+  const map = parseMap(EDDI_MAP)
+  assert.equal(map.nodeTests.size, 0, "в карте eddi нет ни одной привязки теста к модулю")
+
+  const r = blindNodes({ frd: parseFrd(EDDI_FRD), map })
+  // «Ни один сьют не доходит» здесь неотличимо от «никто не записал, какие тесты есть»: ответ — None.
+  // Вернуть сюда список — и на полной карте оператора спросят про все 16 узлов ширины, а роль сгорит
+  // в LOOPS, не имея честной починки (standards/code.md, ограничение 2).
+  assert.equal(r.known, false)
+  assert.deepEqual([...r.nodes], [])
+})
+
+test("шов 3: ложной тревоги нет — правило считается по ШИРИНЕ, а не по репозиторию", () => {
+  // Форма t1-3: изменение трогает один узел, у него есть свои тесты. По всему репо слепых узлов там
+  // семь (страницы, модели, конфиги) — если считать по репозиторию, гейт задаст оператору семь
+  // вопросов про файлы, которых изменение не касается.
+  const r = blindNodes(T1_3)
+  assert.equal(r.known, true)
+  assert.deepEqual([...r.nodes], [])
+
+  // И то же самое доказано с другой стороны: страница слепа в этом репозитории всегда, но пока
+  // изменение её не трогает — это свойство репозитория, а не находка.
+  assert.equal(blindNodes(T2).nodes.includes(FRUITS_HTML), true)
+})
+
+test("шов 4: ответ находится по СТВОЛУ вопроса — сьюты и их команды в текст не попадают", () => {
+  const first = waiverFor({ node: FRUITS_HTML, answers: [] })
+  assert.equal(first.word, "")
+  assert.equal(first.question, `${BLIND_STEM(FRUITS_HTML)}${BLIND_TAIL}`)
+  // Ствол — функция ОДНОГО аргумента: узла. Вложить в него список сьютов и их команды — и вопрос
+  // перестанет совпадать со своим ответом, как только в репозитории поменяется `cmd` (класс 46edab60,
+  // steps/plan/plan.mjs:57-58). Факты о репозитории едут в evidence, не в текст.
+  assert.equal(BLIND_STEM.length, 1)
+  assert.equal(/mvn|mvnw|cmd=|suite=/.test(first.question), false, first.question)
+
+  // Круг целиком, через тот самый формат, которым ответ едет на диск.
+  const file = newExchange([{ n: 1, question: first.question, text: "accept" }])
+  assert.equal(file.ok, true)
+  const said = newAnswers(file.value).value
+  assert.equal(waiverFor({ node: FRUITS_HTML, answers: said }).word, "accept")
+  // Вопрос адресован УЗЛУ: ответ про страницу не отвечает за ресурс.
+  assert.equal(waiverFor({ node: RESOURCE_JAVA, answers: said }).word, "")
+
+  // Ответ вне словаря — пере-спрос с ПРИЧИНОЙ, приписанной к тому же стволу: текст НОВЫЙ (иначе
+  // askOperator не поставит паузу — прогон 03b598c7), а адрес прежний.
+  const junk = newAnswers(newExchange([{ n: 1, question: first.question, text: "не знаю" }]).value).value
+  const again = waiverFor({ node: FRUITS_HTML, answers: junk })
+  assert.equal(again.word, "")
+  assert.notEqual(again.question, first.question)
+  assert.ok(again.question.startsWith(BLIND_STEM(FRUITS_HTML)))
+  assert.match(again.question, /не знаю/)
+
+  // Последний ответ побеждает: оператор, поправивший себя, отвечает ещё раз.
+  const fixed = [...junk, ...newAnswers(newExchange([{ n: 1, question: again.question, text: "SUITE" }]).value).value]
+  assert.equal(waiverFor({ node: FRUITS_HTML, answers: fixed }).word, "suite")
+  assert.deepEqual([...WAIVER_WORDS], ["suite", "drop", "accept"])
 })

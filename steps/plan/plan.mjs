@@ -13,6 +13,10 @@
 // EXTERNAL_DEPENDENCY: steps/intake/map.mjs — parseMap's parse is the ONLY reader of appgraph.xml in
 //             this band; `nodeTests`, `suites`, `spine` and `cycles` were added there rather than
 //             re-scanned here for that reason.
+// EXTERNAL_DEPENDENCY: core/suites.mjs — hasOwnCheck, the ONE expression of "this node can be closed
+//             by a command of its own". Step 6's gate (steps/ripple/ripple.mjs::blindNodes) asks the
+//             same question of the same map, and a second copy is how a node this step called
+//             self-closing could be the node the gate calls blind.
 // EXTERNAL_DEPENDENCY: steps/design/design.mjs — parseDesign AND parseRoutes, both parsed by the
 //             CALLER (ext/index.mjs) and handed in. The routes carry the change's own direction and
 //             are absent whenever step 9 was skipped, which is a legal input, not a failure.
@@ -37,6 +41,7 @@
 import { ok, err } from "../../core/result.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
 import { forwardLegs } from "../design/routes.mjs"
+import { hasOwnCheck } from "../../core/suites.mjs"
 
 // 2 — the node carries what a TICKET needs to be shippable: `dod` (its units, derived once at step 9
 //     by steps/design/design.mjs::unitsByPath) and `why` (the FRD's own words about why this node is
@@ -236,11 +241,13 @@ export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, e
   //             contradicted each other exactly where they met.
   //   Fix:      the "one node needs no scenario" shortcut holds only while that node can close
   //             ITSELF. hasOwnCheck is read off the map, the same source the commands come from.
-  const hasOwnCheck = (path) => ((m.nodeTests || new Map()).get(path) || []).some((t) => suiteById.has(t.suite))
+  //   Moved to core/suites.mjs (D23): step 6's gate asks the same question of the same map, and one
+  //   expression is what keeps "the node closes itself" from meaning two things.
+  const closesItself = (path) => hasOwnCheck(m, path)
   for (const s of (frd && frd.scenarios) || []) {
     const over = String(s.nodes || "").split(/\s+/).filter((p) => codeIds.has(p))
     if (!over.length) continue
-    if (over.length < 2 && over.every(hasOwnCheck)) continue
+    if (over.length < 2 && over.every(closesItself)) continue
     const node = { id: `scenario:${s.id}`, kind: "scenario", scenario: s.id, deps: [...new Set(over)], check: [], coveredBy: [] }
     nodes.push(node)
     byId.set(node.id, node)

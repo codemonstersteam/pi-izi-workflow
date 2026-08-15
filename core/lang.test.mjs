@@ -132,7 +132,11 @@ test("PROMPT_LANG is gone from the code and from standards/code.md", () => {
   // other status is re-thrown rather than swallowed into a green.
   let found = ""
   try {
-    found = execFileSync("git", ["grep", "-l", "PROMPT_LANG", "--", "core", "steps", "ext/index.mjs", "bin", "workflows", "prompts", "standards"],
+    // `:!core/lang.test.mjs` — THIS file names the constant twice (the comment above and the needle
+    // itself), so without the exclusion the seam matches itself. It stayed green only while the file
+    // was untracked: `git grep` reads the index, and the first commit that added it turned the seam
+    // red on nothing.
+    found = execFileSync("git", ["grep", "-l", "PROMPT_LANG", "--", "core", "steps", "ext/index.mjs", "bin", "workflows", "prompts", "standards", ":!core/lang.test.mjs"],
       { cwd: REPO, encoding: "utf8" }).trim()
   } catch (e) {
     if (e.status !== 1) throw e

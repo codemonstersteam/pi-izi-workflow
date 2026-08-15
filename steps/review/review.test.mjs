@@ -8,8 +8,14 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { parseFrd } from "../intake/frd.mjs"
-import { newReview, parseReview, owedItems, autoFindings, frdIds, reachedBy, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "./review.mjs"
+import { newReview, parseReview, owedItems, autoFindings, frdIds, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "./review.mjs"
+// reachedBy MOVED to core/suites.mjs (D23): step 6's gate asks the same question of the same map, and
+// the units of R6 below are unchanged by the move — that is the seam of the move itself.
+import { reachedBy } from "../../core/suites.mjs"
 import { parseMap } from "../intake/map.mjs"
+// The gate of step 6 owns the text of the question whose answer R6 reads (D23).
+import { BLIND_STEM, BLIND_TAIL } from "../ripple/ripple.mjs"
+import { newExchange, newAnswers } from "../../core/answers.mjs"
 
 const RESOURCE = "src/main/java/org/acme/rest/json/FruitResource.java"
 const LIST = "src/main/resources/META-INF/resources/fruits.html"
@@ -62,10 +68,9 @@ const COVERS = [
   `<covers item="S2" node="${RESOURCE}"/>`,
 ].join("\n  ")
 // R2: у code-узла без своей команды своя таблица и своё правило — назвать КОМАНДУ, дословно из плана.
-const WITNESS = [
-  `<witness node="${LIST}" cmd="mvn test"/>`,
-  `<witness node="${CARD}" cmd="mvn test"/>`,
-].join("\n  ")
+// Строка ровно одна: `CARD` изменение СОЗДАЁТ, наряд про него не спрашивает, и фикстура, отвечающая
+// больше, чем спрошено, перестаёт быть ответом роли на наряд (askedNodes — одно множество на обоих).
+const WITNESS = `<witness node="${LIST}" cmd="mvn test"/>`
 const pass = (body = "") => `<review verdict="Pass" grammar="2">\n  ${COVERS}\n  ${WITNESS}\n  ${body}\n</review>`
 
 const REJECT = `<review verdict="Reject" grammar="2">
@@ -526,7 +531,6 @@ test("R6: witness командой, которая до узла не доход
   // тестов сьюта `unit` до страницы пути нет: ребро идёт ОТ страницы к ресурсу, а не к ней.
   const xml = `<review verdict="Pass" grammar="2">${COVERS}
     <witness node="${LIST}" cmd="mvn test"/>
-    <witness node="${CARD}" cmd="mvn test"/>
   </review>`
   const r = reviewMapped(xml)
   assert.equal(r.ok, false)
@@ -545,7 +549,6 @@ test("R6: узел, до которого тест сьюта доходит п�
 
   // Тот же артефакт, где страница закрыта честным блокером, а не свидетелем, — форма зелёная.
   const xml = `<review verdict="Reject" grammar="2">${COVERS}
-    <witness node="${CARD}" cmd="mvn test"/>
     <blocker code="unverifiable-node" node="${LIST}" evidence="S1">ни одна команда сценария не открывает страницу</blocker>
   </review>`
   const r = reviewMapped(xml)
@@ -558,9 +561,130 @@ test("R6: несуществующий сьют у команды — тоже �
   const plan = { ...PLAN, nodes: PLAN.nodes.map((n) => (n.id === "scenario:S1" ? { ...n, check: [{ suite: "e2e", cmd: "mvn test" }] } : n)) }
   const xml = `<review verdict="Pass" grammar="2">${COVERS}
     <witness node="${LIST}" cmd="mvn test"/>
-    <witness node="${CARD}" cmd="mvn test"/>
   </review>`
   const r = newReview({ xml, plan, frd: FRD, map: MAP })
   assert.equal(r.ok, false)
   assert.match(r.error.detail, /R6 <witness node=/)
+})
+
+// --- D23: чего R6 не судит — операнд оператора и два операнда, которых нет вовсе ------------------
+//
+// Гейт шага 6 спрашивает оператора про узел, который не исполняет ни один сьют (steps/ripple/
+// ripple.mjs::blindNodes), и ответ живёт в .agent/answers.md. Здесь — вторая половина того же
+// решения: узел с ответом `accept` из цикла R6 уходит, иначе шаг 11 останавливает полосу на вопросе,
+// на который оператор уже ответил (эскалация прогона 21dd9b34).
+const waiverAnswers = (node, word) =>
+  newAnswers(newExchange([{ n: 1, question: `${BLIND_STEM(node)}${BLIND_TAIL}`, text: word }]).value).value
+
+test("шов 5: R6 молчит про узел, неверифицируемость которого оператор принял на гейте шага 6", () => {
+  // Страницу не закрывает ни свидетель, ни блокер — сегодняшний красный R6.
+  const xml = `<review verdict="Pass" grammar="2">${COVERS}</review>`
+  const red = newReview({ xml, plan: PLAN, frd: FRD, map: MAP })
+  assert.equal(red.ok, false)
+  assert.match(red.error.detail, /R6 узел .*fruits\.html без своей команды/)
+
+  // Тот же артефакт при ответе `accept` на диске — зелёный: убрать операнд `answers`, и он снова
+  // красный, то есть оператора спрашивают второй раз о том, что он уже решил.
+  const green = newReview({ xml, plan: PLAN, frd: FRD, map: MAP, answers: waiverAnswers(LIST, "accept") })
+  assert.equal(green.ok, true, green.ok ? "" : green.error.detail)
+
+  // Waiver — это именно `accept`: «заведу сьют» полосу не пропускает, и шаг 11 остаётся страховкой.
+  const suite = newReview({ xml, plan: PLAN, frd: FRD, map: MAP, answers: waiverAnswers(LIST, "suite") })
+  assert.equal(suite.ok, false)
+})
+
+// Карта формы quarkus-rest-json-app-v2-t3, ВЫПИСКА ДОСЛОВНО (appgraph.xml: строки 1, 3-4, 44, 54-55,
+// 79, 108, 110): fruit-card.html в ней НЕТ и быть не может — карта построена до того, как файл создан.
+const APPGRAPH_T3 = `<appgraph grammar="4" modules="17" components="2" isolated="7" levels="4">
+  <suite id="unit" kind="unit" cmd="mvn test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <suite id="component-native" kind="component" cmd="mvn verify -Pnative" one="-Dit.test={class}" path="src/test/java" match="*IT.java"/>
+  <module path="${RESOURCE}" pkg="org.acme.rest.json" component="c1" level="3" fanin="2" fanout="1">
+    <test path="src/test/java/org/acme/rest/json/FruitResourceTest.java" suite="unit"/>
+    <test path="src/test/java/org/acme/rest/json/FruitResourceIT.java" suite="component-native"/>
+  </module>
+  <module path="${LIST}" component="c1" level="1" fanin="0" fanout="1"/>
+  <module path="src/test/java/org/acme/rest/json/FruitResourceTest.java" pkg="org.acme.rest.json" kind="test" suite="unit" component="c1" level="2" fanin="1" fanout="1"/>
+  <edge from="${LIST}" to="${RESOURCE}" via="url: '/fruits'," by="use"/>
+  <edge from="src/test/java/org/acme/rest/json/FruitResourceTest.java" to="${RESOURCE}" via=".when().get(&quot;/fruits&quot;)" by="use"/>
+</appgraph>`
+
+test("шов 6: R6 не судит создаваемый узел ВОВСЕ — операнда нет ни у одной половины", () => {
+  // Замена над сохранёнными артефактами t3 (0 токенов) показала это: R6 краснел на fruit-card.html —
+  // узле с `new: true`, которого в карте нет и никогда не будет, потому что карта старше файла.
+  // Узел уходит из правила целиком и ОДНИМ выражением: убрать `!n.new` из askedNodes — и роль,
+  // ответившая наряду дословно (наряд про этот узел не спрашивает), получает блокер обратно.
+  const map = parseMap(APPGRAPH_T3)
+  assert.equal(map.nodes.has(CARD), false, "создаваемого узла в карте нет по построению")
+
+  const xml = `<review verdict="Reject" grammar="2">${COVERS}
+    <blocker code="unverifiable-node" node="${LIST}" evidence="S1">ни одна команда сценария не открывает страницу</blocker>
+  </review>`
+  const r = newReview({ xml, plan: PLAN, frd: FRD, map })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+
+  // Наряд и правило спрашивают одно множество: создаваемого узла нет ни там, ни там.
+  assert.equal(askedNodes({ plan: PLAN }).map((n) => n.id).includes(CARD), false)
+  assert.deepEqual(createdNodes({ plan: PLAN }).map((n) => n.id), [CARD])
+})
+
+test("шов 10: выдуманный <witness> на создаваемый узел МОЛЧИТ — судить его нечем", () => {
+  // Обратная сторона шва 6, и она стоит отдельного юнита: половина «команда КОПИРУЕТСЯ из списка»
+  // тоже осталась без операнда — команды, исполняющей файл, которого ещё нет, нет ни у кого, а
+  // сочинённая роль не наказывается только потому, что про такой узел не спрашивают. Вернуть цикл R6
+  // по всем узлам плана — и строка снова судится.
+  const map = parseMap(APPGRAPH_T3)
+  const xml = `<review verdict="Reject" grammar="2">${COVERS}
+    <witness node="${CARD}" cmd="npx playwright test"/>
+    <blocker code="unverifiable-node" node="${LIST}" evidence="S1">ни одна команда сценария не открывает страницу</blocker>
+  </review>`
+  const r = newReview({ xml, plan: PLAN, frd: FRD, map })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+})
+
+test("шов 7: карта без единой привязки теста мнения не имеет — половина карты молчит", () => {
+  // Форма eddi: 92 узла, ни одного <test> внутри модуля. Выписка карты дословная (appgraph.xml:
+  // строки 1, 3, 5-6, 28, 69); плана у этой формы на диске нет — прогон встал раньше шага 10, — так
+  // что план здесь построен над её же узлами. Вернуть `if (map)` без проверки nodeTests — и роль
+  // получает блокер на каждом узле ширины, честной починки у неё нет, LOOPS сгорают.
+  const EDDI_MAP = parseMap(`<appgraph grammar="3" modules="92" components="4" isolated="8" levels="6">
+  <paths prefix="src/main/java/ai/labs/eddi/"/>
+  <suite id="unit" kind="unit" cmd="./mvnw test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <suite id="component" kind="component" cmd="./mvnw verify" one="-Dit.test={class}" path="src/test/java" match="*IT.java"/>
+  <module path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" pkg="ai.labs.eddi.backup" component="c1" level="5" fanin="9" fanout="1">
+    <role>Interface defining data source contracts for reading agent, workflow, and snippet backup resources</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" pkg="ai.labs.eddi.backup.impl" component="c1" level="1" fanin="0" fanout="6">
+    <role>REST service for exporting agent configurations to ZIP archives with preview support</role>
+  </module>
+</appgraph>`)
+  assert.equal(EDDI_MAP.nodeTests.size, 0)
+
+  const SRC = "src/main/java/ai/labs/eddi/backup/IResourceSource.java"
+  const EXPORT = "src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"
+  const plan = {
+    grammar: 1,
+    order: [SRC, EXPORT, "scenario:S1"],
+    nodes: [
+      { id: SRC, kind: "code", delta: ["IResourceSource.readGlossaries (Added)"], deps: [], check: [], coveredBy: ["scenario:S1"] },
+      { id: EXPORT, kind: "code", delta: ["RestExportService (Added)"], deps: [SRC], check: [], coveredBy: ["scenario:S1"] },
+      { id: "scenario:S1", kind: "scenario", scenario: "S1", deps: [SRC, EXPORT], check: [{ suite: "unit", cmd: "./mvnw test" }], coveredBy: [] },
+    ],
+  }
+  const frd = parseFrd(`<frd grammar="1" goal="ввести глобальный ресурс глоссарий">
+  <usecase id="UC1" actor="admin" goal="экспортировать глоссарии">
+    <post>архив содержит глоссарии</post>
+    <step n="1">админ запрашивает экспорт</step>
+  </usecase>
+  <delta op="IResourceSource.readGlossaries" form="Added" node="${SRC}"/>
+  <scenario id="S1" uc="UC1" before="экспорт без глоссариев" after="экспорт включает глоссарии" nodes="${SRC} ${EXPORT}"/>
+  <touched path="${EXPORT}" why="добавлена запись {id}.glossary.json в ZIP-архив экспорта"/>
+</frd>`)
+  const xml = `<review verdict="Pass" grammar="2">
+    <covers item="UC1/post" node="scenario:S1"/>
+    <covers item="S1" node="scenario:S1"/>
+    <witness node="${SRC}" cmd="./mvnw test"/>
+    <witness node="${EXPORT}" cmd="./mvnw test"/>
+  </review>`
+  const r = newReview({ xml, plan, frd, map: EDDI_MAP })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
 })

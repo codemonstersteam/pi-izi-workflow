@@ -57,7 +57,10 @@ These hold on every run, whatever the order says.
    commands, and you decide about EACH: `<witness node="…" cmd="…"/>` naming the command that
    executes it — COPIED from that list, character for character, because the machine checks it
    against the plan — or a blocker `unverifiable-node` when none of them does. Silence is not an
-   option the form has. This is a question about reachability, not about outcomes.
+   option the form has. This is a question about reachability, not about outcomes. A node this change
+   CREATES is not in that list and is not a finding — nobody has a command that executes a file which
+   does not exist yet, and the acceptance step measures it as a fact; the order names such nodes in a
+   line of their own.
 5. **Every finding has an ADDRESS, and the KIND of address is fixed by the code.** `node` is an id of
    the plan, character for character, including the `scenario:` ones (R3). `evidence` is a fact of
    your input, of the kind that code takes (R4): `unreachable-antecedent` — the id of the plan node

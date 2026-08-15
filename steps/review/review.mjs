@@ -11,6 +11,10 @@
 // EXTERNAL_DEPENDENCY: steps/intake/frd.mjs — parseFrd, done by the CALLER and handed in. The FRD's
 //             grammar is the intake slice's, and a second reader of it here would be a second
 //             grammar to keep in step.
+// EXTERNAL_DEPENDENCY: steps/ripple/ripple.mjs — waiverFor, the resolver that OWNS the text of step
+//             6's gate question. R6 reads the operator's `accept` with the same expression the gate
+//             asked it with; a second reader of `.agent/answers.md` here would be a second opinion on
+//             what the operator answered.
 // EXTERNAL_DEPENDENCY: steps/review/critic.md — the role states the same two codes in its LAW, and
 //             review.test.mjs fails when the role and CODES disagree: the role is what the model
 //             reads, CODES is what runs.
@@ -23,11 +27,17 @@
 //             CODE_CULPRIT · CODE_OWNER · CODE_EVIDENCE · OPERATOR_NOTE — the four functions of a code
 //             frdIds(frd) -> Set<string> — every id the FRD offers as an address; also the input
 //               steps/intake/frd.mjs::checkFrd's F9 resolves a rewind's evidence against
+//             askedNodes({ plan, answers }) -> node[] — the ONE set step 11 asks the role about, read
+//               by R6 here and by the order (ext/index.mjs::reviewForm)
+//             createdNodes({ plan }) -> node[] — the nodes this change creates, named by the order in
+//               a line of their own so their absence from askedNodes is a fact, not an oversight
 //             parseReview(xml) -> { verdict, blockers[] }
-//             newReview({ xml, plan, frd }) -> Result<{ verdict, blockers[] }, cls>
+//             newReview({ xml, plan, frd, map, answers }) -> Result<{ verdict, blockers[] }, cls>
 
 import { ok, err } from "../../core/result.mjs"
 import { attrs, elem, tag } from "../../core/xml.mjs"
+import { reachedBy } from "../../core/suites.mjs"
+import { waiverFor } from "../ripple/ripple.mjs"
 
 // 2 — D21: `<covers item node/>`, the checklist the role fills instead of judging "as a whole", and
 //     the three codes it makes expressible. Additive: a grammar-1 file is a grammar-2 file with no
@@ -125,7 +135,7 @@ export const OPERATOR_NOTE = Object.freeze({
   // The three honest ends of an unverifiable node (docs/review.md §6; live run 508d74fa's diagnosis)
   // — none of them a machine repair, which is the whole reason this code's owner is `operator` and not
   // step 6.
-  "unverifiable-node": "чинится оператором: ни одна команда сценария не наблюдает узел, а требование не гасят удалением его из FRD — три честных выхода: 1) завести сьют, исполняющий узел, и перезапустить полосу; 2) снять требование правкой TASK.md/BRD (не FRD) и перезапустить; 3) принять неверифицируемость сознательно — механизма waiver этот наряд не заводит, повторный прогон упрётся в ту же остановку",
+  "unverifiable-node": "чинится оператором: ни одна команда сценария не наблюдает узел, а требование не гасят удалением его из FRD — три честных выхода: 1) завести сьют, исполняющий узел, и перезапустить полосу; 2) снять требование правкой TASK.md/BRD (не FRD) и перезапустить; 3) принять неверифицируемость сознательно — ответом accept на гейте шага 6. Про этот узел там спрашивали: блокер здесь значит, что ответа accept на диске (.agent/answers.md) нет",
 })
 
 const VERDICTS = Object.freeze(["Pass", "Reject"])
@@ -276,39 +286,52 @@ export function autoFindings({ frd } = {}) {
   })).filter((b) => b.evidence)
 }
 
-// FUNCTION_CONTRACT: reachedBy — what a suite's tests can observe, walked over the map's edges
-//   Input:        map — parseMap's parse; suite — a suite id
-//   Dependencies: —
-//   Antecedent:   map may be null and the suite unknown — both answer an empty set
-//   Consequent:   success: Set<path> — the tests of that suite and everything their execution
-//                          travels to along `<edge from to>`. The direction is the one the map
-//                          records: `from` uses `to`, so a test reaches what it calls, and a page
-//                          calling an endpoint does NOT make the endpoint's test reach the page
+// FUNCTION_CONTRACT: askedNodes — the nodes step 11 ASKS the role about, in ONE expression
+//   Input:        { plan, answers }
+//                 plan    — the parsed `.agent/plan-index.json` object
+//                 answers — [{ question, text }] as core/answers.mjs reads them off disk
+//   Dependencies: waiverFor (steps/ripple/ripple.mjs) — the resolver that OWNS step 6's gate question
+//   Antecedent:   any values — absences read as empty, never as "everything"
+//   Consequent:   success: the plan's `code` nodes whose own `check` is empty, MINUS the two the rule
+//                          has no operand for: a node this change CREATES (`new` — the map predates
+//                          the file, so no command of the map can be shown to reach it; verifiability
+//                          of a created node is step 16's fact) and a node whose unverifiability the
+//                          operator ACCEPTED at step 6's gate (asking again offers no exit)
 //                 failure: none — total
 //   Purity:       pure
-export function reachedBy(map, suite) {
-  const seen = new Set()
-  if (!map || !suite) return seen
-  const out = new Map()
-  for (const e of map.edges || []) {
-    if (!out.has(e.from)) out.set(e.from, [])
-    out.get(e.from).push(e.to)
-  }
-  const queue = []
-  for (const rows of (map.nodeTests || new Map()).values()) {
-    for (const t of rows || []) if (t.suite === suite && t.path) queue.push(t.path)
-  }
-  while (queue.length) {
-    const at = queue.shift()
-    if (seen.has(at)) continue
-    seen.add(at)
-    for (const next of out.get(at) || []) queue.push(next)
-  }
-  return seen
+//   Interface:    askedNodes({ plan, answers }) -> node[]
+//   BUG_FIX_CONTEXT: D23 wrote this set TWICE and the two copies drifted. The order
+//                 (ext/index.mjs::reviewForm) subtracted both the created node and the accepted one;
+//                 R6 subtracted only the accepted one, and `!n.new` guarded just the map's half of the
+//                 rule. A role that answered the order VERBATIM was then told
+//                 `R6 узел …/fruit-card.html без своей команды` — the order had stopped naming the
+//                 created node while the rule went on judging it. Reproduced by substitution over the
+//                 saved artifacts of runbox/quarkus-rest-json-app-v2-t3. The order and the rule read
+//                 this one expression now: what the role is asked and what the role is judged by
+//                 cannot disagree, because there is nothing left to disagree with.
+export function askedNodes({ plan, answers = [] } = {}) {
+  return (((plan && plan.nodes) || [])).filter((n) =>
+    n && n.kind === "code" && !((n.check || []).length) && !n.new &&
+    waiverFor({ node: n.id, answers }).word !== "accept")
 }
 
+// FUNCTION_CONTRACT: createdNodes — the nodes of the same list this change CREATES
+//   Input:        { plan } — the parsed `.agent/plan-index.json` object
+//   Dependencies: —
+//   Antecedent:   any value — absences read as empty
+//   Consequent:   success: the `code` nodes with an empty `check` of their own that carry `new`, i.e.
+//                          exactly what askedNodes drops for want of an operand. The order names them
+//                          in a line of their own: a node that vanished from the checklist with no
+//                          word reads as an oversight, and an oversight is what a role repairs by
+//                          inventing a finding
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    createdNodes({ plan }) -> node[]
+export const createdNodes = ({ plan } = {}) =>
+  (((plan && plan.nodes) || [])).filter((n) => n && n.kind === "code" && !((n.check || []).length) && n.new)
+
 // FUNCTION_CONTRACT: newReview — the critic's file judged as a verdict the band can act on
-//   Input:        { xml, plan, frd, map }
+//   Input:        { xml, plan, frd, map, answers }
 //                 xml  — the staged review as the role wrote it
 //                 plan — the parsed `.agent/plan-index.json` object (io reads the JSON)
 //                 frd  — parseFrd's parse of `.agent/frd.xml`
@@ -316,7 +339,12 @@ export function reachedBy(map, suite) {
 //                        reachability operand: `nodeTests` says which tests a module has, `edges`
 //                        say where a test's execution can travel. With no map the half stays silent
 //                        (no sources, no judgement — the device `known: null` uses in steps/design)
-//   Dependencies: parseReview, frdIds, CODES, CODE_CULPRIT, CODE_OWNER, CODE_EVIDENCE
+//                 answers — [{ question, text }] as core/answers.mjs reads them off disk, the SAME
+//                        operand steps/plan/plan.mjs::newPlanIndex takes. It carries the operator's
+//                        waivers from step 6's gate; without it R6 stops the band on a node whose
+//                        unverifiability the operator already accepted
+//   Dependencies: parseReview, frdIds, owedItems, askedNodes, CODES, CODE_CULPRIT, CODE_OWNER,
+//                 CODE_EVIDENCE, reachedBy
 //   Antecedent:   any values — every absence below is a named refusal, never a default
 //   Consequent:   success: { verdict, blockers[{ code, node, evidence, culprit, owner, text }] } —
 //                          `culprit` and `owner` derived here, never read from the role's file
@@ -325,7 +353,7 @@ export function reachedBy(map, suite) {
 //                          "invalid-review" — R1..R4; the detail is the blockers, joined the way
 //                                             newBrd/newDesign join theirs, and it rides in FEEDBACK
 //   Purity:       pure
-export function newReview({ xml, plan, frd, map = null } = {}) {
+export function newReview({ xml, plan, frd, map = null, answers = [] } = {}) {
   const parsed = parseReview(xml)
   if (!parsed.found) return err("empty", "в staging нет элемента <review> — роль не написала артефакт")
 
@@ -428,8 +456,10 @@ export function newReview({ xml, plan, frd, map = null } = {}) {
   // against the plan. Whether that command would actually turn red stays step 16's fact — this rule
   // is about reachability, and the residual risk of a false witness is named, not hidden.
   const nodeById = new Map(((plan && plan.nodes) || []).map((n) => [(n && n.id) || "", n]))
-  for (const n of ((plan && plan.nodes) || [])) {
-    if (!n || n.kind !== "code" || ((n.check || []).length)) continue
+  // The SAME expression the order asked with (askedNodes, above): the node the operator already
+  // accepted at step 6's gate and the node this change creates are outside the rule, not outside half
+  // of it, and they are outside it in one place.
+  for (const n of askedNodes({ plan, answers })) {
     const mine = parsed.witness.filter((w) => w.node === n.id)
     const blamed = parsed.blockers.some((b) => b.node === n.id)
     if (!mine.length && !blamed) {
@@ -455,7 +485,17 @@ export function newReview({ xml, plan, frd, map = null } = {}) {
     //   critic closed `…/fruits.html` — a static AngularJS page — with `mvn verify -Pnative`, a java
     //   suite that never opens a page, and both verdicts were Pass. The page's `fanin="0"` was in the
     //   map all along: no test leads to it, and nothing but a role's word said otherwise.
-    if (map) {
+    //
+    // ONE MAP THIS HALF HAS NO OPERAND FOR, and silence is the honest answer: a map that binds NO
+    // test to any node at all (`nodeTests.size === 0`). "No suite reaches this node" is then
+    // indistinguishable from "nobody wrote down which tests exist" — measured on runbox/eddi, where
+    // `if (map)` alone reddened all 16 nodes of the width, the role had no honest repair and the LOOPS
+    // burned out (standards/code.md, constraint 2). The other half — the command is COPIED from the
+    // list — keeps judging such a node.
+    // The node this change CREATES has no operand for EITHER half, and it left the rule before this
+    // line: it is not in askedNodes at all (see its BUG_FIX_CONTEXT), so a `!n.new` guard here would
+    // be dead code and, worse, a second copy of that decision.
+    if (map && (map.nodeTests || new Map()).size) {
       const suites = new Set(checks.filter((c) => c.cmd === mine[0].cmd).map((c) => c.suite).filter(Boolean))
       const reachable = suites.size && [...suites].some((id) => reachedBy(map, id).has(n.id))
       if (!reachable) {

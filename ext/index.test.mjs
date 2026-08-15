@@ -20,6 +20,13 @@ import { join } from "node:path"
 import { Compile } from "typebox/compile"
 import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, reviewForm, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
+// D23: the gate of step 6 — its question is a constant of the ripple slice, and the answer travels in
+// the format core/answers.mjs owns.
+import { BLIND_STEM, BLIND_TAIL } from "../steps/ripple/ripple.mjs"
+import { newExchange } from "../core/answers.mjs"
+// D23-11: наряд и правило шага 11 читают ОДНО выражение — тест держит их за одно и то же.
+import { askedNodes } from "../steps/review/review.mjs"
+import { parseFrd } from "../steps/intake/frd.mjs"
 import { checkRoutes } from "../steps/design/routes.mjs"
 import { checkGraph } from "../steps/design/nodes.mjs"
 import { DEFAULT_BUDGETS } from "../core/budgets.mjs"
@@ -1091,6 +1098,501 @@ test("reviewForm: строка {UNCHECKED} несёт юниты узла, а н
   assert.match(f.unchecked, /делает:/)
   assert.match(f.unchecked, /1\. клик -> GET \/x/)
   assert.match(f.unchecked, /2\. 200 -> карточка/)
+})
+
+// --- D23: гейт шага 6 — узел изменения, которого не исполняет ни один сьют ------------------------
+//
+// io трёх рельс. Вопрос ОПЕРАТОРУ (роли здесь нет: артефакт зелёный, сьюта нет у РЕПОЗИТОРИЯ),
+// остановка на `suite`/`drop` и проход на `accept`. Жёсткое условие проверяется отдельно: на КРАСНОМ
+// checkFrd гейт молчит — иначе оператора спрашивают про артефакт, который роль ещё перепишет.
+const GATE_MAP = `<appgraph grammar="4" modules="4">
+  <suite id="unit" kind="unit" cmd="mvn test" one="-Dtest={class}" path="src/test" match="*Test.java"/>
+  <module path="src/CardResource.java" kind="rest">
+    <api name="GET /card"/>
+    <test path="src/test/CardResourceTest.java" suite="unit"/>
+  </module>
+  <module path="src/card.html"/>
+  <module path="src/test/CardResourceTest.java" kind="test" suite="unit"/>
+  <edge from="src/test/CardResourceTest.java" to="src/CardResource.java" via=".when().get(&quot;/card&quot;)" by="use"/>
+  <edge from="src/card.html" to="src/CardResource.java" via="url: '/card'" by="use"/>
+</appgraph>`
+const GATE_FRD = (goal = "карточка по имени") => `<frd grammar="1" goal="${goal}">
+  <usecase id="UC1" actor="user" goal="увидеть карточку">
+    <post>карточка отображена</post>
+    <step n="1">пользователь открывает карточку</step>
+  </usecase>
+  <failures found="no" why="изменение не вводит кодов отказа"/>
+  <delta op="GET /card" form="Added" node="src/CardResource.java"/>
+  <scenario id="S1" uc="UC1" before="карточки нет" after="карточка есть" nodes="src/card.html src/CardResource.java"/>
+  <touched path="src/card.html" why="страница показывает карточку"/>
+</frd>`
+const gateRoot = (frd = GATE_FRD()) => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  writeFileSync(join(root, ".agent", "appgraph.xml"), GATE_MAP)
+  writeFileSync(join(root, ".agent", "staging", "frd.xml"), frd)
+  return root
+}
+// Ответ пишется тем же путём, каким его пишет izi_answer — через формат core/answers.mjs.
+const answerOnDisk = (root, question, text) =>
+  writeFileSync(join(root, ".agent", "answers.md"), newExchange([{ n: 1, question, text }]).value)
+
+test("шов 8: гейт шага 6 — ask без ответа, стоп на suite/drop, проход на accept", () => {
+  const root = gateRoot()
+  const asked = `${BLIND_STEM("src/card.html")}${BLIND_TAIL}`
+  // Хост валидирует ВЫХОД: поле, которого нет в схеме, роняет прогон на «Invalid output from
+  // checkFrd» — тот же класс, что дважды стоил прогона на `budgets`. Проверяется каждая рельса.
+  const schema = Compile(checkFrd.output)
+  const valid = (out) => { assert.equal(schema.Check(out), true, JSON.stringify(out)); return out }
+
+  // 1. Ответа нет: рельса ОПЕРАТОРА. FRD не промотирован — промоушен делает workflow после гейта.
+  const ask = valid(checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root)))
+  assert.equal(ask.ok, false)
+  assert.equal(ask.ask, true)
+  assert.deepEqual(ask.items, [asked])
+  assert.equal(ask.subject, asked)
+  assert.match(ask.why, /src\/card\.html/)
+  assert.equal(ask.blockers, undefined, "это не блокер формы: роль на этом не пере-делегируют")
+  assert.equal(existsSync(join(root, ".agent", "frd.xml")), false)
+
+  // 2. `suite` — полоса встаёт, и это НЕ вопрос и НЕ блокер роли: чинит человек.
+  answerOnDisk(root, asked, "suite")
+  const stop = valid(checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root)))
+  assert.equal(stop.ok, false)
+  assert.equal(stop.stop, true)
+  assert.equal(stop.ask, undefined)
+  assert.match(stop.why, /заведи сьют, исполняющий src\/card\.html/)
+
+  // 3. `drop` — та же остановка, другой честный выход: правится TASK.md/BRD, не FRD.
+  answerOnDisk(root, asked, "drop")
+  const drop = valid(checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root)))
+  assert.equal(drop.stop, true)
+  assert.match(drop.why, /TASK\.md\/BRD \(НЕ FRD\)/)
+
+  // 4. `accept` — полоса идёт дальше, и число принятых узлов названо.
+  answerOnDisk(root, asked, "accept")
+  const green = valid(checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root)))
+  assert.equal(green.ok, true, green.ok ? "" : green.blockers || green.why)
+  assert.equal(green.waived, 1)
+  assert.equal(green.ask, undefined)
+
+  // 5. Ответ вне словаря — пере-спрос с ПРИЧИНОЙ: текст новый, значит пауза придёт.
+  answerOnDisk(root, asked, "ну ладно")
+  const again = valid(checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root)))
+  assert.equal(again.ask, true)
+  assert.notEqual(again.items[0], asked)
+  assert.match(again.items[0], /ну ладно/)
+})
+
+test("гейт срабатывает ТОЛЬКО после зелёного checkFrd: на красной проверке вопроса нет", () => {
+  // Тот же слепой узел, но артефакт красный по F-правилу: узла `src/invented.java` карта не знает.
+  const broken = GATE_FRD().replace('nodes="src/card.html src/CardResource.java"', 'nodes="src/card.html src/invented.java"')
+  const root = gateRoot(broken)
+  const r = checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root))
+  assert.equal(r.ok, false)
+  assert.ok(r.blockers, "красная проверка возвращает блокеры роли")
+  assert.equal(r.ask, undefined, "оператора не спрашивают про артефакт, который роль ещё перепишет")
+  assert.equal(r.stop, undefined)
+
+  // Ровно та же красная проверка при ответе `accept` на диске остаётся рельсой РОЛИ.
+  answerOnDisk(root, `${BLIND_STEM("src/card.html")}${BLIND_TAIL}`, "accept")
+  const still = checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root))
+  assert.equal(still.ok, false)
+  assert.ok(still.blockers)
+  assert.equal(still.waived, undefined)
+})
+
+test("шов 9: {UNCHECKED} спрашивает про узел, а про два множества, о которых не спрашивают, говорит", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "frd.xml"), FRD_R)
+  writeFileSync(join(root, ".agent", "plan-index.json"), JSON.stringify({
+    grammar: 2,
+    order: ["src/page.html", "src/card.html", "scenario:S1"],
+    nodes: [
+      { id: "src/page.html", kind: "code", new: false, delta: [], dod: ["клик -> GET /x"], deps: [], check: [], coveredBy: ["scenario:S1"] },
+      { id: "src/card.html", kind: "code", new: true, delta: ["GET /card (Added)"], dod: [], deps: [], check: [], coveredBy: ["scenario:S1"] },
+      { id: "scenario:S1", kind: "scenario", scenario: "S1", deps: [], check: [{ suite: "unit", cmd: "mvn test" }], coveredBy: [] },
+    ],
+  }))
+
+  // Создаваемый узел спрошенным не бывает: до него не может доходить ни одна команда карты — карта
+  // старше файла (steps/review/review.mjs::askedNodes). Но и молча пропасть он не может: строка
+  // наряда называет его ФАКТОМ шага 16, иначе пропажа читается как недосмотр и роль чинит её сама.
+  const before = reviewForm.run({}, ctx(root))
+  assert.match(before.unchecked, /src\/page\.html — своей команды нет/)
+  assert.equal(/src\/card\.html — своей команды нет/.test(before.unchecked), false)
+  assert.match(before.unchecked, /эти узлы изменение СОЗДАЁТ.*шаг 16.*Блокер unverifiable-node на них не пишется: src\/card\.html/)
+  assert.equal(/принята оператором/.test(before.unchecked), false)
+
+  // Узел с `accept` — тоже, и вместо него одна строка про решение оператора: строка чек-листа,
+  // которую правило не посчитает, тратит внимание роли впустую.
+  answerOnDisk(root, `${BLIND_STEM("src/page.html")}${BLIND_TAIL}`, "accept")
+  const after = reviewForm.run({}, ctx(root))
+  assert.equal(/src\/page\.html — своей команды нет/.test(after.unchecked), false)
+  assert.match(after.unchecked, /неверифицируемость этих узлов принята оператором на шаге 6: src\/page\.html/)
+})
+
+// --- D23-11: наряд и правило спрашивают ОДНО множество (главный io-шов) ---------------------------
+//
+// Форма quarkus-rest-json-app-v2-t3, три артефакта её прогона c6bc2e54 ДОСЛОВНО. Роль здесь не
+// зовётся: её ответ СОБИРАЕТСЯ из выхода reviewForm — `<covers>` на каждую строку {OWED} и
+// `<witness>` на каждую строку {UNCHECKED}, то есть ровно то, о чём наряд спросил, и ничего сверх.
+// Такой ответ обязан пройти review({path}) целиком. D23 давал на нём
+// `R6 узел …/fruit-card.html без своей команды`: множество «о чём спрашивают» было записано дважды,
+// и наряд перестал называть создаваемый узел раньше, чем правило перестало его судить.
+const T3_LIST = "src/main/resources/META-INF/resources/fruits.html"
+const T3_CARD = "src/main/resources/META-INF/resources/fruit-card.html"
+const T3_PLAN = `{
+  "grammar": 1,
+  "mode": "minor",
+  "branch": {
+    "task": "IZI-3",
+    "name": "feature/IZI-3",
+    "base": "main",
+    "source": "operator-answer"
+  },
+  "gaps": [
+    "toggle",
+    "spec"
+  ],
+  "order": [
+    "src/main/java/org/acme/rest/json/FruitResource.java",
+    "src/main/resources/META-INF/resources/fruits.html",
+    "src/main/resources/META-INF/resources/fruit-card.html",
+    "scenario:S2",
+    "scenario:S3"
+  ],
+  "nodes": [
+    {
+      "id": "src/main/java/org/acme/rest/json/FruitResource.java",
+      "kind": "code",
+      "new": false,
+      "delta": [
+        "GET /fruits/{id} (Added)"
+      ],
+      "deps": [],
+      "check": [
+        {
+          "suite": "unit",
+          "cmd": "mvn test -Dtest=FruitResourceTest"
+        },
+        {
+          "suite": "component-native",
+          "cmd": "mvn verify -Pnative -Dit.test=FruitResourceIT"
+        }
+      ],
+      "coveredBy": [
+        "scenario:S3"
+      ]
+    },
+    {
+      "id": "src/main/resources/META-INF/resources/fruits.html",
+      "kind": "code",
+      "new": false,
+      "delta": [
+        "list-page navigation (Added)"
+      ],
+      "deps": [
+        "src/main/java/org/acme/rest/json/FruitResource.java"
+      ],
+      "check": [],
+      "coveredBy": [
+        "scenario:S2"
+      ]
+    },
+    {
+      "id": "src/main/resources/META-INF/resources/fruit-card.html",
+      "kind": "code",
+      "new": true,
+      "delta": [
+        "GET /fruit-card.html (Added)"
+      ],
+      "deps": [
+        "src/main/java/org/acme/rest/json/FruitResource.java"
+      ],
+      "check": [],
+      "coveredBy": [
+        "scenario:S3"
+      ]
+    },
+    {
+      "id": "scenario:S2",
+      "kind": "scenario",
+      "scenario": "S2",
+      "deps": [
+        "src/main/resources/META-INF/resources/fruits.html"
+      ],
+      "check": [
+        {
+          "suite": "unit",
+          "cmd": "mvn test"
+        },
+        {
+          "suite": "component-native",
+          "cmd": "mvn verify -Pnative"
+        }
+      ],
+      "coveredBy": []
+    },
+    {
+      "id": "scenario:S3",
+      "kind": "scenario",
+      "scenario": "S3",
+      "deps": [
+        "src/main/resources/META-INF/resources/fruit-card.html",
+        "src/main/java/org/acme/rest/json/FruitResource.java"
+      ],
+      "check": [
+        {
+          "suite": "unit",
+          "cmd": "mvn test"
+        },
+        {
+          "suite": "component-native",
+          "cmd": "mvn verify -Pnative"
+        }
+      ],
+      "coveredBy": []
+    }
+  ]
+}
+`
+const T3_FRD = `<frd grammar="1" goal="отдельная страница карточки фрукта со своим адресом, отображающая имя и описание">
+  <actor name="browser" kind="human" via="HTTP GET /fruit-card.html, GET /fruits/{id}"/>
+  <actor name="list-page" kind="system" via="HTML navigation link in fruits.html"/>
+
+  <usecase id="UC1" actor="browser" goal="получить данные одного фрукта по идентификатору">
+    <pre>фрукт с таким name существует в коллекции</pre>
+    <post>вернётся JSON с полями name и description одного фрукта, HTTP 200</post>
+    <step n="1">клиент отправляет GET /fruits/{id}, где {id} — имя фрукта</step>
+    <step n="2">FruitResource находит фрукт по name в коллекции</step>
+    <step n="3">FruitResource возвращает JSON {name, description} со статусом 200</step>
+    <ext id="2a" error="FRUIT_NOT_FOUND" outcome="фрукт с таким name не найден — HTTP 404"/>
+  </usecase>
+
+  <usecase id="UC2" actor="browser" goal="перейти на карточку фрукта из списка">
+    <pre>пользователь видит страницу списка фруктов (fruits.html)</pre>
+    <post>клик по имени фрукта открывает страницу карточки /fruit-card.html с параметром id</post>
+    <step n="1">fruits.html рендерит список фруктов, каждое имя — ссылка &lt;a&gt;</step>
+    <step n="2">ссылка ведёт на /fruit-card.html?id=&lt;fruitName&gt;</step>
+    <step n="3">браузер открывает страницу fruit-card.html</step>
+  </usecase>
+
+  <usecase id="UC3" actor="browser" goal="отобразить карточку фрукта">
+    <pre>пользователь открыл /fruit-card.html?id=&lt;fruitName&gt;</pre>
+    <post>на странице отображены name и description фрукта</post>
+    <step n="1">fruit-card.html считывает параметр id из URL</step>
+    <step n="2">страница отправляет GET /fruits/{id}</step>
+    <step n="3">при получении ответа страница отображает name и description</step>
+    <ext id="2a" error="FRUIT_NOT_FOUND" outcome="GET вернул 404 — страница показывает сообщение об отсутствии фрукта"/>
+  </usecase>
+
+  <field name="id" in="GET /fruits/{id}" type="string" domain="any fruit name present in collection" required="yes" error="FRUIT_NOT_FOUND" source="answers.md"/>
+
+  <failure code="FRUIT_NOT_FOUND" status="404" client="отобразить сообщение об отсутствии" operator="—" from="UC1/2a,UC3/2a"/>
+
+  <delta op="GET /fruits/{id}" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java" from="endpoint отсутствует" to="endpoint возвращает Fruit по name (200) или 404"/>
+  <delta op="GET /fruit-card.html" form="Added" node="src/main/resources/META-INF/resources/fruit-card.html" new="yes"/>
+  <delta op="list-page navigation" form="Added" node="src/main/resources/META-INF/resources/fruits.html" from="имя фрукта не кликабельно" to="имя фрукта — ссылка &lt;a href=&quot;/fruit-card.html?id={name}&quot;&gt;"/>
+
+  <scenario id="S1" uc="UC1" before="GET /fruits/{id} не существует — сервер возвращает 404 для любого path-параметра" after="GET /fruits/{id} возвращает JSON с name и description фрукта или 404 при отсутствии" nodes="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <scenario id="S2" uc="UC2" before="fruits.html не содержит ссылок на карточку фрукта" after="имя каждого фрукта в списке — кликабельная ссылка на /fruit-card.html?id={name}" nodes="src/main/resources/META-INF/resources/fruits.html"/>
+  <scenario id="S3" uc="UC3" before="файл fruit-card.html не существует, адрес /fruit-card.html недоступен" after="fruit-card.html загружает фрукт по GET /fruits/{id} и отображает name и description" nodes="src/main/resources/META-INF/resources/fruit-card.html src/main/java/org/acme/rest/json/FruitResource.java"/>
+
+  <touched path="src/main/java/org/acme/rest/json/FruitResource.java" why="добавлен метод findByName() с @PathParam для GET /fruits/{id}"/>
+  <touched path="src/main/resources/META-INF/resources/fruits.html" why="имя фрукта в списке обёрнуто в &lt;a&gt; со ссылкой на карточку"/>
+  <touched path="src/main/resources/META-INF/resources/fruit-card.html" why="новый HTML-файл страницы карточки, загружающий данные по GET /fruits/{id}"/>
+
+  <nfr subject="existing-contracts" fit="format ответа существующих endpoints unchanged" source="brd.md"/>
+</frd>
+`
+const T3_MAP = `<appgraph grammar="3" modules="17" components="2" isolated="7" levels="4">
+  <artifact name="rest-json-quickstart" root="."/>
+  <suite id="unit" kind="unit" cmd="mvn test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <suite id="component-native" kind="component" cmd="mvn verify -Pnative" one="-Dit.test={class}" path="src/test/java" match="*IT.java"/>
+  <build cmd="mvn package"/>
+  <toggles found="no"/>
+  <branching found="no"/>
+  <contract found="no"/>
+  <lang id="(unknown)" files="10" edges="no-rules" routes="no-rules" decls="no-rules"/>
+  <lang id="java" files="9" edges="yes" routes="yes" decls="class,interface,enum,record,method,field"/>
+  <subject name="fruit"/>
+  <subject name="card" found="no"/>
+  <subject name="page"/>
+  <subject name="list"/>
+  <subject name="link"/>
+  <component id="c1" modules="5" heads="src/main/resources/META-INF/resources/fruits.html src/test/java/org/acme/rest/json/FruitResourceIT.java"/>
+  <component id="c2" modules="5" heads="src/main/resources/META-INF/resources/legumes.html src/test/java/org/acme/rest/json/LegumeResourceIT.java"/>
+  <module path=".github/modernize/java-upgrade/hooks/scripts/recordToolUse.ps1" level="1" fanin="0" fanout="0">
+    <role>PowerShell hook script recording tool use events for java-upgrade extension</role>
+  </module>
+  <module path=".github/modernize/java-upgrade/hooks/scripts/recordToolUse.sh" level="1" fanin="0" fanout="0">
+    <role>Bash hook script recording tool use events for java-upgrade extension</role>
+  </module>
+  <module path="src/main/docker/Dockerfile.jvm" level="1" fanin="0" fanout="0">
+    <role>Dockerfile for JVM-mode container image of Quarkus application</role>
+  </module>
+  <module path="src/main/docker/Dockerfile.legacy-jar" level="1" fanin="0" fanout="0">
+    <role>Dockerfile for legacy JAR-mode container image of Quarkus application</role>
+  </module>
+  <module path="src/main/docker/Dockerfile.native" level="1" fanin="0" fanout="0">
+    <role>Dockerfile for native-mode container image of Quarkus application</role>
+  </module>
+  <module path="src/main/docker/Dockerfile.native-micro" level="1" fanin="0" fanout="0">
+    <role>Dockerfile for native micro-base container image of Quarkus application</role>
+  </module>
+  <module path="src/main/java/org/acme/rest/json/Fruit.java" pkg="org.acme.rest.json" component="c1" level="4" fanin="1" fanout="0">
+    <role>POJO class representing a fruit entity</role>
+    <decl kind="class" name="Fruit" sig="public class Fruit"/>
+    <decl kind="method" name="Fruit()" sig="public Fruit()"/>
+    <decl kind="method" name="Fruit(String name, String description)" sig="public Fruit(String name, String description)"/>
+    <decl kind="field" name="name" sig="public String name"/>
+    <decl kind="field" name="description" sig="public String description"/>
+  </module>
+  <module path="src/main/java/org/acme/rest/json/FruitResource.java" pkg="org.acme.rest.json" component="c1" level="3" fanin="2" fanout="1">
+    <role>JAX-RS REST resource managing in-memory fruit collection</role>
+    <api name="DELETE /fruits" kind="http" scope="public" via="@DELETE public Set&lt;Fruit&gt; delete(Fruit fruit)"/>
+    <api name="GET /fruits" kind="http" scope="public" via="@GET public Set&lt;Fruit&gt; list()"/>
+    <api name="POST /fruits" kind="http" scope="public" via="@POST public Set&lt;Fruit&gt; add(Fruit fruit)"/>
+    <decl kind="class" name="FruitResource" sig="public class FruitResource"/>
+    <decl kind="method" name="FruitResource()" sig="public FruitResource()"/>
+    <decl kind="method" name="list()" sig="public Set&lt;Fruit&gt; list()"/>
+    <decl kind="method" name="add(Fruit fruit)" sig="public Set&lt;Fruit&gt; add(Fruit fruit)"/>
+    <decl kind="method" name="delete(Fruit fruit)" sig="public Set&lt;Fruit&gt; delete(Fruit fruit)"/>
+    <test path="src/test/java/org/acme/rest/json/FruitResourceTest.java" suite="unit"/>
+    <test path="src/test/java/org/acme/rest/json/FruitResourceIT.java" suite="component-native"/>
+  </module>
+  <module path="src/main/java/org/acme/rest/json/Legume.java" pkg="org.acme.rest.json" component="c2" level="4" fanin="1" fanout="0">
+    <role>POJO class representing a legume entity</role>
+    <decl kind="class" name="Legume" sig="public class Legume"/>
+    <decl kind="method" name="Legume()" sig="public Legume()"/>
+    <decl kind="method" name="Legume(String name, String description)" sig="public Legume(String name, String description)"/>
+    <decl kind="field" name="name" sig="public String name"/>
+    <decl kind="field" name="description" sig="public String description"/>
+  </module>
+  <module path="src/main/java/org/acme/rest/json/LegumeResource.java" pkg="org.acme.rest.json" component="c2" level="3" fanin="2" fanout="1">
+    <role>JAX-RS REST resource managing in-memory legume collection</role>
+    <api name="GET /legumes" kind="http" scope="public" via="@GET public Response list()"/>
+    <decl kind="class" name="LegumeResource" sig="public class LegumeResource"/>
+    <decl kind="method" name="LegumeResource()" sig="public LegumeResource()"/>
+    <decl kind="method" name="list()" sig="public Response list()"/>
+    <test path="src/test/java/org/acme/rest/json/LegumeResourceTest.java" suite="unit"/>
+    <test path="src/test/java/org/acme/rest/json/LegumeResourceIT.java" suite="component-native"/>
+  </module>
+  <module path="src/main/java/org/acme/rest/json/LoggingFilter.java" pkg="org.acme.rest.json" level="1" fanin="0" fanout="0">
+    <role>JAX-RS provider filter logging incoming HTTP requests</role>
+    <decl kind="class" name="LoggingFilter" sig="public class LoggingFilter"/>
+    <decl kind="method" name="filter(ContainerRequestContext context)" sig="public void filter(ContainerRequestContext context)"/>
+  </module>
+  <module path="src/main/resources/META-INF/resources/fruits.html" component="c1" level="1" fanin="0" fanout="1">
+    <role>AngularJS single-page client for viewing and adding fruits via /fruits API</role>
+  </module>
+  <module path="src/main/resources/META-INF/resources/legumes.html" component="c2" level="1" fanin="0" fanout="1">
+    <role>AngularJS single-page client for viewing legumes via /legumes API</role>
+  </module>
+  <module path="src/test/java/org/acme/rest/json/FruitResourceIT.java" pkg="org.acme.rest.json" kind="test" suite="component-native" component="c1" level="1" fanin="0" fanout="1">
+    <role>Quarkus integration test delegating to FruitResourceTest</role>
+    <decl kind="class" name="FruitResourceIT" sig="public class FruitResourceIT"/>
+  </module>
+  <module path="src/test/java/org/acme/rest/json/FruitResourceTest.java" pkg="org.acme.rest.json" kind="test" suite="unit" component="c1" level="2" fanin="1" fanout="1">
+    <role>Quarkus unit test for FruitResource list and add operations</role>
+    <decl kind="class" name="FruitResourceTest" sig="public class FruitResourceTest"/>
+    <decl kind="method" name="testList()" sig="public void testList()"/>
+    <decl kind="method" name="testAdd()" sig="public void testAdd()"/>
+  </module>
+  <module path="src/test/java/org/acme/rest/json/LegumeResourceIT.java" pkg="org.acme.rest.json" kind="test" suite="component-native" component="c2" level="1" fanin="0" fanout="1">
+    <role>Quarkus integration test delegating to LegumeResourceTest</role>
+    <decl kind="class" name="LegumeResourceIT" sig="public class LegumeResourceIT"/>
+  </module>
+  <module path="src/test/java/org/acme/rest/json/LegumeResourceTest.java" pkg="org.acme.rest.json" kind="test" suite="unit" component="c2" level="2" fanin="1" fanout="1">
+    <role>Quarkus unit test for LegumeResource list operation</role>
+    <decl kind="class" name="LegumeResourceTest" sig="public class LegumeResourceTest"/>
+    <decl kind="method" name="testList()" sig="public void testList()"/>
+  </module>
+  <edge from="src/main/java/org/acme/rest/json/FruitResource.java" to="src/main/java/org/acme/rest/json/Fruit.java" via="private Set&lt;Fruit&gt; fruits = Collections.newSetFromMap(Collections.synchronizedMap(new LinkedHashMap&lt;&gt;()));"/>
+  <edge from="src/main/java/org/acme/rest/json/LegumeResource.java" to="src/main/java/org/acme/rest/json/Legume.java" via="private Set&lt;Legume&gt; legumes = Collections.synchronizedSet(new LinkedHashSet&lt;&gt;());"/>
+  <edge from="src/test/java/org/acme/rest/json/FruitResourceIT.java" to="src/test/java/org/acme/rest/json/FruitResourceTest.java" via="public class FruitResourceIT extends FruitResourceTest {"/>
+  <edge from="src/test/java/org/acme/rest/json/LegumeResourceIT.java" to="src/test/java/org/acme/rest/json/LegumeResourceTest.java" via="public class LegumeResourceIT extends LegumeResourceTest {"/>
+  <edge from="src/main/resources/META-INF/resources/fruits.html" to="src/main/java/org/acme/rest/json/FruitResource.java" via="url: '/fruits'," by="use"/>
+  <edge from="src/main/resources/META-INF/resources/legumes.html" to="src/main/java/org/acme/rest/json/LegumeResource.java" via="url: '/legumes'" by="use"/>
+  <edge from="src/test/java/org/acme/rest/json/FruitResourceTest.java" to="src/main/java/org/acme/rest/json/FruitResource.java" via=".when().get(&quot;/fruits&quot;)" by="use"/>
+  <edge from="src/test/java/org/acme/rest/json/LegumeResourceTest.java" to="src/main/java/org/acme/rest/json/LegumeResource.java" via=".when().get(&quot;/legumes&quot;)" by="use"/>
+  <surface>
+    <api name="DELETE /fruits" kind="http" at="src/main/java/org/acme/rest/json/FruitResource.java"/>
+    <api name="GET /fruits" kind="http" at="src/main/java/org/acme/rest/json/FruitResource.java"/>
+    <api name="POST /fruits" kind="http" at="src/main/java/org/acme/rest/json/FruitResource.java"/>
+    <api name="GET /legumes" kind="http" at="src/main/java/org/acme/rest/json/LegumeResource.java"/>
+  </surface>
+  <systems/>
+  <isolated path=".github/modernize/java-upgrade/hooks/scripts/recordToolUse.ps1"/>
+  <isolated path=".github/modernize/java-upgrade/hooks/scripts/recordToolUse.sh"/>
+  <isolated path="src/main/docker/Dockerfile.jvm"/>
+  <isolated path="src/main/docker/Dockerfile.legacy-jar"/>
+  <isolated path="src/main/docker/Dockerfile.native"/>
+  <isolated path="src/main/docker/Dockerfile.native-micro"/>
+  <isolated path="src/main/java/org/acme/rest/json/LoggingFilter.java"/>
+</appgraph>
+`
+
+const t3Root = () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  writeFileSync(join(root, ".agent", "plan-index.json"), T3_PLAN)
+  writeFileSync(join(root, ".agent", "frd.xml"), T3_FRD)
+  writeFileSync(join(root, ".agent", "appgraph.xml"), T3_MAP)
+  // Гейт шага 6 на этой форме спрашивает про fruits.html — узел ширины с fanin="0", до которого не
+  // доходит ни один сьют, — и до шага 11 полоса доходит ТОЛЬКО с ответом `accept`: `suite` и `drop`
+  // останавливают её там же (steps/ripple/ripple.mjs::BLIND_TAIL). Прогон c6bc2e54 старше гейта,
+  // поэтому ответ дописан здесь: без него у формы нет пути до шага 11 вовсе.
+  answerOnDisk(root, `${BLIND_STEM(T3_LIST)}${BLIND_TAIL}`, "accept")
+  return root
+}
+
+// Ответ роли, собранный ИЗ НАРЯДА. Ни один id здесь не набран руками: пункты приходят строками
+// {OWED}, узлы без своей команды — строками {UNCHECKED} вместе со своими командами-кандидатами.
+// Узел для `<covers>` роль выбирает по FRD (LAW 2 роли, правило R7): пункт живёт на узлах своего
+// сценария, а для `nfr:` узла у FRD нет вовсе.
+const orderIds = (block, mark) => String(block).split("\n")
+  .filter((l) => l.includes(mark))
+  .map((l) => l.split(" — ")[0].trim())
+const answerTheOrder = (form, plan, frd) => {
+  const planIds = new Set((plan.nodes || []).map((n) => n.id))
+  const nodeFor = (item) => {
+    const uc = item.includes("/") ? item.split("/")[0] : null
+    const own = (frd.scenarios || []).filter((s) => (uc ? String(s.uc).trim() === uc : String(s.id).trim() === item))
+    const cands = own.flatMap((s) => [`scenario:${String(s.id).trim()}`, ...String(s.nodes || "").split(/\s+/).filter(Boolean)])
+    return cands.find((id) => planIds.has(id)) || [...planIds][0]
+  }
+  const covers = orderIds(form.owed, " — ").map((id) => `<covers item="${id}" node="${nodeFor(id)}"/>`)
+  const witness = String(form.unchecked).split("\n")
+    .filter((l) => l.includes("своей команды нет; закрывают: "))
+    .map((l) => {
+      const id = l.split(" — ")[0].trim()
+      const cmd = l.split("закрывают: ")[1].split(" · ")[0].trim()
+      return `<witness node="${id}" cmd="${cmd}"/>`
+    })
+  return `<review verdict="Pass" grammar="2">\n  ${[...covers, ...witness].join("\n  ")}\n</review>`
+}
+
+test("шов 11: роль, ответившая наряду ДОСЛОВНО, проходит шаг 11 на форме t3", () => {
+  const root = t3Root()
+  const plan = JSON.parse(T3_PLAN)
+  const answers = [{ n: 1, question: `${BLIND_STEM(T3_LIST)}${BLIND_TAIL}`, text: "accept" }]
+  const form = reviewForm.run({}, ctx(root))
+
+  // О чём наряд спрашивает — то правило и считает. Одно выражение на обоих концах: верни `!n.new` в
+  // любую одну сторону, и эти два множества разойдутся (D23).
+  assert.deepEqual(orderIds(form.unchecked, "своей команды нет"), askedNodes({ plan, answers }).map((n) => n.id))
+  // На этой форме спрашивать не о чем: fruits.html принят оператором, fruit-card.html создаётся.
+  assert.deepEqual(askedNodes({ plan, answers }), [])
+  assert.match(form.unchecked, new RegExp(`принята оператором на шаге 6: ${T3_LIST}`))
+  assert.match(form.unchecked, new RegExp(`эти узлы изменение СОЗДАЁТ.*${T3_CARD}`))
+
+  writeFileSync(join(root, ".agent", "staging", "review.xml"), answerTheOrder(form, plan, parseFrd(T3_FRD)))
+  const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
+  assert.equal(r.ok, true, r.ok ? "" : r.blockers)
+  assert.equal(r.verdict, "Pass")
 })
 
 // --- D15: the hats, and the one that must stay unique --------------------------------------------

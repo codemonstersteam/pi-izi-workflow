@@ -624,10 +624,14 @@ async function graph() {
 //   Antecedent:   step 5 wrote .agent/appgraph.xml; steps/intake/order.tpl exists in the run's cwd;
 //                 LOOPS ≥ 1
 //   Consequent:   success: RETURNS with .agent/frd.xml promoted from staging after a GREEN checkFrd
+//                          and a passed GATE — every node of the change that no suite executes either
+//                          does not exist or was answered `accept` by the operator
 //                 failure: exits — err("blocked") when the map cannot be read or is above the
-//                          reading ceiling (docs/intake.md §3), err(kind) on a role error rail,
-//                          err("escalate") when LOOPS redelegations were spent, carrying the LAST
-//                          guardrail diagnosis
+//                          reading ceiling (docs/intake.md §3) or when the gate's answer is `suite`
+//                          or `drop` (the repair is a human's, and the FRD is not promoted),
+//                          err(kind) on a role error rail, err("question") when the trips to the
+//                          operator ran out on the gate, err("escalate") when LOOPS redelegations
+//                          were spent, carrying the LAST guardrail diagnosis
 //   Purity:       io (through the host)
 //
 // This step ASKS, and it asks in BATCHES. Frying a requirement without a question degenerates into a
@@ -704,9 +708,33 @@ async function intake(fromCritic) {
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
 
-    const check = await checkFrd({ path: STAGING }); // the check runs ON STAGING, before any promote
+    // The check runs ON STAGING, before any promote — and it carries a SECOND rail now: after a green
+    // FRD the gate asks the OPERATOR about every node of the change no suite of this repository
+    // executes (ext/index.mjs::checkFrd, steps/ripple/ripple.mjs::blindNodes). The loop is copied from
+    // planning(): there is no role to re-delegate to — the artifact is green, the REPOSITORY is what
+    // lacks a suite — so the answer is applied by calling the same host function again over the same
+    // disk. It spends QUESTION_ROUNDS and never LOOPS: a round costs the operator's time.
+    //
+    // WHY THE GATE IS HERE AND NOT AT STEP 8 OR 11: live run 21dd9b34 escalated at step 11 on exactly
+    // this fact, 167 805 tokens and five role launches after it was computable. Steps 7 and 8 are
+    // scripts and cost nothing, so the price of asking here and asking at step 8 is identical — and
+    // the change is first expressed HERE, which is the honest place to stop with an unanswered
+    // question about it.
+    let check = await checkFrd({ path: STAGING });
+    for (let round = 1; check.ask && round <= QUESTION_ROUNDS + 1; round++) {
+      const q = charge({ subject: check.subject, items: check.items });
+      if (q.spent) exit(noRoundsLeft({ subject: check.subject, evidence: check.why || "" }, "intake"));
+      log(`intake: гейт сьютов — круг ${q.n}, узлов без сьюта ${(check.items || []).length} (${check.why || ""})`);
+      await askOperator({ subject: check.subject, items: check.items, evidence: check.why || "" }, q.n, "intake", "intake");
+      check = await checkFrd({ path: STAGING });
+    }
+    // `suite` and `drop` are the operator saying the band must stop: a suite is written by a human and
+    // a requirement is withdrawn in TASK.md/BRD, neither of which any role here can do. The FRD is NOT
+    // promoted — the next run starts from the requirement, not from an artifact nobody can verify.
+    if (check.stop) exit(err("blocked", { subject: check.why, evidence: ".agent/frd.xml не промотирован" }));
     if (check.ok) {
       await promote({ from: STAGING, to: ".agent/frd.xml" });
+      if (check.waived) log(`intake: неверифицируемых узлов принято оператором — ${check.waived}: шаг 11 о них не спросит`);
       log(`intake: deltas=${check.deltas} unknown=${check.unknown} scenarios=${check.scenarios} touched=${check.touched}`);
       // An Unknown is a legal artifact and a REFUSAL of step 7: said out loud here, where the run is
       // still green, rather than discovered later as a missing .agent/mode.

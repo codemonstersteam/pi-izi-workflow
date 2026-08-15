@@ -74,13 +74,13 @@ import { newDigest } from "../steps/scope/digest.mjs"
 import { newGraph, graphXml } from "../steps/graph/graph.mjs"
 import { newFrd, parseFrd, FRD_FORM } from "../steps/intake/frd.mjs"
 import { newMode } from "../steps/weight/weight.mjs"
-import { newRipple } from "../steps/ripple/ripple.mjs"
+import { newRipple, blindNodes, waiverFor } from "../steps/ripple/ripple.mjs"
 import { parseDesign, parseRoutes, expand, assemble, unitsByPath } from "../steps/design/design.mjs"
 import { parseValues, checkValues } from "../steps/design/values.mjs"
 import { parseNodes, checkGraph, cards } from "../steps/design/nodes.mjs"
 import { parseRoutes as parseWorkRoutes, checkRoutes } from "../steps/design/routes.mjs"
 import { newPlanIndex } from "../steps/plan/plan.mjs"
-import { newReview, parseReview, owedItems, autoFindings, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
+import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
@@ -1139,8 +1139,10 @@ export const graphMap = {
     return { ok: true, text: index, bytes: mi.bytes, nodes: mi.nodes, cap: MAP_CAP_BYTES, form: "index", fullBytes: m.bytes }
   },
 }
+// THE GATE OF STEP 6 lives at the END of this function, and only on a GREEN check — see the block
+// after `newFrd` succeeds.
 export const checkFrd = {
-  description: "Judge a staged FRD by steps/intake/frd.mjs::newFrd. Node keys come from .agent/appgraph.xml; a number in a field's domain or an NFR's fit must occur in TASK.md, in the VALUES of operator answers, in a BRD requirement's fit or verify, or in the map itself. When .agent/review.xml carries a Reject, its blockers travel in as `rewind` for F9: a `goal-not-delivered` whose evidence no longer resolves in the new FRD is refused — the subject of a rewind is not repaired by deleting it.",
+  description: "Judge a staged FRD by steps/intake/frd.mjs::newFrd. Node keys come from .agent/appgraph.xml; a number in a field's domain or an NFR's fit must occur in TASK.md, in the VALUES of operator answers, in a BRD requirement's fit or verify, or in the map itself. When .agent/review.xml carries a Reject, its blockers travel in as `rewind` for F9: a `goal-not-delivered` whose evidence no longer resolves in the new FRD is refused — the subject of a rewind is not repaired by deleting it. AFTER a green check, and only then, the gate: a node of the change's width that no suite of the repository executes (steps/ripple/ripple.mjs::blindNodes) is asked about the OPERATOR — ok:false with ask:true carries the questions verbatim; an answer `suite` or `drop` comes back as ok:false with stop:true, `accept` as ok:true with waived:N.",
   input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
   output: {
     type: "object",
@@ -1152,6 +1154,16 @@ export const checkFrd = {
       questions: { type: "number" },
       touched: { type: "number" },
       blockers: { type: "string" },
+      // The gate's three answers, and they are three DIFFERENT rails for the caller: `ask` goes to the
+      // operator (no role is re-delegated — the artifact is green, the repository is not), `stop` ends
+      // the run (the repair is a human's: a suite is written or a requirement is withdrawn), `waived`
+      // is the count of nodes whose unverifiability the operator accepted on purpose.
+      ask: { type: "boolean" },
+      subject: { type: "string" },
+      items: { type: "array", items: { type: "string" } },
+      stop: { type: "boolean" },
+      why: { type: "string" },
+      waived: { type: "number" },
     },
     required: ["ok"],
     additionalProperties: false,
@@ -1187,7 +1199,48 @@ export const checkFrd = {
     const r = newFrd({ xml: readFileSync(at(root, path), "utf8"), nodes: map.nodes, tests: map.tests, entries: map.entries, edges: map.edges, sources, rewind })
     if (!r.ok) return { ok: false, blockers: r.error.detail }
     const v = r.value
-    return { ok: true, deltas: v.deltas.length, unknown: v.unknown, scenarios: v.scenarios.length, questions: v.questions.length, touched: v.touched.length }
+    const seen = { deltas: v.deltas.length, unknown: v.unknown, scenarios: v.scenarios.length, questions: v.questions.length, touched: v.touched.length }
+
+    // THE GATE, and it fires ONLY HERE — after the check came back green. On a red check the rail is
+    // the ROLE's (the FRD is re-delegated with the blockers), and asking the operator about an
+    // artifact the role is still rewriting would spend a trip on a change that no longer exists by the
+    // time the answer lands. The width itself is a function of that artifact.
+    //
+    // BUG_FIX_CONTEXT: live run 21dd9b34 (runbox/quarkus-rest-json-app-v2-t2). The band ran to step 11
+    //   and escalated on `unverifiable-node · …/fruits.html` — a page no suite of the repository
+    //   executes. Both operands of that fact existed the moment this check went green: the map (step 5)
+    //   and the width of the change (this artifact). Between the green check and the escalation stood
+    //   167 805 tokens and five role launches (valuer, designer, router, critic ×2), and none of them
+    //   could have repaired it — a suite is written by a human. The gate stands where the fact first
+    //   becomes relevant, and its rail is the operator's because the repair is the operator's.
+    const blind = blindNodes({ frd: v, map })
+    if (!blind.known || !blind.nodes.length) return { ok: true, ...seen }
+
+    const said = ans.ok ? ans.value : []
+    const decided = blind.nodes.map((node) => ({ node, ...waiverFor({ node, answers: said }) }))
+    const asking = decided.filter((d) => !d.word)
+    if (asking.length) {
+      // The suites and their commands are FACTS ABOUT THE REPOSITORY and travel in `evidence`, never
+      // in the question's text: the text is compared against the stored answer, and a question built
+      // out of values stops matching its own answer when a value changes (run 46edab60).
+      const cmds = (map.suites || []).map((s) => `${s.id}: ${s.cmd || "(без команды)"}`).join(" · ") || "сьютов в карте нет вовсе"
+      return {
+        ok: false,
+        ask: true,
+        subject: asking.map((d) => d.question).join("\n\n"),
+        items: asking.map((d) => d.question),
+        why: `узлов без сьюта: ${asking.map((d) => d.node).join(", ")}`,
+      }
+    }
+
+    const stop = decided.filter((d) => d.word !== "accept")
+    if (stop.length) {
+      const how = (d) => (d.word === "suite"
+        ? `заведи сьют, исполняющий ${d.node}, и перезапусти полосу`
+        : `сними требование правкой TASK.md/BRD (НЕ FRD) по узлу ${d.node} и перезапусти полосу`)
+      return { ok: false, stop: true, why: `оператор ответил на гейте шага 6: ${stop.map((d) => `${d.node} → ${d.word}`).join("; ")}. Что делать: ${stop.map(how).join("; ")}` }
+    }
+    return { ok: true, ...seen, waived: decided.length }
   },
 }
 
@@ -1588,7 +1641,7 @@ export const plan = {
 // (REVIEW_PATH is declared once, beside FRD_PATH — checkFrd's F9 io reads it too.)
 
 export const reviewForm = {
-  description: "The blocker vocabulary AND the checklist of step 11, as data. `codes` from steps/review/review.mjs; `owed` — one row per thing the plan owes the FRD, with a machine-generated id the role copies rather than composes (owedItems); `unchecked` — the plan's code nodes whose own `check` is empty, with the commands of the scenarios that close them. The order SUBSTITUTES all three; a role that had to recall the FRD's contents instead answered as a whole, and three defects passed unremarked (live run c64dbd32).",
+  description: "The blocker vocabulary AND the checklist of step 11, as data. `codes` from steps/review/review.mjs; `owed` — one row per thing the plan owes the FRD, with a machine-generated id the role copies rather than composes (owedItems); `unchecked` — the nodes R6 asks about (steps/review/review.mjs::askedNodes, the SAME expression the rule counts by), each with the commands of the scenarios that close it, followed by one line per set the rule does NOT judge: the nodes this change creates (createdNodes) and the nodes whose unverifiability the operator accepted at step 6's gate. The order SUBSTITUTES all three; a role that had to recall the FRD's contents instead answered as a whole, and three defects passed unremarked (live run c64dbd32).",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -1609,8 +1662,16 @@ export const reviewForm = {
 
     const owed = owedItems(frd, plan).map((r) => `${r.id} — ${r.what}`).join("\n")
     const byId = new Map((plan.nodes || []).map((n) => [n.id, n]))
-    const unchecked = (plan.nodes || [])
-      .filter((n) => n.kind === "code" && !(n.check || []).length)
+    // WHAT THE ORDER ASKS IS WHAT THE RULE COUNTS — one expression, `askedNodes`, imported from the
+    // module that judges (steps/review/review.mjs). The two written separately is D23: the order
+    // stopped naming the node this change CREATES while R6 went on judging it, and a role that
+    // answered the order verbatim got `R6 узел …/fruit-card.html без своей команды`.
+    const said = parsedAnswers(readIfExists(root, ANSWERS_PATH))
+    const answers = said.ok ? said.value : []
+    const waived = (plan.nodes || [])
+      .filter((n) => waiverFor({ node: n.id, answers }).word === "accept")
+      .map((n) => n.id)
+    const unchecked = askedNodes({ plan, answers })
       .map((n) => {
         const cmds = (n.coveredBy || []).flatMap((s) => ((byId.get(s) || {}).check || []).map((c) => c.cmd))
         // The node's OWN units travel beside the candidate commands. Without them the question reads
@@ -1620,7 +1681,17 @@ export const reviewForm = {
         const dod = (n.dod || []).map((u, i) => `\n      ${i + 1}. ${u}`).join("")
         return `${n.id} — своей команды нет; закрывают: ${cmds.length ? cmds.join(" · ") : "ничто"}${dod ? `\n    делает:${dod}` : ""}`
       }).join("\n")
-    return { codes, owed: owed || "(пусто)", unchecked: unchecked || "—" }
+    // Said out loud instead of silently missing: the operator's decision is part of what the critic is
+    // looking at, and a node that vanished from the list with no explanation reads as an oversight.
+    const note = waived.length ? `\nневерифицируемость этих узлов принята оператором на шаге 6: ${waived.join(" · ")}` : ""
+    // The second such line, and it exists for the same reason: a created node is absent from the list
+    // BY THE RULE (askedNodes), not by an oversight, and the role is told so in the words of the fact —
+    // step 16 measures a created node, not step 11.
+    const created = createdNodes({ plan }).map((n) => n.id)
+    const born = created.length
+      ? `\nэти узлы изменение СОЗДАЁТ — своей команды у них нет по построению (карта старше файла), и witness про них не спрашивают: наблюдаемость нового узла меряет шаг 16 фактом «команда была красной до и зелёной после». Блокер unverifiable-node на них не пишется: ${created.join(" · ")}`
+      : ""
+    return { codes, owed: owed || "(пусто)", unchecked: `${unchecked || "—"}${note}${born}` }
   },
 }
 
@@ -1684,7 +1755,10 @@ export const review = {
     // checkGraph treats a missing ripple subgraph.
     const mapPath = at(root, GRAPH_PATH)
     const map = existsSync(mapPath) ? parseMap(readFileSync(mapPath, "utf8")) : null
-    const r = newReview({ xml: readFileSync(at(root, path), "utf8"), plan, frd, map })
+    // The operator's waivers from step 6's gate, read by THE reader of that file — the same call
+    // `plan` makes for the task key. A node answered `accept` is not judged by R6 at all.
+    const said = parsedAnswers(readIfExists(root, ANSWERS_PATH))
+    const r = newReview({ xml: readFileSync(at(root, path), "utf8"), plan, frd, map, answers: said.ok ? said.value : [] })
     if (!r.ok) return { ok: false, blockers: r.error.detail }
 
     // The findings that cost no role call at all, merged AFTER the form was judged: R1 keeps judging

@@ -26,11 +26,20 @@
 // Interface:  GRAMMAR_VERSION — stamped on the artifact
 //             DESIGN_TABLE — weight → how the flag is decided, as data
 //             changeWidth({ frd, tests }) -> Set<path> — the nodes the change makes WORK on
+//             blindNodes({ frd, map }) -> { known, nodes[] } — the width's nodes no suite executes
+//             BLIND_STEM · BLIND_TAIL · WAIVER_WORDS — the gate's question and its vocabulary
+//             waiverFor({ node, answers }) -> { word, question } — the operator's decision, or the ask
 //             newRipple({ xml, frd, mode, map, cap? }) -> Result<Ripple, ...>
+//
+// blindNodes and the waiver are the GATE OF STEP 6, not of step 8: they live here because the set they
+// are counted over is `changeWidth`, and that expression must have one home (standards/code.md §1).
+// Their consumers are ext/index.mjs::checkFrd (asks) and steps/review/review.mjs (R6 stays silent on
+// an accepted node).
 
 import { ok, err } from "../../core/result.mjs"
 import { attrs, elem, esc } from "../../core/xml.mjs"
 import { MAP_CAP_BYTES } from "../intake/map.mjs"
+import { reachedBy, hasOwnCheck } from "../../core/suites.mjs"
 
 export const GRAMMAR_VERSION = 1
 
@@ -88,6 +97,95 @@ export function changeWidth({ frd, tests } = {}) {
   const t = tests || new Set()
   const deltaNodes = (((frd && frd.deltas) || []).map((d) => d && d.node)).filter(Boolean)
   return new Set([...deltaNodes, ...((frd && frd.touched) || [])].filter((p) => p && !t.has(p)))
+}
+
+// FUNCTION_CONTRACT: blindNodes — the nodes of the change no suite of this repository executes
+//   Input:        { frd, map }
+//                 frd — parseFrd's parse (steps/intake/frd.mjs): `deltas`, `touched`
+//                 map — parseMap's parse (steps/intake/map.mjs): `nodes`, `tests`, `nodeTests`,
+//                       `suites`, `edges`
+//   Dependencies: changeWidth, core/suites.mjs (reachedBy, hasOwnCheck)
+//   Antecedent:   any values — a missing frd or map answers `known: false`, never a list
+//   Consequent:   success: { known, nodes[] } — `known: false` when the map binds NO test to any node
+//                          at all: "no suite reaches this node" is then indistinguishable from
+//                          "nobody wrote down which tests exist", and the honest answer is None, not
+//                          "all of them are blind" (standards/code.md, constraint 2). Otherwise
+//                          `nodes` are the paths of `changeWidth` that the map DECLARES (a module the
+//                          change creates has no operand — the map predates the file), that have no
+//                          command of their own, and that no suite's tests reach
+//                 failure: none — total
+//   Purity:       pure
+//
+// COUNTED ONLY OVER THE WIDTH OF THE CHANGE, never over the repository. Measured on the saved
+// artifacts of four forms: blind nodes across the whole repository are 7 / 9 / 9 / 57 on `t1-3` / `t2`
+// / `t3` / `eddi` — noise a gate cannot ask about. Intersected with the width they are 0 / 1 / 1 /
+// None, and the single node on `t2` is `fruits.html`, the node live run 21dd9b34 escalated on at step
+// 11 — 167 805 tokens and five role launches after this fact was computable (backlog D23).
+//
+// EXPORTED and consumed at STEP 6 (ext/index.mjs::checkFrd), not here: the fact is born at step 5
+// (the map) and becomes RELEVANT the moment a change exists, which is step 6's artifact. It lives
+// beside `changeWidth` because that is the one expression of what the change touches, and a gate
+// asking about a different set than the one step 10 cuts tickets from would be a second answer to
+// "what does this change work on".
+export function blindNodes({ frd, map } = {}) {
+  const m = map || {}
+  const nodeTests = m.nodeTests || new Map()
+  if (!nodeTests.size) return Object.freeze({ known: false, nodes: Object.freeze([]) })
+
+  const nodes = m.nodes || new Set()
+  // One walk per suite, not per (node, suite) pair: reachedBy floods the whole graph from the suite's
+  // tests, so its answer is a property of the suite alone.
+  const reach = ((m.suites) || []).map((s) => reachedBy(m, s && s.id))
+  const blind = [...changeWidth({ frd, tests: m.tests || new Set() })]
+    .filter((p) => nodes.has(p))
+    .filter((p) => !hasOwnCheck(m, p))
+    .filter((p) => !reach.some((r) => r.has(p)))
+  return Object.freeze({ known: true, nodes: Object.freeze(blind) })
+}
+
+// THE QUESTION, and why it is a CONSTANT with the path substituted and nothing else. An answer is
+// recognised by comparing the question text stored on disk with the stem below (core/answers.mjs), so
+// a question assembled from variables stops matching its own answer the moment any variable changes —
+// the class of defect that cost run 46edab60 two re-asks of a question the operator had answered
+// (steps/plan/plan.mjs:57-58). The suites and their commands are FACTS ABOUT THE REPOSITORY that
+// change between runs; they travel in `evidence`, never in the text.
+export const BLIND_STEM = (node) =>
+  `Узел «${node}» изменение трогает, но ни один тест-сьют репозитория его не исполняет: своей команды у него нет, и в карте нет пути от тестов ни одного сьюта до него. `
+export const BLIND_TAIL =
+  `Ответь ОДНИМ словом: suite — заведу сьют, исполняющий узел (полоса останавливается сейчас, перезапустишь после); drop — сниму требование правкой TASK.md/BRD (полоса останавливается сейчас); accept — принимаю неверифицируемость сознательно, полоса идёт дальше и шаг 11 об этом узле не спросит.`
+export const WAIVER_WORDS = Object.freeze(["suite", "drop", "accept"])
+
+// The re-ask carries the REFUSED VALUE and the reason, appended to the same stem — so it is a NEW
+// question (askOperator pauses only on one, workflows/izi.js) addressed to the SAME value (the stem
+// is what the resolver matches on). The device and its price are steps/plan/plan.mjs::refused, live
+// run 03b598c7.
+const refusedWaiver = (value) =>
+  `\n\n(Предыдущий ответ «${value}» не подошёл: нужно ровно одно слово — ${WAIVER_WORDS.join(" | ")}. Ответь ещё раз.)`
+
+// FUNCTION_CONTRACT: waiverFor — the operator's decision about ONE blind node
+//   Input:        { node, answers }
+//                 node    — the path the question is about
+//                 answers — [{ question, text }] as core/answers.mjs reads them off disk
+//   Dependencies: BLIND_STEM, BLIND_TAIL, WAIVER_WORDS, refusedWaiver
+//   Antecedent:   any values — no answers at all is the first ask, not a failure
+//   Consequent:   success: { word, question } — `word` is one of WAIVER_WORDS when the LAST answer
+//                          addressed to this node's stem is one of them (an operator who corrects
+//                          themselves answers again, and the newer answer is the one they meant);
+//                          otherwise `word` is "" and `question` is the text to ask — the first ask,
+//                          or the re-ask carrying the refused value. `question` is "" once decided
+//                 failure: none — total
+//   Purity:       pure
+//
+// The waiver lives in `.agent/answers.md` and nowhere else: not in the map (a map is a fact of the
+// repository, not a decision about a change) and not in a new artifact field — answers.md is the one
+// file that survives a rewind to step 6, its format exists and its reader exists.
+export function waiverFor({ node, answers } = {}) {
+  const stem = BLIND_STEM(String(node == null ? "" : node)).trim()
+  const mine = (answers || []).filter((a) => a && String(a.question).trim().startsWith(stem))
+  const said = String((mine.pop() || {}).text || "").trim()
+  if (WAIVER_WORDS.includes(said.toLowerCase())) return Object.freeze({ word: said.toLowerCase(), question: "" })
+  const ask = `${BLIND_STEM(node)}${BLIND_TAIL}`
+  return Object.freeze({ word: "", question: said ? `${ask}${refusedWaiver(said)}` : ask })
 }
 
 const openTag = (path, seed, rest, cut) => {
