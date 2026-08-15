@@ -19,10 +19,11 @@ import { parseFrd } from "../intake/frd.mjs"
 // FRD declares — the four sources §4a names, one row each. The failure's text carries BOTH the code
 // and how the module hands it out, which is why rule 8 compares by substring.
 const VALUES = `<values>
-  <value id="v1" text="POST /bookings {slotId,userId}"/>
+  <value id="v1" text="POST /bookings {slotId,userId}" closes="UC1/in"/>
   <value id="v2" text="book(slotId,userId)"/>
   <value id="v3" text="lock(slotId,ttl)"/>
   <value id="v4" text="409 SLOT_TAKEN"/>
+  <value id="v5" text="Booked(slotId,until)" closes="UC1/post"/>
 </values>`
 
 const FRD_XML = `<frd grammar="1" goal="бронь слота с блокировкой">
@@ -40,7 +41,9 @@ const blockersOf = (xml, frd = FRD) => checkValues({ values: parseValues(xml), f
 
 test("happy: every value is a name and a text, and the failure the FRD declared is among them", () => {
   const values = parseValues(VALUES)
-  assert.equal(values.size, 4)
+  assert.equal(values.size, 5)
+  // Rule 12's attribution rides on the Map, next to `dups`, and rule 13 reads it one pass later.
+  assert.deepEqual([...values.closes], [["v1", ["UC1/in"]], ["v5", ["UC1/post"]]])
   // The text is the whole value, punctuation included — a later pass substitutes it verbatim.
   assert.equal(values.get("v3"), "lock(slotId,ttl)")
   assert.equal(values.get("v1"), "POST /bookings {slotId,userId}")
@@ -146,4 +149,64 @@ test("totality: garbage, undefined and no argument at all are read as an empty d
   assert.deepEqual(parseValues("<design><module path=\"a.js\"/></design>").dups, [])
   assert.deepEqual(checkValues({}), [])
   assert.deepEqual(checkValues(), [])
+})
+
+// Rule 12, reintroduced from the artifacts that bought it. The dictionary of the live run carries no
+// attribution at all, and every end of both use cases is open. Removing the rule turns this fixture
+// green again — and the run it came from escalated at pass C for exactly that reason.
+const FRD_1DF9 = parseFrd(`<frd grammar="1" goal="один фрукт по имени и карточка на странице списка">
+  <usecase id="UC1" actor="http-client" goal="получить один фрукт по имени">
+    <post>вернён JSON-объект одного фрукта либо 404</post>
+    <step n="1">клиент отправляет GET /fruits/{name}</step>
+    <ext id="3a" error="none" outcome="фрукт не найден, сервер возвращает HTTP 404"/>
+  </usecase>
+  <usecase id="UC2" actor="user" goal="увидеть карточку фрукта inline на странице списка">
+    <post>карточка выбранного фрукта показана inline, URL не изменён</post>
+    <step n="1">пользователь выбирает фрукт из списка</step>
+    <step n="2">страница показывает карточку фрукта inline на том же месте</step>
+  </usecase>
+  <delta op="GET /fruits/{name}" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <scenario id="S1" uc="UC1" before="эндпоинта нет" after="эндпоинт отдаёт один фрукт" nodes="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <scenario id="S2" uc="UC2" before="карточки нет" after="карточка раскрыта inline" nodes="src/main/resources/META-INF/resources/fruits.html"/>
+  <touched path="src/main/resources/META-INF/resources/fruits.html" why="добавлен inline-показ карточки"/>
+</frd>`)
+
+const VALUES_1DF9 = `<values>
+  <value id="v1" text="GET /fruits/{name} {name}"/>
+  <value id="v2" text="Выбор(name)"/>
+  <value id="v13" text="200 {Fruit}"/>
+  <value id="v14" text="404 Not Found"/>
+</values>`
+
+// Токены открытых концов — блокер называет их первым словом после «12 конец».
+const openEnds = (b) => b.filter((l) => l.startsWith("12 конец")).map((l) => l.match(/^12 конец (\S+)/)[1])
+
+test("12: каждый конец use case закрыт значением — дословный словарь прогона 1df91a31", () => {
+  const b = checkValues({ values: parseValues(VALUES_1DF9), frd: FRD_1DF9 })
+  assert.deepEqual(openEnds(b), ["UC1/in", "UC1/post", "UC1/3a", "UC2/in", "UC2/post"], b.join("\n"))
+  // Блокер несёт ТЕКСТ конца из FRD — роли есть из чего сформулировать значение.
+  assert.match(b[4], /карточка выбранного фрукта показана inline/)
+
+  // …и с атрибуцией он зелен. `UC2` без единого `<ext>` — токен post есть всё равно.
+  const closed = VALUES_1DF9
+    .replace('id="v1" text="GET /fruits/{name} {name}"', 'id="v1" text="GET /fruits/{name} {name}" closes="UC1/in"')
+    .replace('id="v2" text="Выбор(name)"', 'id="v2" text="Выбор(name)" closes="UC2/in"')
+    .replace('id="v13" text="200 {Fruit}"', 'id="v13" text="200 {Fruit}" closes="UC1/post"')
+    .replace('id="v14" text="404 Not Found"', 'id="v14" text="404 Not Found" closes="UC1/3a"')
+    .replace("</values>", '  <value id="v15" text="Карточка(name,description)" closes="UC2/post"/>\n</values>')
+  assert.deepEqual(checkValues({ values: parseValues(closed), frd: FRD_1DF9 }), [])
+})
+
+test("12: токен, который не резолвится в конец FRD, — зеркало правила 1", () => {
+  const bad = VALUES_1DF9.replace('id="v1" text="GET /fruits/{name} {name}"', 'id="v1" text="GET /fruits/{name} {name}" closes="UC9/post"')
+  const b = checkValues({ values: parseValues(bad), frd: FRD_1DF9 }).filter((l) => l.includes("не резолвится"))
+  assert.equal(b.length, 1)
+  assert.match(b[0], /значение v1: closes="UC9\/post"/)
+  assert.match(b[0], /UC1\/in, UC1\/post, UC1\/3a, UC2\/in, UC2\/post/)
+})
+
+test("12: несколько токенов на одном значении, и FRD без use case ничего не требует", () => {
+  const two = VALUES_1DF9.replace('id="v14" text="404 Not Found"', 'id="v14" text="404 Not Found" closes="UC1/3a UC1/post"')
+  assert.deepEqual(openEnds(checkValues({ values: parseValues(two), frd: FRD_1DF9 })), ["UC1/in", "UC2/in", "UC2/post"])
+  assert.deepEqual(checkValues({ values: parseValues(VALUES_1DF9), frd: {} }), [])
 })

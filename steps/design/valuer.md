@@ -1,5 +1,5 @@
 ---
-description: Interface analyst — step 9 pass A, the MESSAGE CATALOG of everything the nodes of the change exchange, extracted from the FRD and the ripple subgraph
+description: Interface analyst — the MESSAGE CATALOG of everything the nodes of the change exchange, extracted from the FRD and the ripple subgraph
 model: openrouter/qwen/qwen3.6-27b
 thinking: low
 tools: [read, write]
@@ -43,10 +43,11 @@ $START_LAW
 5. Id идут `v1`, `v2`, `v3`… в порядке записи и только ДОПИСЫВАЮТСЯ.
    Новая строка берёт следующий номер. Перенумерация запрещена: pass B и pass C пишут твои имена, переименование молча меняет их смысл.
 
-6. Каждый конец use case — это значение:
-   - вход,
-   - последний `<step>`,
-   - по одной строке на каждое `<ext>`.
+6. Каждый конец use case — это значение, и оно помечено токеном конца:
+   - вход — `closes="UC1/in"`,
+   - последний `<step>` — `closes="UC1/post"`,
+   - по одной строке на каждое `<ext>` — `closes="UC1/1a"`.
+   Конец без значения с таким токеном — ошибка rule 12.
    Расширение — способ, которым use case ЗАКАНЧИВАЕТСЯ, including when the outcome is that the actor is shown nothing.
    Маршрут должен уметь на нём остановиться.
    Два расширения с одинаковым `error` — всё равно две строки, если их `outcome` не совпадают символ в символ.
@@ -189,14 +190,14 @@ Ripple-подграф (четыре узла, контрактов нет):
 
 ```xml
 <values>
-  <value id="v1" text="POST /loans/{id}/renew {loanId}"/>
+  <value id="v1" text="POST /loans/{id}/renew {loanId}" closes="UC1/in"/>
   <value id="v2" text="renew(loanId,today)"/>
   <value id="v3" text="findById(loanId)"/>
   <value id="v4" text="Loan(loanId,dueOn,renewals)"/>
   <value id="v5" text="Renewed(loanId,dueOn)"/>
   <value id="v6" text="Overdue(loanId,dueOn)"/>
-  <value id="v7" text="200 {dueOn}"/>
-  <value id="v8" text="409 LOAN_OVERDUE"/>
+  <value id="v7" text="200 {dueOn}" closes="UC1/post"/>
+  <value id="v8" text="409 LOAN_OVERDUE" closes="UC1/1a"/>
 </values>
 ```
 

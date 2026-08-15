@@ -44,22 +44,50 @@ import { attrs, tag } from "../../core/xml.mjs"
 //                          steps/graph/graph.mjs::mergeGraph's `duplicates`, same reason)
 //                 failure: none — total
 //   Purity:       pure
-//   Interface:    parseValues(xml: unknown) -> Map<id, text> & { dups: readonly string[] }
+//   Interface:    parseValues(xml: unknown) -> Map<id, text> & { dups: readonly string[],
+//                                                                closes: Map<id, readonly token[]> }
 //
 // The Map is the shape every consumer wants — `values.get("v9")` for a card, `values.has("v9")` for a
 // contract's id — so the duplicate evidence rides ON it rather than beside it in a wrapper: a wrapper
-// would make every later pass unpack a pair to ask a Map one question.
+// would make every later pass unpack a pair to ask a Map one question. `closes` rides the same way
+// and for the same reason: rule 13 lives in the NEXT pass's guardrail and needs the attribution of a
+// value without re-parsing the artifact this one already read.
 export function parseValues(xml) {
   const values = new Map()
   const dups = []
+  const closes = new Map()
   for (const m of String(xml || "").matchAll(tag("value"))) {
     const a = attrs(m[1])
     const id = a.id || ""
     if (values.has(id)) { dups.push(id); continue }
     values.set(id, String(a.text || "").trim())
+    const tokens = String(a.closes || "").split(/\s+/).map((t) => t.trim()).filter(Boolean)
+    if (tokens.length) closes.set(id, Object.freeze(tokens))
   }
   values.dups = Object.freeze(dups)
+  values.closes = closes
   return values
+}
+
+// The ends of a use case, as TOKENS: the entry (its first `<step>`), the exit (its `<post>`) and one
+// per `<ext>`. The set is derived from the FRD and never from the dictionary — that asymmetry is the
+// rule: the requirement says how many ends the change has, the dictionary answers for them.
+// Exported because rule 13 resolves the same tokens against the graph one pass later, and two
+// spellings of one token would drift the day an id gains a dot.
+export function endsOf(frd = {}) {
+  const ends = []
+  for (const u of frd.usecases || []) {
+    const id = String((u && u.id) || "").trim()
+    if (!id) continue
+    ends.push({ token: `${id}/in`, uc: id, side: "in", text: (u.steps || [])[0] || "" })
+    ends.push({ token: `${id}/post`, uc: id, side: "out", text: u.post || "" })
+    for (const e of u.exts || []) {
+      const eid = String((e && e.id) || "").trim()
+      if (!eid) continue
+      ends.push({ token: `${id}/${eid}`, uc: id, side: "out", text: e.outcome || "" })
+    }
+  }
+  return ends
 }
 
 // FUNCTION_CONTRACT: checkValues — the guardrail of pass A
@@ -71,10 +99,10 @@ export function parseValues(xml) {
 //   Antecedent:   values — a Map as parseValues builds it (a hand-built Map with no `dups` is read
 //                 as "no repeats", which is true of any Map built by set()); frd — an object, a
 //                 missing `failures` read as empty
-//   Consequent:   success: string[] of blockers, empty = green. Rule 8 keeps the number it has in
-//                          docs/data-flow.md §6; the two checks the dictionary owns are the pass's
-//                          own and carry no number, because §6 numbers the rules of the two
-//                          PROJECTIONS and the dictionary is neither
+//   Consequent:   success: string[] of blockers, empty = green. Rules 8 and 12 keep the numbers they
+//                          have in docs/data-flow.md §6; the two checks the dictionary owns beside
+//                          them (an id without a text, a repeated id) are the pass's own and carry no
+//                          number, because §6's table is the single declaration of the numbers
 //                 failure: none — total, "the dictionary is bad" is DATA, not a function failure
 //   Purity:       pure
 export function checkValues({ values = new Map(), frd = {} } = {}) {
@@ -111,6 +139,31 @@ export function checkValues({ values = new Map(), frd = {} } = {}) {
     for (const code of declared) {
       if (!texts.some((t) => t.includes(code))) {
         B.push(`8 отказ ${code} объявлен в FRD, но не назван ни одним значением — маршрута у него не будет, значит не будет и юнита; объяви значение, которым узел его отдаёт`)
+      }
+    }
+  }
+
+  // Rule 12. A use case ENDS somewhere, and the dictionary answers for every one of its ends by NAME.
+  // Until this rule the ends were LAW 6 of the role and nothing else: three live runs in a row wrote a
+  // dictionary with no value for the exit of a page — 09d11a84, d07c4840, 1df91a31 — and pass C burnt
+  // its whole loop on the consequence, having no legal file to write (tasks/step-design-ends-closed.md).
+  // The count is over the FRD's ends, not over the dictionary's rows: the requirement declares how many
+  // ends the change has, and a row that answers for none of them is not a defect — the dictionary is
+  // deliberately wider than any one projection.
+  const ends = endsOf(frd)
+  if (ends.length) {
+    const claimed = new Set([...values.closes || []].flatMap(([, ts]) => ts))
+    for (const e of ends) {
+      if (!claimed.has(e.token)) {
+        B.push(`12 конец ${e.token} не закрыт ни одним значением — «${e.text}»; объяви значение, которым он кончается, и пометь его closes="${e.token}"`)
+      }
+    }
+    // The mirror of rule 1: a token that resolves to no end of this FRD closes nothing, and the value
+    // wearing it would be seated by rule 13 against a use case that does not exist.
+    const known = new Set(ends.map((e) => e.token))
+    for (const [id, tokens] of values.closes || []) {
+      for (const t of tokens) {
+        if (!known.has(t)) B.push(`12 значение ${id}: closes="${t}" не резолвится ни в один конец FRD — токены этого требования: ${[...known].join(", ")}`)
       }
     }
   }

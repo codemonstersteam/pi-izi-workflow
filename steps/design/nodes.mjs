@@ -96,10 +96,11 @@ export function parseNodes(xml) {
 //   Antecedent:   nodes — parseNodes' Map; values — parseValues' Map (a missing one is read as an
 //                 empty dictionary, and then every id a contract names is unknown, which is true);
 //                 frd — an object, a missing `failures` read as empty; known — a Set or null
-//   Consequent:   success: string[] of blockers, empty = green. Rule 6 keeps the number it has in
-//                          docs/data-flow.md §6; the three checks the graph owns carry no number,
-//                          because §6's table is the single declaration of the numbers and they are
-//                          not in it
+//   Consequent:   success: string[] of blockers, empty = green. Rules 6, 13 and 14 keep the numbers
+//                          they have in docs/data-flow.md §6; the three checks the graph owns beside
+//                          them (an id outside the dictionary, an edge out of the file, rule 8's
+//                          other half) carry no number, because §6's table is the single declaration
+//                          of the numbers and they are not in it
 //                 failure: none — total, "the graph is bad" is DATA, not a function failure
 //   Purity:       pure
 export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, known = null } = {}) {
@@ -149,6 +150,56 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
   // One blocker per FAILURE, not per value: the substring comparison is rule 8's (a value names both
   // the failure and how the module hands it out — `404 FRUIT_NOT_FOUND`), and a code no value carries
   // at all is rule 8's finding, judged one artifact earlier. One defect, one blocker.
+  // Rule 14. A node the NEXT pass is obliged to put on a route must have something to walk with. The
+  // obligation is not a preference: rule 2 demands a delta node on some route and rule 5 demands the
+  // same of every `touched` path, while a step is written with a value taken from `out`
+  // (steps/design/routes.mjs). With `out` empty the three requirements have no common solution — no
+  // routes.xml exists that satisfies them — and pass C spends its whole loop discovering that.
+  //
+  // BUG_FIX_CONTEXT: live run 1df91a31-4c96-4999-b7ac-353b330f2694. `fruits.html delta="Changed"
+  //   … out=""` passed this guardrail green (`function/design/3`: nodes 3) and pass C escalated after
+  //   three attempts, its first and third reports identical to the character. The rule is here and not
+  //   in pass C because here it is REPAIRABLE: the graph is what has to change.
+  for (const n of nodes.values()) {
+    if (n.delta && !n.out.length) {
+      B.push(`14 узел ${n.path} с delta="${n.delta}": out пуст — маршрут обязан пройти через него (правило 2), а шаг пишется значением из out; назови, что этот узел отдаёт`)
+    }
+  }
+  for (const t of frd.touched || []) {
+    const path = String(t || "").trim()
+    if (!path) continue
+    const n = nodes.get(path)
+    if (!n) B.push(`14 touched-путь FRD ${path} отсутствует в графе — маршрут обязан пройти через него (правило 5), а узла нет`)
+    else if (!n.out.length) B.push(`14 touched-путь FRD ${path}: out пуст — маршрут обязан пройти через него (правило 5), а шаг пишется значением из out; назови, что этот узел отдаёт`)
+  }
+
+  // Rule 13. The end of a use case is not only NAMED (rule 12, one artifact earlier) — it is SEATED:
+  // the value closing an end stands in the contract of a node the FRD's scenario for that use case
+  // names. This is the machine form of the third ground of §4 — what the change hands OUT of the graph
+  // — and it is what gives pass B a concrete repair instead of "the page needs something".
+  // A use case whose scenarios name no node is not judged: there is no candidate to point at, and a
+  // blocker with no address costs a redelegation and buys nothing.
+  const seats = new Map()   // uc -> Set<path> of the nodes its scenarios name
+  for (const s of frd.scenarios || []) {
+    const uc = String((s && s.uc) || "").trim()
+    if (!uc) continue
+    const paths = String((s && s.nodes) || "").split(/\s+/).map((p) => p.trim()).filter(Boolean)
+    if (!seats.has(uc)) seats.set(uc, new Set())
+    for (const p of paths) seats.get(uc).add(p)
+  }
+  for (const [id, tokens] of values.closes || []) {
+    for (const token of tokens) {
+      const [uc, tail] = String(token).split("/")
+      const where = seats.get(uc)
+      if (!where || !where.size) continue
+      const side = tail === "in" ? "in" : "out"
+      const seated = [...where].some((p) => (nodes.get(p) || { in: [], out: [] })[side].includes(id))
+      if (!seated) {
+        B.push(`13 значение ${id} закрывает ${token}, но не стоит в ${side} ни одного узла сценария этого use case — ${[...where].join(", ")}`)
+      }
+    }
+  }
+
   const produced = new Set([...nodes.values()].flatMap((n) => n.out))
   for (const f of frd.failures || []) {
     const code = String((f && f.code) || "").trim()

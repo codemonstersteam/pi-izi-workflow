@@ -20,14 +20,14 @@ import { parseFrd } from "../intake/frd.mjs"
 
 // The dictionary of the booking change — every value the graph below is allowed to speak of.
 const VALUES_XML = `<values>
-  <value id="v1" text="POST /bookings {slotId,userId}"/>
+  <value id="v1" text="POST /bookings {slotId,userId}" closes="UC1/in"/>
   <value id="v2" text="book(slotId,userId)"/>
   <value id="v3" text="lock(slotId,ttl)"/>
   <value id="v4" text="409 SLOT_TAKEN"/>
   <value id="v5" text="Taken"/>
   <value id="v6" text="Conflict(slotId)"/>
   <value id="v7" text="Booked(bookingId)"/>
-  <value id="v8" text="201 {bookingId}"/>
+  <value id="v8" text="201 {bookingId}" closes="UC1/post"/>
   <value id="v9" text="save(slotId,lock)"/>
   <value id="v10" text="Saved"/>
   <value id="v11" text="Lock"/>
@@ -270,4 +270,87 @@ test("totality: garbage, undefined and no argument at all are read as an empty g
   assert.equal(parseNodes('<values><value id="v1" text="POST /bookings"/></values>').size, 0)
   assert.deepEqual(checkGraph({}), [])
   assert.deepEqual(checkGraph(), [])
+})
+
+// --- Правила 13 и 14, реинтродукция из прогона 1df91a31 -----------------------------------------
+//
+// Дословный граф того прогона: у страницы `out` пуст. Гардрейл принял его зелёным
+// (`function/design/3`: nodes 3), и проход C сжёг три круга, потому что легального routes.xml при
+// `delta ≠ "" ∧ out = ∅` не существует: шаг пишется значением из `out` (routes.mjs), а правила 2 и 5
+// требуют этот узел на маршруте. Снять правило 14 — фикстура снова зелёная, и цена известна.
+const FRD_1DF9 = parseFrd(`<frd grammar="1" goal="один фрукт по имени и карточка на странице списка">
+  <usecase id="UC1" actor="http-client" goal="получить один фрукт по имени">
+    <post>вернён JSON-объект одного фрукта либо 404</post>
+    <step n="1">клиент отправляет GET /fruits/{name}</step>
+  </usecase>
+  <usecase id="UC2" actor="user" goal="увидеть карточку фрукта inline">
+    <post>карточка выбранного фрукта показана inline</post>
+    <step n="1">пользователь выбирает фрукт из списка</step>
+    <step n="2">страница показывает карточку фрукта inline</step>
+  </usecase>
+  <delta op="GET /fruits/{name}" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <scenario id="S1" uc="UC1" before="эндпоинта нет" after="эндпоинт отдаёт один фрукт" nodes="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <scenario id="S2" uc="UC2" before="карточки нет" after="карточка раскрыта inline" nodes="src/main/resources/META-INF/resources/fruits.html"/>
+  <touched path="src/main/resources/META-INF/resources/fruits.html" why="добавлен inline-показ карточки"/>
+</frd>`)
+
+const PAGE = "src/main/resources/META-INF/resources/fruits.html"
+const RES = "src/main/java/org/acme/rest/json/FruitResource.java"
+
+const VALUES_1DF9 = parseValues(`<values>
+  <value id="v1" text="GET /fruits/{name} {name}" closes="UC1/in"/>
+  <value id="v2" text="Выбор(name)" closes="UC2/in"/>
+  <value id="v3" text="Fruit(name,description)"/>
+  <value id="v13" text="200 {Fruit}" closes="UC1/post"/>
+  <value id="v15" text="Карточка(name,description)" closes="UC2/post"/>
+</values>`)
+
+const GRAPH_1DF9 = `<design mode="minor" base=".agent/appgraph.xml">
+  <module path="${RES}" delta="Added">
+    <contract in="v1 | v3" out="v13"/>
+    <dep path="${PAGE}"/>
+  </module>
+  <module path="${PAGE}" delta="Changed">
+    <contract in="v2 | v3" out=""/>
+    <dep path="${RES}"/>
+  </module>
+</design>`
+
+const graphOf = (xml) => checkGraph({ nodes: parseNodes(xml), values: VALUES_1DF9, frd: FRD_1DF9, known: new Set([RES, PAGE]) })
+
+test("14: узел с delta и пустым out — маршрута через него не написать", () => {
+  const b = graphOf(GRAPH_1DF9).filter((l) => l.startsWith("14 "))
+  assert.equal(b.length, 2, b.join("\n"))
+  assert.match(b[0], new RegExp(`^14 узел ${PAGE} с delta="Changed": out пуст`))
+  // Та же дыра со стороны правила 5: touched-путь обязан лежать на маршруте.
+  assert.match(b[1], new RegExp(`^14 touched-путь FRD ${PAGE}: out пуст`))
+
+  // Заполненный out — зелено по правилу 14.
+  assert.deepEqual(graphOf(GRAPH_1DF9.replace('out=""', 'out="v15"')).filter((l) => l.startsWith("14 ")), [])
+})
+
+test("14: touched-путь FRD, которого нет в графе вовсе", () => {
+  const b = graphOf(GRAPH_1DF9.replace(new RegExp(`  <module path="${PAGE}"[\\s\\S]*?</module>\n`), "")).filter((l) => l.startsWith("14 "))
+  assert.deepEqual(b, [`14 touched-путь FRD ${PAGE} отсутствует в графе — маршрут обязан пройти через него (правило 5), а узла нет`])
+})
+
+test("13: закрывающее значение поселено в контракте узла своего сценария", () => {
+  // v15 закрывает UC2/post, сценарий S2 называет страницу — значит v15 обязан стоять в её `out`.
+  const b = graphOf(GRAPH_1DF9).filter((l) => l.startsWith("13 "))
+  assert.deepEqual(b, [`13 значение v15 закрывает UC2/post, но не стоит в out ни одного узла сценария этого use case — ${PAGE}`])
+  assert.deepEqual(graphOf(GRAPH_1DF9.replace('out=""', 'out="v15"')).filter((l) => l.startsWith("13 ")), [])
+
+  // Вход судится по той же схеме, но по `in`: убрать v2 из `in` страницы — красное.
+  const noEntry = GRAPH_1DF9.replace('in="v2 | v3" out=""', 'in="v3" out="v15"')
+  assert.deepEqual(graphOf(noEntry).filter((l) => l.startsWith("13 ")),
+    [`13 значение v2 закрывает UC2/in, но не стоит в in ни одного узла сценария этого use case — ${PAGE}`])
+})
+
+test("13: use case, чьи сценарии не называют узлов, не судится — блокеру некуда указать", () => {
+  const frd = parseFrd(`<frd grammar="1" goal="g">
+    <usecase id="UC2" actor="user" goal="g"><post>p</post><step n="1">s</step></usecase>
+    <scenario id="S2" uc="UC2" before="b" after="a"/>
+  </frd>`)
+  const b = checkGraph({ nodes: parseNodes(GRAPH_1DF9.replace('out=""', 'out="v15"')), values: VALUES_1DF9, frd, known: null })
+  assert.deepEqual(b.filter((l) => l.startsWith("13 ")), [])
 })

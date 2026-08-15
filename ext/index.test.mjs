@@ -1200,7 +1200,9 @@ test("a graph naming an id the frozen dictionary does not carry is pass A's faul
   // Pass B cannot repair it however many times it is re-delegated (backlog D8) — the dictionary is
   // frozen for it. Again the fixture is the real guardrail's line, not a copy of its wording.
   const lines = checkGraph({
-    nodes: new Map([["a.js", { path: "a.js", delta: "Added", in: ["v9"], out: [], deps: [] }]]),
+    // `out` is non-empty on purpose: a delta node with nothing to hand on is rule 14's finding, and
+    // this fixture is about WHOSE fault an unknown id is, not about that.
+    nodes: new Map([["a.js", { path: "a.js", delta: "Added", in: ["v9"], out: ["v9"], deps: [] }]]),
     values: new Map(), frd: {}, known: null,
   })
   const parts = BLAME.blameSplit("nodes", lines.join("\n"))
