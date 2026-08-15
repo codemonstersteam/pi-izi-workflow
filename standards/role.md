@@ -66,6 +66,17 @@ $START_CONSTRAINTS
    this out loud; a Russian request must yield a Russian artifact.
 6. **The role never self-certifies.** "Done" is the guardrail's exit code. A role that found a
    blocker succeeded — a negative verdict is data, not an error.
+7. **A line of a role is an INSTRUCTION, not an account.** What to do and in what form — nothing
+   else. No run ids, no cost, no history of why the rule appeared, no argument for it. Evidence
+   belongs in three other places, each of which the role never reads: `docs/` for the rule's reason,
+   a `BUG_FIX_CONTEXT` comment for the code that judges it, `tasks/` for the work that bought it.
+   A role is executed by a small model, and every line that is not an instruction competes with the
+   ones that are.
+8. **The form is shown by EXAMPLE, and the instruction is unambiguous.** `Renewed(loanId,dueOn)`
+   teaches more than a paragraph about naming. Two readings of one line is a defect of the line: if
+   a sentence can be obeyed in two ways, the model will pick the wrong one, and the guardrail will
+   pay for it a redelegation at a time. A sentence that says the same thing as the line above it is
+   deleted, not kept for emphasis.
 $END_CONSTRAINTS
 
 $START_OUTPUT_FORMAT

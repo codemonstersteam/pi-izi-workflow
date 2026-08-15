@@ -369,6 +369,27 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     for (const p of route) if (!nodes.has(p) && !newNodes.has(p)) B.push(`F4 ${at}: узла «${p}» нет ни в карте, ни среди создаваемых этим изменением (<delta new="yes">) — маршрут сценария опирается на выдуманный путь`)
   }
 
+  // F4b — the same binding, read the other way. F4 above refuses a scenario whose `uc` resolves to
+  // nothing; this refuses a use case no scenario distinguishes. The link is TOTAL in both directions
+  // because everything downstream is addressed BY THE SCENARIO: step 9's rule 5 demands a route per
+  // scenario of the FRD, its rule 13 takes the candidate nodes out of `<scenario nodes>`, and step 11
+  // owes a checklist line per scenario. A use case with none reaches the plan with no countable
+  // address at all — declared in the artifact, invisible to every judge after it.
+  //
+  // BUG_FIX_CONTEXT: live run 7588bf0e-5f69-4fb0-9ba1-bdacee628817
+  //   (quarkus-rest-json-app-v2-t2). The FRD declared two use cases and one scenario — `UC2`, the
+  //   inline card on the list page, had none — and step 6 closed GREEN: `deltas=1 unknown=0
+  //   scenarios=1 touched=1`. F4 was satisfied (one scenario exists, its `uc` resolves), F2b was
+  //   satisfied (the page was explained by a neighbour's delta), and the requirement travelled to the
+  //   plan as words. The judge is this rule, not the operator: the repair rail already exists — the
+  //   `intake` role writes the missing scenario out of the requirement it has already fried.
+  const covered = new Set(frd.scenarios.map((sc) => sc.uc).filter(Boolean))
+  for (const u of frd.usecases) {
+    if (!u.id || covered.has(u.id)) continue
+    B.push(`F4b ${u.id} «${u.goal}» — нет <scenario uc="${u.id}">. ` +
+           `Напиши: <scenario id="…" uc="${u.id}" before="как сейчас" after="как станет" nodes="путь путь"/>`)
+  }
+
   // F5 — every quantity of the requirement has a named, declared source.
   for (const f of frd.fields) B.push(...provenance(`поле ${f.name || "(без name)"}`, f.domain, f.source, known))
   for (const n of frd.nfrs) B.push(...provenance(`нфт ${n.subject || "(без subject)"}`, n.fit, n.source, known))

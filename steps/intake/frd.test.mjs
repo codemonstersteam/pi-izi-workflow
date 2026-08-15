@@ -196,6 +196,8 @@ test("F4: a scenario that does not distinguish, and an FRD with no scenario at a
   assert.match(blockersOf(same).join("\n"), /F4 S1: before и after совпадают/)
   assert.match(blockersOf(FRD.replace(/<scenario[\s\S]*?\/>/, "")).join("\n"), /F4 ни одного <scenario>/)
   assert.match(blockersOf(FRD.replace('uc="UC1"', 'uc="UC9"')).join("\n"), /F4 S1: uc="UC9" — такого <usecase> нет/)
+  // …и обратная сторона: use case, который не различает ни один сценарий.
+  assert.match(blockersOf(FRD.replace(/<scenario[\s\S]*?\/>/, "")).join("\n"), /F4b UC1 .* — нет <scenario uc="UC1">/)
 
   // The ROUTE of the scenario. Step 8 seeds the ripple subgraph from these paths and step 9 demands a
   // contract for every node of the route (design.mjs::checkDesign, rule 1), copied out of that
@@ -450,6 +452,16 @@ test("the form the order substitutes is the SAME data the guardrail judges by", 
   // word without a rule, and the live run S21 defect (an additive change declared `Changed`, weighing
   // major for one node) comes straight back.
   const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
+
+  // F4b: a scenario is opened PER USE CASE, and the two texts carry it the way each of them can —
+  // the order as a constraint plus a SELFCHECK the role counts before writing the file, the role as a
+  // prohibition naming its check. Drop either and the guardrail is the first thing the role hears
+  // about the rule, one redelegation later.
+  assert.match(tpl, /На каждый `<usecase>` — свой `<scenario uc="…">`/)
+  const selfcheck = tpl.match(/\$START_SELFCHECK[\s\S]*?\$END_SELFCHECK/)
+  assert.ok(selfcheck, "наряд обязан нести блок $START_SELFCHECK")
+  assert.equal((selfcheck[0].match(/^\d\. /gm) || []).length, 7)
+  assert.match(role, /Не оставляй `<usecase>` без сценария.*`F4b`/)
 })
 
 // S30g seam: since step 11 exists, a FEEDBACK line can come from TWO places, and they are not
