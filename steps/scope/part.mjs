@@ -39,7 +39,12 @@ import { attrs, ATTRS, tag } from "../../core/xml.mjs"
 // 3 — step 5's two missing facts (backlog G0): `<artifact>` — what is BUILT here, the level above a
 //     module that no question used to ask for; and `match` on a suite — the file-name pattern that
 //     tells two suites of ONE folder apart (rule P6).
-export const GRAMMAR_VERSION = "3"
+// 4 — `<toggles config>` (rule P7): a toggle is what a RUNNING instance switches without a rebuild,
+//     and the key it reads is what says so. Live run c64dbd32 answered the toggle question with
+//     `mechanism="maven profiles (-Pnative for native build)"` — a BUILD profile — and step 10 turned
+//     that into the first ticket of the plan, for a change whose requirement never mentioned any
+//     switch at all. Nothing could catch it: P1 only asked that `mechanism` be non-empty.
+export const GRAMMAR_VERSION = "4"
 
 // SPINE_ANSWERS — the seven questions the graph must answer (docs/concept.md, "Survey"; the seventh
 // is docs/graph.md §1), as the elements a spine part carries. `keys` are the attributes that count as
@@ -365,6 +370,24 @@ function checkSpine(part, cell) {
         B.push(`P6 ${cell.id}: <suite id="${s.id || "?"}"> shares path="${path}" with another suite — add match="…", the file-name pattern its runner picks up (surefire *Test.java, failsafe *IT.java), read from the build manifest`)
       }
     }
+  }
+
+  // P7 — a TOGGLE is what a running instance switches without being rebuilt, and `config` is the key
+  // that proves it: the property, flag or record the application reads at run time. A build profile
+  // has no such key, so it cannot be answered honestly here and dies on this rule instead of becoming
+  // a ticket. `found="no"` stays a complete answer — step 10 declares the gap (steps/plan/plan.mjs).
+  //
+  // BUG_FIX_CONTEXT: live run c64dbd32 (sandbox/runbox/quarkus-rest-json-app-v2-t2).
+  //   Previous: P1 asked only that `mechanism` be non-empty (SPINE_ANSWERS).
+  //   Problem:  the spine answered `mechanism="maven profiles (-Pnative for native build)"` — the
+  //             native BUILD profile. Step 10 believed it, made `toggle` the FIRST node of the plan
+  //             and ordered every code node behind it, so the deliverable opened with a ticket
+  //             "switch this endpoint with a maven profile" that no requirement had asked for.
+  //   Fix:      this rule. The question "name the key the running application reads" has no answer
+  //             for a build profile, and a blocker is cheaper than a ticket.
+  const tg = part.answers.toggles
+  if (tg && tg.found !== "no" && text(tg.mechanism) && !text(tg.config)) {
+    B.push(`P7 ${cell.id}: <toggles mechanism="${tg.mechanism}"> has no config — name the KEY a RUNNING instance reads (a property, a flag, a record). Something that only takes effect at build time — a profile, a compiler flag, a deploy variable — is not a toggle: answer <toggles found="no"/>`)
   }
 
   return B

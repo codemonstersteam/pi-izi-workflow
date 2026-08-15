@@ -117,6 +117,11 @@ function walk(nodes, routes) {
     r.steps.forEach((s, k) => {
       const n = nodes.get(s.path)
       const prev = k === 0 ? null : nodes.get(r.steps[k - 1].path)
+      // TOTAL. On a green artifact every step resolves — that is `expand`'s antecedent and rule 1 of
+      // step 9 buys it. But this walk now has a SECOND caller, `unitsByPath`, whose result rides on
+      // the plan's node, and step 10 is total by contract: an artifact outlives the run that wrote
+      // it, and a stale design-graph must give a Result, never a throw.
+      if (!n || (k > 0 && !prev)) return
       out.push({
         scenario: r.scenario,
         path: s.path,
@@ -163,6 +168,35 @@ export function expand(nodes, routes) {
 
   // The section is named exactly as the TICKET's section (docs/workflow.md §3.14): step 14 CUTS it by
   // `path` into the ticket, it does not retell it — the same device by which it cuts $START_FLOW.
+  for (const [path, units] of unitsByPath(nodes, routes)) {
+    out.push(`$START_TESTS path="${path}"`)
+    units.forEach((u, k) => out.push(`${k + 1}. ${u}`))
+    out.push("$END_TESTS")
+  }
+
+  return out.join("\n")
+}
+
+// FUNCTION_CONTRACT: unitsByPath — the DoD of every node: its units, one per distinguishable pair
+//   Input:        nodes — parseDesign's parse; routes — parseRoutes' parse (of the promoted form)
+//   Dependencies: walk
+//   Antecedent:   the same one `expand` has — a GREEN checkRoutes; an unchecked route is the caller's
+//                 defect, not this function's
+//   Consequent:   success: Map<path, string[]> — `<in> -> <out>` per DISTINGUISHABLE pair the routes
+//                          traverse, in first-appearance order, deduplicated; a node no route passes
+//                          through is absent from the map, never present with an empty list
+//                 failure: none — total
+//   Purity:       pure
+//
+// WHY IT IS ITS OWN FUNCTION. Step 9 computes this and writes it into `.agent/data-flow.md`; step 10
+// needs the SAME list on the plan's node, because the ticket is cut from the plan and a ticket with no
+// definition of done cannot be shipped — live run d8ef8c60 handed the implementer a node whose check
+// command was green BEFORE any work, and nothing anywhere said which tests were owed. Two derivations
+// of one list would drift, so there is one, and `expand` calls it too (the device D17 used for
+// `forwardLegs`).
+export function unitsByPath(nodes, routes) {
+  const steps = walk(nodes, routes)
+  const byPath = new Map()
   for (const path of nodes.keys()) {
     const seen = new Set()
     const units = []
@@ -173,13 +207,9 @@ export function expand(nodes, routes) {
       seen.add(key)
       units.push(key)
     }
-    if (!units.length) continue
-    out.push(`$START_TESTS path="${path}"`)
-    units.forEach((u, k) => out.push(`${k + 1}. ${u}`))
-    out.push("$END_TESTS")
+    if (units.length) byPath.set(path, units)
   }
-
-  return out.join("\n")
+  return byPath
 }
 
 // FUNCTION_CONTRACT: assemble — the three working artifacts of step 9 into the ONE promoted file

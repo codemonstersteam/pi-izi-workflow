@@ -1,23 +1,29 @@
+
 $START_TASK
-Extract the dictionary of this change: every value its nodes hand to each other, declared once, under
-a name the two passes after you will write instead of the text.
+Извлеки словарь этого изменения.
+
+Собери все значения, которыми узлы обмениваются между собой.
+Каждое значение объяви ровно один раз.
+Последующие два pass’а будут писать `id` вместо текста.
 $END_TASK
 
 $START_DATA
 $START_DOCUMENT
 path: .agent/frd.xml
-the delta, its scenarios, its touched nodes and its failure codes — what must change. Its
-`<failure code status>` rows and its `<delta op>` operations are two of the four sources of a value
+Дельта, сценарии, затронутые узлы и коды сбоев — то, что должно измениться.
+Строки `<failure code status>` и операции `<delta op>` — два из четырёх источников значений.
 $END_DOCUMENT
 $START_CONTENT
 {FRD}
 $END_CONTENT
+
 $START_DOCUMENT
 path: .agent/ripple.xml
-the subgraph reachable from the touched nodes — what exists. `<api name>` and `<decl name>` are the
-other two sources of a value, and their text is copied from the attribute, not paraphrased. There are
-no `<contract>`s here and none are asked of you: which node speaks which value is the NEXT pass's
-file. `<decl more="N"/>` means the remainder was cut by the map's cap and is not in your input
+Подграф, достижимый из затронутых узлов — то, что уже существует.
+`<api name>` и `<decl name>` — два оставшихся источника значений.
+Текст копируй из атрибута `name=` символ в символ, без перефразирования.
+Контрактов здесь нет и писать их не нужно — какой узел какое значение говорит, решит следующий pass.
+`<decl more="N"/>` означает, что остаток обрезан лимитом карты и в твой вход не попал.
 $END_DOCUMENT
 $START_CONTENT
 {RIPPLE}
@@ -25,20 +31,29 @@ $END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
-- one value — one row; `id` unique across the file, `text` never empty
-- ids run `v1`, `v2`, `v3` … in writing order, appended, never renumbered
-- the text of a call is copied CHARACTER FOR CHARACTER from the `name=` it comes from
-- every `<failure code>` of the FRD stands inside the text of some value, together with its status —
-  and the domain value the node below the boundary answers with is a row of its own
-- a node whose `<decl>`s are `kind="field"` is ONE value, the record itself, not one value per field
-- no `<module>`, `<contract>`, `<dep>`, `<route>`, path, count or prose in this file: the graph is the
-  next pass's artifact and is judged by its own guardrail
+- Одно значение = одна строка.
+  `id` уникален в файле, `text` никогда не пустой.
+- Каждый `<usecase>` FRD даёт `2 + (число его <ext>)` строк:
+  - вход,
+  - последний `<step>`,
+  - по одной строке на каждое расширение.
+  Два расширения с одинаковым `error` — всё равно две строки,  
+  если их `outcome` не совпадают символ в символ.
+  Строка `<failure>` закрывает расширение только тогда, когда её текст стоит ВНУТРИ `outcome`.
+  Считаются usecase и их расширения, а не delta.
+- `id` идут подряд: `v1`, `v2`, `v3`… в порядке записи. Не перенумеровывай.
+- Текст вызова копируй символ в символ из атрибута `name=`.
+- Каждый `<failure code>` FRD должен стоять внутри текста какого-то значения вместе со своим status.
+  Доменное значение, которым узел ниже границы отвечает на этот сбой — отдельная строка.
+- Узел, у которого все `<decl>` имеют `kind="field"`, даёт ОДНО значение (саму запись), а не по значению на каждое поле.
+- В этом файле запрещены: `<module>`, `<contract>`, `<dep>`, `<route>`, пути, счётчики и любой текст.
+  Граф — артефакт следующего pass’а и проверяется своим guardrail.
 $END_CONSTRAINTS
 
 $START_FEEDBACK
-Evidence from the last red check on the staging file, if this is a redelegation. Empty means the first
-attempt. Each blocker names the row that is broken — an id, or the failure code no value carries.
-Repair exactly those rows and change nothing else.
+Evidence последней красной проверки staging-файла (пусто = первая попытка).
+Каждый blocker называет сломанную строку — id или код сбоя, который никто не несёт.
+Чини ровно эти строки. Больше ничего не меняй.
 $START_CONTENT
 {FEEDBACK}
 $END_CONTENT
@@ -51,6 +66,5 @@ schema:
     <value id="v1" text="…"/>
   </values>
 check: {CHECK}
-return: call workflow_result — the shape and the choice of rail are declared by your ROLE's
-OUTPUT_FORMAT
+return: вызови workflow_result по OUTPUT_FORMAT своей ROLE
 $END_OUTPUT

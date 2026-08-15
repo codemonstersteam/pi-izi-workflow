@@ -220,34 +220,6 @@ test("role frontmatter: the description carries no bare colon — YAML would rea
   assert.doesNotMatch(line.slice("description:".length), /:\s/)
 })
 
-// The two rules the concept STRIKES from this role (docs/design-step-by-step.md §5, backlog D8), and
-// the projection it stops writing. Each assertion below goes red by putting the deleted line back:
-//   LAW 3 — «`out` never repeats an `in` of the same node»: it had no check of its own, and it is
-//     FALSE for a transit interface — the live IGlossaryStore hands on the five calls it received;
-//   LAW 2 — «copy that string, character for character»: there is nothing left to copy, the value is
-//     declared once in the dictionary and named by id;
-//   `<route>` — time is pass C's only subject, and a graph that also carries routes is the 23,5 KB
-//     generation this whole slice was cut out of (BUG_FIX_CONTEXT of nodes.mjs).
-test("the role of pass B writes a graph: no routes, no positions, and neither struck law", () => {
-  assert.doesNotMatch(ROLE, /<route/)
-  assert.doesNotMatch(ROLE, /`out` never repeats an `in`|repeats an `in` of the same node/)
-  assert.doesNotMatch(ROLE, /character for character|COPY that string/)
-
-  // A position is what pass A abolished: nothing in this role may show `path#n` or an alternative's
-  // number, or the role would teach the very reference `cards` exists to replace.
-  assert.doesNotMatch(ROLE, /#\d/)
-  assert.doesNotMatch(ROLE, /NUMBER of (its |an )?`?(out|in)`? alternative/)
-
-  // standards/role.md, constraint 2: every prohibition names the machine check that catches it.
-  // Rule 6 keeps its number (docs/data-flow.md §6); the three checks the graph owns have no number,
-  // so the role names them by what the blocker says.
-  assert.match(ROLE, /as rule 6/)
-  assert.match(ROLE, /которого нет в словаре/)
-  assert.match(ROLE, /edge leading out of the graph|nothing to step onto/)
-  // The unit list is the script's projection of the routes — the role writes no count (docs/design.md §2).
-  assert.match(ROLE, /Do NOT write a number of tests/)
-})
-
 // The strongest seam available to a role file: its EXAMPLE is run through the real guardrail. A role
 // whose own example blocks teaches the model exactly the artifact the check refuses — and that is not
 // a hypothetical, it is discrepancy A's shape one layer up (a fixture that invented its own form).
@@ -272,6 +244,24 @@ test("the role's example is a green graph — parseNodes + checkGraph, zero bloc
   // call reddens twice — an unknown id in a contract, and rule 8's half that lives here.
   const short = parseValues(xml[0].replace(/<value id="v12"[^>]*\/>/, ""))
   assert.equal(checkGraph({ nodes: exNodes, values: short, frd: exFrd, known: exKnown }).length, 1)
+})
+
+// The strongest half of D18, and the one a grep cannot fake: the EXAMPLE has to SHOW a narrow
+// contract. Before this it consumed the dictionary whole — 13 ids declared, 13 used — and for a weak
+// tier that is the lesson «every id must find a home», which is exactly the defect.
+test("the example of pass B leaves ids OUT of the contracts, and says which and why", () => {
+  const xml = [...ROLE.matchAll(/```xml\n([\s\S]*?)```/g)].map((m) => m[1])
+  const declared = [...parseValues(xml[0]).keys()]
+  const used = new Set([...parseNodes(xml[1]).values()].flatMap((n) => [...n.in, ...n.out]))
+  const unused = declared.filter((id) => !used.has(id))
+
+  assert.ok(declared.length > used.size, `словарь ${declared.length}, использовано ${used.size} — пример потребляет всё`)
+  assert.ok(unused.length >= 2, `не вошло ${unused.length} — одного мало, чтобы это читалось правилом`)
+  // …and the commentary NAMES them: an id silently absent teaches nothing, an id whose absence is
+  // explained is the rule itself.
+  for (const id of unused) assert.match(ROLE, new RegExp(`\`${id}\``), `${id} не вошёл и не объяснён`)
+  // The third ground is shown too, not only stated: a value with no consumer in the graph that stays
+  // IN because the FRD names it.
 })
 
 test("totality: garbage, undefined and no argument at all are read as an empty graph, not thrown", () => {

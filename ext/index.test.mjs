@@ -18,8 +18,10 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, reviewForm, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
+import { checkRoutes } from "../steps/design/routes.mjs"
+import { checkGraph } from "../steps/design/nodes.mjs"
 import { DEFAULT_BUDGETS } from "../core/budgets.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
@@ -294,6 +296,54 @@ test("checkBrd and checkFrd judge a promoted artifact without consuming it", () 
   // A missing artifact is a refusal, never a throw: that is what makes "not green now" a legal answer
   // for a step that simply has not run yet.
   assert.equal(checkFrd.run({ path: ".agent/frd.xml" }, ctx(root)).ok, false)
+})
+
+// --- checkFrd io: F9's `rewind` comes from .agent/review.xml, only on a Reject --------------------
+// Live run 508d74fa's class of defect: step 6, cornered by a blocker it cannot honestly repair,
+// deletes the SUBJECT of the blocker instead. F9 (steps/intake/frd.mjs) catches that on the FRD side;
+// this is the io half — the workflow never hands `rewind` in by hand (workflows/izi.js::intake is
+// unchanged), checkFrd builds it itself from whatever verdict is on disk.
+test("checkFrd io: rewind is read from .agent/review.xml, and only a Reject supplies it", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  writeFileSync(join(root, ".agent", "appgraph.xml"),
+    '<appgraph><module path="src/CardResource.java" kind="rest"><api name="GET /card"/></module></appgraph>')
+
+  const frdXml = (withUC2) => `<frd grammar="1" goal="карточка по имени">
+  <usecase id="UC1" actor="user" goal="увидеть карточку">
+    <post>карточка отображена</post>
+    <step n="1">пользователь открывает карточку</step>
+  </usecase>
+  ${withUC2 ? `<usecase id="UC2" actor="user" goal="получить данные карточки">
+    <post>данные карточки получены</post>
+    <step n="1">клиент шлёт GET /card</step>
+  </usecase>` : ""}
+  <failures found="no" why="изменение не вводит кодов отказа"/>
+  <delta op="GET /card" form="Added" node="src/CardResource.java"/>
+  <scenario id="S1" uc="UC1" before="карточки нет" after="карточка есть" nodes="src/CardResource.java"/>
+  ${withUC2 ? '<scenario id="S2" uc="UC2" before="данных нет" after="данные есть" nodes="src/CardResource.java"/>' : ""}
+  <touched path="src/CardResource.java" why="карточка добавляется"/>
+</frd>`
+  const reject = '<review verdict="Reject" grammar="2"><blocker code="goal-not-delivered" node="src/CardResource.java" evidence="UC2/post">карточка данных не реализована</blocker></review>'
+
+  // No .agent/review.xml at all: not a rewind, F9 stays silent even though UC2 is absent.
+  writeFileSync(join(root, ".agent", "staging", "frd.xml"), frdXml(false))
+  assert.equal(checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root)).ok, true)
+
+  // A promoted Pass carries no rewind either.
+  writeFileSync(join(root, ".agent", "review.xml"), '<review verdict="Pass" grammar="2"/>')
+  assert.equal(checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root)).ok, true)
+
+  // A Reject naming UC2/post, with UC2 still gone from the repair: F9 refuses.
+  writeFileSync(join(root, ".agent", "review.xml"), reject)
+  const cut = checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root))
+  assert.equal(cut.ok, false)
+  assert.match(cut.blockers, /F9 предмет перемотки «UC2\/post» удалён из FRD/)
+
+  // …and the honest repair — UC2 restored — passes the very Reject that named it.
+  writeFileSync(join(root, ".agent", "staging", "frd.xml"), frdXml(true))
+  const fixed = checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root))
+  assert.equal(fixed.ok, true, fixed.ok ? "" : fixed.blockers)
 })
 
 // --- carried: the memory of a repair loop reaches the sandbox --------------------------------
@@ -649,6 +699,58 @@ test("three green passes promote in turn, and the LAST one assembles the deliver
   assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), false)   // promote is a MOVE
 })
 
+// D17. Rule 9's second operand is the MAP's directed edges, and only the host can fetch them: the
+// ripple projects every edge BOTH ways (steps/ripple/ripple.mjs), so `.agent/ripple.xml` cannot say
+// who calls whom. Replace `edges: mapEdges` with `edges: []` in ext/index.mjs::design and this goes
+// green while the live defect walks straight through step 9 into step 10's `cycle` — the refusal on a
+// step with no role (live run f7bf154a).
+test("the routes pass is judged against the MAP's direction, which only the host can read", () => {
+  const root = designRoot()
+  design.run({}, ctx(root))
+  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
+  design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root))
+
+  // The map says the repo is used BY the resource. W_ROUTES walks resource → repo, which agrees —
+  // green. Reverse the map's edge and the very same routes now close a loop with it.
+  const appgraph = (from, to) => `<appgraph grammar="3" modules="2">
+  <module path="src/ParcelResource.java" level="1"><role>resource</role></module>
+  <module path="src/ParcelRepo.java" level="2"><role>repo</role></module>
+  <edge from="${from}" to="${to}" via="uses"/>
+</appgraph>`
+
+  writeFileSync(join(root, ".agent", "appgraph.xml"), appgraph("src/ParcelResource.java", "src/ParcelRepo.java"))
+  assert.equal(design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root)).ok, true)
+
+  design.run({}, ctx(root))   // the gate: the pair goes, A and B are reused
+  writeFileSync(join(root, ".agent", "appgraph.xml"), appgraph("src/ParcelRepo.java", "src/ParcelResource.java"))
+  const r = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root))
+  assert.equal(r.ok, false)
+  assert.match(r.blockers, /^9 .*зовут друг друга/)
+  assert.match(r.blockers, /ребро карты/)
+})
+
+// D13. A role that returns track:"ok" and writes nothing is not a red artifact — it is no artifact.
+// The two are told apart by a FLAG, not by matching this module's Russian sentence from the workflow:
+// live run a900de7b, occurrence 3, where `{"track":"ok","artifact":".agent/staging/routes.xml"}` cost
+// pass C a whole redelegation. Drop `missing: true` from ext/index.mjs::design and this goes red —
+// and with it the workflow's free retry, which is the point of the flag.
+test("nothing written to the staging path is MISSING, not merely red", () => {
+  const root = designRoot()
+  design.run({}, ctx(root))
+  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
+  design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root))
+
+  const r = design.run({ pass: "routes", path: ".agent/staging/routes.xml" }, ctx(root))
+  assert.equal(r.ok, false)
+  assert.equal(r.missing, true, "the caller spends a different budget on this refusal")
+  assert.match(r.blockers, /не существует/)
+
+  // A red artifact is NOT missing: there is a file, and the blockers are what repairs it.
+  const bad = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES.replace("@v4", "@v9")) }, ctx(root))
+  assert.equal(bad.ok, false)
+  assert.equal(bad.missing, undefined)
+})
+
 test("a red pass promotes nothing, keeps its staging file, and does not reach the pass after it", () => {
   const root = designRoot()
   design.run({}, ctx(root))
@@ -810,6 +912,17 @@ const planRoot = (mode = "minor") => {
   return root
 }
 
+// R-shippable, io-половина. Зелёный путь `plan` юнитом не берётся — ему нужен настоящий git-репозиторий
+// для транка (см. соседний блок), поэтому шов здесь на ИСТОЧНИК, тем же приёмом, что ENVELOPE и
+// $START_BLAME: хост обязан ПОСЧИТАТЬ юниты из design-graph и передать их в ядро. Верни `new Map()` —
+// и тикет снова приедет без определения готовности, ровно как в прогоне d8ef8c60, где команда узла
+// была зелена до начала работы.
+test("plan: хост считает dod из design-graph и передаёт его в ядро", () => {
+  const src = readFileSync(new URL("./index.mjs", import.meta.url), "utf8")
+  assert.match(src, /units: designXml \? unitsByPath\(parseDesign\(designXml\), parseRoutes\(designXml\)\) : new Map\(\)/)
+  assert.match(src, /import \{[^}]*unitsByPath[^}]*\} from "\.\.\/steps\/design\/design\.mjs"/)
+})
+
 test("plan asks for the task key VERBATIM, and asking is not a refusal of the step", () => {
   const root = planRoot()
   const r = plan.run({}, ctx(root))
@@ -839,14 +952,15 @@ const reviewRoot = (verdict) => {
   writeFileSync(join(root, ".agent", "plan-index.json"), JSON.stringify({
     grammar: 1,
     order: ["src/ParcelResource.java"],
-    nodes: [{ id: "src/ParcelResource.java", kind: "code", delta: ["GET /parcels (Added)"], deps: [], check: [], coveredBy: ["scenario:S1"] }],
+    nodes: [{ id: "src/ParcelResource.java", kind: "code", delta: ["GET /parcels (Added)"], deps: [], check: [{ suite: "unit", cmd: "mvn test" }], coveredBy: ["scenario:S1"] }],
   }))
   writeFileSync(join(root, ".agent", "staging", "review.xml"), verdict)
   return root
 }
 
 test("review promotes a Pass and returns the verdict", () => {
-  const root = reviewRoot('<review verdict="Pass" grammar="1"/>')
+  // grammar 2 (D21): a Pass now has to CLOSE the checklist — this FRD owes exactly one row, S1.
+  const root = reviewRoot('<review verdict="Pass" grammar="2"><covers item="S1" node="src/ParcelResource.java"/></review>')
   const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
   assert.equal(r.ok, true, r.ok ? "" : r.blockers)
   assert.equal(r.verdict, "Pass")
@@ -855,7 +969,7 @@ test("review promotes a Pass and returns the verdict", () => {
 })
 
 test("review promotes a Reject too, and hands back the owner of each blocker", () => {
-  const root = reviewRoot('<review verdict="Reject" grammar="1"><blocker code="goal-not-delivered" node="src/ParcelResource.java" evidence="S1">поиск не выполняется ни одним узлом</blocker></review>')
+  const root = reviewRoot('<review verdict="Reject" grammar="2"><blocker code="goal-not-delivered" node="src/ParcelResource.java" evidence="S1">поиск не выполняется ни одним узлом</blocker></review>')
   const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
   assert.equal(r.ok, true, r.ok ? "" : r.blockers)
   assert.equal(r.verdict, "Reject")
@@ -863,8 +977,52 @@ test("review promotes a Reject too, and hands back the owner of each blocker", (
   assert.equal(existsSync(join(root, ".agent", "review.xml")), true, "the operator and the repair rail both read the blockers")
 })
 
+// The findings schema carries `note` (П2) — a function of the code, "" for every owner but `operator`
+// (goal-not-delivered has none). The host's OWN validator is the judge here, the same device the
+// budgets schema test above uses: a key present in the runtime shape but missing from `required`/
+// `properties` is how a live run silently drops a field the caller (band()) depends on.
+test("review output schema: findings carry `note`, and the host's own validator accepts the shape", () => {
+  const root = reviewRoot('<review verdict="Reject" grammar="2"><blocker code="goal-not-delivered" node="src/ParcelResource.java" evidence="S1">поиск не выполняется ни одним узлом</blocker></review>')
+  const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
+  assert.equal(r.ok, true, r.ok ? "" : r.blockers)
+  assert.equal(r.findings[0].note, "", "goal-not-delivered carries no OPERATOR_NOTE — band() never reads this row's note")
+  const validate = Compile(review.output)
+  assert.equal(validate.Check(r), true, JSON.stringify(r))
+})
+
+// autoFindings (open-question) is a SEPARATE mapping from newReview's blockers (ext/index.mjs::review,
+// "const auto = …") — a `note` added to one and not the other still validates as long as no test
+// exercises the missing side. This is that side.
+test("review output schema: an autoFindings open-question finding also carries `note`", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  writeFileSync(join(root, ".agent", "frd.xml"), `<frd grammar="1" goal="искать посылку">
+  <delta op="GET /parcels" form="Added" node="src/ParcelResource.java" from="list()" to="list(track)"/>
+  <scenario id="S1" uc="UC1" before="весь реестр" after="только совпавшие" nodes="src/ParcelResource.java"/>
+  <touched path="src/ParcelResource.java"/>
+  <question subject="track-format" why="формат трек-номера не определён"/>
+</frd>
+`)
+  writeFileSync(join(root, ".agent", "plan-index.json"), JSON.stringify({
+    grammar: 1,
+    order: ["src/ParcelResource.java"],
+    nodes: [{ id: "src/ParcelResource.java", kind: "code", delta: ["GET /parcels (Added)"], deps: [], check: [{ suite: "unit", cmd: "mvn test" }], coveredBy: ["scenario:S1"] }],
+  }))
+  writeFileSync(join(root, ".agent", "staging", "review.xml"),
+    '<review verdict="Pass" grammar="2"><covers item="S1" node="src/ParcelResource.java"/></review>')
+
+  const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
+  assert.equal(r.ok, true, r.ok ? "" : r.blockers)
+  assert.equal(r.verdict, "Reject", "an unanswered <question> reaching the plan turns the RESULT to Reject regardless of the role's own Pass")
+  const q = r.findings.find((f) => f.code === "open-question")
+  assert.ok(q, JSON.stringify(r.findings))
+  assert.equal(q.note, "", "open-question's owner is step 6, not operator — OPERATOR_NOTE has no row for it")
+  const validate = Compile(review.output)
+  assert.equal(validate.Check(r), true, JSON.stringify(r))
+})
+
 test("a malformed verdict promotes nothing and erases yesterday's review", () => {
-  const root = reviewRoot('<review verdict="Reject" grammar="1"><blocker code="made-up" node="src/ParcelResource.java" evidence="S1">x</blocker></review>')
+  const root = reviewRoot('<review verdict="Reject" grammar="2"><blocker code="made-up" node="src/ParcelResource.java" evidence="S1">x</blocker></review>')
   writeFileSync(join(root, ".agent", "review.xml"), '<review verdict="Pass" grammar="1"/>')   // yesterday's
   const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
   assert.equal(r.ok, false)
@@ -908,12 +1066,155 @@ test("three passes, three roles, three orders — and the role names are the one
   assert.equal(existsSync(new URL("../steps/design/order.tpl", import.meta.url).pathname), false)
 })
 
-test("a red pass is blamed by its RULE NUMBER, and the third address exists", () => {
-  // Rules 3 and 4 are the graph's fault, not the route's — the donor's "return to Step 5".
-  assert.match(IZI, /pass === "routes" && lines\.some\(\(l\) => \/\^\[34\] \/\.test\(l\)\)\) return "nodes"/)
-  // And a graph naming an id the frozen dictionary does not carry is pass A's fault: pass B cannot
-  // repair it however many times it is re-delegated (backlog D8).
-  assert.match(IZI, /pass === "nodes" && lines\.some\(\(l\) => \/которого нет в словаре\/\.test\(l\)\)\) return "values"/)
-  // The valuer returns a count, so the envelope must carry it — additionalProperties is false.
+test("the valuer returns a count, so the envelope carries it — additionalProperties is false", () => {
   assert.match(IZI, /values: \{ type: "number" \}/)
+})
+
+// R-shippable: наряд критика показывает узлу без своей команды ЕГО ЮНИТЫ рядом с кандидатами.
+// Прогон d8ef8c60: роль спросили «какая из этих команд исполняет узел», показав только id и команды,
+// и она ответила `<witness cmd="mvn verify -Pnative"/>` для HTML-страницы — команда машинную сверку
+// проходит (она у закрывающего сценария) и страницу не открывает. Убери `dod` из строки — красный.
+test("reviewForm: строка {UNCHECKED} несёт юниты узла, а не один его id", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "frd.xml"), FRD_R)
+  writeFileSync(join(root, ".agent", "plan-index.json"), JSON.stringify({
+    grammar: 2,
+    order: ["src/page.html", "scenario:S1"],
+    nodes: [
+      { id: "src/page.html", kind: "code", delta: [], why: "вызов и карточка", dod: ["клик -> GET /x", "200 -> карточка"], deps: [], check: [], coveredBy: ["scenario:S1"] },
+      { id: "scenario:S1", kind: "scenario", scenario: "S1", deps: [], check: [{ suite: "unit", cmd: "mvn test" }], coveredBy: [] },
+    ],
+  }))
+  const f = reviewForm.run({}, ctx(root))
+  assert.match(f.unchecked, /src\/page\.html — своей команды нет; закрывают: mvn test/)
+  assert.match(f.unchecked, /делает:/)
+  assert.match(f.unchecked, /1\. клик -> GET \/x/)
+  assert.match(f.unchecked, /2\. 200 -> карточка/)
+})
+
+// --- D15: the hats, and the one that must stay unique --------------------------------------------
+//
+// A role's first line is the strongest instruction in the file: it decides which of the model's
+// professions answers the order. The seven hats are chosen so that they do not overlap, and the
+// overlap that matters is `software architect` — the only profession in this pipeline that is
+// entitled to invent modules. Give it to the interface analyst and pass A starts drawing a graph it
+// is forbidden to draw; give it to the systems analyst and pass C starts repairing the frozen one.
+// So it is asserted to occur EXACTLY ONCE in all of steps/, and the test lives here because
+// ext/index.mjs is what declares roleDirectories — the only place all of them are named at once.
+//
+// The domain check is one rule in one place, over EVERY role rather than three: standards/role.md
+// constraint 3 is a property of role files as such, and it has already cost a live run (a role
+// returned its prepared example instead of reading the order). The words banned are the ones of the
+// forms this pipeline is actually run against — a role carrying them cannot be told apart from an
+// order.
+const ROLE_FILES = [
+  ["brd/gilb.md", /business analyst/],
+  ["scope/scout.md", /REVERSE ENGINEER/],
+  ["intake/intake.md", /requirements analyst/],
+  ["design/valuer.md", /INTERFACE ANALYST/],
+  ["design/designer.md", /software architect/],
+  ["design/router.md", /SYSTEMS ANALYST/],
+  ["review/critic.md", /DESIGN REVIEWER/],
+]
+const roleText = (f) => readFileSync(new URL(`../steps/${f}`, import.meta.url), "utf8")
+
+test("no role carries a word of a form this pipeline is run against — the example is the only concrete place", () => {
+  // The regression form (fruits) and the hard input (eddi, its glossary): live-domain vocabulary in a
+  // LAW or a STRATEGY is a prepared answer, and a weak tier returns it instead of reading the order.
+  const live = /\bfruits?\b|фрукт|\bglossar|глоссари|\beddi\b/i
+  for (const [file] of ROLE_FILES) {
+    const hits = roleText(file).split("\n").filter((l) => live.test(l))
+    assert.deepEqual(hits, [], `${file} несёт слова живого домена`)
+  }
+})
+
+// --- D13: the blame is addressed PER LINE, and the guardrails' own texts are what address it ------
+//
+// `workflows/izi.js` cannot be imported — it runs in a host vm sandbox with no module system — so the
+// block that decides blame is CUT OUT of the source between two markers and executed here. That makes
+// this a seam over the real code rather than a grep: `blameOf` and `blameSplit` below are the very
+// functions the run calls.
+//
+// And the blocker lines they are fed are not invented either. Every rule of blame matches PROSE that
+// lives in another module (steps/design/routes.mjs, steps/design/nodes.mjs), so the two texts can
+// drift apart in silence — a reworded blocker would quietly send the whole report back to the pass
+// that did not write the defect. The fixtures below are therefore produced by the REAL guardrails.
+//
+// Reintroduce any of the three defects and a branch here goes red:
+//   · make blameOf take the whole set again (`lines.some(...)`) — the split test fails;
+//   · delete the «вход в контракте узла не объявлен» line — rule 1's boundary goes back to pass C;
+//   · move `attempt[p.id]++` above the `check.missing` branch — the last test fails.
+const BLAME = new Function(`${IZI.slice(IZI.indexOf("// $START_BLAME"), IZI.indexOf("// $END_BLAME"))}
+  return { blameOf, blameSplit }`)()
+
+// A graph a route can be walked over: the page accepts v3 and hands out v1, the store accepts v1.
+const BNODES = new Map([
+  ["fruits.html", { path: "fruits.html", delta: "Changed", in: ["v3"], out: ["v1"], deps: ["store.js"] }],
+  ["store.js", { path: "store.js", delta: "", in: ["v1"], out: ["v3"], deps: [] }],
+])
+const BVALUES = new Map([["v1", "save(glossary)"], ["v3", "Fruit"]])
+const bRoute = (steps, entry = "v1") => [{ scenario: "S1", entry, steps }]
+const bStep = (path, value) => ({ path, value })
+
+test("rule 1 at the BOUNDARY is the graph's fault — the guardrail's own line says so, and blameOf reads it", () => {
+  // The scenario enters at fruits.html with v1, and fruits.html's contract declares no such input.
+  const lines = checkRoutes({
+    routes: bRoute([bStep("fruits.html", "v1")]),
+    nodes: BNODES, values: BVALUES, frd: { scenarios: [{ id: "S1" }] },
+  })
+  const rule1 = lines.filter((l) => l.startsWith("1 "))
+  assert.equal(rule1.length, 1, lines.join("\n"))
+  assert.equal(BLAME.blameOf("routes", rule1[0]), "nodes", "«вход в контракте узла не объявлен» — чинит проход B")
+
+  // The other half of rule 1 stays with pass C: it named an `out` the node does not have, and the
+  // node's contract is not what is wrong.
+  const outLine = checkRoutes({
+    routes: bRoute([bStep("fruits.html", "v9")], "v3"),
+    nodes: BNODES, values: BVALUES, frd: { scenarios: [{ id: "S1" }] },
+  }).filter((l) => l.startsWith("1 "))
+  assert.equal(outLine.length, 1, "one defect, one blocker")
+  assert.equal(BLAME.blameOf("routes", outLine[0]), "routes")
+})
+
+test("a pass gets ITS OWN lines and nothing else — the report is split, not forwarded whole", () => {
+  // One red pass C carrying two facts with two different addresses: an undeclared edge (rule 3, the
+  // graph's) and a node with a delta no route walks (rule 2, the route's).
+  const lines = checkRoutes({
+    routes: bRoute([bStep("store.js", "v3"), bStep("far.js", "v3")], "v1"),
+    nodes: new Map([...BNODES, ["far.js", { path: "far.js", delta: "Added", in: ["v3"], out: ["v3"], deps: [] }]]),
+    values: BVALUES,
+    frd: { scenarios: [{ id: "S1" }] },
+  })
+  const parts = BLAME.blameSplit("routes", lines.join("\n"))
+  assert.ok(parts.nodes && parts.nodes.length, lines.join("\n"))
+  assert.ok(parts.routes && parts.routes.length, lines.join("\n"))
+  // THE POINT: nothing addressed to the graph mentions a route's own rules. Live run a900de7b handed
+  // pass B rules 2 and 5 and got back an invented `in="v1 | v3"` and a flipped delta.
+  for (const l of parts.nodes) assert.match(l, /^[34] /)
+  for (const l of parts.routes) assert.doesNotMatch(l, /^[34] /)
+  assert.equal(parts.nodes.length + parts.routes.length, lines.length, "разделение без потерь")
+})
+
+test("a graph naming an id the frozen dictionary does not carry is pass A's fault", () => {
+  // Pass B cannot repair it however many times it is re-delegated (backlog D8) — the dictionary is
+  // frozen for it. Again the fixture is the real guardrail's line, not a copy of its wording.
+  const lines = checkGraph({
+    nodes: new Map([["a.js", { path: "a.js", delta: "Added", in: ["v9"], out: [], deps: [] }]]),
+    values: new Map(), frd: {}, known: null,
+  })
+  const parts = BLAME.blameSplit("nodes", lines.join("\n"))
+  assert.deepEqual(Object.keys(parts), ["values"], lines.join("\n"))
+})
+
+test("the workflow addresses the lines it was handed, and «файла нет» does not spend a repair round", () => {
+  // The split is what the phase actually calls, and `carried` is given the addressee's OWN lines.
+  assert.match(IZI, /const parts = blameSplit\(p\.id, check\.blockers\)/)
+  assert.match(IZI, /carried\(\{ blockers: mine\.join\("\\n"\), seen: wasRed\[q\.id\] \}\)/)
+  // And the missing-file rail is decided BEFORE the repair budget is charged. Order is the whole
+  // claim: `attempt[p.id]++` above the branch would charge the round it exists to save.
+  const missingAt = IZI.indexOf("if (check.missing)")
+  const chargeAt = IZI.indexOf("attempt[p.id]++")
+  assert.ok(missingAt > 0 && chargeAt > missingAt, "круг ремонта тратится ПОСЛЕ ветки «файла нет»")
+  assert.match(IZI, /silent\[p\.id\]\+\+/, "bounded by its own counter, not by LOOPS")
 })

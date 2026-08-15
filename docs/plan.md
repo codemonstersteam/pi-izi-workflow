@@ -240,7 +240,7 @@ JSON, а не XML: артефакт пишет скрипт и читают ск
 
 ```json
 {
-  "grammar": 1,
+  "grammar": 2,
   "mode": "minor",
   "branch": { "task": "DOS-42", "name": "feature/DOS-42", "base": "main", "source": "operator-answer" },
   "gaps": ["toggle", "spec"],
@@ -249,6 +249,8 @@ JSON, а не XML: артефакт пишет скрипт и читают ск
   "nodes": [
     { "id": "src/main/java/org/acme/rest/json/FruitResource.java", "kind": "code",
       "new": false, "delta": ["GET /fruits/{id} (Added)", "GET /fruits (Added)"],
+      "why": "эндпоинт по имени",
+      "dod": ["GET /fruits/{id} -> Fruit", "GET /fruits/{id} -> 404 NOT_FOUND"],
       "deps": ["src/main/java/org/acme/rest/json/Fruit.java"],
       "check": [ { "suite": "unit", "cmd": "mvn test -Dtest=FruitResourceTest" },
                  { "suite": "component-native", "cmd": "mvn verify -Pnative -Dit.test=FruitResourceIT" } ],
@@ -269,6 +271,18 @@ JSON, а не XML: артефакт пишет скрипт и читают ск
 там, где он есть: `{ "id": "toggle", "kind": "toggle", "mechanism": "<из <toggles mechanism>>",
 "source": "graph", "deps": [], "check": [<команды сценариев>] }`, и каждый узел `code` с дельтой
 получает `"toggle"` в своих `deps`.
+
+**`dod` и `why` — то, чем тикет СДАЁТСЯ (grammar 2).** `check` это команда ЗАКРЫТИЯ: она говорит, чем
+узел проверяют, и до появления теста зелена. `dod` — юниты узла, «1 happy + Σ ветвей», выведенные
+шагом 9 (`steps/design/design.mjs::unitsByPath`) и ПЕРЕНЕСЁННЫЕ сюда, а не посчитанные заново: тикет
+режется из плана, и без DoD исполнителю не сказано, какие тесты причитаются. Шаг 9 пропущен ⇒
+`dod: []` — объявлено, как `deps: []` у создаваемого узла. `why` — слова самого FRD (`<touched why>`)
+о том, зачем узел тронут; без него узел, названный только `<touched>`, приезжает в тикет немым.
+
+Цена молчания измерена прогоном `d8ef8c60`: узел ресурса нёс команду `mvn test -Dtest=FruitResourceTest`,
+в классе которой не было ни новой операции, ни её ветки отказа, — команда зелена ДО работы; узел
+страницы приехал с `delta: []` и не сказал исполнителю ничего, хотя FRD объявлял работу дословно.
+Оба факта уже лежали на диске.
 
 `id` узла-файла — репо-относительный путь, тот же ключ, что у карты, FRD и ряби. У узлов, которых в
 карте нет, ключ префиксован родом (`scenario:S1`, `toggle`) — файла за ними не стоит, и путь им

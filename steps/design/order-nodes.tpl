@@ -1,41 +1,54 @@
 $START_TASK
-Project the decided change onto its MODULES: every node the change touches or the data passes
-through, with the contract it speaks — in the NAMES of the dictionary below. No routes: this file
-carries no time at all.
+Спроецируй изменение на модули.
+
+Включи:
+- каждый узел, который изменение затрагивает (с `delta`);
+- каждый узел, через который проходят данные (без `delta`, скопировать из ripple).
+
+У каждого узла напиши контракт — только id из словаря.
+
+Маршрутов, route, entry, step list и любого порядка выполнения — быть не должно.
+Этот файл содержит только узлы, контракты и рёбра. Время и последовательность здесь запрещены.
 $END_TASK
 
 $START_DATA
 $START_DOCUMENT
 path: .agent/values.xml
-the DICTIONARY — every value this change exchanges, declared once, already accepted by its own
-guardrail. A contract names a value by its `id`; the text is substituted by a script later. The
-dictionary is CLOSED to you: an id that is not here blocks the check, and adding a row is not among
-your outputs
+СЛОВАРЬ — все значения этого изменения.
+Объявлены один раз, уже прошли guardrail.
+Контракт использует только `id`. Текст подставит скрипт позже.
+Словарь закрыт: id, которого здесь нет — ошибка.
+Добавлять строки нельзя.
 $END_DOCUMENT
 $START_CONTENT
 {VALUES}
 $END_CONTENT
+
 $START_DOCUMENT
 path: .agent/frd.xml
-the delta, its scenarios and its touched nodes — what must change
+Дельта, сценарии и затронутые узлы — что должно измениться.
 $END_DOCUMENT
 $START_CONTENT
 {FRD}
 $END_CONTENT
+
 $START_DOCUMENT
 path: .agent/ripple.xml
-the subgraph reachable from the touched nodes — what exists, with its `<api>` and `<decl>` but
-WITHOUT contracts: the contract of a node you copy is derived from those and named with the ids
-above. The full application graph is not here and is not needed: a node outside this subgraph is
-outside this change, unless you are adding it
+Подграф от затронутых узлов.
+Есть `<api>` и `<decl>`, контрактов нет.
+Контракт копируемого узла выводится из них + id из словаря.
+Полный граф приложения здесь не нужен.
+Узел вне подграфа — вне изменения (если ты его не добавляешь).
 $END_DOCUMENT
 $START_CONTENT
 {RIPPLE}
 $END_CONTENT
+
 $START_DOCUMENT
 path: .agent/answers.md
-what the operator has already answered in this run — the VALUE of an answer, not the wording of its
-question. A contract you asked about and got an answer for is settled: do not ask again
+Ответы оператора в этом прогоне.
+Важен только текст ответа, не формулировка вопроса.
+Если по контракту уже есть ответ — спрашивать снова нельзя.
 $END_DOCUMENT
 $START_CONTENT
 {ANSWERS}
@@ -43,20 +56,29 @@ $END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
-- weight of the change: {MODE} — goes into `mode` of the root element
-- vocabulary of `delta`: {DELTA_FORMS} — the same word step 6 used for that node, never a synonym
-- `in` and `out` carry IDS of the dictionary, separated by ` | `, never the text of a value
-- every node the change touches is here with a `delta`; every node the data passes through is here
-  too, copied from the subgraph WITHOUT `delta`
-- every `<dep path>` names a `<module>` of this same file
-- the value that carries an FRD failure code stands in the `out` of the node that hands it out
-- not one `<route>`, `entry` or step list: the routes are written by another pass over this file,
-  once it is frozen
+- Вес изменения: {MODE} → атрибут `mode` корня.
+- Словарь `delta`: {DELTA_FORMS}. Используй ровно то слово, которое дал step 6. Синонимы запрещены.
+- `in` и `out` — только id из словаря через ` | `. Текст значения писать нельзя.
+- Контракт — сечение изменения через узел, не полный API.
+  Id попадает в `in`/`out` только если:
+  - другой конец есть в этом файле, или
+  - это вход/выход изменения, или
+  - его называет `<step>` / `<ext>` / `<delta>` FRD.
+  Вызов, который изменение не трогает — не включай.
+- `delta` менять нельзя (даже чтобы убрать blocker). Его читает только правило словаря.
+- Узлы изменения — с `delta`.
+  Транзитные узлы (данные проходят) — без `delta`, копировать из ripple.
+- `<dep path>` указывает только на `<module>` этого файла.
+- Код сбоя FRD стоит в `out` узла, который его отдаёт.
+- Никаких route, entry, step list и порядка выполнения.
 $END_CONSTRAINTS
 
 $START_FEEDBACK
-Evidence from the last red check, if this is a redelegation. Empty means the first attempt. Each
-blocker names the node to repair — repair exactly what it names, first.
+Evidence последней красной проверки (пусто = первая попытка).
+Каждый blocker называет узел. Чини ровно его и сначала.
+Часть blocker’ов найдена следующим pass’ом по маршрутам.
+Каждый указывает направление («X не принимает v от Y», «X недостижим из Y», «у X нет v в in»).
+Чини только названную сторону — никогда обе.
 $START_CONTENT
 {FEEDBACK}
 $END_CONTENT
@@ -73,6 +95,5 @@ schema:
     </module>
   </design>
 check: {CHECK}
-return: call workflow_result — the shape and the choice of rail are declared by your ROLE's
-OUTPUT_FORMAT
+return: вызови workflow_result по OUTPUT_FORMAT своей ROLE
 $END_OUTPUT

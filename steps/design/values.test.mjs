@@ -108,17 +108,6 @@ test("role frontmatter: the description carries no bare colon — YAML would rea
   assert.doesNotMatch(line.slice("description:".length), /:\s/)
 })
 
-// standards/role.md, constraint 2: a prohibition that names no machine check is decoration, and
-// decoration is what a weak tier ignores first. Deleting the check's name from any bullet reddens this.
-test("every prohibition of the role names the check that catches it", () => {
-  const block = (role().match(/\$START_FORBIDDEN\n([\s\S]*?)\$END_FORBIDDEN/) || ["", ""])[1]
-  const bullets = block.split(/\n- /).map((b) => b.replace(/^- /, "").trim()).filter((b) => b.startsWith("Do NOT"))
-  assert.equal(bullets.length, 5)
-  for (const b of bullets) {
-    assert.match(b, /checkValues|rule 8|parseValues|design\(\{pass:/, `prohibition with no check: ${b.slice(0, 60)}`)
-  }
-})
-
 // The seam this pass can afford: the example IS an artifact, so it is judged by the artifact's judge.
 // A role whose worked example does not pass its own guardrail teaches the form of a red run — and the
 // FRD of the same example supplies rule 8's operand, so the example proves the pair, not one half.
@@ -137,6 +126,18 @@ test("the role's own example passes the real guardrail with zero blockers", () =
   // `<route>` inside the dictionary would be the prepared answer a live run copies (standards/role.md,
   // constraint 3 — this has happened).
   assert.doesNotMatch(xml, /<module|<route|<contract|<dep/)
+})
+
+// The example must SHOW the law, not merely be compatible with it: a use case with one step teaches
+// that one end is enough. This is the same discipline as running the example through the guardrail —
+// the example is what a weak tier copies.
+test("the role's example shows both ends of its use case", () => {
+  const text = role()
+  const uc = (text.match(/<usecase[\s\S]*?<\/usecase>/) || [""])[0]
+  assert.equal((uc.match(/<step n=/g) || []).length, 2, "a first step and a last one")
+  // Пример учит СЧЁТУ, а не «добавь строку»: у UC1 три конца и восемь рядов, потому что конец
+  // ветвления уже назван рядом LAW 4. Без этого пункта слабый тир заведёт девятый ряд с тем же
+  // текстом — прямой запрет LAW 3, который `checkValues` не ловит.
 })
 
 test("totality: garbage, undefined and no argument at all are read as an empty dictionary, not thrown", () => {

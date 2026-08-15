@@ -11,7 +11,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { newDesign, parseDesign, parseRoutes, expand, assemble } from "./design.mjs"
+import { newDesign, parseDesign, parseRoutes, expand, assemble, unitsByPath } from "./design.mjs"
 import { parseValues } from "./values.mjs"
 import { parseNodes } from "./nodes.mjs"
 import { parseRoutes as parseWorkRoutes } from "./routes.mjs"
@@ -215,4 +215,23 @@ test("assembly: the number is the position of the NAMED value, and off-by-one is
   // `<role>` is read by NO guardrail, and precisely therefore it needs a seam: a projection that
   // quietly drops a section of the deliverable would pass every other test in this file.
   assert.match(out, /<role>REST-точка брони<\/role>/)
+})
+
+// R-shippable: одна деривация, два потребителя. Шаг 9 пишет юниты в `data-flow.md`, шаг 10 кладёт их
+// же на узел плана как `dod` — тикет режется из ПЛАНА, и без DoD исполнителю нечем закрыть узел
+// (живой прогон d8ef8c60: команда узла зелена до начала работы). Вторая копия деривации разойдётся с
+// первой молча, поэтому она одна и сверяется здесь круговым швом.
+test("unitsByPath и $START_TESTS — одна деривация: секции потока собираются из той же карты", () => {
+  const nodes = parseDesign(GRAPH)
+  const routes = parseRoutes(GRAPH)
+  const units = unitsByPath(nodes, routes)
+  const flow = expand(nodes, routes)
+
+  for (const [path, list] of units) {
+    const block = (flow.match(new RegExp(`\\$START_TESTS path="${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\n([\\s\\S]*?)\\$END_TESTS`)) || ["", ""])[1]
+    assert.deepEqual(block.trim().split("\n").map((l) => l.replace(/^\d+\.\s*/, "")), list, path)
+  }
+  // Узел, через который не идёт ни один маршрут, в карте ОТСУТСТВУЕТ — не лежит там с пустым списком.
+  assert.equal([...units.values()].every((l) => l.length > 0), true)
+  assert.equal(units.size, (flow.match(/\$START_TESTS /g) || []).length)
 })

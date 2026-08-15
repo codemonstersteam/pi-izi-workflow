@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url"
 import { parseMap } from "../intake/map.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 import { parseDesign, parseRoutes } from "../design/design.mjs"
-import { newPlanIndex, TASK_KEY, KEY_QUESTION } from "./plan.mjs"
+import { forwardLegs } from "../design/routes.mjs"
+import { newPlanIndex, TASK_KEY, KEY_QUESTION, GRAMMAR_VERSION } from "./plan.mjs"
+import { unitsByPath } from "../design/design.mjs"
 
 const RESOURCE = "src/main/java/org/acme/rest/json/FruitResource.java"
 const FRUIT = "src/main/java/org/acme/rest/json/Fruit.java"
@@ -87,6 +89,7 @@ const run = (over = {}) => newPlanIndex({
   trunk: "trunk" in over ? over.trunk : "main",
   answers: over.answers || ANSWERED,
   edges: over.edges,
+  units: "units" in over ? over.units : (over.design === null ? new Map() : unitsByPath(parseDesign(over.design || DESIGN), parseRoutes(over.design || DESIGN))),
 })
 
 const idsOf = (v) => v.order
@@ -131,6 +134,59 @@ test("the RETURN leg of a route is not an edge", () => {
   assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
   assert.deepEqual(r.value.nodes.find((n) => n.id === RESOURCE).deps.filter((d) => d === CARD), [], "the return does not order the callee after its caller")
   assert.ok(idsOf(r.value).indexOf(RESOURCE) < idsOf(r.value).indexOf(CARD), "the callee still comes first")
+})
+
+// D17. The defect live run f7bf154a died on, reproduced HERE — this is the step that names it, and
+// that is the whole problem: `cycle` is a refusal on a step with no role, no operator and no repair
+// rail, so the band ends holding a diagnosis nobody can act on. The route below is the live shape:
+// rule 7 of step 9 demanded a branch be walked, no FRD scenario exercised it, and pass C took it by
+// handing the value to the node that CALLS this one. The map already says `LIST -> RESOURCE`.
+//
+// Step 9's rule 9 now refuses that set of routes BEFORE it reaches here (steps/design/routes.mjs), and
+// it refuses it by `forwardLegs` — the very function this module orders by. These two tests are what
+// keep the two ends honest: the first proves this step still dies on the inverted route, the second
+// proves the way out step 9 offers the role actually reaches a plan.
+const INVERTING = ROUTED.replace("</design>", `  <route scenario="S3" entry="1" steps="${RESOURCE}#1 -> ${LIST}#1"/>\n</design>`)
+const SHORTENED = ROUTED.replace("</design>", `  <route scenario="S3" entry="1" steps="${RESOURCE}#1"/>\n</design>`)
+
+test("a route asserting the direction the map already declares closes the order — the f7bf154a refusal", () => {
+  const r = run({ design: INVERTING })
+  assert.equal(r.ok, false)
+  assert.equal(r.error.cls, "cycle")
+  assert.match(r.error.detail, new RegExp(`${RESOURCE}|${LIST}`))
+})
+
+test("the way out of rule 9 reaches a plan: a route that ENDS on the node that produced the value", () => {
+  const r = run({ design: SHORTENED })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  // …and it added no edge at all: a one-step route has no forward leg to assert.
+  assert.deepEqual(r.value.nodes.find((n) => n.id === RESOURCE).deps.filter((d) => d === LIST), [])
+})
+
+// The order this step builds comes from ONE derivation, and step 9's rule 9 promises "this will sort"
+// by calling the same function. Re-inline the loop in plan.mjs and the promise becomes a promise about
+// a different graph — this test is what notices.
+test("plan orders by forwardLegs itself — one derivation, two callers", () => {
+  const r = run({ design: ROUTED })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  const legs = forwardLegs(parseRoutes(ROUTED))
+  assert.ok(legs.length, "фикстура обязана нести хотя бы один прямой участок")
+  for (const l of legs) {
+    assert.ok(r.value.nodes.find((n) => n.id === l.from).deps.includes(l.to), `${l.from} → ${l.to}`)
+  }
+})
+
+// D18c. Run 53592269 shipped four false flows in `data-flow.md`, and NONE of them reached the plan —
+// the scenario nodes here are cut from the FRD's `<scenario>` rows, not from the routes. That held by
+// construction and by nothing else: no test said so, and the next person to source a scenario node
+// from the design would have removed the only thing keeping a lie out of the tickets. It is a seam
+// now. Source `frd.scenarios` from `routes` in plan.mjs and this goes red.
+test("a flow the FRD does not declare produces no plan node — the routes never become work", () => {
+  const invented = ROUTED.replace("</design>", `  <route scenario="S9invented" entry="1" steps="${RESOURCE}#1"/>\n</design>`)
+  const r = run({ design: invented })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.deepEqual(idsOf(r.value).filter((id) => id.startsWith("scenario:")), ["scenario:S1", "scenario:S2"])
+  assert.equal(idsOf(r.value).includes("scenario:S9invented"), false, "маршрут вне FRD не становится работой")
 })
 
 // S30e. A blocker of step 11 whose two ends the guardrail resolved to plan ids IS an edge, and the
@@ -299,4 +355,45 @@ test("refusals: every absence is named, and the core is total", () => {
 test("the key's shape lives in one place: the code and the skill agree", () => {
   const skill = readFileSync(fileURLToPath(new URL("./git-conventions.md", import.meta.url)), "utf8")
   assert.ok(skill.includes(TASK_KEY.source), `steps/plan/git-conventions.md must carry ${TASK_KEY.source} verbatim`)
+})
+
+// --- R-shippable: тикет режется из ПЛАНА, значит сдаточное знание обязано лежать в плане ----------
+//
+// Живой прогон d8ef8c60 (форма quarkus-rest-json-app-v2-t2) сдал план, по которому работу нельзя
+// СДАТЬ: у узла ресурса команда `mvn test -Dtest=FruitResourceTest` зелена ДО работы (в классе только
+// testList/testAdd), а какие тесты причитаются — знал шаг 9 и не передал; узел страницы приехал с
+// `delta: []` и не сказал исполнителю ничего, хотя FRD объявлял работу дословно в `<touched why>`.
+// Оба факта уже лежали на диске. Убери любой перенос — соответствующий тест краснеет.
+test("dod узла — юниты его пути, перенесённые из шага 9, а не посчитанные заново", () => {
+  const r = run({ design: ROUTED })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  const units = unitsByPath(parseDesign(ROUTED), parseRoutes(ROUTED))
+  for (const n of r.value.nodes) {
+    if (n.kind !== "code") continue
+    assert.deepEqual(n.dod, [...(units.get(n.id) || [])], n.id)
+  }
+  // У узла, через который идут маршруты, DoD непустой — иначе тикет закрывать нечем.
+  assert.ok(r.value.nodes.find((n) => n.id === CARD).dod.length > 0)
+})
+
+test("шаг 9 пропущен ⇒ dod: [] и узел жив — объявлено, а не домыслено", () => {
+  const r = run({ design: null })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  for (const n of r.value.nodes) if (n.kind === "code") assert.deepEqual(n.dod, [])
+})
+
+test("узел ширины несёт why из <touched> — он не немой даже без delta", () => {
+  const r = run({ design: ROUTED })
+  const pojo = r.value.nodes.find((n) => n.id === FRUIT)
+  assert.deepEqual(pojo.delta, [], "у этого узла дельты нет — ровно случай fruits.html прогона d8ef8c60")
+  assert.equal(pojo.why, "поле cardUrl", "работа названа FRD в <touched why> и обязана доехать до тикета")
+  // А узел, названный дельтой, why не требует: его работа уже в delta.
+  assert.equal(typeof r.value.nodes.find((n) => n.id === RESOURCE).why, "string")
+})
+
+test("новые поля не породили новых узлов: состав и порядок прежние, grammar поднята", () => {
+  const r = run({ design: ROUTED })
+  assert.deepEqual(idsOf(r.value), [FRUIT, RESOURCE, CARD, LIST, "scenario:S1", "scenario:S2"])
+  assert.equal(r.value.index.grammar, GRAMMAR_VERSION)
+  assert.equal(GRAMMAR_VERSION, 2, "форма артефакта расширена — версия поднята в том же изменении")
 })

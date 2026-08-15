@@ -26,6 +26,12 @@ import { attrs, ATTRS, tag } from "../../core/xml.mjs"
 // pipeline, and it already has a home: the same function that judges `fit` at step 2, together with
 // its defence against designations (ISO-8601, RFC 3339, HTTP/2). A second copy here would drift.
 import { numbersIn } from "../brd/brd.mjs"
+// EXTERNAL_DEPENDENCY: steps/review/review.mjs::frdIds — "what is an id of this FRD" is answered ONCE:
+// step 11's R4 resolves a blocker's evidence against it, and F9 below (the guard against 508d74fa's
+// class of defect — a rewind's subject erased instead of repaired) resolves the SAME evidence against
+// the SAME set, on the FRD the role just rewrote. Not a cycle: review.mjs takes frd/plan as data and
+// never imports this module.
+import { frdIds } from "../review/review.mjs"
 
 // THE FORM AS DATA, so the order can SUBSTITUTE it instead of restating it (ext/index.mjs::frdForm,
 // the same device as brdForm — see its BUG_FIX_CONTEXT G9e).
@@ -148,17 +154,21 @@ function provenance(at, value, source, known) {
   return out
 }
 
-// FUNCTION_CONTRACT: checkFrd — the seven rules of docs/intake.md §5
-//   Input:        { frd, nodes, known }
+// FUNCTION_CONTRACT: checkFrd — the seven rules of docs/intake.md §4, plus F9 (guard against a
+//                     rewind erasing what it was sent to repair)
+//   Input:        { frd, nodes, known, rewind }
 //                 nodes — Set<path> of the map's node keys (steps/intake/map.mjs::parseMap)
-//   Dependencies: provenance, FRD_FORM
+//                 rewind — [{ code, node, evidence }], the PREVIOUS review's blockers when it Rejected
+//                          (ext/index.mjs::checkFrd reads .agent/review.xml); [] when this is not a
+//                          rewind — F9 is then silent, exactly as F5 is silent with no sources
+//   Dependencies: provenance, FRD_FORM, steps/review/review.mjs::frdIds
 //   Antecedent:   frd — parseFrd's parse; nodes — a Set (empty means the map gave nothing, and then
 //                 F2/F3 will name every touched, which is the honest answer for an empty map)
-//   Consequent:   success: string[] of blockers, empty = green. Numbers F1..F7 match docs/intake.md
-//                          §5 and are NOT restated in prose here
+//   Consequent:   success: string[] of blockers, empty = green. Numbers F1..F7 and F9 match
+//                          docs/intake.md §4 and are NOT restated in prose here
 //                 failure: none — total; "the FRD is bad" is DATA, not a function failure
 //   Purity:       pure
-export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], known = null }) {
+export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], known = null, rewind = [] }) {
   const B = []
   // Who has an existing caller: a node someone else points an edge AT. `entries` answers the same
   // question for the world outside the repository. Both come from the map (steps/intake/map.mjs) —
@@ -398,22 +408,47 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   for (const e of errs) if (!codes.has(e)) B.push(`F6 код «${e}» из <ext> не описан в карте отказов`)
   for (const c of codes) if (!errs.has(c)) B.push(`F6 код «${c}» карты отказов не встречен ни одним <ext>`)
 
+  // F9 — a rewind's SUBJECT survives the repair. `rewind` carries the previous review's blockers only
+  // when it Rejected (ext/index.mjs::checkFrd reads .agent/review.xml); [] otherwise, and then this
+  // rule is as silent as F5 is with no sources.
+  //
+  // Only `goal-not-delivered` is judged: its carrier is always expressible in FRD grammar (a touched,
+  // a delta, a scenario, a use case's own `<post>`) so "the element is gone" is unambiguously a defect
+  // of the REPAIR, not of the finding. `unverifiable-node` gets no row here — after CODE_OWNER moved it
+  // to `operator` (steps/review/review.mjs) that code never reaches this rewind at all, and a rule for
+  // a rewind that cannot occur is a promise about a mechanism this artifact does not have.
+  //
+  // BUG_FIX_CONTEXT: live run 508d74fa (sandbox/runbox/quarkus-rest-json-app-v2-t2, before this fix
+  //   existed). A `goal-not-delivered` blocker named UC2 as its evidence; the role facing it deleted
+  //   UC2's carrier — `<touched>` emptied, `fruits.html` cut from `S2@nodes` — instead of adding one.
+  //   The blocker vanished because its subject no longer existed to point at, the plan collapsed from
+  //   3 nodes to 1, and BRD requirement R2 stopped being delivered by anyone, silently.
+  const ids = rewind.some((r) => r && r.code === "goal-not-delivered") ? frdIds(frd) : null
+  for (const r of rewind) {
+    if (!r || r.code !== "goal-not-delivered") continue
+    const evidence = String((r && r.evidence) || "").trim()
+    if (evidence && !ids.has(evidence)) {
+      B.push(`F9 предмет перемотки «${evidence}» удалён из FRD — требование не гасят удалением; верни элемент; если требование действительно снято оператором, оно снимается из TASK.md/BRD отдельной работой, не полосой`)
+    }
+  }
+
   return B
 }
 
 // FUNCTION_CONTRACT: newFrd — step 6's artifact, fit to be handed to steps 7-9
-//   Input:        { xml, nodes, tests, sources } — xml as the role wrote it in staging
+//   Input:        { xml, nodes, tests, sources, rewind } — xml as the role wrote it in staging
 //   Dependencies: parseFrd, checkFrd, numbersIn
 //   Antecedent:   xml — any value; nodes — Set<path> from the map; tests — its subset marked
 //                 `kind="test"` (steps/intake/map.mjs::parseMap); sources — the texts a number may
 //                 come from (TASK.md, the VALUES of operator answers, the BRD, the map itself); an
-//                 empty array means "no sources supplied" and F5's number rule stays silent
+//                 empty array means "no sources supplied" and F5's number rule stays silent; rewind —
+//                 forwarded to checkFrd's F9 unchanged, [] when this is not a rewind
 //   Consequent:   success: the frozen FRD plus `unknown` — how many deltas the role could not
 //                          classify; step 7 refuses to write a weight while that number is non-zero
 //                 failure: "invalid-frd" — the detail carries EVERY blocker, one per line, and rides
 //                          in the FEEDBACK of the redelegation exactly as newBrd's does
 //   Purity:       pure
-export function newFrd({ xml, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], sources = [] }) {
+export function newFrd({ xml, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], sources = [], rewind = [] }) {
   const frd = parseFrd(xml)
   if (!frd.usecases.length && !frd.deltas.length) {
     return err("invalid-frd", "в артефакте нет ни <usecase>, ни <delta> — грамматика не распознана: staging пуст или это не frd.xml")
@@ -422,7 +457,7 @@ export function newFrd({ xml, nodes = new Set(), tests = new Set(), entries = ne
   const src = sources.filter(Boolean)
   const known = src.length ? new Set(src.flatMap((t) => [...numbersIn(t)])) : null
 
-  const blockers = checkFrd({ frd, nodes, tests, entries, edges, known })
+  const blockers = checkFrd({ frd, nodes, tests, entries, edges, known, rewind })
   if (blockers.length) return err("invalid-frd", blockers.join("\n  "))
 
   return ok(Object.freeze({ ...frd, unknown: frd.deltas.filter((d) => d.form === "Unknown").length }))

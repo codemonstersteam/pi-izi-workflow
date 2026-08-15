@@ -8,6 +8,7 @@ import assert from "node:assert/strict"
 import { mergeGraph, newGraph, graphXml, suiteFor } from "./graph.mjs"
 import { parseComputed } from "../scope/computed.mjs"
 import { parseMap } from "../intake/map.mjs"
+import { GRAMMAR_VERSION } from "../scope/part.mjs"
 
 const M = "src/main/java/org/acme/rest/json"
 const T = "src/test/java/org/acme/rest/json"
@@ -77,7 +78,7 @@ test("happy: the live form merges into a map — modules, suites bound by name, 
   const at = (p) => g.modules.find((m) => m.path === p)
 
   assert.equal(g.modules.length, 6)                     // a module is a FILE, exactly as in a part
-  assert.equal(g.grammar, "3")                          // stamped from the part grammar, not a second counter
+  assert.equal(g.grammar, GRAMMAR_VERSION)              // stamped FROM the part grammar — one counter, not a copy that drifts
 
   // THE binding this step exists for: two suites over one folder, told apart by `match`. Bound by
   // path alone, the IT would have taken the unit command and executed nothing, green.
@@ -123,7 +124,7 @@ test("happy: the live form merges into a map — modules, suites bound by name, 
   assert.ok(g.gaps.some((x) => x.path === "src/main/resources/import.sql"))   // the part's own gap survives
 
   const xml = graphXml(g)
-  assert.match(xml, /^<appgraph grammar="3" modules="6" components="1" isolated="1" levels="4">/)
+  assert.match(xml, new RegExp(`^<appgraph grammar="${GRAMMAR_VERSION}" modules="6" components="1" isolated="1" levels="4">`))
   assert.match(xml, /<artifact name="rest-json-quickstart" root="\."\/>/)
   assert.match(xml, /<toggles found="no"\/>/)
   assert.match(xml, new RegExp(`<module path="${T}/FruitResourceIT\\.java" kind="test" suite="component-native"`))

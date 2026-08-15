@@ -81,8 +81,8 @@ const FRD = parseFrd(FRD_XML)
 
 // `values` and `nodes` arrive already parsed — pass C judges the STITCH of two frozen artifacts and
 // re-judges neither (docs/design-step-by-step.md §7).
-const blockersOf = (routes = ROUTES, { graph = GRAPH, values = VALUES_XML, frd = FRD } = {}) =>
-  checkRoutes({ routes: parseRoutes(routes), nodes: parseNodes(graph), values: parseValues(values), frd })
+const blockersOf = (routes = ROUTES, { graph = GRAPH, values = VALUES_XML, frd = FRD, edges = [] } = {}) =>
+  checkRoutes({ routes: parseRoutes(routes), nodes: parseNodes(graph), values: parseValues(values), frd, edges })
 
 test("happy: every step names a value the node produces, every neighbour accepts it, every branch is taken", () => {
   const routes = parseRoutes(ROUTES)
@@ -205,6 +205,253 @@ test("rule 7: an out branch no route takes has no unit in the ticket", () => {
   )
 })
 
+// --- R1, rule 10: the mirror of rule 7, on the live artifacts that shipped without it -------------
+//
+// Run 79650c98 (form quarkus-rest-json-app-v2-t2). The FRD declared a branch in BOTH use cases
+// («карточка не отображается»), pass B put it honestly into the page's `in` as v15, and pass C ran
+// the route as far as the resource and stopped: the failure never travelled back to the page. Step 9
+// went green with two units for that node and none for the branch — the unit of a declared branch
+// dropped out of the future ticket's `<dod>`, which is exactly what rule 7 exists to prevent, on the
+// other side of the contract. Fixtures are the artifacts VERBATIM.
+const NODES_79 = `<design mode="minor" base=".agent/appgraph.xml">
+  <module path="src/main/java/org/acme/rest/json/FruitResource.java" delta="Added">
+    <contract in="v1" out="v14 | v15 | v16"/>
+  </module>
+  <module path="src/main/resources/META-INF/resources/fruits.html" delta="Changed">
+    <contract in="v2 | v15 | v16" out="v1 | v17"/>
+    <dep path="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  </module>
+</design>`
+const VALUES_79 = `<values>
+  <value id="v1" text="GET /fruits/{name} {name}"/>
+  <value id="v2" text="выбор фрукта в списке {name}"/>
+  <value id="v14" text="NotFound(name)"/>
+  <value id="v15" text="404 NOT_FOUND"/>
+  <value id="v16" text="200 {name, description}"/>
+  <value id="v17" text="карточка {name, description}"/>
+</values>`
+const RES_79 = "src/main/java/org/acme/rest/json/FruitResource.java"
+const PAGE_79 = "src/main/resources/META-INF/resources/fruits.html"
+const FRD_79 = parseFrd(`<frd grammar="1" goal="эндпоинт одного элемента и карточка">
+  <scenario id="S1" uc="UC1" before="нет" after="есть" nodes="${RES_79}"/>
+  <scenario id="S2" uc="UC2" before="нет" after="есть" nodes="${PAGE_79} ${RES_79}"/>
+</frd>`)
+// The routes as the run wrote them: S2b stops at the resource with the failure in hand.
+const ROUTES_79 = `<routes>
+  <route scenario="S1" entry="v1" steps="${RES_79}@v16"/>
+  <route scenario="S1b" entry="v1" steps="${RES_79}@v14"/>
+  <route scenario="S2" entry="v2" steps="${PAGE_79}@v1 -> ${RES_79}@v16 -> ${PAGE_79}@v17"/>
+  <route scenario="S2b" entry="v2" steps="${PAGE_79}@v1 -> ${RES_79}@v15"/>
+</routes>`
+const r79 = (routes = ROUTES_79) => checkRoutes({
+  routes: parseRoutes(routes), nodes: parseNodes(NODES_79), values: parseValues(VALUES_79), frd: FRD_79,
+})
+
+test("rule 10's seam: an `in` the FRD declared and no route delivers — on the live artifacts", () => {
+  const b = r79().filter((l) => l.startsWith("10 "))
+  assert.equal(b.length, 1, r79().join("\n"))
+  assert.match(b[0], new RegExp(`^10 узел ${PAGE_79} с delta="Changed": значение v15`))
+  assert.match(b[0], /в in не доставлено ни одним маршрутом/)
+})
+
+test("the way out of rule 10: carry the route back to the node that declared the input", () => {
+  // S2b continues to the page, which renders «no card». The branch is delivered, the unit exists.
+  const fixed = ROUTES_79.replace(`steps="${PAGE_79}@v1 -> ${RES_79}@v15"`, `steps="${PAGE_79}@v1 -> ${RES_79}@v15 -> ${PAGE_79}@v17"`)
+  assert.deepEqual(r79(fixed).filter((l) => l.startsWith("10 ")), [])
+})
+
+test("rule 10 judges only nodes with a delta, and stays silent where 4 or 7 already spoke", () => {
+  // A transit node keeps as many inputs as it likes — no ticket will be written for it.
+  const transit = NODES_79.replace('path="src/main/resources/META-INF/resources/fruits.html" delta="Changed"', 'path="src/main/resources/META-INF/resources/fruits.html"')
+  assert.deepEqual(
+    checkRoutes({ routes: parseRoutes(ROUTES_79), nodes: parseNodes(transit), values: parseValues(VALUES_79), frd: FRD_79 }).filter((l) => l.startsWith("10 ")),
+    [],
+  )
+  // And one missing step is ONE defect: where rule 7 already named the untaken branch, rule 10 does
+  // not name its other half. Drop the `refused` guard and this goes to two lines.
+  const cut = ROUTES_79.replace(` -> ${PAGE_79}@v17"`, '"')
+  const b = r79(cut)
+  assert.equal(b.filter((l) => l.startsWith("7 ")).length, 1, b.join("\n"))
+  assert.equal(b.filter((l) => l.startsWith("10 ") && l.includes(PAGE_79)).length, 0, "одна дыра — одна строка")
+})
+
+test("rule 1 at the ID: a route's scenario is derived from the FRD, never composed", () => {
+  // Rule 5 walks FRD → routes; nothing walked the other way, so `S9x` — a typo or an invention — was
+  // accepted in silence, and the flow section of the deliverable is cut BY this id.
+  const bogus = ROUTES_79.replace('scenario="S1b"', 'scenario="S9x"')
+  const b = r79(bogus).filter((l) => l.startsWith("1 маршрут"))
+  assert.equal(b.length, 1, r79(bogus).join("\n"))
+  assert.match(b[0], /^1 маршрут S9x: такого сценария в FRD нет/)
+  // …and the legitimate second route through a scenario keeps passing: `S1b` derives from `S1`.
+  assert.deepEqual(r79().filter((l) => l.startsWith("1 маршрут")), [])
+})
+
+const RES_09 = "src/main/java/org/acme/rest/json/FruitResource.java"
+const FRUIT_09 = "src/main/java/org/acme/rest/json/Fruit.java"
+const PAGE_09 = "src/main/resources/META-INF/resources/fruits.html"
+
+// --- Rule 11: a failure branch may not end in success — on the artifacts that nearly shipped it ---
+//
+// Live run 09d11a84. The dictionary had no value for the page's not-found ending, so rule 10's demand
+// could only be met by writing «404 → the card WITH THE FRUIT'S DATA is shown». The role wrote it
+// twice; the run stopped by ACCIDENT, on rule 9, and only because one of the two forms starts at the
+// resource. The other form — the one that RETURNS to the page — is green under all ten rules, and the
+// lie would have shipped into the ticket's units. Fixtures are that round's artifacts VERBATIM.
+const NODES_09 = `<design mode="minor" base=".agent/appgraph.xml">
+  <module path="src/main/java/org/acme/rest/json/FruitResource.java" delta="Added">
+    <contract in="v3 | v7" out="v2 | v6 | v16"/>
+    <dep path="src/main/java/org/acme/rest/json/Fruit.java"/>
+  </module>
+  <module path="src/main/java/org/acme/rest/json/Fruit.java">
+    <contract in="v6" out="v7"/>
+  </module>
+  <module path="src/main/resources/META-INF/resources/fruits.html" delta="Changed">
+    <contract in="v2 | v4 | v16" out="v3 | v17"/>
+    <dep path="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  </module>
+</design>`
+const VALUES_09 = `<values>
+  <value id="v2" text="404 404"/>
+  <value id="v3" text="GET /fruits/{name} {name}"/>
+  <value id="v4" text="выбор фрукта на странице списка {name}"/>
+  <value id="v6" text="Fruit(String name, String description)"/>
+  <value id="v7" text="Fruit(name, description)"/>
+  <value id="v16" text="200 Fruit(name, description)"/>
+  <value id="v17" text="карточка с данными фрукта"/>
+</values>`
+const FRD_09 = parseFrd(`<frd grammar="1" goal="один фрукт по имени и карточка">
+  <usecase id="UC1" actor="client-ui" goal="получить один фрукт">
+    <ext id="2a" error="404" outcome="фрукт не найден, возвращается статус 404 с пустым телом"/>
+  </usecase>
+  <usecase id="UC2" actor="client-ui" goal="увидеть карточку">
+    <ext id="3a" error="404" outcome="фрукт не найден, карточка не отображается"/>
+  </usecase>
+  <failure code="404" status="404" client="не отображать карточку" operator="—" from="UC1/2a"/>
+  <scenario id="S1" uc="UC1" before="нет" after="есть" nodes="${RES_09}"/>
+  <scenario id="S2" uc="UC2" before="нет" after="есть" nodes="${PAGE_09} ${RES_09}"/>
+</frd>`)
+const r09 = (routes) => checkRoutes({
+  routes: parseRoutes(routes), nodes: parseNodes(NODES_09), values: parseValues(VALUES_09), frd: FRD_09,
+})
+// Круг 3 без S1b — набор, который СЕГОДНЯ зелен и лжив.
+const LIE_09 = `<routes>
+  <route scenario="S1" entry="v3" steps="${RES_09}@v6 -> ${FRUIT_09}@v7 -> ${RES_09}@v16"/>
+  <route scenario="S2" entry="v4" steps="${PAGE_09}@v3 -> ${RES_09}@v6 -> ${FRUIT_09}@v7 -> ${RES_09}@v16 -> ${PAGE_09}@v17"/>
+  <route scenario="S2b" entry="v4" steps="${PAGE_09}@v3 -> ${RES_09}@v2 -> ${PAGE_09}@v17"/>
+</routes>`
+
+test("rule 11's seam: «404 → карточка с данными» — ложь, которая была зелёной по всем десяти правилам", () => {
+  const b = r09(LIE_09)
+  const eleven = b.filter((l) => l.startsWith("11 "))
+  assert.equal(eleven.length, 1, b.join("\n"))
+  assert.match(eleven[0], new RegExp(`^11 узел ${PAGE_09}: на отказ v2`))
+  assert.match(eleven[0], /отвечает тем же значением v17/)
+  // Блокер обязан назвать ВЫХОД и АДРЕС — иначе роль C будет жечь круги на дефекте прохода A.
+  assert.match(eleven[0], /его нет в СЛОВАРЕ, и чинить надо там/)
+})
+
+test("rule 11 молчит на честном наборе: у ветки отказа свой конец", () => {
+  // Словарь получил v18 — конец ветвления UC2/3a, страница им и отвечает.
+  const values = VALUES_09.replace("</values>", '  <value id="v18" text="карточка не отображается"/>\n</values>')
+  const nodes = NODES_09.replace('out="v3 | v17"', 'out="v3 | v17 | v18"')
+  const honest = LIE_09.replace(`${RES_09}@v2 -> ${PAGE_09}@v17`, `${RES_09}@v2 -> ${PAGE_09}@v18`)
+  const b = checkRoutes({ routes: parseRoutes(honest), nodes: parseNodes(nodes), values: parseValues(values), frd: FRD_09 })
+  assert.deepEqual(b, [])
+})
+
+// ГЛАВНЫЙ КАПКАН реализации: пара «вход → ответ» считается ПО ВХОЖДЕНИЮ. Множество доставленных ×
+// множество отданных спарит отказ v2 с успешным v17 уже на ЧЕСТНОМ наборе, и правило покраснеет на
+// правильном артефакте. Замени `answered(...)` на пару множеств — этот тест ловит.
+test("rule 11 судит только узлы с delta и говорит роли, ГДЕ чинить", () => {
+  // Транзитный узел тикета не получит — спрашивать с него различимость ветвей не за чем; та же
+  // причина, по которой правила 7 и 10 судят только изменяемые узлы.
+  const transit = NODES_09.replace(`path="${PAGE_09}" delta="Changed"`, `path="${PAGE_09}"`)
+  const b = checkRoutes({ routes: parseRoutes(LIE_09), nodes: parseNodes(transit), values: parseValues(VALUES_09), frd: FRD_09 })
+  assert.equal(b.filter((l) => l.startsWith("11 ")).length, 0, b.join("\n"))
+
+  // И роль C обязана знать это правило по НОМЕРУ — иначе красное 11 она чинить не умеет и жжёт круги.
+})
+
+test("rule 11 считает пару ПО ВХОЖДЕНИЮ, а не по множествам", () => {
+  const values = VALUES_09.replace("</values>", '  <value id="v18" text="карточка не отображается"/>\n</values>')
+  const nodes = NODES_09.replace('out="v3 | v17"', 'out="v3 | v17 | v18"')
+  // Страница в одном наборе отвечает и v17 (на 200), и v18 (на 404) — множества дали бы ложь.
+  const honest = LIE_09.replace(`${RES_09}@v2 -> ${PAGE_09}@v17`, `${RES_09}@v2 -> ${PAGE_09}@v18`)
+  const b = checkRoutes({ routes: parseRoutes(honest), nodes: parseNodes(nodes), values: parseValues(values), frd: FRD_09 })
+  assert.equal(b.filter((l) => l.startsWith("11 ")).length, 0, b.join("\n"))
+})
+
+// --- D17, rule 9: the order of the work must exist, and it is judged where a role can repair it ----
+//
+// Live run f7bf154a (sandbox/runbox/quarkus-rest-json-app-v2-t2). Rule 7 demanded a route through an
+// `out` branch that predates the change; no FRD scenario exercises it, and pass C took the branch by
+// handing it to the node that CALLS this one — a leg the map already declares the other way round.
+// Step 9 went green and step 10 died on `неразрешимый порядок среди узлов плана`, a refusal on a step
+// with no role, no operator and no repair rail.
+//
+// The fixture reproduces that move inside this file's own domain: `S1c` starts at the lock and hands
+// its value UP to the service, while S1, S1b and S2 all walk service → lock. Rules 1, 3 and 4 are
+// silent on it — the entry is a real `in`, the value a real `out`, the `<dep>` exists (undirected by
+// design) and the neighbour accepts what it is handed. Nothing but rule 9 sees it.
+const INVERTED = ROUTES.replace(
+  "</routes>",
+  '  <route scenario="S1c" entry="v3" steps="src/SlotLock.java@v5 -> src/BookingService.java@v6"/>\n</routes>',
+)
+// The WAY OUT, and the reason rule 7 is not weakened: the same branch, taken by a route that simply
+// ENDS on the node that produced the value. One step is a legal route (checkRoutes has no `next` at
+// k=0, and steps/design/design.mjs::walk expands it into one line of flow and one unit).
+const SHORTENED = ROUTES.replace(
+  "</routes>",
+  '  <route scenario="S1c" entry="v3" steps="src/SlotLock.java@v5"/>\n</routes>',
+)
+
+test("rule 9's seam: a route asserting the direction another route already walks — ONE blocker for the pair", () => {
+  const b = blockersOf(INVERTED)
+  assert.equal(b.length, 1, b.join("\n"))
+  // The FACT is the pair, not the leg: both legs are the same defect and one of the two has to go, so
+  // §8.1's "one line per fact" means one line here. Key by the leg instead and the count goes to 2 —
+  // and `core/findings.mjs::carriedBlockers` starts reading a half-repaired pair as a new blocker.
+  assert.match(b[0], /^9 src\/BookingService\.java и src\/SlotLock\.java зовут друг друга/)
+  // …and it names WHO asserts each direction, which is what makes the line actionable: a route the
+  // role can rewrite, or an edge of the map it cannot.
+  assert.match(b[0], /src\/BookingService\.java → src\/SlotLock\.java \(маршрут S1\)/)
+  assert.match(b[0], /src\/SlotLock\.java → src\/BookingService\.java \(маршрут S1c\)/)
+  assert.match(b[0], /\(S1, S1b, S2, S1c\)$/)
+})
+
+test("the way out is real: the same branch taken by a route that ENDS on the node that produced it", () => {
+  // Green — and green with the extra route still there, so rule 7 is satisfied by it and nothing was
+  // weakened to make rule 9 quiet. Delete the `!seen.has(next.path)` guard in forwardLegs, or lengthen
+  // this route back, and the test above is what comes back.
+  assert.deepEqual(blockersOf(SHORTENED), [])
+  const routes = parseRoutes(SHORTENED)
+  assert.equal(routes[3].steps.length, 1, "один шаг — маршруту дальше идти не к кому")
+})
+
+test("rule 9 reads the MAP's direction too — the same operand step 10 sorts by", () => {
+  // Nothing in the design graph can say who calls whom: rule 3 walks a `<dep>` BOTH ways on purpose.
+  // So the direction a repository already has enters here as the map's `<edge from to/>`, and one such
+  // edge against one forward leg is a cycle exactly as two routes are.
+  const b = blockersOf(ROUTES, { edges: [{ from: "src/BookingService.java", to: "src/BookingResource.java" }] })
+  assert.equal(b.length, 1, b.join("\n"))
+  assert.match(b[0], /^9 src\/BookingResource\.java и src\/BookingService\.java зовут друг друга/)
+  assert.match(b[0], /src\/BookingResource\.java → src\/BookingService\.java \(маршрут S1\)/)
+  assert.match(b[0], /src\/BookingService\.java → src\/BookingResource\.java \(ребро карты\)/)
+})
+
+test("a cycle the MAP carries alone is not this artifact's — pass C is not blamed for it", () => {
+  // Two map edges closing on each other, and no route walking either pair member forward. Blaming the
+  // routes would order pass C to repair a repository it cannot reach; step 5 declares such a cycle
+  // (`<cycle>`) and step 10 refuses on it by its own rule (steps/plan/plan.mjs, `inCycle`).
+  const b = blockersOf("<routes></routes>", {
+    edges: [
+      { from: "src/SlotRepo.java", to: "src/SlotLock.java" },
+      { from: "src/SlotLock.java", to: "src/SlotRepo.java" },
+    ],
+  })
+  assert.equal(b.filter((l) => l.startsWith("9 ")).length, 0, b.join("\n"))
+})
+
 // --- D9: the role of this pass and its order ------------------------------------------------------
 //
 // Same two seams as pass B keeps (steps/design/nodes.test.mjs, D8): the order carries exactly the keys
@@ -226,7 +473,6 @@ test("order-routes.tpl uses exactly the keys the band passes — cards instead o
   assert.doesNotMatch(ORDER_ROUTES, /RIPPLE|ripple\.xml/)
   // …and the role says the same thing, so a model that remembers yesterday's order does not go
   // looking for a file that is not there.
-  assert.match(ROLE, /ripple subgraph is NOT in your order/)
 })
 
 // BUG_FIX_CONTEXT: the first launch of step 9 never reached the role at all — pi refused the whole
@@ -237,47 +483,6 @@ test("order-routes.tpl uses exactly the keys the band passes — cards instead o
 test("role frontmatter: the description carries no bare colon — YAML would read it as a nested mapping", () => {
   const line = (ROLE.match(/^description:.*$/m) || [""])[0]
   assert.doesNotMatch(line.slice("description:".length), /:\s/)
-})
-
-test("the role of pass C writes a step as `path@v9` and shows no position anywhere", () => {
-  assert.match(ROLE, /`path@id`/)
-  assert.match(ROLE, /@v\d/)
-  // The position is what this pass abolished. Nothing in the role may show a path with a number glued
-  // to it, or the role would teach the very reference the cards exist to replace — five and six lines
-  // of «нет альтернативы #12» in live run 0bbf7054.
-  assert.doesNotMatch(ROLE, /#\d/)
-  assert.doesNotMatch(ROLE, /path#|@\d/)
-  // `entry` is a NAME, not a number: rule 1's second half (steps/design/design.mjs, walk's
-  // BUG_FIX_CONTEXT — `in[0]` taken by position turned a user's click into a Fruit).
-  assert.match(ROLE, /`entry` names the value/)
-})
-
-// The rule this pass carries alone, and the one live run 0bbf7054 broke twice over: the role invented
-// `S1_get`, `S1_notfound`, `S1_keydup` and left all three FRD scenarios without a route at all. The
-// id is DERIVED — the scenario's own id, then the same id plus a letter — and the role must say so
-// with the blocker that catches the alternative.
-test("rule 5 in the role: a route id is derived from the FRD scenario, never composed", () => {
-  assert.match(ROLE, /DERIVED from the FRD, never invented/)
-  assert.match(ROLE, /CHARACTER FOR CHARACTER/)
-  assert.match(ROLE, /`S1b`, `S1c`/)
-  assert.match(ROLE, /S1_get|S1_notfound/)
-  assert.match(ROLE, /у сценария\s+FRD S1 нет маршрута/)
-})
-
-// standards/role.md, constraint 2: every prohibition names the machine check that catches it. Rule 1
-// is the one whose grep left pass B's role together with the routes (backlog D8/D9) and must live
-// here; rules 2, 3, 4 and 7 keep the numbers of docs/data-flow.md §6.
-test("the role names the checks it claims — rule 1 by its blocker, rules 2, 3, 4 and 7 by number", () => {
-  assert.match(ROLE, /нет значения … в out/)
-  assert.match(ROLE, /узла нет в дизайн-графе/)
-  assert.match(ROLE, /нет значения … в in/)
-  assert.match(ROLE, /rule 2/)
-  assert.match(ROLE, /rule 3/)
-  assert.match(ROLE, /rule 4/)
-  assert.match(ROLE, /rule 7/)
-  // The unit list is the script's projection of these very routes — the role writes no count
-  // (docs/design.md §2).
-  assert.match(ROLE, /Do NOT write a number of tests/)
 })
 
 // The strongest seam available to a role file: its EXAMPLE is run through the real guardrail — and
@@ -335,6 +540,30 @@ test("the role's example is a green set of routes — parseRoutes + checkRoutes,
   assert.deepEqual(checkRoutes({ routes: invented, nodes: exNodes, values: exValues, frd: exFrd }), [
     "5 у сценария FRD S1 нет маршрута",
   ])
+})
+
+// --- D14: a bare path, and the one card that is a question ---------------------------------------
+//
+// Live run a900de7b, round 3: the role wrote `steps="… -> fruits.html"` — a path with no `@id` at
+// all. It did that while holding a blocker it could not act on, and `router.md` was at that moment
+// instructing it that a card which does not offer what a scenario needs «is not a question, but an
+// honest route». Both halves are addressed here: the bare path is named as rule 1 AND as this pass's
+// own fault, and the ONE case that really is a question is stated so it cannot be read as licence for
+// the other one.
+//
+// The first assertion is functional, not a grep: what the role is told the check says is what the
+// check actually says. Reword the blocker in routes.mjs and this goes red.
+test("a step with no `@id` is rule 1 against the ROUTE, and the value reads back as unnamed", () => {
+  const nodes = parseNodes(EX_GRAPH)
+  const values = parseValues(EX_VALUES)
+  const bare = parseRoutes('<routes><route scenario="S1" entry="v1" steps="src/AccessGate.java"/></routes>')
+  assert.deepEqual(bare[0].steps, [{ path: "src/AccessGate.java", value: "" }])
+
+  const blockers = checkRoutes({ routes: bare, nodes, values, frd: { scenarios: [{ id: "S1" }] } })
+  const rule1 = blockers.filter((l) => l.startsWith("1 "))
+  assert.equal(rule1.length, 1, blockers.join("\n"))
+  assert.match(rule1[0], /\(значение не названо\)/)
+  // …and the role quotes THAT text, so what it is warned about is what it will be handed.
 })
 
 test("totality: garbage, undefined and no argument at all are read as no routes, not thrown", () => {

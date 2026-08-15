@@ -16,6 +16,10 @@
 // EXTERNAL_DEPENDENCY: steps/design/design.mjs — parseDesign AND parseRoutes, both parsed by the
 //             CALLER (ext/index.mjs) and handed in. The routes carry the change's own direction and
 //             are absent whenever step 9 was skipped, which is a legal input, not a failure.
+// EXTERNAL_DEPENDENCY: steps/design/routes.mjs — forwardLegs, the ONE derivation of "which directed
+//             edge does a route assert". Step 9's rule 9 refuses a set of routes whose order cannot be
+//             built, and it refuses it by this very function: the two steps must not be able to
+//             disagree about what a route says (backlog D17, live run f7bf154a).
 // EXTERNAL_DEPENDENCY: steps/plan/git-conventions.md — the branch convention this module encodes:
 //             `<prefix>/<KEY>`, prefix from the weight, base a fact of git. TASK_KEY below is the ONE
 //             copy of the key's shape, and plan.test.mjs asserts that the file and this constant
@@ -32,8 +36,14 @@
 
 import { ok, err } from "../../core/result.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
+import { forwardLegs } from "../design/routes.mjs"
 
-export const GRAMMAR_VERSION = 1
+// 2 — the node carries what a TICKET needs to be shippable: `dod` (its units, derived once at step 9
+//     by steps/design/design.mjs::unitsByPath) and `why` (the FRD's own words about why this node is
+//     touched). Live run d8ef8c60 shipped a plan whose page node read `delta: []` and whose resource
+//     node's check command was green before a line was written — both facts already existed on disk
+//     and the plan simply did not carry them.
+export const GRAMMAR_VERSION = 2
 
 // The key's shape, in ONE place — steps/plan/git-conventions.md carries the same regexp for the human
 // reader and plan.test.mjs fails when the two disagree.
@@ -84,7 +94,7 @@ const oneCmd = (suite, testPath) =>
     : suite.cmd
 
 // FUNCTION_CONTRACT: newPlanIndex — the change as an ordered DAG of work
-//   Input:        { frd, map, mode, design, routes, trunk, answers, edges }
+//   Input:        { frd, map, mode, design, routes, trunk, answers, edges, units }
 //                 frd    — parseFrd's parse (steps/intake/frd.mjs): deltas, touched, scenarios
 //                 map    — parseMap's parse (steps/intake/map.mjs): nodes, tests, edges, nodeTests,
 //                          suites, spine, cycles
@@ -115,7 +125,7 @@ const oneCmd = (suite, testPath) =>
 //                          "uncovered-node" — a `code` node with no check command and no scenario
 //                          "no-suite"       — a scenario node whose nodes declare no suite at all
 //   Purity:       pure
-export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, edges } = {}) {
+export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, edges, units = new Map() } = {}) {
   const weight = String(mode == null ? "" : mode).trim()
   if (!weight) return err("no-mode", ".agent/mode пуст или отсутствует — шаг 7 не отработал, вес не угадывается")
   if (!PREFIX[weight]) {
@@ -156,11 +166,27 @@ export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, e
     .filter((d) => d && d.node === path)
     .map((d) => `${d.op || "(без op)"} (${d.form || "?"})`)
 
+  // WHY a node is in the plan when no `<delta>` names it. A node reaches the width through
+  // `<touched path why>` too, and until now only the delta travelled: `fruits.html` arrived in the
+  // ticket with `delta: []` and nothing at all about the work — the implementer had to guess it back
+  // out of the code (live run d8ef8c60). The FRD already said it; the plan simply did not carry it.
+  const whyOf = (path) => {
+    const row = ((frd && frd.touchedRows) || []).find((t) => t && t.path === path)
+    return String((row && row.why) || "").trim()
+  }
+
   const nodes = ordered.map((path) => ({
     id: path,
     kind: DOC_EXT.test(path) ? "doc" : "code",
     new: created.has(path),
     delta: deltasOf(path),
+    why: whyOf(path),
+    // THE DEFINITION OF DONE, carried and not recomputed. Step 9 derived it
+    // (steps/design/design.mjs::unitsByPath) and wrote it into `.agent/data-flow.md`; the ticket is
+    // cut from the PLAN, so a plan without it hands the implementer a node whose check command is
+    // green before any work and says nothing about which tests are owed. `[]` when step 9 was skipped
+    // — declared, exactly as `deps: []` is for a created node, never guessed.
+    dod: [...(units.get(path) || [])],
     deps: [],
     check: [],
     coveredBy: [],
@@ -246,15 +272,12 @@ export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, e
   //             along the same nodes (`fruit-card#2 -> FruitResource#1 -> fruit-card#3`), and taking
   //             the return as an edge would reintroduce exactly the two-node cycle that disqualified
   //             `<dep>`. A node already seen in this route is where the return begins.
-  for (const r of routes || []) {
-    const steps = (r && r.steps) || []
-    const seen = new Set()
-    for (const [k, s] of steps.entries()) {
-      seen.add(s.path)
-      const next = steps[k + 1]
-      if (next && !seen.has(next.path)) addDep(s.path, next.path)   // caller waits for the callee
-    }
-  }
+  //
+  // D17: the derivation itself moved to steps/design/routes.mjs::forwardLegs and is CALLED from both
+  // sides. Its other caller is rule 9 of step 9's own guardrail, which refuses a set of routes whose
+  // order cannot be built — and a promise of "step 10 will sort this" made by a SECOND copy of this
+  // loop would be a promise about a different graph (live run f7bf154a, backlog D17).
+  for (const l of forwardLegs(routes)) addDep(l.from, l.to)          // caller waits for the callee
 
   // A created module has no edge in the map — it is not there yet. Its neighbours are what the
   // designer wrote, and the undirectedness of `<dep>` is harmless here: a module that does not exist

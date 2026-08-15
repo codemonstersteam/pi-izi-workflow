@@ -258,6 +258,39 @@ test("order.spine.tpl carries no bare file-name pattern — a pattern here lands
   assert.doesNotMatch(tpl, /\*(Test|IT)(?!\.java)/)
 })
 
+// P7 — D21. A TOGGLE is what a running instance switches without a rebuild, and `config` is the key
+// that proves it. Live run c64dbd32: the spine answered `mechanism="maven profiles (-Pnative for
+// native build)"` — a BUILD profile — P1 was satisfied (non-empty), and step 10 made `toggle` the
+// FIRST ticket of a plan whose requirement never mentioned a switch. The seam is the key: a build
+// profile has none, so the honest answer is `found="no"`. Delete P7 and the first branch goes green
+// again — and the ticket comes back.
+test("P7: a toggle without the key a RUNNING instance reads is a blocker; found=no is complete", () => {
+  const withProfile = SPINE_XML.replace('<toggles found="no"/>', '<toggles mechanism="maven profiles (-Pnative for native build)"/>')
+  const b = checkPart({ part: parsePart(withProfile), cell: spineCell })
+  assert.equal(b.length, 1, b.join("\n"))
+  assert.match(b[0], /^P7 /)
+  assert.match(b[0], /name the KEY a RUNNING instance reads/)
+
+  // A real toggle passes: the key is what the application reads at run time.
+  const real = SPINE_XML.replace('<toggles found="no"/>', '<toggles mechanism="config property read at startup" config="app.feature.search.enabled"/>')
+  assert.deepEqual(checkPart({ part: parsePart(real), cell: spineCell }), [])
+
+  // …and so does the honest absence — the gap is step 10's to declare, not this rule's to force.
+  assert.deepEqual(checkPart({ part: parsePart(SPINE_XML), cell: spineCell }), [])
+})
+
+// The definition itself lives where the role reads it — the order — and it is stated as a CHECKABLE
+// question ("name the key"), never as taste. Without the second bullet a model that found no key has
+// no sanctioned way out and invents one, which is exactly what c64dbd32 did.
+test("the spine order defines a toggle by the key a running instance reads, and blesses found=no", () => {
+  const tpl = readFileSync(new URL("order.spine.tpl", import.meta.url), "utf8")
+  assert.match(tpl, /<toggles mechanism="…" config="…"\/>/)
+  assert.match(tpl, /WITHOUT being\s+rebuilt or redeployed/)
+  assert.match(tpl, /a build profile \(`-P…`\), a compiler or packaging flag/)
+  assert.match(tpl, /are NOT toggles/)
+  assert.match(tpl, /`<toggles found="no"\/>`,\s+and that is a complete answer/)
+})
+
 test("role: scout.md names the machine check behind each of its prohibitions", () => {
   // The role file is named by ROLE, not by step: pi resolves `agent({role: "scout"})` by FILENAME
   // inside the declared roleDirectories (ext/index.mjs), so scope/role.md would install as "role".

@@ -799,20 +799,54 @@ const PASSES = [
 
 // WHOSE FAULT IS A RED PASS. The blocker's own rule number decides, because the number IS the
 // declaration of what the rule judges (docs/data-flow.md §6):
-//   · rules 1, 2, 5, 7 — the route names what no node produces, walks nothing, misses a scenario or
-//     leaves a branch untaken. The graph is fine; pass C wrote it wrong.
+//   · rules 2, 5, 7 — the route walks past a node with a delta, misses an FRD scenario or leaves a
+//     branch of a contract untaken. The graph is fine; pass C wrote it wrong.
 //   · rules 3, 4 — the route asked for an edge that is not declared, or handed a neighbour what it
 //     does not accept. The ROUTE cannot fix that: the donor calls this "return to Step 5"
 //     (program-design/reference/step-09-contracts-graph.md), and here it is pass B.
+//   · rule 1 AT THE BOUNDARY — «у первого узла … нет значения … в in». The line ENDS in the words
+//     «вход в контракте узла не объявлен», and that ending is the address: an FRD scenario has to
+//     enter the graph somewhere, so a first node whose `in` names no such value has an unfinished
+//     contract — the defect is pass B's, not the route's. The other halves of rule 1 (an unknown
+//     node, an `out` the node does not have) stay with pass C, which named them.
 //   · a graph naming an id the dictionary does not carry — pass B cannot fix it either, because the
 //     dictionary is frozen for it. Found while writing role B (backlog D8): §7 of the concept knew
 //     only two addresses, and this is the third.
-const blameOf = (pass, blockers) => {
-  const lines = String(blockers || "").split("\n").map((l) => l.trim()).filter(Boolean)
-  if (pass === "nodes" && lines.some((l) => /которого нет в словаре/.test(l))) return "values"
-  if (pass === "routes" && lines.some((l) => /^[34] /.test(l))) return "nodes"
+//
+// ONE LINE AT A TIME, NOT ONE SET. This is the whole of D13, and it is bought by live run a900de7b:
+// pass C was red three rounds running, and `feedback[blame] = carry.text` handed pass B the WHOLE
+// report — rules 2 and 5 included, which are statements about routes and which pass B cannot act on
+// at all. The graph of round 1 was RIGHT (`fruits.html (Changed) принимает: v3 · отдаёт: v1`); round
+// 3 answered the borrowed blockers with `in="v1 | v3"` and a `delta` flipped from `Changed` to
+// `Added`. A role handed a demand it cannot satisfy does not stop — it invents.
+//
+// $START_BLAME — this block is cut out of the source and EXECUTED by ext/index.test.mjs. It is the
+// only seam workflows/ can have: no test may import this file, so the test reads it (the device the
+// ENVELOPE test already uses). The names below are that test's interface — renaming one is a change
+// to it.
+const linesOf = (t) => String(t || "").split("\n").map((l) => l.trim()).filter(Boolean)
+
+const blameOf = (pass, line) => {
+  const l = String(line || "").trim()
+  if (pass === "nodes" && /которого нет в словаре/.test(l)) return "values"
+  if (pass === "routes" && /^[34] /.test(l)) return "nodes"
+  if (pass === "routes" && /вход в контракте узла не объявлен/.test(l)) return "nodes"
   return pass
 }
+
+// blameSplit — a red check's blockers, ADDRESSED: { pass id → the lines that pass must repair }. A
+// pass that owns nothing in this report is absent from the result, so its feedback is not touched at
+// all — the round it is holding stays whatever the last check that actually blamed it wrote.
+const blameSplit = (pass, blockers) => {
+  const out = {}
+  for (const l of linesOf(blockers)) {
+    const b = blameOf(pass, l)
+    if (!out[b]) out[b] = []
+    out[b].push(l)
+  }
+  return out
+}
+// $END_BLAME
 
 async function designing(from = 6) {
   const gate = await design({});
@@ -837,6 +871,11 @@ async function designing(from = 6) {
   const attempt = { values: 0, nodes: 0, routes: 0 };
   const feedback = { values: "(none — first attempt)", nodes: "(none — first attempt)", routes: "(none — first attempt)" };
   const wasRed = { values: [], nodes: [], routes: [] };
+  // A SECOND counter, and it is not a duplicate of `attempt`. A role that returns track:"ok" and
+  // writes no file has produced no artifact to repair, so the repair budget has nothing to spend
+  // itself on — but the loop still has to be bounded, and nothing else bounds it. Two counters, two
+  // meanings, exactly as LOOPS and QUESTION_ROUNDS are two.
+  const silent = { values: 0, nodes: 0, routes: 0 };
 
   while (i < PASSES.length) {
     const p = PASSES[i];
@@ -870,13 +909,35 @@ async function designing(from = 6) {
       continue;
     }
 
+    // «ФАЙЛА НЕТ» IS A DEFECT OF THE MOVE, NOT OF THE ARTIFACT, and it therefore spends no round of
+    // the repair budget: there is no artifact to repair and no blocker to carry. Live run a900de7b,
+    // `function/design`, occurrence 3: the role returned {"track":"ok","artifact":".agent/staging/
+    // routes.xml"} while `design/5` reported the file did not exist — a whole redelegation of pass C
+    // was charged for a role that had simply not written anything. What it needs is not the last
+    // check's blockers (there are none) but the fact itself, and `silent` keeps it bounded.
+    if (check.missing) {
+      silent[p.id]++;
+      if (silent[p.id] >= LOOPS) exit(err("escalate", { subject: check.blockers, evidence: `проход ${p.id} шага 9: роль ${LOOPS} раз вернула track:"ok", не записав ${p.out}` }));
+      log(`design/${p.id}: роль вернула ok, а ${p.out} не существует — попытка ${silent[p.id]} из ${LOOPS}, круг ремонта не потрачен`);
+      feedback[p.id] = check.blockers;
+      continue;
+    }
+
     attempt[p.id]++;
-    const blame = blameOf(p.id, check.blockers);
-    const carry = await carried({ blockers: check.blockers, seen: wasRed[blame] });
-    feedback[blame] = carry.text; wasRed[blame] = carry.seen;   // the loop's memory is the RUN, not the round
-    if (blame !== p.id) {
-      log(`design/${p.id}: красный по вине прохода ${blame} — возврат туда, а маршруты переживут: они называют значения ИМЕНЕМ`);
-      i = PASSES.findIndex((x) => x.id === blame);
+    // PER LINE. Every pass named in this report gets ITS OWN lines and nothing else; a pass this
+    // report does not blame keeps the feedback it already holds.
+    const parts = blameSplit(p.id, check.blockers);
+    let back = "";
+    for (const q of PASSES) {
+      const mine = parts[q.id];
+      if (!mine || !mine.length) continue;
+      const carry = await carried({ blockers: mine.join("\n"), seen: wasRed[q.id] });
+      feedback[q.id] = carry.text; wasRed[q.id] = carry.seen;   // the loop's memory is the RUN, not the round
+      if (q.id !== p.id && !back) back = q.id;                  // PASSES are in order — the EARLIEST culprit
+    }
+    if (back) {
+      log(`design/${p.id}: красный по вине прохода ${back} — возврат туда, а маршруты переживут: они называют значения ИМЕНЕМ`);
+      i = PASSES.findIndex((x) => x.id === back);
     }
   }
   return ".agent/data-flow.md";
@@ -948,7 +1009,7 @@ async function reviewing() {
   let feedback = "(none — first attempt)", attempt = 0, wasRed = [];
 
   while (attempt < LOOPS) {
-    const order = prompt(orderTpl, { PLAN, FRD, CODES: FORM.codes, FEEDBACK: feedback, STAGING, CHECK });
+    const order = prompt(orderTpl, { PLAN, FRD, CODES: FORM.codes, OWED: FORM.owed, UNCHECKED: FORM.unchecked, FEEDBACK: feedback, STAGING, CHECK });
     const env = await agent(order, { role: "critic", outputSchema: ENVELOPE });
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
 
@@ -1072,6 +1133,23 @@ async function band(from0) {
       }));
     }
     for (const b of blockers) repaired.add(blockerKey(b));
+
+    // OWNER `operator` — the third address, and the only one with no machine repair behind it. A node
+    // the plan built out of a SPINE answer is wrong because the MAP is wrong, and rewinding to step 6
+    // rewrites the FRD, which cannot touch the map: the band would loop until REVIEW_ROUNDS ran out
+    // and then escalate anyway, having spent every role of steps 6-11 on it. So it stops here and
+    // says what it found (live run c64dbd32 — `toggle` из профиля сборки, D21).
+    const mine = blockers.filter((b) => b.owner === "operator");
+    if (mine.length) {
+      // The words are the code's, not this call site's: steps/review/review.mjs::OPERATOR_NOTE is a
+      // function OF the code, exactly as `culprit`/`owner` are (docs/review.md §4). Two `operator`
+      // codes can print different honest ends here — `node-not-required` and, since live run 508d74fa,
+      // `unverifiable-node` — so `note` travels per finding and this branch prints each ONCE.
+      exit(err("escalate", {
+        subject: mine.map((b) => `${b.code} · ${b.node} — ${b.text}`).join("\n  "),
+        evidence: [...new Set(mine.map((b) => b.note))].filter(Boolean).join("\n  "),
+      }));
+    }
 
     if (blockers.every((b) => b.owner === 10)) {
       from = 10;
