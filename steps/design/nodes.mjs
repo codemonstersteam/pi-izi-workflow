@@ -16,6 +16,10 @@
 //             (steps/weight/weight.mjs). It moved here WITH rule 6 out of steps/design/design.mjs;
 //             a second spelling of the same word would make the artifacts of steps 6, 7 and 9
 //             unjoinable by anything but a translation table (docs/design.md §3, discrepancy C).
+// EXTERNAL_DEPENDENCY: steps/intake/frd.mjs::OP_STUB — «is this `op` an answer or a dash» is ONE
+//             question with ONE answer: F3n refuses the stub at step 6, and rule 14 here reads the
+//             SAME expression to decide whether the FRD gave this node anything to hand out. A second
+//             list of fillers would drift the day a role types «—» instead of «-» (run 088fb3ee).
 // Invariants: parseNodes is total — any input, including undefined, yields an empty graph and never
 //             throws (a guardrail that crashes on a malformed artifact turns "the role wrote
 //             nonsense" — data, a red check, a redelegation — into "the run crashed", code 2, no
@@ -36,9 +40,81 @@
 //             the edges. A red graph regenerates ten kilobytes, not twenty-three and a half.
 
 import { attrs, ATTRS, tag } from "../../core/xml.mjs"
-import { FRD_FORM } from "../intake/frd.mjs"
+import { FRD_FORM, OP_STUB } from "../intake/frd.mjs"
 
 const alts = (s) => String(s || "").split("|").map((x) => x.trim()).filter(Boolean)
+
+// The three grounds rule 14 may offer, as TEXT — one wording each, written once. A ground names WHERE
+// the value comes from, because a candidate with no provenance is the invention the rule exists to
+// refuse (the same device F5's blocker uses: a rule and the way out of it are one decision).
+const GROUND_OP = "текст значения стоит в op дельты FRD этого узла"
+const GROUND_IN = "уже в in этого узла: узел-транзит отдаёт то, что принял"
+const GROUND_CLOSES = (token) => `закрывает конец ${token}, сценарий которого называет этот узел`
+
+// FUNCTION_CONTRACT: outCandidates — what rule 14 may OFFER a node whose `out` is empty
+//   Input:        n — the node as parseNodes returns it; frd — parseFrd's parse; values — parseValues'
+//   Dependencies: OP_STUB (steps/intake/frd.mjs) — «op пуст или заглушка» is ONE question with ONE
+//                 answer, asked at step 6 by F3n and re-asked here over the artifact it let through
+//   Antecedent:   any values — a missing FRD or dictionary yields no candidates, which is the truth
+//                 about them and not a silence
+//   Consequent:   success: [{ id, why }] — every id declared in the dictionary, offered ONCE, in the
+//                          order the three grounds are declared above
+//                 failure: none — total
+//   Purity:       pure
+//
+// BUG_FIX_CONTEXT: live run 088fb3ee (sandbox/runbox/eddi), pass B. The blocker said «назови, что этот
+//   узел отдаёт» and nothing else. For five of the six created modules step 6 had said `op="-"`, so
+//   there was nothing to name — and the role, holding a demand it could not satisfy, did what a role
+//   always does with one: attempt 2 rewrote the file and knocked out a node that had been green
+//   (`Glossary.java: out="v94"` → `out=""`), attempt 3 produced three thinking blocks of ~110 000
+//   characters and no tool call at all. The operands were on the guardrail's own hands the whole time.
+function outCandidates(n, frd = {}, values = new Map()) {
+  const found = []
+  const seen = new Set()
+  const add = (id, why) => {
+    if (!id || seen.has(id) || !values.has(id)) return
+    seen.add(id)
+    found.push({ id, why })
+  }
+
+  // 1. What the requirement said this node brings into the world. A stub is not a source — F3n of
+  // step 6 judges the same attribute by the same expression, and when it let one through the answer
+  // here is «нет кандидатов», never a guess.
+  const op = String((frd.deltas || []).find((d) => d && d.node === n.path)?.op || "").trim()
+  if (op && !OP_STUB.test(op)) {
+    for (const [id, text] of values) {
+      const t = String(text || "").trim()
+      if (t && op.includes(t)) add(id, GROUND_OP)
+    }
+  }
+
+  // 2. What the node already accepts. A transit node hands on what it took, and a data model hands
+  // out itself — `in="v94" out="v94"` is the shape run 088fb3ee had no word for.
+  for (const id of n.in) add(id, GROUND_IN)
+
+  // 3. The end of a use case whose scenario names this node. The `in` side is somebody else's ground:
+  // rule 13 seats an entry in `in`, and offering it here would push the node to answer with its own
+  // input.
+  for (const [id, tokens] of values.closes || []) {
+    for (const token of tokens) {
+      const [uc, tail] = String(token).split("/")
+      if (tail === "in") continue
+      const names = (frd.scenarios || []).some((s) =>
+        String((s && s.uc) || "").trim() === uc &&
+        String((s && s.nodes) || "").split(/\s+/).filter(Boolean).includes(n.path))
+      if (names) add(id, GROUND_CLOSES(token))
+    }
+  }
+
+  return found
+}
+
+// The tail of rule 14's blocker: the candidates, or the address of the deficit that left none. It is
+// built in one place because both halves of the rule — a node with a delta, a `touched` path of the
+// FRD — describe ONE state and owe the role ONE repair instruction.
+const offer = (cands) => cands.length
+  ? `; кандидаты — ${cands.map((c) => `${c.id} (${c.why})`).join(" · ")}: возьми из них, а не придумывай`
+  : `. Кандидатов нет: FRD не сказал, что этот узел заводит (<delta op> пуст или заглушка). Это дефицит шага 6, а не твоя выдумка — верни track:"err" kind:"question"`
 
 // FUNCTION_CONTRACT: parseNodes — nodes of the design graph from the text of pass B
 //   Input:        xml — text of `.agent/design-nodes.xml`; type unconstrained
@@ -160,9 +236,14 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
   //   … out=""` passed this guardrail green (`function/design/3`: nodes 3) and pass C escalated after
   //   three attempts, its first and third reports identical to the character. The rule is here and not
   //   in pass C because here it is REPAIRABLE: the graph is what has to change.
+  //
+  // THE BLOCKER NAMES ITS EXITS, and the rule is not relaxed by that: an empty `out` stays red. Run
+  // 088fb3ee is the price of the other shape — see outCandidates' BUG_FIX_CONTEXT. Where the FRD left
+  // nothing to offer, the blocker says whose deficit that is and which rail leads out of it, because
+  // a role told only the law invents a repair (steps/intake/frd.mjs::provenance, run e132f0a1).
   for (const n of nodes.values()) {
     if (n.delta && !n.out.length) {
-      B.push(`14 узел ${n.path} с delta="${n.delta}": out пуст — маршрут обязан пройти через него (правило 2), а шаг пишется значением из out; назови, что этот узел отдаёт`)
+      B.push(`14 узел ${n.path} с delta="${n.delta}": out пуст — маршрут обязан пройти через него (правило 2), а шаг пишется значением из out${offer(outCandidates(n, frd, values))}`)
     }
   }
   for (const t of frd.touched || []) {
@@ -170,7 +251,7 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
     if (!path) continue
     const n = nodes.get(path)
     if (!n) B.push(`14 touched-путь FRD ${path} отсутствует в графе — маршрут обязан пройти через него (правило 5), а узла нет`)
-    else if (!n.out.length) B.push(`14 touched-путь FRD ${path}: out пуст — маршрут обязан пройти через него (правило 5), а шаг пишется значением из out; назови, что этот узел отдаёт`)
+    else if (!n.out.length) B.push(`14 touched-путь FRD ${path}: out пуст — маршрут обязан пройти через него (правило 5), а шаг пишется значением из out${offer(outCandidates(n, frd, values))}`)
   }
 
   // Rule 13. The end of a use case is not only NAMED (rule 12, one artifact earlier) — it is SEATED:

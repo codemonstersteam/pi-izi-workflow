@@ -252,6 +252,25 @@ test("F3n: a created module with no op is told WHERE its op comes from — the r
   assert.match(b[0], new RegExp(NEW_PAGE))   // and it names WHICH delta, since a run has several
 })
 
+// A STUB IS NOT AN ANSWER. The delta below is verbatim from the frd.xml of live run 088fb3ee
+// (sandbox/runbox/eddi): five of six created modules carried `op="-"`, the rule tested only `!d.op`,
+// and step 6 closed green on an artifact with no external point for any of them. Restore `if (!d.op)`
+// and this goes green while pass B of step 9 pays for it — outCandidates has nothing to offer.
+test("F3n: op=«-» is judged as no op at all — a dash is the absence of an answer written down", () => {
+  const stubbed = WITH_NEW.replace('op="parcel card page"', 'op="-"')
+  const b = blockersOf(stubbed)
+  assert.equal(b.length, 1)
+  assert.match(b[0], /^F3 <delta new="yes"> на «src\/ui\/parcel-card\.html» с op="-" —/)
+  assert.match(b[0], /словами требования, а не именем поведения и не прочерком$/)
+
+  // The whole family, and none of them silently: a role that writes «tbd» has not answered either.
+  for (const stub of ["—", "n/a", "N/A", "TBD", "todo", "нет", "none", "..."]) {
+    assert.equal(blockersOf(WITH_NEW.replace('op="parcel card page"', `op="${stub}"`)).length, 1, stub)
+  }
+  // A real op that merely CONTAINS a dash is untouched — the stub is the whole value, not a character.
+  assert.deepEqual(blockersOf(WITH_NEW.replace('op="parcel card page"', 'op="GET /parcel-card"')), [])
+})
+
 test("F2c holds for a created node too — its why is the only place the artifact says what it is for", () => {
   const b = blockersOf(WITH_NEW.replace(' why="новая страница карточки посылки, создаётся этим изменением"', ""))
   assert.match(b.join("\n"), new RegExp(`F2c touched «${NEW_PAGE}» без why`))

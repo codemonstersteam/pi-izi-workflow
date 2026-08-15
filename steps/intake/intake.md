@@ -2,6 +2,7 @@
 description: Requirements analyst — the business requirement fried against the repository's map into an FRD
 model: openrouter/qwen/qwen3.6-27b
 thinking: low
+contextFiles: []
 tools: [read, edit, write]
 ---
 $START_ROLE

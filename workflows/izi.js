@@ -912,9 +912,25 @@ async function designing(from = 6) {
     const seen = await answers({});
     const VALUES = i > 0 ? await readText({ path: ".agent/values.xml" }) : "";
     const CARDS = p.id === "routes" ? (await design({ pass: "routes", cards: true })).text : "";
+    // THE ORDER OF PASS B CARRIES THE FILE PASS B WROTE LAST TIME. Without it the FEEDBACK names nodes
+    // in an artifact the role cannot see, so "repair" is a word for "write it all again" — and a
+    // regeneration loses whatever was green. Two paths, one artifact: `design({pass:"nodes"})` MOVES
+    // staging to .agent/design-nodes.xml the moment the graph is green (ext/index.mjs), so the staging
+    // copy exists only between two red rounds, and the promoted one is what a rewind from pass C is
+    // sent back to repair. `newRun` carries a previous run's leftovers into .agent/prev/, so neither
+    // path can hand this run a graph belonging to another one.
+    //
+    // BUG_FIX_CONTEXT: live run 088fb3ee (sandbox/runbox/eddi), pass B. Attempt 1 was blocked on two
+    //   nodes; attempt 2 wrote the whole file anew and paid for the two repairs with a THIRD node —
+    //   `Glossary.java: out="v94"` became `out=""` — so the report of attempt 2 was one blocker about
+    //   a node attempt 1 had gotten right. Attempt 3 never called a tool at all: `crashed`. This is
+    //   the same defect D13 addressed for feedback lines, one operand short.
+    const PREVIOUS = p.id === "nodes"
+      ? ((await readText({ path: p.out })).trim() || (await readText({ path: ".agent/design-nodes.xml" })).trim() || "(none — first attempt)")
+      : "";
     const keys = {
       values: { FRD, RIPPLE, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"values", path}) — steps/design/values.mjs::checkValues по staging` },
-      nodes: { VALUES, FRD, RIPPLE, ANSWERS: answersBlock(seen, "(no operator answers yet)"), MODE, DELTA_FORMS: FORM.deltaForms, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"nodes", path}) — steps/design/nodes.mjs::checkGraph по staging` },
+      nodes: { VALUES, FRD, RIPPLE, ANSWERS: answersBlock(seen, "(no operator answers yet)"), MODE, DELTA_FORMS: FORM.deltaForms, PREVIOUS, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"nodes", path}) — steps/design/nodes.mjs::checkGraph по staging` },
       routes: { FRD, CARDS, ANSWERS: answersBlock(seen, "(no operator answers yet)"), FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"routes", path}) — steps/design/routes.mjs::checkRoutes по staging` },
     }[p.id];
     const env = await agent(prompt(tpl[p.id], keys), { role: p.role, outputSchema: ENVELOPE });

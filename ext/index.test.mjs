@@ -1073,6 +1073,17 @@ test("three passes, three roles, three orders — and the role names are the one
   assert.equal(existsSync(new URL("../steps/design/order.tpl", import.meta.url).pathname), false)
 })
 
+// D20: the order of pass B carries the file pass B wrote last time. `prompt()` demands an exact
+// bidirectional match, so a `{PREVIOUS}` in the template with no key here throws AT LAUNCH — after the
+// gate, the dictionary and every token of pass A. The seam is a grep, and it costs a millisecond.
+// Run 088fb3ee: attempt 2 of pass B regenerated the graph and knocked `out` off a node attempt 1 had
+// gotten right, because the order showed it blockers about a file it could not see.
+test("the order of pass B carries PREVIOUS — the artifact of the last attempt, read off disk", () => {
+  assert.match(IZI, /const PREVIOUS = p\.id === "nodes"/)
+  assert.match(IZI, /nodes: \{[^}]*PREVIOUS,[^}]*\}/)
+  assert.match(IZI, /\(none — first attempt\)/)
+})
+
 test("the valuer returns a count, so the envelope carries it — additionalProperties is false", () => {
   assert.match(IZI, /values: \{ type: "number" \}/)
 })

@@ -64,6 +64,22 @@ export const FRD_FORM = Object.freeze({
   sources: Object.freeze(["TASK.md", "answers.md", "brd.md", "appgraph.xml"]),
 })
 
+// OP_STUB — the fillers a role writes into `op` when it has nothing to put there. A dash is not an
+// answer, it is the ABSENCE of one written down so the attribute is not empty, and a rule that tests
+// only for emptiness cannot tell the two apart.
+//
+// EXPORTED because step 9's rule 14 asks the same attribute the same question — «did the requirement
+// say what this node brings into the world» — and two spellings of one stub would drift the day a role
+// types «—» instead of «-» (standards/code.md §1: one rule, one place).
+//
+// BUG_FIX_CONTEXT: live run 088fb3ee (sandbox/runbox/eddi). Five of the six created modules carried
+//   `<delta new="yes" op="-" …/>` — a dash where the external point belongs. F3n below tested only
+//   `!d.op`, a dash is not empty, and step 6 closed GREEN: five new nodes travelled to step 9 with no
+//   operand at all. There pass B owes every node with a delta a non-empty `out` (rule 14,
+//   steps/design/nodes.mjs) and had nothing to take one from — two redelegations, and a third that
+//   produced three thinking blocks of ~110 000 characters and not one tool call: `crashed`.
+export const OP_STUB = /^(?:[-–—_.·*?]+|n\/?a|tbd|todo|нет|none)$/i
+
 // The text of a child element, e.g. <post>…</post>. A fresh non-global RegExp per call: `tag()` is
 // global and would carry lastIndex between callers.
 const childText = (body, name) => {
@@ -292,10 +308,15 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     //   it out again — three redelegations, 392 378 tokens, `escalate`. S26 introduced `new="yes"`
     //   and never said what `op` means for a module that does not exist yet; the answer lives in the
     //   requirement, not in the map, and now the message says so.
-    if (!d.op) {
+    //
+    // A STUB IS NOT AN ANSWER (OP_STUB above, run 088fb3ee): `op="-"` is judged exactly as `op=""`,
+    // and the blocker quotes what was written so the role sees which of its own lines is meant.
+    const op = String(d.op || "").trim()
+    if (!op || OP_STUB.test(op)) {
+      const wrote = op ? `с op="${op}"` : "без op"
       B.push(d.new === "yes"
-        ? `F3 <delta new="yes"> на «${d.node || "(без node)"}» без op — у создаваемого модуля op это ВНЕШНЯЯ ТОЧКА, которую он заведёт: адрес страницы, команда, топик, имя функции — словами требования, а не именем поведения`
-        : "F3 <delta> без op — операция не названа")
+        ? `F3 <delta new="yes"> на «${d.node || "(без node)"}» ${wrote} — у создаваемого модуля op это ВНЕШНЯЯ ТОЧКА, которую он заведёт: адрес страницы, команда, топик, имя функции — словами требования, а не именем поведения и не прочерком`
+        : `F3 <delta> на «${d.node || "(без node)"}» ${wrote} — операция не названа`)
     }
     if (!FRD_FORM.deltaForms.includes(d.form)) {
       B.push(`F3 ${at}: form="${d.form || ""}" — допустимо ${FRD_FORM.deltaForms.join(" | ")}`)

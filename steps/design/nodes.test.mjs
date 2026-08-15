@@ -198,7 +198,11 @@ const ORDER_NODES = readFileSync(new URL("order-nodes.tpl", import.meta.url), "u
 // The keys the band substitutes for pass B (backlog D10 writes `designing()`; this list is the
 // contract it must satisfy). VALUES is the one the pass exists for: the dictionary arrives as DATA,
 // so a contract's name is READ, not recalled (docs/design-step-by-step.md §4.A).
-const ORDER_KEYS = ["VALUES", "FRD", "RIPPLE", "ANSWERS", "MODE", "DELTA_FORMS", "FEEDBACK", "STAGING", "CHECK"]
+//
+// PREVIOUS is the artifact of the LAST attempt, and it is a key of this order and not of the other two:
+// pass B is the only one whose role is asked to REPAIR a file rather than write one (run 088fb3ee,
+// where attempt 2 regenerated the graph and lost a node attempt 1 had gotten right).
+const ORDER_KEYS = ["VALUES", "FRD", "RIPPLE", "ANSWERS", "MODE", "DELTA_FORMS", "PREVIOUS", "FEEDBACK", "STAGING", "CHECK"]
 
 test("order-nodes.tpl uses exactly the keys the band passes, and names no delta word of its own", () => {
   const keys = [...ORDER_NODES.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
@@ -229,7 +233,11 @@ test("the role's example is a green graph — parseNodes + checkGraph, zero bloc
 
   const exValues = parseValues(xml[0])
   const exNodes = parseNodes(xml[1])
-  assert.equal(exNodes.size, 4)
+  assert.equal(exNodes.size, 5)
+  // The node D20 added: a module the change CREATES, whose `out` is not readable off a neighbour and
+  // is the value it took — `in="v8" out="v8"`. It is here because run 088fb3ee had no example of it.
+  assert.deepEqual(exNodes.get("src/Discount.java").out, ["v8"])
+  assert.deepEqual(exNodes.get("src/Discount.java").in, ["v8"])
 
   // The FRD and the subgraph of the example's own prose: `COUPON_EXPIRED` is its failure, and the two
   // nodes it says come from the ripple subgraph are what `known` may contain.
@@ -344,6 +352,81 @@ test("13: закрывающее значение поселено в контр
   const noEntry = GRAPH_1DF9.replace('in="v2 | v3" out=""', 'in="v3" out="v15"')
   assert.deepEqual(graphOf(noEntry).filter((l) => l.startsWith("13 ")),
     [`13 значение v2 закрывает UC2/in, но не стоит в in ни одного узла сценария этого use case — ${PAGE}`])
+})
+
+// --- Правило 14 НАЗЫВАЕТ кандидатов, реинтродукция из прогона 088fb3ee ---------------------------
+//
+// Дословные фрагменты живых артефактов (`sandbox/runbox/eddi/.agent/{frd.xml,values.xml}` и графа
+// первой попытки прохода B). Правило не ослаблено: пустой `out` по-прежнему красный — меняется только
+// текст блокера, потому что «назови, что этот узел отдаёт» роль не смогла выполнить трижды подряд.
+const G_MODEL = "src/main/java/ai/labs/eddi/configs/glossary/model/Glossary.java"
+const G_IFACE = "src/main/java/ai/labs/eddi/configs/glossary/IGlossaryStore.java"
+const G_REST_IFACE = "src/main/java/ai/labs/eddi/configs/glossary/IRestGlossaryStore.java"
+const G_REST = "src/main/java/ai/labs/eddi/configs/glossary/rest/RestGlossaryStore.java"
+const G_OPS = "GET /glossarystore/glossaries/descriptors, POST /glossarystore/glossaries"
+
+const FRD_088 = parseFrd(`<frd grammar="1" goal="Глоссарии агента с Терминами">
+  <usecase id="UC1" actor="api-client" goal="CRUD Глоссариев">
+    <post>CRUD Глоссариев работает с кодами 200/201/204</post>
+    <step n="1">клиент вызывает эндпоинт Глоссариев</step>
+  </usecase>
+  <delta op="-" form="Added" node="${G_MODEL}" new="yes"/>
+  <delta op="-" form="Added" node="${G_IFACE}" new="yes"/>
+  <delta op="${G_OPS}" form="Added" node="${G_REST_IFACE}" new="yes"/>
+  <scenario id="S1" uc="UC1" before="GET /glossarystore/glossaries → 404" after="CRUD Глоссариев работает" nodes="${G_REST} ${G_MODEL}"/>
+</frd>`)
+
+const VALUES_088 = parseValues(`<values>
+  <value id="v9" text="${G_OPS}" closes="UC1/in"/>
+  <value id="v16" text="GET /glossarystore/glossaries/descriptors"/>
+  <value id="v18" text="POST /glossarystore/glossaries"/>
+  <value id="v94" text="Glossary(id, version, terms)"/>
+  <value id="v95" text="200 {glossary}" closes="UC1/post"/>
+</values>`)
+
+// Граф первой попытки: три создаваемых узла с пустым `out` — ровно то, что прогон отдал в `design/3`.
+const GRAPH_088 = `<design mode="major" base=".agent/appgraph.xml">
+  <module path="${G_REST_IFACE}" delta="Added"><contract in="" out=""/></module>
+  <module path="${G_IFACE}" delta="Added"><contract in="" out=""/></module>
+  <module path="${G_MODEL}" delta="Added"><contract in="v94" out=""/></module>
+</design>`
+
+const of088 = (xml = GRAPH_088) => checkGraph({ nodes: parseNodes(xml), values: VALUES_088, frd: FRD_088, known: null })
+
+test("14: у узла с настоящим op блокер перечисляет кандидатов и говорит, откуда взят каждый", () => {
+  const b = of088().filter((l) => l.includes(G_REST_IFACE))
+  assert.equal(b.length, 1, b.join("\n"))
+  // Правило то же самое — красное, по тому же номеру и той же причине.
+  assert.match(b[0], new RegExp(`^14 узел ${G_REST_IFACE} с delta="Added": out пуст`))
+  // …и оно НАЗЫВАЕТ выходы: каждый id, чей текст стоит в `op` дельты FRD этого узла.
+  assert.match(b[0], /кандидаты — v9 \(текст значения стоит в op дельты FRD этого узла\) · v16 \(текст значения стоит в op дельты FRD этого узла\) · v18 \(текст значения стоит в op дельты FRD этого узла\): возьми из них, а не придумывай$/)
+
+  // Три основания сразу: `in` узла и конец use case, чей сценарий его называет.
+  const model = of088().filter((l) => l.startsWith("14 ") && l.includes(G_MODEL))
+  assert.equal(model.length, 1, model.join("\n"))
+  assert.match(model[0], /кандидаты — v94 \(уже в in этого узла: узел-транзит отдаёт то, что принял\) · v95 \(закрывает конец UC1\/post, сценарий которого называет этот узел\)/)
+})
+
+test("14: кандидатов нет — блокер адресует дефицит шагу 6, а не требует выдумки", () => {
+  // `op="-"` у шага 6, узла нет ни в одном сценарии, `in` пуст: предложить нечего, и это факт о FRD.
+  const b = of088().filter((l) => l.includes(G_IFACE))
+  assert.equal(b.length, 1, b.join("\n"))
+  assert.match(b[0], /Кандидатов нет: FRD не сказал, что этот узел заводит \(<delta op> пуст или заглушка\)\. Это дефицит шага 6, а не твоя выдумка — верни track:"err" kind:"question"$/)
+
+  // Заглушка судится ровно как пустой op: верни настоящую операцию — и кандидаты появляются.
+  const real = checkGraph({
+    nodes: parseNodes(GRAPH_088),
+    values: VALUES_088,
+    frd: parseFrd(`<frd grammar="1" goal="g"><delta op="${G_OPS}" form="Added" node="${G_IFACE}" new="yes"/></frd>`),
+  }).filter((l) => l.includes(G_IFACE))
+  assert.match(real[0], /кандидаты — v9 .* · v16 .* · v18 /)
+})
+
+test("14: правило НЕ ослаблено — пустой out остаётся красным на каждом из трёх узлов", () => {
+  assert.equal(of088().filter((l) => l.startsWith("14 ")).length, 3)
+  // Заполненный `out` — зелено по правилу 14 у всех троих.
+  const filled = GRAPH_088.replace(/out=""/g, 'out="v94"')
+  assert.deepEqual(of088(filled).filter((l) => l.startsWith("14 ")), [])
 })
 
 test("13: use case, чьи сценарии не называют узлов, не судится — блокеру некуда указать", () => {

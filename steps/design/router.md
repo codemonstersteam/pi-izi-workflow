@@ -2,6 +2,7 @@
 description: Systems analyst — step 9 pass C, the decided change played out in time, one route per scenario over a frozen graph of node cards
 model: openrouter/qwen/qwen3.6-27b
 thinking: low
+contextFiles: []
 tools: [read, write]
 ---
 

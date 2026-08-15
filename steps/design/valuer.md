@@ -2,6 +2,7 @@
 description: Interface analyst — the MESSAGE CATALOG of everything the nodes of the change exchange, extracted from the FRD and the ripple subgraph
 model: openrouter/qwen/qwen3.6-27b
 thinking: low
+contextFiles: []
 tools: [read, write]
 ---
 

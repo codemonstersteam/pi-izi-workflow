@@ -2,6 +2,7 @@
 description: Design reviewer — the work plan read as a program, judged by contracts that must compose
 model: openrouter/qwen/qwen3.6-27b
 thinking: low
+contextFiles: []
 tools: [read, write]
 ---
 

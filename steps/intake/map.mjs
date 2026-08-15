@@ -82,9 +82,30 @@ export function mapIndex(xml) {
 // number, and the index arrives together with the repository that needs it, priced on that repository.
 import { attrs, elem, tag } from "../../core/xml.mjs"
 
-// 32K tokens of map ≈ 115 KB (docs/concept.md, "Как карта читается"); at the measured 417 B/node
-// (docs/graph.md §7, live run c166bd87) that is ≈306 nodes. The number lives HERE — the workflow and
-// the role receive it through the host, they do not carry a copy.
+// WHAT THIS NUMBER IS, AND WHAT IT IS NOT — rewritten after live run 162e8b02 (form eddi).
+//
+// It was derived as "окно 128К × ≤25 % = 32K токенов ≈ 115 КБ" (docs/concept.md). Every term of that
+// derivation is now false: the window of the role's model is 262 144, and no share of it is reserved
+// for the map by anyone. What the provider actually enforces is a SUM, and the map is only half of it:
+//   062e8b02, role intake: 56 448 tokens of input = map 27 197 (51%) + the project's own AGENTS.md
+//   16 010 (30%, pi puts it in every role's system prompt — see contextFiles: [] in steps/*/*.md)
+//   + order without the map 3 112 + pi boilerplate ~4 930 + tool schemas ~1 780.
+// The request then claimed `min(model.maxTokens, window − estimate − 4096)` for the OUTPUT, and since
+// the catalogue declares maxTokens == contextWindow, it claimed the whole window: 205 022 tokens for
+// an artifact of two kilobytes. The estimator counts characters ÷ 4 while the real rate was 3.82, so
+// it undershot by 4 208 against a fixed 4 096 safety margin — 112 tokens over, HTTP 400, and the role
+// never ran. The fix for THAT is not here: it is `maxTokens: 32768` in ~/.pi/agent/models.json.
+//
+// So this number is NOT a window budget and must not be re-derived from one — a cap that tracks the
+// window would move with every model change and silently widen the focus (steps/focus/focus.mjs) and
+// the ripple subgraph (steps/ripple/ripple.mjs), which read it too. It is a POLICY on how much map a
+// role can read and still answer about all of it: 115 KB ≈ 32K tokens ≈ 306 nodes at the measured
+// 417 B/node (docs/graph.md §7, live run c166bd87). The number lives HERE — the workflow and the role
+// receive it through the host, they do not carry a copy.
+//
+// The guard this run showed to be MISSING is a different one: nobody measures the ASSEMBLED order
+// against the window before the role is launched, and the map cap cannot stand in for it — it sees
+// one of five terms. That check belongs in the workflow, next to the launch, and it is backlog.
 export const MAP_CAP_BYTES = 115 * 1024
 
 // MAP_PRICE — what each ELEMENT of the map costs, and why this is a price list rather than an average.
