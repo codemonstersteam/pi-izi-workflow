@@ -276,11 +276,46 @@ export function autoFindings({ frd } = {}) {
   })).filter((b) => b.evidence)
 }
 
+// FUNCTION_CONTRACT: reachedBy — what a suite's tests can observe, walked over the map's edges
+//   Input:        map — parseMap's parse; suite — a suite id
+//   Dependencies: —
+//   Antecedent:   map may be null and the suite unknown — both answer an empty set
+//   Consequent:   success: Set<path> — the tests of that suite and everything their execution
+//                          travels to along `<edge from to>`. The direction is the one the map
+//                          records: `from` uses `to`, so a test reaches what it calls, and a page
+//                          calling an endpoint does NOT make the endpoint's test reach the page
+//                 failure: none — total
+//   Purity:       pure
+export function reachedBy(map, suite) {
+  const seen = new Set()
+  if (!map || !suite) return seen
+  const out = new Map()
+  for (const e of map.edges || []) {
+    if (!out.has(e.from)) out.set(e.from, [])
+    out.get(e.from).push(e.to)
+  }
+  const queue = []
+  for (const rows of (map.nodeTests || new Map()).values()) {
+    for (const t of rows || []) if (t.suite === suite && t.path) queue.push(t.path)
+  }
+  while (queue.length) {
+    const at = queue.shift()
+    if (seen.has(at)) continue
+    seen.add(at)
+    for (const next of out.get(at) || []) queue.push(next)
+  }
+  return seen
+}
+
 // FUNCTION_CONTRACT: newReview — the critic's file judged as a verdict the band can act on
-//   Input:        { xml, plan, frd }
+//   Input:        { xml, plan, frd, map }
 //                 xml  — the staged review as the role wrote it
 //                 plan — the parsed `.agent/plan-index.json` object (io reads the JSON)
 //                 frd  — parseFrd's parse of `.agent/frd.xml`
+//                 map  — steps/intake/map.mjs::parseMap of `.agent/appgraph.xml`, or null. R6's
+//                        reachability operand: `nodeTests` says which tests a module has, `edges`
+//                        say where a test's execution can travel. With no map the half stays silent
+//                        (no sources, no judgement — the device `known: null` uses in steps/design)
 //   Dependencies: parseReview, frdIds, CODES, CODE_CULPRIT, CODE_OWNER, CODE_EVIDENCE
 //   Antecedent:   any values — every absence below is a named refusal, never a default
 //   Consequent:   success: { verdict, blockers[{ code, node, evidence, culprit, owner, text }] } —
@@ -290,7 +325,7 @@ export function autoFindings({ frd } = {}) {
 //                          "invalid-review" — R1..R4; the detail is the blockers, joined the way
 //                                             newBrd/newDesign join theirs, and it rides in FEEDBACK
 //   Purity:       pure
-export function newReview({ xml, plan, frd } = {}) {
+export function newReview({ xml, plan, frd, map = null } = {}) {
   const parsed = parseReview(xml)
   if (!parsed.found) return err("empty", "в staging нет элемента <review> — роль не написала артефакт")
 
@@ -403,9 +438,29 @@ export function newReview({ xml, plan, frd } = {}) {
     }
     if (mine.length > 1) { B.push(`R6 узел ${n.id}: ${mine.length} <witness> — одна команда, одна строка`); continue }
     if (!mine.length) continue
-    const cmds = (n.coveredBy || []).flatMap((sc) => (((nodeById.get(sc) || {}).check) || []).map((c) => c.cmd))
+    const checks = (n.coveredBy || []).flatMap((sc) => ((nodeById.get(sc) || {}).check) || [])
+    const cmds = checks.map((c) => c.cmd)
     if (!cmds.includes(mine[0].cmd)) {
       B.push(`R6 <witness node="${n.id}" cmd="${mine[0].cmd}"/> — такой команды нет среди команд его сценариев (${cmds.join(" · ") || "их нет вовсе"}): команда КОПИРУЕТСЯ из списка, не сочиняется`)
+      continue
+    }
+
+    // R6, the half the map decides. A copied command is not yet a witness: it has to be able to
+    // OBSERVE the node. The map answers that without a word from the role — a suite's tests are
+    // `<test suite=…>` rows, and where their execution can travel is `<edge from to>`. A node no
+    // test of that suite reaches is not witnessed by it, and the only honest answer left is the
+    // blocker `unverifiable-node`, which the machine writes itself rather than asking again.
+    //
+    // BUG_FIX_CONTEXT: live runs 79650c98 and 0aa13bff, both on quarkus-rest-json-app-v2-t2. The
+    //   critic closed `…/fruits.html` — a static AngularJS page — with `mvn verify -Pnative`, a java
+    //   suite that never opens a page, and both verdicts were Pass. The page's `fanin="0"` was in the
+    //   map all along: no test leads to it, and nothing but a role's word said otherwise.
+    if (map) {
+      const suites = new Set(checks.filter((c) => c.cmd === mine[0].cmd).map((c) => c.suite).filter(Boolean))
+      const reachable = suites.size && [...suites].some((id) => reachedBy(map, id).has(n.id))
+      if (!reachable) {
+        B.push(`R6 <witness node="${n.id}" cmd="${mine[0].cmd}"/> — эту команду не исполняет ни один тест, доходящий до узла: в карте нет пути от тестов сьюта до ${n.id}. Узел непроверяем — блокер unverifiable-node, а не свидетель`)
+      }
     }
   }
 

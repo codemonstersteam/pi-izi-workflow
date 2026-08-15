@@ -72,6 +72,12 @@ $START_CONSTRAINTS
   takes `*IT.java`; gradle and jest declare theirs in the build file. Without it step 5 has two
   candidates per test file and binds the integration test to the unit command, which then runs
   nothing and reports green. One suite over a folder needs no `match`
+- `match` is checked against the files you were given: a pattern that picks up none of them is
+  rejected. The file EXTENSION is part of the name a runner matches — leave it off and the pattern
+  catches nothing
+- `cmd` runs the runner THIS repository ships. `mvnw` or `gradlew` in the root is that runner:
+  write `./mvnw …`, `./gradlew …`. A bare `mvn`/`gradle` beside a wrapper is rejected — it is a
+  different runner and may not be installed at all
 - `one` is what has to be ADDED to THIS suite's own `cmd` to run ONE test file instead of the whole
   suite. Read it where this suite's runner is configured — the build manifest, the task or profile
   that defines the suite, that runner's own flag. Write `{{class}}` where the file or class name

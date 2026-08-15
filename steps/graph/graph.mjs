@@ -28,6 +28,7 @@
 
 import { ok, err } from "../../core/result.mjs"
 import { esc } from "../../core/xml.mjs"
+import { matches, under } from "../../core/suites.mjs"
 import { parsePart, GRAMMAR_VERSION, SPINE_ANSWERS } from "../scope/part.mjs"
 import { parseComputed } from "../scope/computed.mjs"
 import { newLevels } from "./levels.mjs"
@@ -56,16 +57,8 @@ const text = (s) => String(s == null ? "" : s).trim()
 // class is small.
 export const DECL_CAP = 12
 
-// matches — a suite's `match` against a file NAME. `*` is the only wildcard: the patterns this reads
-// come from build manifests (`*Test.java`, `*IT.java`, `test_*.py`), and a full glob engine would be
-// a dependency to interpret three characters.
-function matches(path, pattern) {
-  const name = path.slice(path.lastIndexOf("/") + 1)
-  const re = new RegExp(`^${String(pattern).split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`)
-  return re.test(name)
-}
-
-const under = (path, dir) => Boolean(dir) && (path === dir || path.startsWith(`${dir}/`))
+// `matches` and `under` live in core/suites.mjs: step 4 judges the suite by the same rule this step
+// binds files with (P8), and a second spelling would let a suite pass there and drop its files here.
 
 // FUNCTION_CONTRACT: suiteFor — which suite runs this test file
 //   Input:        path — a repo-relative file path; suites — the spine's <suite> list

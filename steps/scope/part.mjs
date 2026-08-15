@@ -27,6 +27,7 @@
 
 import { ok, err } from "../../core/result.mjs"
 import { attrs, ATTRS, tag } from "../../core/xml.mjs"
+import { matches, under, WRAPPERS } from "../../core/suites.mjs"
 
 // GRAMMAR_VERSION — what a part of this shape MEANS. It is the third key of the step-4 cache
 // (steps/scope/cache.mjs): a part accepted under an older grammar is not re-judged, it is
@@ -287,7 +288,7 @@ function checkSurvey(part, cell) {
 }
 
 // checkSpine — rules P1..P3 of docs/scope.md §3, for the cell of kind "spine".
-function checkSpine(part, cell) {
+function checkSpine(part, cell, inventory = []) {
   const B = []
 
   // P1 — all six answers present, each either with a value or explicitly found="no". Two of them —
@@ -390,6 +391,42 @@ function checkSpine(part, cell) {
     B.push(`P7 ${cell.id}: <toggles mechanism="${tg.mechanism}"> has no config — name the KEY a RUNNING instance reads (a property, a flag, a record). Something that only takes effect at build time — a profile, a compiler flag, a deploy variable — is not a toggle: answer <toggles found="no"/>`)
   }
 
+  // P8 and P9 — a suite is a PROMISE OF A COMMAND, and both halves of it are facts of the repository
+  // the survey already read. Without the inventory the two rules stay silent: no sources, no
+  // judgement (the discipline F5 keeps, and the same device as `known: null` in steps/design).
+  //
+  // BUG_FIX_CONTEXT: two live runs on sandbox/runbox/quarkus-rest-json-app-v2-t2.
+  //   1df91a31: `match="*Test"` instead of `*Test.java` — every one of the four test files fell out
+  //             of its suite, the merge reported four `gap`s and the band went on. The file side of
+  //             that pair is counted (steps/graph/graph.mjs::suiteFor); the SUITE side was not.
+  //   0aa13bff: `cmd="mvn test"` while the repository carries `mvnw` and the machine has no `mvn` at
+  //             all. Both commands rode verbatim into `check` of every plan node, so the deliverable
+  //             promised a verification that does not start.
+  if (inventory.length) {
+    for (const s of part.suites) {
+      if (s.found === "no") continue
+
+      // P8 — `match` picks up at least one file that exists. A pattern nobody matches is a suite that
+      // runs nothing, and step 10 would still write its command into a node's `check`.
+      if (text(s.match)) {
+        const hits = inventory.filter((p) => (!text(s.path) || under(p, s.path)) && matches(p, s.match))
+        if (!hits.length) {
+          B.push(`P8 ${cell.id}: <suite id="${s.id || "?"}" match="${s.match}"> matches no file under path="${s.path || "."}" — the pattern is a file NAME with one \`*\` (surefire *Test.java, failsafe *IT.java); a suite that runs nothing still gets written into every ticket's check`)
+        }
+      }
+
+      // P9 — the runner of `cmd` is the one this repository ships. A build wrapper in the root is an
+      // instruction, not a suggestion: the project pins its own version through it, and the bare name
+      // may not be installed at all.
+      const runner = String(s.cmd || "").trim().split(/\s+/)[0] || ""
+      for (const w of WRAPPERS) {
+        if (runner === w.bare && inventory.includes(w.file)) {
+          B.push(`P9 ${cell.id}: <suite id="${s.id || "?"}" cmd="${s.cmd}"> — the repository ships ./${w.file}, so the command is \`./${w.file} …\`: the bare \`${w.bare}\` is a different runner and may not be installed`)
+        }
+      }
+    }
+  }
+
   return B
 }
 
@@ -404,13 +441,13 @@ function checkSpine(part, cell) {
 //                          of this function
 //   Purity:       pure
 //   Interface:    checkPart({ part, cell }) -> string[]
-export function checkPart({ part, cell }) {
+export function checkPart({ part, cell, inventory = [] }) {
   // C1 — the part answers the cell it was ordered for. Everything else is meaningless first: a part
   // written for another cell would be judged against the wrong file list.
   if (part.cell !== cell.id || part.kind !== cell.kind) {
     return [`C1 ${cell.id}: root must be <part cell="${cell.id}" kind="${cell.kind}"> — found cell="${part.cell}" kind="${part.kind}"`]
   }
-  return cell.kind === "spine" ? checkSpine(part, cell) : checkSurvey(part, cell)
+  return cell.kind === "spine" ? checkSpine(part, cell, inventory) : checkSurvey(part, cell)
 }
 
 // FUNCTION_CONTRACT: newPart — the step's artifact from the text the role staged
@@ -423,9 +460,9 @@ export function checkPart({ part, cell }) {
 //                          is written for the ROLE to repair, not for a human to admire
 //   Purity:       pure
 //   Interface:    newPart({ xml, cell }) -> Result<Part, "invalid-part">
-export function newPart({ xml, cell }) {
+export function newPart({ xml, cell, inventory = [] }) {
   const part = parsePart(xml)
-  const blockers = checkPart({ part, cell })
+  const blockers = checkPart({ part, cell, inventory })
   if (blockers.length) return err("invalid-part", blockers.join("\n  "))
   return ok(part)
 }

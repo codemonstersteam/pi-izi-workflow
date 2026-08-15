@@ -896,7 +896,12 @@ export const checkPart = {
     if (!existsSync(at(root, path))) {
       return { ok: false, blockers: `${path} does not exist — the role wrote nothing to the staging path` }
     }
-    const r = newPart({ xml: readFileSync(at(root, path), "utf8"), cell: target })
+    // The inventory is the WHOLE survey, not this cell's slice: the spine answers `<suite>` for the
+    // repository, and the files a suite claims (P8) and the wrapper it must run through (P9) live in
+    // other cells. Reading it here keeps the same discipline as the cell itself — neither the model
+    // nor the workflow hands the guardrail a list that suits the answer.
+    const inventory = plan.cells.flatMap((c) => (c.files || []).map((f) => f.path))
+    const r = newPart({ xml: readFileSync(at(root, path), "utf8"), cell: target, inventory })
     if (!r.ok) return { ok: false, blockers: r.error.detail }
     return { ok: true, modules: r.value.modules.length, gaps: r.value.gaps.length }
   },
@@ -1674,7 +1679,12 @@ export const review = {
     }
 
     const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
-    const r = newReview({ xml: readFileSync(at(root, path), "utf8"), plan, frd })
+    // The map is R6's reachability operand — which tests can observe a node. It is not demanded:
+    // a run whose map is missing loses that half of the rule and keeps the rest, the same way
+    // checkGraph treats a missing ripple subgraph.
+    const mapPath = at(root, GRAPH_PATH)
+    const map = existsSync(mapPath) ? parseMap(readFileSync(mapPath, "utf8")) : null
+    const r = newReview({ xml: readFileSync(at(root, path), "utf8"), plan, frd, map })
     if (!r.ok) return { ok: false, blockers: r.error.detail }
 
     // The findings that cost no role call at all, merged AFTER the form was judged: R1 keeps judging

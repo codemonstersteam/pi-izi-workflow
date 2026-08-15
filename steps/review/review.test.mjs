@@ -8,7 +8,8 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { parseFrd } from "../intake/frd.mjs"
-import { newReview, parseReview, owedItems, autoFindings, frdIds, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "./review.mjs"
+import { newReview, parseReview, owedItems, autoFindings, frdIds, reachedBy, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "./review.mjs"
+import { parseMap } from "../intake/map.mjs"
 
 const RESOURCE = "src/main/java/org/acme/rest/json/FruitResource.java"
 const LIST = "src/main/resources/META-INF/resources/fruits.html"
@@ -497,4 +498,69 @@ test("the vocabulary lives in one place: the code and the role agree", () => {
   assert.ok(!role.includes("check-not-witnessing"), "a code cut from the vocabulary must not survive in the role")
   assert.deepEqual(Object.keys(CODE_CULPRIT).sort(), [...CODES].sort(), "every code names its culprit")
   assert.deepEqual(Object.keys(CODE_OWNER).sort(), [...CODES].sort(), "every code names the step that repairs it")
+})
+
+// --- R6, вторая половина: witness обязан быть достижим тестом сьюта --------------------------------
+//
+// Реинтродукция прогонов 79650c98 и 0aa13bff (форма quarkus-rest-json-app-v2-t2): критик закрыл
+// статическую страницу командой java-сьюта, который её не открывает, и оба вердикта были Pass.
+// Карта знала это всё время — у страницы `fanin="0"`, ни одно ребро в неё не ведёт.
+const APPGRAPH = `<appgraph grammar="3">
+  <suite id="unit" kind="unit" cmd="mvn test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <module path="${RESOURCE}" kind="code">
+    <test path="src/test/java/org/acme/rest/json/FruitResourceTest.java" suite="unit"/>
+  </module>
+  <module path="${LIST}" kind="code"/>
+  <module path="${CARD}" kind="code"/>
+  <module path="src/test/java/org/acme/rest/json/FruitResourceTest.java" kind="test" suite="unit"/>
+  <edge from="src/test/java/org/acme/rest/json/FruitResourceTest.java" to="${RESOURCE}" via=".when().get(&quot;/fruits&quot;)" by="use"/>
+  <edge from="${LIST}" to="${RESOURCE}" via="url: '/fruits'," by="use"/>
+  <edge from="src/test/java/org/acme/rest/json/FruitResourceTest.java" to="${CARD}" via=".when().get(&quot;/fruit-card.html&quot;)" by="use"/>
+</appgraph>`
+
+const MAP = parseMap(APPGRAPH)
+const reviewMapped = (xml) => newReview({ xml, plan: PLAN, frd: FRD, map: MAP })
+
+test("R6: witness командой, которая до узла не доходит, — не свидетель", () => {
+  // LIST закрывается сценарием S1 с командой `mvn test`, и роль назвала её свидетелем. В карте от
+  // тестов сьюта `unit` до страницы пути нет: ребро идёт ОТ страницы к ресурсу, а не к ней.
+  const xml = `<review verdict="Pass" grammar="2">${COVERS}
+    <witness node="${LIST}" cmd="mvn test"/>
+    <witness node="${CARD}" cmd="mvn test"/>
+  </review>`
+  const r = reviewMapped(xml)
+  assert.equal(r.ok, false)
+  assert.match(r.error.detail, new RegExp(`R6 <witness node="${LIST}" cmd="mvn test"/> — эту команду не исполняет ни один тест`))
+  assert.match(r.error.detail, /блокер unverifiable-node, а не свидетель/)
+
+  // Без карты правило молчит — ровно тот зелёный, который выдали оба живых прогона.
+  assert.equal(newReview({ xml, plan: PLAN, frd: FRD }).ok, true)
+})
+
+test("R6: узел, до которого тест сьюта доходит по ребру, свидетелем закрывается", () => {
+  // Достижимость, а не наличие собственного теста: ресурс в карте достижим из FruitResourceTest.
+  const reach = reachedBy(MAP, "unit")
+  assert.ok(reach.has(RESOURCE), [...reach].join(" "))
+  assert.ok(!reach.has(LIST))
+
+  // Тот же артефакт, где страница закрыта честным блокером, а не свидетелем, — форма зелёная.
+  const xml = `<review verdict="Reject" grammar="2">${COVERS}
+    <witness node="${CARD}" cmd="mvn test"/>
+    <blocker code="unverifiable-node" node="${LIST}" evidence="S1">ни одна команда сценария не открывает страницу</blocker>
+  </review>`
+  const r = reviewMapped(xml)
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.equal(r.value.blockers[0].owner, "operator")
+})
+
+test("R6: несуществующий сьют у команды — тоже не свидетель", () => {
+  // Команда скопирована верно, но её сьют карте неизвестен: доказать наблюдение нечем.
+  const plan = { ...PLAN, nodes: PLAN.nodes.map((n) => (n.id === "scenario:S1" ? { ...n, check: [{ suite: "e2e", cmd: "mvn test" }] } : n)) }
+  const xml = `<review verdict="Pass" grammar="2">${COVERS}
+    <witness node="${LIST}" cmd="mvn test"/>
+    <witness node="${CARD}" cmd="mvn test"/>
+  </review>`
+  const r = newReview({ xml, plan, frd: FRD, map: MAP })
+  assert.equal(r.ok, false)
+  assert.match(r.error.detail, /R6 <witness node=/)
 })

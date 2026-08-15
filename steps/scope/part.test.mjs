@@ -299,3 +299,64 @@ test("role: scout.md names the machine check behind each of its prohibitions", (
   assert.match(role, /deps="none"/)   // named ONLY to forbid it: the script owns edges now (LAW 4)
   assert.match(role, /found="no"/)    // "not found" is an answer, not a guess (LAW 5)
 })
+
+// --- P8 и P9: сьют — обещание команды, и обе его половины суть факты репозитория -------------------
+//
+// Инвентарь — весь список файлов обзора (ext/index.mjs::checkPart собирает его из всех клеток
+// survey-plan.json): хребет отвечает `<suite>` за репозиторий, а файлы, которые сьют забирает, и
+// обёртка, через которую он запускается, лежат в других клетках. Без инвентаря оба правила молчат.
+const INVENTORY = [
+  "pom.xml", "README.md", "mvnw",
+  "src/main/java/org/acme/rest/json/FruitResource.java",
+  "src/test/java/org/acme/rest/json/FruitResourceTest.java",
+  "src/test/java/org/acme/rest/json/FruitResourceIT.java",
+]
+const spineOf = (xml, inventory = INVENTORY) => checkPart({ part: parsePart(xml), cell: spineCell, inventory })
+
+// Хребет, который прошёл бы сегодняшний гардрейл: обёртка есть в дереве, а команды написаны без неё.
+const SPINE_REAL = `
+<part cell="${SPINE_CELL}" kind="spine">
+  <artifact name="rest-json-quickstart" root="."/>
+  <suite id="unit" kind="unit" cmd="mvn test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <suite id="component-native" kind="component" cmd="mvn verify -Pnative" one="-Dit.test={class}" path="src/test/java" match="*IT.java"/>
+  <integration system="orders-db" kind="db" config="quarkus.datasource.jdbc.url" value="jdbc:postgresql://db/orders"/>
+  <build cmd="./mvnw package"/>
+  <toggles found="no"/>
+  <branching branches="feature/&lt;slug&gt;" commits="conventional-commits"/>
+  <contract found="no"/>
+</part>`
+
+test("P9: репозиторий несёт mvnw — команда сьюта обязана идти через обёртку (прогон 0aa13bff)", () => {
+  const b = spineOf(SPINE_REAL).filter((l) => l.startsWith("P9 "))
+  assert.equal(b.length, 2, b.join("\n"))
+  assert.match(b[0], /<suite id="unit" cmd="mvn test"> — the repository ships \.\/mvnw/)
+
+  // Через обёртку — зелено; и без обёртки в инвентаре голое имя законно.
+  assert.deepEqual(spineOf(SPINE_REAL.replaceAll('cmd="mvn ', 'cmd="./mvnw ')).filter((l) => l.startsWith("P9 ")), [])
+  assert.deepEqual(spineOf(SPINE_REAL, INVENTORY.filter((p) => p !== "mvnw")).filter((l) => l.startsWith("P9 ")), [])
+})
+
+test("P8: match, который не забирает ни одного файла (прогон 1df91a31)", () => {
+  // `*Test` вместо `*Test.java`: в том прогоне все четыре тестовых файла остались без сьюта, а
+  // харнес сообщил об этом gap-ом и поехал дальше.
+  const b = spineOf(SPINE_REAL.replace('match="*Test.java"', 'match="*Test"')).filter((l) => l.startsWith("P8 "))
+  assert.equal(b.length, 1, b.join("\n"))
+  assert.match(b[0], /<suite id="unit" match="\*Test"> matches no file under path="src\/test\/java"/)
+
+  // Правило судит ровно ту же парой (path, match), какой шаг 5 привязывает файлы: одно правило —
+  // одно место (core/suites.mjs), иначе сьют зеленеет здесь и теряет файлы там.
+  assert.deepEqual(spineOf(SPINE_REAL).filter((l) => l.startsWith("P8 ")), [])
+  // Сьют, объявленный отсутствующим, ничего не обещает.
+  assert.deepEqual(spineOf(SPINE_REAL.replace('match="*Test"', 'match="*Test" found="no"')).filter((l) => l.startsWith("P8 ")), [])
+})
+
+test("P8/P9 без инвентаря молчат — нет источников, нет суждения", () => {
+  assert.deepEqual(checkPart({ part: parsePart(SPINE_REAL), cell: spineCell }).filter((l) => /^P[89] /.test(l)), [])
+})
+
+test("order.spine.tpl говорит про обёртку и про расширение в match — правило видно роли, не только гардрейлу", () => {
+  const tpl = readFileSync(new URL("order.spine.tpl", import.meta.url), "utf8")
+  assert.match(tpl, /`mvnw` or `gradlew` in the root is that runner/)
+  assert.match(tpl, /A bare `mvn`\/`gradle` beside a wrapper is rejected/)
+  assert.match(tpl, /The file EXTENSION is part of the name a runner matches/)
+})
