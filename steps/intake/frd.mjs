@@ -256,13 +256,17 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   //   ordered. Step 9 was ready for it all along (checkDesign rule 6 allows a delta node outside the
   //   ripple subgraph — «новый модуль это суждение дизайнера»); nothing could carry the fact there.
   const newNodes = new Set(frd.deltas.filter((d) => d.new === "yes" && d.node).map((d) => d.node))
+  // The routes of the FRD, as one set of paths. Declared ONCE here and read by both rules that ask
+  // «does a scenario run through this node» — F2b just below and F3c after it. Two spellings of one
+  // expression would drift the day `nodes` gains a separator (standards/code.md §1).
+  const scenarioNodes = new Set(frd.scenarios.flatMap((s) => String(s.nodes || "").split(/\s+/).filter(Boolean)))
   // F2b — a touched must be EXPLAINED: it carries a delta of its own, or a scenario runs through it.
   // Since step 8 measures the WIDTH of the change by `touched` (docs/ripple.md §3), a node declared
   // touched on nothing but the role's say-so orders the `designer` role for free — and step 10 would
   // owe it a ticket nobody can write, because nothing in the artifact says what changes there.
   const explained = new Set([
     ...frd.deltas.map((d) => d.node).filter(Boolean),
-    ...frd.scenarios.flatMap((s) => String(s.nodes || "").split(/\s+/).filter(Boolean)),
+    ...scenarioNodes,
   ])
   for (const t of frd.touched) {
     if (newNodes.has(t)) continue   // a node this change creates: F3 below judges it, the map cannot
@@ -287,6 +291,33 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     if (judged && !String(t.why || "").trim()) {
       B.push(`F2c touched «${t.path}» без why — назови, ЧТО в этом узле меняется. Маршрут сценария через узел не значит, что узел меняется, а ширина изменения (шаг 8) считается по этому списку`)
     }
+  }
+
+  // F3c — F2b READ THE OTHER WAY: a delta whose node no scenario runs through. F2b asks a `<touched>`
+  // for its explanation; this asks a DELTA for the use case that answers for it. Everything after step
+  // 6 is addressed BY THE SCENARIO — step 9's routes are written one per `<scenario>` (docs/data-flow.md
+  // §6, rule 5), and its rule 2 then owes a route to every node carrying a delta. A node with a delta
+  // and no scenario is work nobody can be told to do: the `designer` may not invent a use case, that is
+  // step 6's artifact.
+  //
+  // `Unknown` and a delta with no `node` are not judged: `Unknown` is already terminal at step 7
+  // (FRD_FORM.deltaForms above), and «no node» is F3's own blocker — one defect, one blocker.
+  //
+  // BUG_FIX_CONTEXT: live runs 300c545b and 9ae1c092 (sandbox/runbox/eddi) — THE SAME deficit paid for
+  //   TWICE by the swarm: 863 666 tokens, $1.42, two identical terminal `escalate`s (code 10) on two
+  //   lines of step 9's rule 2 — «узел с delta="Added" не встречен ни в одном маршруте» for
+  //   `IRestGlossaryStore.java` and `RemoteApiResourceSource.java`. Both nodes carried a delta and stood
+  //   in no `<scenario nodes>`, so no part of the swarm answered for them and none could. The blame had
+  //   no addressee (steps/design/parts.mjs, `byNode` empty) and the band stopped. Step 8 could not
+  //   report the gap either: it seeds the ripple from the UNION `deltaNodes ∪ touched ∪ routeNodes`
+  //   (steps/ripple/ripple.mjs), and a union cannot notice a disagreement between its operands.
+  //   Judged here, the same defect costs one redelegation of this role and zero tokens of the swarm.
+  for (const d of frd.deltas) {
+    if (!d.node || d.form === "Unknown" || scenarioNodes.has(d.node)) continue
+    // THE BLOCKER NAMES ITS EXITS — all three, one command each. Without the third the role invents a
+    // use case for a service module rather than admit the node moves only behind its neighbour: the
+    // precedent is `.agent.bak-20260815`, where `TemplateEngineModule` simply vanished from the FRD.
+    B.push(`F3c дельта на «${d.node}» без сценария — ни один <scenario nodes> не называет этот узел. Впиши ${d.node} в nodes сценария, который через него работает; нет такого сценария — у изменения не хватает use case, напиши его; узел меняется лишь вслед за соседней дельтой — сними эту дельту`)
   }
 
   // F7 — an FRD without a delta says nothing about the change.

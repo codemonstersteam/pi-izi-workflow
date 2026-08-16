@@ -24,6 +24,11 @@ const EDGES = [
 ]
 const SOURCES = ["Нужен поиск посылки по части трек-номера, в ответе не больше 20 записей."]
 
+// The route of the fixture's one scenario — BOTH nodes that carry a delta. F3c below demands exactly
+// that: a node with a delta and no scenario through it is work no use case answers for. Written as a
+// constant because four tests rewrite this route to reintroduce a defect into it.
+const S1_NODES = 'nodes="src/ParcelResource.java src/ParcelRepo.java"'
+
 const FRD = `<frd grammar="1" goal="искать посылку по части трек-номера">
   <actor name="operator-ui" kind="human" via="HTTP GET /parcels"/>
 
@@ -42,7 +47,7 @@ const FRD = `<frd grammar="1" goal="искать посылку по части 
   <delta op="GET /parcels" form="Changed" node="src/ParcelResource.java" from="list()" to="list(track)"/>
   <delta op="findByTrack" form="Added" node="src/ParcelRepo.java"/>
   <scenario id="S1" uc="UC1" before="GET /parcels?track=AB отдаёт весь реестр"
-            after="отдаёт только посылки с AB в треке" nodes="src/ParcelResource.java"/>
+            after="отдаёт только посылки с AB в треке" ${S1_NODES}/>
   <touched path="src/ParcelResource.java" why="метод list получает параметр track и фильтрует"/>
   <touched path="src/ParcelRepo.java" why="добавляется поиск по подстроке трека"/>
 
@@ -102,7 +107,7 @@ test("F2b: a touched with no delta of its own and no scenario through it is not 
   assert.match(blockersOf(bare).join("\n"), /F2b touched «src\/Parcel\.java» ничем не объяснён/)
   // The same node, named by a scenario's route: explained, and green — this is exactly the live shape
   // of run c4b7cea5, where the page carried no delta of its own but the scenario ran through it.
-  const viaRoute = bare.replace('nodes="src/ParcelResource.java"', 'nodes="src/ParcelResource.java src/Parcel.java"')
+  const viaRoute = bare.replace(S1_NODES, 'nodes="src/ParcelResource.java src/ParcelRepo.java src/Parcel.java"')
   assert.deepEqual(blockersOf(viaRoute), [])
 })
 
@@ -158,7 +163,7 @@ test("F3: Changed/Removed need a node someone can actually call — an <api> or 
   const onLeaf = (form) => FRD.replace(
     '  ' + REPO_TOUCHED,
     `  <delta op="parcel-card-rendering" form="${form}" node="src/ui/parcels.html" from="список без карточки" to="карточка по клику"/>\n  ${REPO_TOUCHED}\n  <touched path="src/ui/parcels.html" why="добавляется карточка по клику"/>`,
-  )
+  ).replace(S1_NODES, 'nodes="src/ui/parcels.html src/ParcelResource.java src/ParcelRepo.java"')   // F3c: the new delta's node owes a scenario
   for (const form of ["Changed", "Removed"]) {
     const b = blockersOf(onLeaf(form)).join("\n")
     assert.match(b, new RegExp(`F3 parcel-card-rendering: «src/ui/parcels\\.html» — ${form}`))
@@ -173,6 +178,7 @@ test("F3: Changed/Removed need a node someone can actually call — an <api> or 
     .replace('<delta op="findByTrack" form="Added" node="src/ParcelRepo.java"/>',
              '<delta op="findByTrack" form="Added" node="src/ParcelRepo.java"/>\n  <delta op="Parcel.track" form="Changed" node="src/Parcel.java" from="String track" to="TrackNo track"/>')
     .replace('  ' + REPO_TOUCHED, '  ' + REPO_TOUCHED + '\n  <touched path="src/Parcel.java" why="тип поля track"/>')
+    .replace(S1_NODES, 'nodes="src/ParcelResource.java src/ParcelRepo.java src/Parcel.java"')   // F3c: same
   assert.deepEqual(blockersOf(onCallee), [])
 })
 
@@ -203,11 +209,11 @@ test("F4: a scenario that does not distinguish, and an FRD with no scenario at a
   // contract for every node of the route (design.mjs::checkDesign, rule 1), copied out of that
   // subgraph. A path that no module owns would arrive at step 9 as a node nobody can contract, and
   // step 8 — a script with no role — could only stop the band. It is cheap here and terminal there.
-  assert.match(blockersOf(FRD.replace('nodes="src/ParcelResource.java"', 'nodes=""')).join("\n"), /F4 S1: nodes пуст/)
-  assert.match(blockersOf(FRD.replace('nodes="src/ParcelResource.java"', 'nodes="src/Invented.java"')).join("\n"),
+  assert.match(blockersOf(FRD.replace(S1_NODES, 'nodes=""')).join("\n"), /F4 S1: nodes пуст/)
+  assert.match(blockersOf(FRD.replace(S1_NODES, 'nodes="src/Invented.java"')).join("\n"),
     /F4 S1: узла «src\/Invented.java» нет ни в карте, ни среди создаваемых/)
   // A route of several nodes is the ordinary case — whitespace-separated, every one resolved.
-  assert.deepEqual(blockersOf(FRD.replace('nodes="src/ParcelResource.java"', 'nodes="src/ParcelResource.java src/ParcelRepo.java"')), [])
+  assert.deepEqual(blockersOf(FRD.replace(S1_NODES, 'nodes="src/ParcelResource.java src/ParcelRepo.java src/Parcel.java"')), [])
 })
 
 // F3n — the module this change CREATES.
@@ -839,4 +845,50 @@ test("роль и наряд несут свои строки про F6c/F6d", (
   assert.match(tpl, /from="UC1\/1a UC2\/2a"/)
   assert.match(tpl, /Два конца разных use case с одним текстом → F6c/)
   assert.match(tpl, /Ветка с кодом, не названная в `from` строки этого кода → F6d/)
+})
+
+// --- F3c: a delta no scenario answers for — the guard against runs 300c545b and 9ae1c092 ----------
+// Fixtures COPIED VERBATIM from sandbox/runbox/eddi/.agent/frd.xml: the two deltas the swarm escalated
+// on (`:163`, `:167`) and the two scenarios whose routes run right past their nodes (`:182`, `:209`).
+// Step 9's rule 2 printed exactly these two paths, terminally, TWICE — 863 666 tokens and $1.42 for one
+// deficit of step 6. `rule()` above calls checkFrd with no map, so F3/F4 speak about every path here;
+// only the F3c family is read, which is the whole point of the filter.
+const D_IREST = '  <delta op="IRestGlossaryStore interface" form="Added" node="src/main/java/ai/labs/eddi/configs/glossaries/IRestGlossaryStore.java" new="yes"/>'
+const D_REMOTE = '  <delta op="readGlossaries()" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java" from="readSnippets" to="readSnippets/readGlossaries"/>'
+const S1_EDDI = '  <scenario id="S1" uc="UC1" before="POST /glossarystore/glossaries -&gt; 404 (endpoint не существует)" after="POST /glossarystore/glossaries -&gt; 201 Created с Location" nodes="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java src/main/java/ai/labs/eddi/configs/glossaries/IGlossaryStore.java src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java src/main/java/ai/labs/eddi/configs/glossaries/model/Glossary.java"/>'
+const S10_EDDI = '  <scenario id="S10" uc="UC10" before="ZIP-архив агента не содержит Глоссарии" after="ZIP-архив агента содержит Глоссарии со всеми Терминами" nodes="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>'
+const FRD_300 = `<frd grammar="1" goal="Глоссарии как ресурс с Терминами">
+${D_IREST}
+${D_REMOTE}
+${S1_EDDI}
+${S10_EDDI}
+</frd>`
+
+test("F3c: узел с дельтой, которого не называет ни один сценарий — два блокера прогонов 300c545b/9ae1c092", () => {
+  const b = rule(FRD_300, "F3c")
+  assert.equal(b.length, 2, b.join("\n"))
+  assert.match(b[0], /^F3c дельта на «src\/main\/java\/ai\/labs\/eddi\/configs\/glossaries\/IRestGlossaryStore\.java» без сценария/)
+  assert.match(b[1], /^F3c дельта на «src\/main\/java\/ai\/labs\/eddi\/backup\/impl\/RemoteApiResourceSource\.java» без сценария/)
+  // All three exits, one command each: without the third the role invents a use case for a service
+  // module instead of admitting the node moves behind its neighbour (`.agent.bak-20260815`).
+  assert.match(b[0], /Впиши src\/main\/java\/ai\/labs\/eddi\/configs\/glossaries\/IRestGlossaryStore\.java в nodes сценария, который через него работает/)
+  assert.match(b[0], /нет такого сценария — у изменения не хватает use case, напиши его/)
+  assert.match(b[0], /узел меняется лишь вслед за соседней дельтой — сними эту дельту$/)
+
+  // The repair the first exit names: the same two deltas, their nodes written into the routes that
+  // already run through their neighbours. Replacing `scenarioNodes` with `explained` in frd.mjs turns
+  // the rule into a tautology — a delta explains itself — and the two assertions above go to zero.
+  const fixed = FRD_300
+    .replace('nodes="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java',
+             'nodes="src/main/java/ai/labs/eddi/configs/glossaries/IRestGlossaryStore.java src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java')
+    .replace('nodes="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java',
+             'nodes="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java src/main/java/ai/labs/eddi/backup/impl/RestExportService.java')
+  assert.deepEqual(rule(fixed, "F3c"), [])
+
+  // Not judged, and neither absence is silence: `Unknown` is already terminal at step 7, and a delta
+  // with no node at all is F3's own blocker — one defect, one line of FEEDBACK.
+  const unknown = FRD_300.replace(D_IREST, '  <delta op="IRestGlossaryStore interface" form="Unknown" why="в карте два кандидата"/>').replace(D_REMOTE + "\n", "")
+  assert.deepEqual(rule(unknown, "F3c"), [])
+  const noNode = FRD_300.replace(D_IREST, '  <delta op="readGlossaries()" form="Added"/>').replace(D_REMOTE + "\n", "")
+  assert.deepEqual(rule(noNode, "F3c"), [])
 })
