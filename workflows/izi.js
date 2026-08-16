@@ -11,7 +11,7 @@
 //               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
-//               routeUnits · plan · review · reviewForm. They are not
+//               valueUnits · nodeUnits · routeUnits · plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -32,8 +32,9 @@
 //               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl, steps/intake/order.tpl,
 //               steps/design/order-values.tpl, steps/design/order-nodes.tpl,
 //               steps/design/order-routes.tpl (three passes, one order each),
-//               steps/design/order-nodes-part.tpl and steps/design/order-routes-part.tpl (ONE part of
-//               the swarm of pass B and of pass C — the same role, a different document),
+//               steps/design/order-values-part.tpl, steps/design/order-nodes-part.tpl and
+//               steps/design/order-routes-part.tpl (ONE part of the swarm of pass A, of pass B and of
+//               pass C — the same role, a different document),
 //               steps/review/order.tpl.
 //               prompt() demands an
 //               EXACT bidirectional match between a template's placeholders and the values passed
@@ -992,6 +993,103 @@ const swarmParts = (units) => ((units || []).length >= SWARM_MIN ? units : []);
 // now belongs to this phase and is the file this part must REPAIR (see routePart's contract).
 const AFTER_INTAKE = 9;
 
+// FUNCTION_CONTRACT: valuePart — one seat of pass A's swarm: one FRD scenario into one page of values
+//   Input:        unit — one element of valueUnits({}): its FRD projection, its own scenario's ripple
+//                 bytes, the block naming its id prefix and the ends of its use case; tplValuePart —
+//                 the part's order; feedback — the lines of the LAST red merge addressed to this part,
+//                 or ""
+//   Dependencies: EXTERNAL — reenter, readText, design, prompt, agent(role "valuer"); ENVELOPE
+//   Antecedent:   steps 6 and 8 are done; the part's staging path is this scenario's and no other
+//   Consequent:   success: { ok: true, id, called } — `called` says whether the role was paid for.
+//                          A part whose own file is green NOW and which no blocker names closes for
+//                          ZERO tokens (the D25 re-entry, one file lower)
+//                 failure: { ok: false, id, why } — RETURNED AS A VALUE, never thrown: parallel()
+//                          catches every error a task throws and rethrows its own (execution.ts:253-262)
+//   Purity:       io (through the host)
+//
+// THERE IS NO QUESTION RAIL HERE and there cannot be: checkpoint() from inside parallel() is the
+// scout's rule. Pass A has never had one anyway — its role's OUTPUT_FORMAT offers `invalid` alone.
+//
+// THE PART REPAIRS, AND THE WHOLE PASS DOES NOT, and that is not an inconsistency: the whole pass A
+// rewrites a whole vocabulary and its order carries no {PREVIOUS} for that reason, while a part holds
+// a handful of rows about one use case and its blockers name them by id. Rewriting the page instead of
+// repairing it is what loses the rows that were green — run 088fb3ee's defect, one artifact higher.
+async function valuePart(unit, tplValuePart, feedback) {
+  const STAGING = `.agent/staging/values-parts/${unit.id}.xml`;
+  const CHECK = `design({pass:"values", scenario:"${unit.id}", path}) — steps/design/values.mjs::checkEnds по файлу этой части`;
+  // THE GUARDRAIL BEFORE THE ROLE, per part: its own file judged against the FRD as it stands NOW.
+  const { previous, verdict } = await reenter("values", STAGING, AFTER_INTAKE, readText, (a) => design({ pass: a.pass, path: a.path, scenario: unit.id }));
+  if (verdict && verdict.ok && !feedback) return { ok: true, id: unit.id, called: false };
+
+  const env = await agent(prompt(tplValuePart, {
+    ENDS: unit.ends,
+    FRD: unit.frd,
+    RIPPLE: unit.ripple,
+    PREVIOUS: previous || "(none — first attempt)",
+    FEEDBACK: feedback || (verdict && verdict.blockers) || "(none — first attempt)",
+    STAGING,
+    CHECK,
+  }), { role: "valuer", outputSchema: ENVELOPE });
+  if (env.track === "err") return { ok: false, id: unit.id, why: `${unit.id}: ${env.kind || "err"} — ${env.subject || "(без subject)"}` };
+  return { ok: true, id: unit.id, called: true };
+}
+
+// FUNCTION_CONTRACT: valueSlot — one seat of pass A's swarm, empty seats included
+//   Input:        batch — the units of this batch; i — the seat's index; the rest as valuePart takes it
+//   Dependencies: valuePart
+//   Antecedent:   i is within 0..SWARM_WIDTH-1; the batch may be SHORTER than the swarm
+//   Consequent:   success: valuePart's result, or null when this seat has no unit
+//   Purity:       io (through valuePart)
+async function valueSlot(batch, i, tplValuePart, fb) {
+  const unit = batch[i];
+  if (!unit) return null;
+  return valuePart(unit, tplValuePart, fb[unit.id] || "");
+}
+
+// FUNCTION_CONTRACT: swarmValues — pass A's parts, in batches of SWARM_WIDTH
+//   Input:        units — valueUnits' list, already through swarmParts; the rest as valuePart takes it
+//   Dependencies: parallel, valueSlot, log; SWARM_WIDTH, MAX_PARALLEL
+//   Antecedent:   units is non-empty; MAX_PARALLEL ≥ 1
+//   Consequent:   success: { track: "ok" } — every part has a file, or had one and kept it
+//                 failure: { track: "err", kind: "escalate" } naming EVERY part that failed in the batch
+//   Purity:       io (through the host)
+//
+// The literal record of slots is the host's contract, not a style: validation.ts:755 demands a literal
+// name and a literal ObjectExpression of tasks, so this record cannot be built from a width read at run
+// time and cannot be shared with the swarms of passes B and C either — `parallel("values-batch", …)`,
+// `parallel("nodes-batch", …)` and `parallel("routes-batch", …)` are three literal names by the host's
+// rule (steps/scope's swarm, BUG_FIX_CONTEXT).
+async function swarmValues(units, tplValuePart, fb) {
+  const width = Math.min(MAX_PARALLEL, SWARM_WIDTH);
+  let called = 0;
+  for (let i = 0; i < units.length; i += width) {
+    const batch = units.slice(i, i + width);
+    log(`design/values: батч ${batch.map((u) => u.id).join(" ")}`);
+
+    const done = await parallel("values-batch", {
+      a1: () => valueSlot(batch, 0, tplValuePart, fb),
+      a2: () => valueSlot(batch, 1, tplValuePart, fb),
+      a3: () => valueSlot(batch, 2, tplValuePart, fb),
+      a4: () => valueSlot(batch, 3, tplValuePart, fb),
+      a5: () => valueSlot(batch, 4, tplValuePart, fb),
+      a6: () => valueSlot(batch, 5, tplValuePart, fb),
+      a7: () => valueSlot(batch, 6, tplValuePart, fb),
+      a8: () => valueSlot(batch, 7, tplValuePart, fb),
+    });
+
+    const results = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8"].map((k) => done[k]).filter((r) => r);
+    const bad = results.filter((r) => !r.ok);
+    // A lost part is a lost use case — its ends would be closed by nobody — so no part is skipped "to
+    // salvage the rest", and the operator sees all of them at once.
+    if (bad.length) {
+      return { track: "err", kind: "escalate", subject: bad.map((r) => r.why).join("\n  "), evidence: "часть прохода A вернула ошибку; рельсы вопроса у части нет" };
+    }
+    called += results.filter((r) => r.called).length;
+  }
+  log(`design/values: частей ${units.length}, роль звалась ${called} раз`);
+  return { track: "ok" };
+}
+
 // FUNCTION_CONTRACT: nodePart — one seat of pass B's swarm: one FRD scenario into one file of modules
 //   Input:        unit — one element of nodeUnits({}): its FRD projection, its own nodes' ripple bytes,
 //                 the block naming what it writes and which neighbours it may reach; tplNodePart — the
@@ -1248,6 +1346,7 @@ async function designing(from = 6) {
   // file, every FRD scenario has a route, every touched path is walked), and a part answers for none of
   // them — it is one scenario and it is told so. Two passes, two part orders, and neither touches the
   // whole-pass template it stands beside.
+  const tplValuePart = await readText({ path: "steps/design/order-values-part.tpl" });
   const tplNodePart = await readText({ path: "steps/design/order-nodes-part.tpl" });
   const tplPart = await readText({ path: "steps/design/order-routes-part.tpl" });
 
@@ -1280,6 +1379,14 @@ async function designing(from = 6) {
   const wasRedNode = {};
   let swarmingNodes = false;
   let dropNodeParts = from <= 6;
+  // …and the same three, one pass higher: pass A is swarmed by the same rule (D31). `valueFeedback` is
+  // filled from ONE report — a red merge of pass A — because no later pass sends a line back here as a
+  // line about a VALUE: a graph naming an id the dictionary does not carry is blamed on pass A as a
+  // whole (blameOf), and what it asks for is a row that does not exist yet, addressed to no part.
+  let valueFeedback = {};
+  const wasRedValue = {};
+  let swarmingValues = false;
+  let dropValueParts = from <= 6;
   // One green verdict, one sentence — written once and read from both places a pass can close: after
   // the role, and before it (the re-entry below), where the counts are the same numbers.
   const green = (id, check) => log(id === "routes"
@@ -1381,7 +1488,19 @@ async function designing(from = 6) {
         ? await swarmRoutes(units, tplPart, answersBlock(seen, "(no operator answers yet)"), partFeedback)
         : await whole();
     } else {
-      env = await whole();
+      // ERASED ONCE, AND ONLY WHEN THE FRD MOVED — the same operand and the same flag as the two passes
+      // below. Pass A's parts are cut by the FRD alone, so a rewind to step 6 is the only thing that can
+      // make them artifacts about another change.
+      const u = await valueUnits({ drop: dropValueParts });
+      if (u.dropped) log(`design/values: полоса перемотана на шаг 6 — сброшено частей ${u.dropped}`);
+      dropValueParts = false;
+      if (!u.ok) exit(err("blocked", { subject: u.why, evidence: "части прохода A не собраны" }));
+      const units = swarmParts(u.units);
+      swarmingValues = units.length > 0;
+      if (swarmingValues) log(`design/values: рой — частей ${units.length}, наряд части ≈ ${Math.max(...units.map((x) => x.chars))} симв (целиком FRD ${FRD.length} + проекция ряби ${CHANGE.text.length})`);
+      env = swarmingValues
+        ? await swarmValues(units, tplValuePart, valueFeedback)
+        : await whole();
     }
 
     if (env.track === "err" && env.kind === "question") {
@@ -1466,6 +1585,23 @@ async function designing(from = 6) {
         }));
       }
       log(`design/nodes: красный (${p.id}) — блокеров ${(parts.nodes || []).length}, адресовано частям ${Object.keys(nodeFeedback).length}`);
+    }
+
+    // AND THE SAME, ONE PASS HIGHER (D31). ONE channel, not two: `parts.values` is non-empty only after
+    // a red pass A (its own lines) or a red pass B naming an id the dictionary does not carry
+    // (blameOf), and `check.blame` addresses BOTH — blameValues keys a row by its id and an end by its
+    // use case, blameNodes keys the missing id by the NODE, and the scenario that owns that node has a
+    // part of pass A too, because pass A gives every scenario one.
+    if (swarmingValues && (p.id === "values" || (parts.values || []).length)) {
+      const split = await addressToParts(parts.values || [], check.blame, wasRedValue);
+      valueFeedback = split.feedback;
+      if (split.orphan.length) {
+        exit(err("escalate", {
+          subject: split.orphan.join("\n  "),
+          evidence: `проход A собран роем из ${(check.parts || 0)} частей; у этих блокеров нет ни одного сценария FRD в адресатах — их чинит шаг 6, а не словарь`,
+        }));
+      }
+      log(`design/values: красный (${p.id}) — блокеров ${(parts.values || []).length}, адресовано частям ${Object.keys(valueFeedback).length}`);
     }
 
     if (back) {

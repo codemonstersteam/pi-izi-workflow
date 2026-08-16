@@ -17,8 +17,8 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { parseRoutes, checkRoutes, checkSteps, checkCoverage, blockerLine, scenarioOf } from "./routes.mjs"
-import { routeParts, mergeParts, blameByScenario, changeRipple, nodeParts, nodeOwner, mergeNodes, blameNodes } from "./parts.mjs"
-import { parseValues } from "./values.mjs"
+import { routeParts, mergeParts, blameByScenario, changeRipple, nodeParts, nodeOwner, mergeNodes, blameNodes, valueParts, valuePrefix, mergeValues, blameValues } from "./parts.mjs"
+import { parseValues, checkValues, checkEnds, valueFacts } from "./values.mjs"
 import { parseNodes, checkNodes, checkGraph, graphFacts } from "./nodes.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 import { parseMap } from "../intake/map.mjs"
@@ -384,6 +384,7 @@ test("вина: 1, 9, 11 — по маршрутам из where; 2, 7, 10 — п
 // запуск — после гейта, словаря и графа, то есть после всех токенов проходов A и B.
 const ORDER_PART = readFileSync(new URL("order-routes-part.tpl", import.meta.url), "utf8")
 const ORDER_NODES_WHOLE = readFileSync(new URL("order-nodes.tpl", import.meta.url), "utf8")
+const ORDER_VALUES_WHOLE = readFileSync(new URL("order-values.tpl", import.meta.url), "utf8")
 const IZI = readFileSync(new URL("../../workflows/izi.js", import.meta.url), "utf8")
 
 test("наряд части: плейсхолдеры шаблона — ровно те ключи, что подставляет полоса", () => {
@@ -1069,4 +1070,250 @@ test("D30 шов D: `<failure from=\"UC1/1a | UC2/2a\">` адресует бло
     // …и один и тот же id закрывает конец у обеих частей: значение объявлено ОДИН раз (LAW 3 роли).
     for (const p of byRoutes) assert.ok(p.routes.some((r) => r.value === "v5"), `${p.id} @ ${JSON.stringify(sep)}`)
   }
+})
+
+
+// --- D31: ПРОХОД A СОБИРАЕТСЯ ТЕМ ЖЕ РОЕМ ----------------------------------------------------------
+//
+// ФИКСТУРА — та же дословная выписка прогона `35972d1c`, что судит рой прохода B: три сценария, ДВА
+// use case (S5 и S6 закрывают один UC5 — случай, ради которого единица взята у `routeParts`, а не у
+// `nodeParts`: `nodeParts` выбросил бы S2 живого FRD, и 21 конец из 35 не написал бы никто).
+//
+// Прогоны, которые это купили: 27b37fdb — наряд 31 173 симв, файл записан, 36 187 токенов выхода;
+// f3c7be97 — тот же наряд 31 430 симв, три хода в потолок 32 768, 98 304 токена, 1 104 с, `failed`.
+const VALUE_PARTS = valueParts({ frd: FRD_D28, ripple: RIPPLE_B, text: FRD_B })
+
+// Файлы трёх частей: у каждой свой префикс и концы СВОЕГО use case. S5 и S6 закрывают один UC5, и
+// каждая пишет его концы сама — так рой и работает: чужой токен `closes` её собственный гардрейл
+// краснит (ext/index.mjs::design).
+const VP = {
+  S3: `<values>
+  <value id="S3v1" text="GlossaryTermKeyMissing(key)"/>
+  <value id="S3v2" text="500 GLOSSARY_TERM_KEY_MISSING" closes="UC3/3a"/>
+  <value id="S3v3" text="getAll()"/>
+  <value id="S3v4" text="resolve glossary namespace" closes="UC3/in"/>
+  <value id="S3v5" text="ResolvedTermValue(key, value)" closes="UC3/post"/>
+</values>`,
+  S5: `<values>
+  <value id="S5v1" text="Glossary(resourceURI, version)"/>
+  <value id="S5v2" text="POST /backup/import" closes="UC5/in"/>
+  <value id="S5v3" text="readGlossaries()"/>
+  <value id="S5v4" text="dispatchGlossaries"/>
+  <value id="S5v5" text="200 {merged}" closes="UC5/post"/>
+</values>`,
+  S6: `<values>
+  <value id="S6v1" text="POST /backup/import" closes="UC5/in"/>
+  <value id="S6v2" text="200 {merged}" closes="UC5/post"/>
+  <value id="S6v3" text="Term(key, value)"/>
+</values>`,
+}
+const valueFiles = (parts = VP) => VALUE_PARTS.map((p) => ({ id: p.id, xml: parts[p.id] })).filter((f) => f.xml)
+const ucOfPart = (id) => VALUE_PARTS.find((p) => p.id === id).uc
+const textsOfA = (facts) => new Set(facts.map((f) => f.text))
+
+test("D31: часть прохода A = один сценарий: свой префикс id, концы СВОЕГО use case, проекция ряби", () => {
+  assert.deepEqual(VALUE_PARTS.map((p) => p.id), ["S3", "S5", "S6"])
+  const [s3, s5, s6] = VALUE_PARTS
+
+  // Префикс назначает ХОСТ, роль только нумерует внутри него — тем же приёмом, каким назначены id
+  // маршрутов и владение узлами. `S1v…` не читается как начало `S12v…`: буква разделяет префиксы.
+  assert.equal(s3.prefix, "S3v")
+  assert.match(s3.ends, /Твои id: S3v1, S3v2, S3v3…/)
+  assert.equal(valuePrefix("S1") === "S1v" && !"S12v1".startsWith(valuePrefix("S1")), true)
+
+  // Концы — только свои, и с текстом из FRD: роли есть из чего сформулировать значение.
+  assert.match(s3.ends, /closes="UC3\/in" — вход/)
+  assert.match(s3.ends, /closes="UC3\/post" — окончание/)
+  assert.match(s3.ends, /closes="UC3\/3a" — окончание/)
+  assert.doesNotMatch(s3.ends, /UC5\//)
+  assert.match(s3.ends, /В твоём файле только токены UC3/)
+  // Один use case на две части: S5 и S6 получают ОДИН и тот же список концов, и это не коллизия —
+  // их id различны по построению, а правило 12 считает концы, а не строки.
+  assert.equal(ucOfPart("S5"), "UC5")
+  assert.equal(ucOfPart("S6"), "UC5")
+  assert.match(s5.ends, /closes="UC5\/post"/)
+  assert.match(s6.ends, /closes="UC5\/post"/)
+
+  // Отказ своего use case назван кодом и статусом: правило 8 чинится ровно здесь.
+  assert.match(s3.ends, /Отказы UC3: GLOSSARY_TERM_KEY_MISSING \(500\)/)
+  assert.match(s5.ends, /Отказов у UC5 в FRD нет/)
+
+  // Проекция FRD — дословные байты своего сценария, его use case и сбоев этого use case.
+  assert.match(s3.frd, /<scenario id="S3"/)
+  assert.match(s3.frd, /<usecase id="UC3"[\s\S]*<\/usecase>/)
+  assert.match(s3.frd, /<failure code="GLOSSARY_TERM_KEY_MISSING"/)
+  assert.doesNotMatch(s3.frd, /<scenario id="S5"/)
+  // Рябь — проекция D29a на узлы ЭТОГО сценария, а соседи по-прежнему едут путями (иначе правило 6
+  // прохода B ломается тихо).
+  assert.match(s3.ripple, /EddiTemplateExtensions\.java/)
+  assert.match(s3.ripple, /Соседи по ряби/)
+  assert.doesNotMatch(s3.ripple, /IResourceSource\.java" seed/)
+  // Наряд части — единицы тысяч символов против 31 430 у наряда, который прогон f3c7be97 не осилил.
+  for (const p of VALUE_PARTS) assert.ok(p.chars < 9000, `${p.id}: ${p.chars}`)
+})
+
+// --- ШОВ РАЗЛОЖЕНИЯ: объединение частных вердиктов ≡ вердикту целого по частным правилам ----------
+//
+// Дефекты внесены нарочно — по одному на класс частного правила: пустой text, id объявлен дважды,
+// незакрытый конец своего use case, токен чужого несуществующего конца. Убери любой из них из `local`
+// (steps/design/values.mjs), и объединение перестанет сходиться с целым.
+const BROKEN_A = {
+  S3: VP.S3
+    .replace('id="S3v1" text="GlossaryTermKeyMissing(key)"', 'id="S3v1" text=""')
+    .replace('id="S3v3" text="getAll()"', 'id="S3v3" text="getAll()"/><value id="S3v3" text="getAll(x)"'),
+  S5: VP.S5
+    .replace('<value id="S5v5" text="200 {merged}" closes="UC5/post"/>', '<value id="S5v5" text="200 {merged}" closes="UC5/99z"/>'),
+  S6: VP.S6.replace('<value id="S6v2" text="200 {merged}" closes="UC5/post"/>', ""),
+}
+
+test("D31 шов: объединение checkEnds частей равно вердикту целого по частным правилам", () => {
+  const merged = mergeValues(valueFiles(BROKEN_A))
+  const whole = textsOfA(valueFacts({ values: parseValues(merged.xml), frd: FRD_D28 }).filter((f) => f.local))
+  const union = new Set()
+  for (const p of VALUE_PARTS) {
+    for (const f of checkEnds({ values: parseValues(BROKEN_A[p.id]), frd: FRD_D28, uc: p.uc })) union.add(f.text)
+  }
+  assert.equal(whole.size, 4, [...whole].join("\n"))
+  assert.deepEqual([...whole].filter((t) => !union.has(t)), [], "промахи: целое видит, части нет")
+  assert.deepEqual([...union].filter((t) => !whole.has(t)), [], "ложные: части видят, целое нет")
+  // …и это четыре РАЗНЫХ правила, а не четыре строки одного: пустой text, дубль id, правило 12 и его
+  // зеркало.
+  const rules = [...new Set(valueFacts({ values: parseValues(merged.xml), frd: FRD_D28 }).filter((f) => f.local).map((f) => f.rule))].sort()
+  assert.deepEqual(rules, [0, 12])
+  assert.equal([...whole].filter((t) => t.startsWith("12 конец")).length, 1)
+  assert.equal([...whole].filter((t) => t.includes("не резолвится")).length, 1)
+})
+
+// --- ШОВ: правила ЦЕЛОГО на части — фантомы -------------------------------------------------------
+//
+// Замер на живом словаре прогона 27b37fdb (12 частей, 35 концов, 4 отказа): части отвечают правилами
+// целого 422 строками там, где целое отвечает нулём. Здесь, на трёх частях — 10 против нуля. И фантом
+// не молчащий: часть S3 не может закрыть концы UC5 никогда, их пишет другая часть.
+test("D31 шов: checkEnds части не выдаёт ни одной строки правил целого — а те на части фантомны", () => {
+  let phantom = 0
+  for (const p of VALUE_PARTS) {
+    const values = parseValues(VP[p.id])
+    assert.deepEqual(checkEnds({ values, frd: FRD_D28, uc: p.uc }), [], p.id)
+    phantom += checkValues({ values, frd: FRD_D28 }).length
+  }
+  assert.equal(phantom, 10, "правила целого на трёх частях")
+  assert.deepEqual(checkValues({ values: parseValues(mergeValues(valueFiles()).xml), frd: FRD_D28 }), [], "целое на том же словаре")
+  // Фантом именно ложный: у S3 краснеют концы UC5 и отказ, который несёт её же собственная строка.
+  const s3 = checkValues({ values: parseValues(VP.S3), frd: FRD_D28 })
+  assert.equal(s3.filter((l) => l.startsWith("12 конец UC5/")).length, 2)
+})
+
+// --- ШОВ: слияние ничего не теряет, ничего не удваивает и НЕ СКЛЕИВАЕТ ДВА РАЗНЫХ КОНЦА -----------
+test("D31 круг: части → mergeValues → parseValues — тот же словарь, ни одного id дважды", () => {
+  const { xml, owner } = mergeValues(valueFiles())
+  const back = parseValues(xml)
+
+  // Одиннадцать строк: пять S3, пять S5 и одна из трёх строк S6 — две другие несут ТОТ ЖЕ текст с ТЕМ
+  // ЖЕ closes, что строки S5, и это одна строка словаря, а не две.
+  assert.equal(back.size, 11)
+  assert.deepEqual(back.dups, [], "id дважды невозможен по построению: у каждой части свой префикс")
+  assert.equal(back.get("S6v3"), "Term(key, value)")
+  assert.equal(back.has("S6v1"), false, "дубль текста И closes склеен")
+  assert.equal(back.has("S6v2"), false)
+  // owner — адрес починки: какая ЧАСТЬ написала эту строку. Читать id для этого нельзя.
+  assert.equal(owner.get("S3v2"), "S3")
+  assert.equal(owner.get("S5v5"), "S5")
+  assert.equal(owner.get("S6v3"), "S6")
+  assert.match(xml, /^<values>/)
+  assert.deepEqual(checkValues({ values: back, frd: FRD_D28 }), [])
+
+  // Формат, который репозиторий и пишет, и читает, на самом трудном законном значении: кириллица,
+  // `>` и `&lt;` внутри значения атрибута, скобки, несколько токенов через ` | `.
+  const hard = `<values>
+  <value id="S1v1" text="Карточка(name, description) -&gt; 200 {&lt;json&gt;}" closes="UC1/post | UC2/post"/>
+</values>`
+  assert.deepEqual(parseValues(mergeValues([{ id: "S1", xml: hard }]).xml), parseValues(hard))
+  assert.deepEqual(mergeValues(), { xml: "<values>\n\n</values>\n", owner: new Map() })
+})
+
+// ШОВ ДЕДУПЛИКАЦИИ, и он куплен готовым артефактом. Фикстура — ДОСЛОВНЫЕ строки `v14` и `v15` из
+// `runbox/quarkus-rest-json-app-v2-t2/.agent/values.xml`: один и тот же текст `404` закрывает концы
+// ДВУХ разных use case. Склей их по тексту — и отказ UC2 списан на UC1, а правило 13 посадит его на
+// узлы чужого сценария.
+test("D31 шов: дедупликация по паре «текст + closes», а не по тексту", () => {
+  const one = { id: "S1", xml: '<values>\n  <value id="S1v14" text="404" closes="UC1/2a"/>\n</values>' }
+  const two = { id: "S2", xml: '<values>\n  <value id="S2v15" text="404" closes="UC2/2a"/>\n</values>' }
+  const back = parseValues(mergeValues([one, two]).xml)
+  assert.equal(back.size, 2, "два конца — две строки")
+  assert.deepEqual(back.closes.get("S1v14"), ["UC1/2a"])
+  assert.deepEqual(back.closes.get("S2v15"), ["UC2/2a"])
+
+  // …а тот же текст с тем же closes — одна строка: это один вызов, названный двумя частями.
+  const same = parseValues(mergeValues([one, { id: "S2", xml: two.xml.replace("UC2/2a", "UC1/2a") }]).xml)
+  assert.equal(same.size, 1)
+  // Разделитель списка не решает: ` | ` и пробел — одна и та же атрибуция (core/xml.mjs::tokens).
+  const bars = parseValues(mergeValues([
+    { id: "S1", xml: '<values>\n  <value id="S1v1" text="404" closes="UC1/2a | UC2/2a"/>\n</values>' },
+    { id: "S2", xml: '<values>\n  <value id="S2v1" text="404" closes="UC1/2a UC2/2a"/>\n</values>' },
+  ]).xml)
+  assert.equal(bars.size, 1)
+})
+
+// --- ВИНА ПОСЛЕ СЛИЯНИЯ ---------------------------------------------------------------------------
+test("D31 вина: строка про ряд — той части, что её написала; строка про конец — сценариям его use case", () => {
+  const merged = mergeValues(valueFiles(BROKEN_A))
+  const facts = valueFacts({ values: parseValues(merged.xml), frd: FRD_D28 })
+  const blame = blameValues({ facts, frd: FRD_D28, owner: merged.owner })
+  const to = new Map(blame.map((b) => [b.scenario, b.lines]))
+
+  // Пустой text и зеркало правила 12 — по id, ровно одной части.
+  assert.equal(to.get("S3").some((l) => l.startsWith("значение S3v1 без text")), true)
+  assert.equal(to.get("S5").some((l) => l.includes("не резолвится")), true)
+  assert.equal((to.get("S3") || []).some((l) => l.includes("не резолвится")), false)
+  // Незакрытый конец UC5 — ОБОИМ сценариям этого use case: закрыть его может любая из двух частей.
+  for (const id of ["S5", "S6"]) assert.equal(to.get(id).some((l) => l.startsWith("12 конец UC5/post")), true)
+  // Сирот нет.
+  const addressed = new Set(blame.flatMap((b) => b.lines))
+  assert.deepEqual(facts.map((f) => f.text).filter((t) => !addressed.has(t)), [])
+
+  // Правило 8 адресуется по use case отказа — обеим частям UC5 не отправится, а вот отказ UC3 уедет S3.
+  const noCode = valueFiles({ ...VP, S3: VP.S3.replace('text="500 GLOSSARY_TERM_KEY_MISSING"', 'text="500 ошибка"') })
+  const m8 = mergeValues(noCode)
+  const f8 = valueFacts({ values: parseValues(m8.xml), frd: FRD_D28 }).filter((f) => f.rule === 8)
+  assert.equal(f8.length, 1)
+  assert.deepEqual(blameValues({ facts: f8, frd: FRD_D28, owner: m8.owner }).map((b) => b.scenario), ["S3"])
+
+  // …а адрес — ПОЛЕ, не регулярка: сотри `id` и `uc` у фактов, и адресата не остаётся ни у одного.
+  assert.deepEqual(blameValues({ facts: facts.map((f) => ({ ...f, id: "", uc: "" })), frd: FRD_D28, owner: merged.owner }), [])
+})
+
+// --- ШОВ: ключи наряда части ≡ плейсхолдеры шаблона, и схема читается ПАРСЕРОМ РОЛИ ----------------
+const ORDER_VALUE_PART = readFileSync(new URL("order-values-part.tpl", import.meta.url), "utf8")
+
+test("D31 наряд части прохода A: плейсхолдеры шаблона — ровно те ключи, что подставляет полоса", () => {
+  const keys = [...ORDER_VALUE_PART.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
+  assert.deepEqual([...new Set(keys)].sort(), ["CHECK", "ENDS", "FEEDBACK", "FRD", "PREVIOUS", "RIPPLE", "STAGING"])
+  const call = IZI.slice(IZI.indexOf("await agent(prompt(tplValuePart, {"), IZI.indexOf('}), { role: "valuer"'))
+  const passed = [...call.matchAll(/^\s{4}([A-Z_]+)[,:]/gm)].map((m) => m[1])
+  assert.deepEqual([...new Set(passed)].sort(), [...new Set(keys)].sort())
+
+  // ШОВ D30, тот же и здесь: схема наряда прогоняется НАСТОЯЩИМ парсером, а не читается глазами.
+  const xml = (ORDER_VALUE_PART.match(/<values>[\s\S]*?<\/values>/) || [""])[0]
+  const parsed = parseValues(xml)
+  assert.equal(parsed.size, (xml.match(/<value\b/g) || []).length, xml)
+  assert.ok([...parsed.closes.values()].some((ts) => ts.length > 1), xml)
+  for (const t of [...parsed.closes.values()].flat()) assert.match(t, /^UC\S+\/\S+$/)
+  // Схема показывает ОДИН use case: часть закрывает только свои концы.
+  assert.equal(new Set([...parsed.closes.values()].flat().map((t) => t.split("/")[0])).size, 1, xml)
+
+  // Часть не отвечает за полноту словаря — и её наряд этого не требует. Наряд ЦЕЛОГО не тронут.
+  assert.match(ORDER_VALUE_PART, /За полноту всего словаря ты не отвечаешь/)
+  assert.match(ORDER_VALUES_WHOLE, /Каждый `<usecase>` FRD даёт/)
+  assert.doesNotMatch(ORDER_VALUE_PART, /Каждый `<usecase>` FRD даёт/)
+})
+
+test("D31 тотальность: без FRD, без ряби и без текста частей прохода A просто нет", () => {
+  assert.deepEqual(valueParts(), [])
+  assert.deepEqual(valueParts({ frd: {}, ripple: "", text: "" }), [])
+  assert.deepEqual(blameValues(), [])
+  assert.equal(valuePrefix(), "v")
+  // Вырождение: у формы `t2` сценариев два, частей выходит две, и порог SWARM_MIN (ext/index.test.mjs)
+  // превращает их в сегодняшний единственный наряд — рой там был бы чистыми накладными.
+  const two = parseFrd(FRD_B.replace(/<scenario id="S6"[\s\S]*?\/>/, ""))
+  assert.equal(valueParts({ frd: two, ripple: RIPPLE_B, text: FRD_B }).length, 2)
 })

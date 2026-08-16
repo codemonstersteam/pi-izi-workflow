@@ -13,11 +13,26 @@
 // Invariants: parseValues is total — any input, including undefined, yields an empty dictionary and
 //             never throws (a guardrail that crashes on a malformed artifact turns "the role wrote
 //             nonsense" — data, a red check, a redelegation — into "the run crashed", code 2, no
-//             diagnosis); checkValues is total and returns EVERY blocker, not the first one;
+//             diagnosis); valueFacts is total and returns EVERY finding, not the first one;
 //             the rule lives in exactly one place — rule 8's NUMBER is the one of docs/data-flow.md
 //             §6 and is not restated here in prose
 // Interface:  parseValues(xml) -> Map<id, text>  (with `dups` — see the contract)
+//             endsOf(frd) -> End[]
+//             valueFacts({ values, frd }) -> Fact[]  — every finding, in the report's order
+//             checkEnds({ values, frd, uc }) -> Fact[]  — the facts a PART can be judged by
 //             checkValues({ values, frd }) -> string[]  — blockers, empty = green
+//
+// TWO RULES, TWO OPERANDS, AND THE FIELD THAT DECIDES WHICH IS WHICH (D31). Pass A is written by a
+// SWARM — one agent per FRD scenario — and a part holds the values of ONE use case: its ends, the
+// failures of that use case, the calls of its own nodes. A finding whose operands lie inside one part
+// is judged ON the part (`local: true` — a row without a name or without a text, a repeated id, rule
+// 12 for the ends of THIS use case, and rule 12's mirror, which resolves a token against the whole
+// FRD the part is handed); a finding whose operand is the SET of all values cannot be asked of a part
+// at all (rule 8 — a failure code is looked for across every text of the dictionary, and the text
+// that carries it may be another part's). Let rule 8 and the other use cases' ends loose on the parts
+// of `eddi` and its twelve parts answer with 422 phantom lines where the whole answers with none.
+// `checkValues` is the same records rendered in TODAY'S order, which is why steps/design/values.test.mjs
+// judges this decomposition without one edit — that file is the seam.
 //
 // BUG_FIX_CONTEXT: live run 0bbf7054-3b8c-400f-b46f-83625777e097 (sandbox/runbox/eddi), the run that
 //   bought this whole pass (docs/design-step-by-step.md §1-§2).
@@ -94,22 +109,33 @@ export function endsOf(frd = {}) {
   return ends
 }
 
-// FUNCTION_CONTRACT: checkValues — the guardrail of pass A
+// A FINDING OF PASS A, and its three fields beside the text:
+//   · `id`    — the value the finding is about, when there is one. It is the ADDRESS of the repair:
+//               the merge knows which part wrote which id (steps/design/parts.mjs::mergeValues)
+//   · `uc`    — the use case the finding is about, when the finding is about an END rather than a row.
+//               Its addressees are every scenario of that use case, exactly as for rule 13 one pass
+//               lower (steps/design/parts.mjs::blameNodes)
+//   · `local` — TRUE when every operand of the finding lies inside one part, i.e. when a PART can be
+//               judged by it. See the module contract: this field IS the decomposition.
+const fact = (rule, text, { id = "", uc = "", local = false } = {}) =>
+  Object.freeze({ rule, text, id, uc, local })
+
+// FUNCTION_CONTRACT: valueFacts — every finding of pass A, in the order the report prints them
 //   Input:        { values, frd }
 //                 values — parseValues' parse; the duplicate evidence is read off its `dups`
 //                 frd    — the parse of `.agent/frd.xml` AS steps/intake/frd.mjs::parseFrd returns
 //                          it: `failures` are the ELEMENTS (a code lives in `.code`). Parsing that
 //                          file belongs to the intake slice; here it is a DEPENDENCY
+//   Dependencies: fact, endsOf
 //   Antecedent:   values — a Map as parseValues builds it (a hand-built Map with no `dups` is read
 //                 as "no repeats", which is true of any Map built by set()); frd — an object, a
 //                 missing `failures` read as empty
-//   Consequent:   success: string[] of blockers, empty = green. Rules 8 and 12 keep the numbers they
-//                          have in docs/data-flow.md §6; the two checks the dictionary owns beside
-//                          them (an id without a text, a repeated id) are the pass's own and carry no
-//                          number, because §6's table is the single declaration of the numbers
+//   Consequent:   success: Fact[] in the report's own order — the rows first (a value with no name,
+//                          a value with no text), then the repeated ids, then rule 8, then rule 12's
+//                          open ends, then rule 12's mirror
 //                 failure: none — total, "the dictionary is bad" is DATA, not a function failure
 //   Purity:       pure
-export function checkValues({ values = new Map(), frd = {} } = {}) {
+export function valueFacts({ values = new Map(), frd = {} } = {}) {
   const B = []
 
   // A value is a NAME and a TEXT, and both are load-bearing: the name is what a contract writes
@@ -117,14 +143,18 @@ export function checkValues({ values = new Map(), frd = {} } = {}) {
   // missing makes the row unusable by the pass that reads it, and unusable is not "empty" — a
   // contract referring to it would resolve to nothing at all.
   for (const [id, text] of values) {
-    if (!id) B.push(`значение без id: text="${text}" — на него нечем сослаться из контракта, имя обязательно`)
-    else if (!text) B.push(`значение ${id} без text — подставлять при сборке нечего`)
+    if (!id) B.push(fact(0, `значение без id: text="${text}" — на него нечем сослаться из контракта, имя обязательно`, { local: true }))
+    else if (!text) B.push(fact(0, `значение ${id} без text — подставлять при сборке нечего`, { id, local: true }))
   }
 
   // One name, one value. A repeated id makes every reference to it ambiguous, and the ambiguity is
   // invisible downstream: a contract says `v9` and gets whichever declaration the reader kept.
+  // …and inside a PART it stays decidable in full: the ids of a part are its own prefix and nobody
+  // else's, so two parts CANNOT collide (steps/design/parts.mjs::valueParts assigns the prefix, the
+  // same discipline by which the machine assigns a route id). A repeat is therefore always a repeat
+  // within one file, and the merge can only carry it through.
   for (const id of new Set(values.dups || [])) {
-    B.push(`значение ${id} объявлено дважды — имя выдаётся один раз, иначе ссылка из контракта неоднозначна`)
+    B.push(fact(0, `значение ${id} объявлено дважды — имя выдаётся один раз, иначе ссылка из контракта неоднозначна`, { id, local: true }))
   }
 
   // Rule 8. A failure the requirement DECLARED and the dictionary does not carry. Everything
@@ -137,12 +167,20 @@ export function checkValues({ values = new Map(), frd = {} } = {}) {
   // literal of the FRD (`FRUIT_NOT_FOUND`) and the value names that literal AND how the module hands
   // it out (`404 FRUIT_NOT_FOUND`); prescribing that wording would be inventing a second grammar for
   // something the role already writes in one.
-  const declared = (frd.failures || []).map((f) => String((f && f.code) || "").trim()).filter(Boolean)
+  //
+  // THE WHOLE'S FINDING, NOT THE PART'S (D31): the operand is the set of ALL texts, and a part carries
+  // the values of one use case. A failure whose `from` names two use cases is legally named by either
+  // of the two parts, so asked of one part alone the rule reports a defect the other part has already
+  // repaired. Its ADDRESS is the use cases the failure came from — every scenario of each of them.
+  const declared = (frd.failures || []).filter((f) => String((f && f.code) || "").trim())
   if (declared.length) {
     const texts = [...values.values()]
-    for (const code of declared) {
+    for (const f of declared) {
+      const code = String(f.code).trim()
       if (!texts.some((t) => t.includes(code))) {
-        B.push(`8 отказ ${code} объявлен в FRD, но не назван ни одним значением — маршрута у него не будет, значит не будет и юнита; объяви значение, которым узел его отдаёт`)
+        B.push(fact(8, `8 отказ ${code} объявлен в FRD, но не назван ни одним значением — маршрута у него не будет, значит не будет и юнита; объяви значение, которым узел его отдаёт`, {
+          uc: tokens(f.from).map((t) => t.split("/")[0]).join(" "),
+        }))
       }
     }
   }
@@ -157,9 +195,13 @@ export function checkValues({ values = new Map(), frd = {} } = {}) {
   const ends = endsOf(frd)
   if (ends.length) {
     const claimed = new Set([...values.closes || []].flatMap(([, ts]) => ts))
+    // THE PART ANSWERS FOR THE ENDS OF ITS OWN USE CASE (D31), and `uc` is what says which those are:
+    // a part is one FRD scenario, a scenario closes one use case, and the ends of somebody else's use
+    // case are somebody else's rows. Judged without that filter, one part of `eddi` reports 32 open
+    // ends out of 35 — every one of them written by another part.
     for (const e of ends) {
       if (!claimed.has(e.token)) {
-        B.push(`12 конец ${e.token} не закрыт ни одним значением — «${e.text}»; объяви значение, которым он кончается, и пометь его closes="${e.token}"`)
+        B.push(fact(12, `12 конец ${e.token} не закрыт ни одним значением — «${e.text}»; объяви значение, которым он кончается, и пометь его closes="${e.token}"`, { uc: e.uc, local: true }))
       }
     }
     // The mirror of rule 1: a token that resolves to no end of this FRD closes nothing, and the value
@@ -172,10 +214,51 @@ export function checkValues({ values = new Map(), frd = {} } = {}) {
     const known = new Set(ends.map((e) => e.token))
     for (const [id, ts] of values.closes || []) {
       for (const t of ts) {
-        if (!known.has(t)) B.push(`12 значение ${id}: closes="${ts.join(" | ")}" — токен «${t}» не резолвится ни в один конец FRD; концы этого требования: ${[...known].join(", ")}`)
+        if (!known.has(t)) B.push(fact(12, `12 значение ${id}: closes="${ts.join(" | ")}" — токен «${t}» не резолвится ни в один конец FRD; концы этого требования: ${[...known].join(", ")}`, { id, local: true }))
       }
     }
   }
 
   return B
+}
+
+// FUNCTION_CONTRACT: checkEnds — the findings a PART of pass A can be judged by, alone
+//   Input:        { values, frd, uc } — `values` being ONE part's dictionary or the whole one, `frd`
+//                 the WHOLE requirement (a part is handed the same file), `uc` the use case this part
+//                 answers for; no `uc` means no end is this caller's, which is what a caller with no
+//                 scenario should see
+//   Dependencies: valueFacts
+//   Antecedent:   the same as valueFacts'
+//   Consequent:   success: Fact[] — the subset whose operands lie inside one part: a row with no name
+//                          or no text, a repeated id, rule 12's mirror, and rule 12's open ends OF
+//                          THIS USE CASE. Every one of them is MONOTONE — red on a part stays red on
+//                          the merge — GIVEN the ownership the part's own guardrail enforces: a part
+//                          closes the ends of its use case and of no other (ext/index.mjs::design), so
+//                          no second part can quietly close an end this one left open
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    checkEnds({ values, frd, uc }) -> Fact[]
+//
+// The whole is judged by `checkValues` after the merge and by nothing else (ext/index.mjs::design): no
+// rule is relaxed here, rule 8 is simply unanswerable by one part.
+export const checkEnds = ({ uc = "", ...input } = {}) =>
+  valueFacts(input).filter((f) => f.local && (!f.uc || f.uc === uc))
+
+// FUNCTION_CONTRACT: checkValues — the guardrail of pass A: the WHOLE dictionary, all its rules
+//   Input:        { values, frd } — as valueFacts takes them
+//   Dependencies: valueFacts
+//   Antecedent:   the same as valueFacts'
+//   Consequent:   success: string[] of blockers, empty = green. Rules 8 and 12 keep the numbers they
+//                          have in docs/data-flow.md §6; the two checks the dictionary owns beside
+//                          them (an id without a text, a repeated id) are the pass's own and carry no
+//                          number, because §6's table is the single declaration of the numbers
+//                 failure: none — total, "the dictionary is bad" is DATA, not a function failure
+//   Purity:       pure
+//   Interface:    checkValues({ values, frd }) -> string[]
+//
+// THE ORDER OF THE LINES IS THE CONTRACT, and it is the order this report had before the decomposition
+// — which is why steps/design/values.test.mjs judges D31 without an edit. It is kept by CONSTRUCTION:
+// one function produces the records, and this one only renders them.
+export function checkValues(input = {}) {
+  return valueFacts(input).map((f) => f.text)
 }

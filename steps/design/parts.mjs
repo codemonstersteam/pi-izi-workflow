@@ -26,11 +26,15 @@
 // Interface:  routeParts({ frd, values, nodes, text }) -> Part[]
 //             mergeParts(files) -> { xml, owner }
 //             blameByScenario({ facts, frd, owner }) -> [{ scenario, lines }]
-//             changeRipple({ frd, ripple }) -> { text, paths, neighbours, chars }
+//             changeRipple({ frd, ripple, only }) -> { text, paths, neighbours, chars }
 //             nodeParts({ frd, ripple, text }) -> NodePart[]
 //             nodeOwner(frd) -> Map<path, scenario>
 //             mergeNodes(files, { mode }) -> { xml, owner }
 //             blameNodes({ facts, frd, owner }) -> [{ scenario, lines }]
+//             valuePrefix(scenario) -> string
+//             valueParts({ frd, ripple, text }) -> ValuePart[]
+//             mergeValues(files) -> { xml, owner }
+//             blameValues({ facts, frd, owner }) -> [{ scenario, lines }]
 //
 // WHY ONE SCENARIO IS THE UNIT (research И2, backlog). On the whole task the role of pass C produced
 // THREE turns of pure reasoning, 32 768 output tokens each, `stop: length`, and not one byte of text —
@@ -39,7 +43,7 @@
 // handed measured 11 262 characters against 32 779, and the FRD projection is what made that possible:
 // the whole FRD is 24 955 bytes, so a part carrying it entire would be no smaller than the whole.
 
-import { attrs, elem, esc, tokens } from "../../core/xml.mjs"
+import { attrs, elem, esc, tag, tokens } from "../../core/xml.mjs"
 import { blockerLine, parseRoutes, scenarioOf } from "./routes.mjs"
 import { endsOf } from "./values.mjs"
 import { cards } from "./nodes.mjs"
@@ -339,30 +343,39 @@ const NEIGHBOURS_HEAD = "Соседи по ряби — узлы подграф�
 const NO_NEIGHBOURS = "Соседей у узлов изменения нет: подграф ряби — это ровно узлы изменения выше."
 
 // FUNCTION_CONTRACT: changeRipple — the ripple as pass A's order carries it
-//   Input:        { frd, ripple }
+//   Input:        { frd, ripple, only }
 //                 frd    — the parse of `.agent/frd.xml` AS steps/intake/frd.mjs::parseFrd returns it
 //                 ripple — the TEXT of `.agent/ripple.xml`, for the bytes of the change's own nodes and
 //                          for the paths of everything else in the subgraph
+//                 only   — the paths to project ON, when the caller is narrower than the whole change:
+//                          a PART of pass A's swarm carries its own scenario's nodes (valueParts, D31).
+//                          Absent means the whole change, which is what the single order of pass A
+//                          carries (workflows/izi.js, ext/index.mjs::design `ripple: true`)
 //   Dependencies: elements, changeWidth, pathsOf
 //   Antecedent:   any values — no FRD projects nothing and lists every module of the ripple as a
 //                 neighbour, which is true and is what a caller with no change should see; no ripple
 //                 yields a projection with no modules and no neighbours
 //   Consequent:   success: { text, paths, neighbours, chars } — `text` is what the order's {RIPPLE}
-//                          carries: the VERBATIM `<module>` bytes of the change's nodes, in the ripple's
-//                          own order, then the paths of every other node of the subgraph as lines.
-//                          `paths` are the projected nodes, `neighbours` the listed ones, `chars` the
-//                          length of `text`
+//                          carries: the VERBATIM `<module>` bytes of the projected nodes, in the
+//                          ripple's own order, then the paths of every other node of the subgraph as
+//                          lines. `paths` are the projected nodes, `neighbours` the listed ones,
+//                          `chars` the length of `text`
 //                 failure: none — total
 //   Purity:       pure
-//   Interface:    changeRipple({ frd, ripple }) -> { text, paths, neighbours, chars }
+//   Interface:    changeRipple({ frd, ripple, only }) -> { text, paths, neighbours, chars }
 //
 // A node of the change the ripple does NOT carry is silently absent from `paths`, and that is the case
 // rather than a defect: `<delta new="yes">` is a module this change creates, so the subgraph cannot hold
 // it — 7 of eddi's 13 change nodes are exactly that. The order says so in its own document header.
-export function changeRipple({ frd = {}, ripple = "" } = {}) {
+//
+// THE NEIGHBOURS ARE NOT NARROWED WITH `only`, and that is the point of the second argument being a
+// projection rather than a filter: whatever is not projected is LISTED, so a part of pass A sees every
+// other path of the subgraph exactly as the whole pass does. Hiding them would break rule 6's transit
+// half one pass later, which is the very condition D29a was built under.
+export function changeRipple({ frd = {}, ripple = "", only = null } = {}) {
   const moduleXml = elements(ripple, "module", "path")
-  const width = changeWidth({ frd, tests: new Set() })
-  for (const s of (frd && frd.scenarios) || []) for (const p of pathsOf(s)) width.add(p)
+  const width = only ? new Set(only) : changeWidth({ frd, tests: new Set() })
+  if (!only) for (const s of (frd && frd.scenarios) || []) for (const p of pathsOf(s)) width.add(p)
 
   const paths = [...moduleXml.keys()].filter((p) => width.has(p))
   const neighbours = [...moduleXml.keys()].filter((p) => !width.has(p))
@@ -586,6 +599,220 @@ export function blameNodes({ facts = [], frd = {}, owner = new Map() } = {}) {
     // `uc` carries one use case or several (a `<failure from>` may name ends of many), and every
     // scenario of each of them is an addressee: the value has to be seated somewhere among their nodes,
     // and which of them owns that node is not this function's judgement to make.
+    if (!to.size && f.uc) for (const u of tokens(f.uc)) for (const s of ofUc.get(u) || []) to.add(s)
+    const line = blockerLine(f)
+    for (const s of to) {
+      if (!out.has(s)) out.set(s, [])
+      out.get(s).push(line)
+    }
+  }
+  return [...out].filter(([, lines]) => lines.length).map(([scenario, lines]) => ({ scenario, lines }))
+}
+
+// --- D31: PASS A IS WRITTEN BY THE SAME SWARM ------------------------------------------------------
+//
+// Two live runs of pass A on the SAME order of the form `eddi`, after D29a had already cut the ripple
+// down to the nodes of the change: run 27b37fdb — order 31 173 characters, the role wrote the file,
+// 36 187 output tokens, `completed`; run f3c7be97 — order 31 430 characters, three turns into the
+// 32 768 ceiling, 98 304 output tokens, 1 104 seconds, `failed`. The projection made success POSSIBLE
+// and did not make it reliable, and what still separates it from the parts that always converge is the
+// number of independent obligations in one file: 76 for the whole pass A, 1 to 4 for a part.
+//
+// THE UNIT IS `routeParts`' UNIT, NOT `nodeParts`'. `nodeParts` drops a scenario whose every node is
+// already owned by an earlier one, and a dropped scenario is a use case whose ENDS nobody would write:
+// on the live FRD of `eddi` that is 21 of the 35 ends. Pass A's obligation is the use case, not the
+// node, so every scenario gets a part — twelve on that form.
+//
+// THE ID SPACE IS THE MACHINE'S. The dictionary is one flat list of opaque names, and the swarm needs
+// them disjoint between parts for the merge to be a concatenation; so the host hands each part its own
+// PREFIX and the part numbers inside it — the same discipline by which the route ids of pass C are
+// assigned (routeParts) and the nodes of pass B are owned (nodeOwner). Nothing in this repository reads
+// the SHAPE of a value id: every consumer treats it as an opaque string (a contract's `in`/`out`, a
+// route's `path@id`, the assembly's substitution by id).
+
+// The prefix of ONE part's ids, written once and read by three: valueParts hands it to the role,
+// blameValues falls back on it when the merge no longer holds the file, and ext/index.mjs::design
+// refuses a row wearing somebody else's. The letter is what keeps the prefixes unambiguous — `S1v…`
+// cannot be read as the start of `S12v…`, which is the trap scenarioOf paid for one pass later
+// (steps/design/routes.mjs, research И2).
+export const valuePrefix = (scenario) => `${String(scenario || "").trim()}v`
+
+// FUNCTION_CONTRACT: valueParts — the change as the units of pass A's swarm
+//   Input:        { frd, ripple, text }
+//                 frd    — the parse of `.agent/frd.xml` AS steps/intake/frd.mjs::parseFrd returns it
+//                 ripple — the TEXT of `.agent/ripple.xml`, for the bytes of this scenario's nodes and
+//                          for the paths of every other node of the subgraph
+//                 text   — the TEXT of `.agent/frd.xml`, for the projection's bytes; absent means the
+//                          projection is empty and the part carries only its ends
+//   Dependencies: elements, endsOf, changeRipple, valuePrefix, pathsOf
+//   Antecedent:   steps 6, 7 and 8 are done — that is what makes the FRD's ends and the subgraph real.
+//                 An FRD with no scenarios yields no parts, which the caller reads as "there is nothing
+//                 to swarm"
+//   Consequent:   success: one ValuePart per `<scenario>` of the FRD, in the FRD's order:
+//                          { id, uc, prefix, frd, ripple, ends, paths[], neighbours[], chars }
+//                          — `frd` is the projection (the scenario, its use case, the failures whose
+//                          `from` names that use case), `ripple` the subgraph projected on this
+//                          scenario's nodes, `ends` the block naming every end this part must close and
+//                          the ids it may use
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    valueParts({ frd, ripple, text }) -> ValuePart[]
+//
+// TWO SCENARIOS OF ONE USE CASE GET TWO PARTS, and both are told to close the same ends. That is not a
+// collision: their rows carry different ids by construction, the merge keeps both when their texts
+// differ and one when they do not (mergeValues), and rule 12 counts ENDS, not rows — an end closed
+// twice is green, exactly as it is today when one role writes both rows.
+export function valueParts({ frd = {}, ripple = "", text = "" } = {}) {
+  const scenarioXml = elements(text, "scenario")
+  const usecaseXml = elements(text, "usecase")
+  const failureXml = elements(text, "failure", "code")
+
+  const parts = []
+  for (const s of (frd && frd.scenarios) || []) {
+    const id = String((s && s.id) || "").trim()
+    if (!id) continue
+    const uc = String((s && s.uc) || "").trim()
+    const prefix = valuePrefix(id)
+
+    // The ends of THIS use case, in the FRD's own order — endsOf is the single declaration of that
+    // order, and rule 12 counts by the very same expression (steps/design/values.mjs).
+    const ends = endsOf(frd).filter((e) => e.uc === uc)
+    const failures = ((frd && frd.failures) || []).filter((f) => tokens(f && f.from).some((t) => t.split("/")[0] === uc))
+
+    const projection = [
+      scenarioXml.get(id) || "",
+      usecaseXml.get(uc) || "",
+      ...failures.map((f) => failureXml.get(String(f.code || "").trim()) || ""),
+    ].filter(Boolean).join("\n")
+
+    const cut = changeRipple({ frd, ripple, only: pathsOf(s) })
+
+    const lines = [
+      `Сценарий ${id} закрывает use case ${uc}. Твои id: ${prefix}1, ${prefix}2, ${prefix}3… — подряд, начиная с ${prefix}1.`,
+      "",
+      ends.length
+        ? `Концы ${uc} — по строке словаря на каждый, атрибут closes копируй отсюда символ в символ:`
+        : `У ${uc} концов в FRD нет — закрывать нечего, пиши только значения вызовов из ряби.`,
+      ...ends.map((e) => `  closes="${e.token}" — ${e.side === "in" ? "вход" : "окончание"}: «${e.text}»`),
+      "",
+      `Конец другого use case не закрывай: его закрывает другая часть. В твоём файле только токены ${uc}.`,
+      failures.length
+        ? `Отказы ${uc}: ${failures.map((f) => `${String(f.code || "").trim()} (${String(f.status || "").trim()})`).join(", ")}. Каждый код обязан стоять ВНУТРИ text одного из твоих значений.`
+        : `Отказов у ${uc} в FRD нет.`,
+    ]
+
+    parts.push(Object.freeze({
+      id,
+      uc,
+      prefix,
+      frd: projection,
+      ripple: cut.text,
+      ends: lines.join("\n"),
+      paths: cut.paths,
+      neighbours: cut.neighbours,
+      chars: projection.length + cut.text.length + lines.join("\n").length,
+    }))
+  }
+  return parts
+}
+
+// FUNCTION_CONTRACT: mergeValues — the swarm's parts as ONE dictionary of pass A
+//   Input:        files — [{ id, xml }] in the order the caller wants the values to appear: the FRD's
+//                 scenario order (ext/index.mjs::partFiles)
+//   Dependencies: tag, attrs, tokens
+//   Antecedent:   any values; a part with no `<value>` contributes nothing and is not an error here —
+//                 the WHOLE's guardrail is what reports an end nobody closed
+//   Consequent:   success: { xml, owner } — the text of `.agent/staging/values.xml` and the map
+//                          `id → the part that wrote it`, which is how a red merge is addressed back to
+//                          the part (blameValues). An id met twice keeps the FIRST part's bytes; two
+//                          rows with the same TEXT AND the same `closes` are ONE row
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    mergeValues(files?: [{ id, xml }]) -> { xml, owner: Map<string, string> }
+//
+// A CLONE OF mergeNodes, NOT AN ABSTRACTION OVER IT, and for the same reason: the grammars differ, and
+// one shared "merge elements of a grammar" helper would take a parser, a writer and a key as three
+// parameters to save ten lines — paid for by whoever changes one grammar and silently changes the
+// other. The bytes are CUT, never re-serialised: a value's text carries exactly the characters that
+// bought core/xml.mjs its quote-resilience (`409 {conflict}`, `steps="a -> b"`).
+//
+// THE DEDUPLICATION IS BY THE PAIR «TEXT + closes», NEVER BY TEXT ALONE. Two scenarios naming one node
+// declare the same call, and those are one row — the reason this function deduplicates at all. But the
+// finished design of the form `t2` carries `v14 text="404" closes="UC1/2a"` and `v15 text="404"
+// closes="UC2/2a"`: one text ending two DIFFERENT use cases. Collapsed by text, one of the two failures
+// would be written off against a use case it does not end, and rule 13 would seat it on the nodes of
+// the wrong scenario one pass later.
+//
+// AND IT IS THE ONLY DEDUPLICATION HERE — a REPEATED ID is deliberately carried through, which is the
+// opposite of what mergeNodes does with a repeated path. The asymmetry is the parser's: `parseNodes`
+// would silently keep one of two `<module>` and nobody would know, while `parseValues` keeps the first
+// AND records the id in `dups`, so the whole's guardrail reports it and blameValues sends it back to the
+// part that wrote it. Swallow it here and the decomposition stops being monotone: a part red on a
+// repeated id would merge into a green dictionary.
+export function mergeValues(files = []) {
+  const seenRow = new Set()
+  const out = []
+  const owner = new Map()
+  for (const f of files || []) {
+    for (const m of String((f && f.xml) || "").matchAll(tag("value"))) {
+      const a = attrs(m[1])
+      const id = String(a.id || "").trim()
+      // The pair is compared by the TOKENS of `closes`, not by the string the role happened to type:
+      // `UC1/2a | UC2/2a` and `UC1/2a UC2/2a` are one attribution, and one separator per class is what
+      // says so (core/xml.mjs::tokens, live run 27b37fdb).
+      const row = `${String(a.text || "").trim()} ${tokens(a.closes).join(" ")}`
+      if (seenRow.has(row)) continue
+      // A row with NO id survives the merge on purpose: dropping it would hide a defect the whole's
+      // guardrail reports («значение без id»), and a silent drop is how a red dictionary looks green.
+      seenRow.add(row)
+      out.push(`  ${m[0]}`)
+      if (id && !owner.has(id)) owner.set(id, (f && f.id) || "")
+    }
+  }
+  return { xml: `<values>\n${out.join("\n")}\n</values>\n`, owner }
+}
+
+// FUNCTION_CONTRACT: blameValues — a red verdict of pass A addressed to the parts that must repair it
+//   Input:        { facts, frd, owner }
+//                 facts — the records of steps/design/values.mjs::valueFacts (a red merge of pass A),
+//                         NOT their rendered lines
+//                 frd   — the parse, for the scenarios of each use case and the scenario order
+//                 owner — Map<value id, scenario id>: which part's FILE this row came out of. The merge
+//                         is what knows it, and it beats any reading of the id
+//   Dependencies: blockerLine, valuePrefix
+//   Antecedent:   any values; a fact addressed to nobody is simply absent from the result, and the
+//                 CALLER decides what that means (workflows/izi.js escalates — there is no part to send
+//                 it to)
+//   Consequent:   success: [{ scenario, lines }] in the FRD's scenario order, lines in the report's own
+//                          order. A finding about a ROW goes to the ONE part that wrote it; a finding
+//                          about a use case (rule 12's open end, rule 8's unnamed failure) goes to every
+//                          scenario of that use case, because any of them may be the one to close it
+//                 failure: none — total
+//   Purity:       pure
+//
+// THE ADDRESS IS A FIELD, NEVER A REGULAR EXPRESSION over the blocker's prose — the rule blameNodes and
+// blameByScenario keep (standards/code.md §1). The prefix is a FALLBACK and nothing more, for a row
+// whose file the merge no longer holds: the file is the fact, the id is the guess.
+export function blameValues({ facts = [], frd = {}, owner = new Map() } = {}) {
+  const ids = ((frd && frd.scenarios) || []).map((s) => String((s && s.id) || "").trim()).filter(Boolean)
+  const ofUc = new Map()
+  for (const s of (frd && frd.scenarios) || []) {
+    const id = String((s && s.id) || "").trim()
+    const uc = String((s && s.uc) || "").trim()
+    if (!id || !uc) continue
+    if (!ofUc.has(uc)) ofUc.set(uc, [])
+    ofUc.get(uc).push(id)
+  }
+  const byPrefix = (vid) => ids.find((s) => vid.startsWith(valuePrefix(s))) || ""
+
+  const out = new Map(ids.map((id) => [id, []]))
+  for (const f of facts) {
+    const to = new Set()
+    const vid = String((f && f.id) || "").trim()
+    if (vid) { const s = (owner && owner.get(vid)) || byPrefix(vid); if (s) to.add(s) }
+    // `uc` carries one use case or several (rule 8 reads a `<failure from>`, which may name ends of
+    // many), and every scenario of each of them is an addressee: the value has to be declared by one of
+    // them, and which one is not this function's judgement to make.
     if (!to.size && f.uc) for (const u of tokens(f.uc)) for (const s of ofUc.get(u) || []) to.add(s)
     const line = blockerLine(f)
     for (const s of to) {
