@@ -603,10 +603,25 @@ const STAGED = `<design mode="minor" base=".agent/appgraph.xml">
   </module>
   <route scenario="S1" entry="1" steps="src/ParcelResource.java#1 -> src/ParcelRepo.java#1 -> src/ParcelResource.java#2"/>
 </design>`
+// D25: the FRD the DESIGN fixtures are judged against carries the use case FRD_R leaves out, and it
+// has to. Rule 12 turns every end of a use case into a value of the dictionary, rule 13 seats those
+// values in a contract, and rule 15 exempts exactly one of them — the ENTRY, which no node produces
+// because the ACTOR brings it. A dictionary with no `closes` at all therefore has an entry that looks
+// like an orphan, and that is a shape no live FRD has: step 6 refuses an FRD with no `<usecase>`.
+const FRD_D = `<frd grammar="1" goal="искать посылку">
+  <usecase id="UC1" actor="http-client" goal="найти посылку по трек-номеру">
+    <post>вернён список совпавших посылок</post>
+    <step n="1">клиент отправляет GET /parcels?track=…</step>
+  </usecase>
+  <delta op="GET /parcels" form="Added" node="src/ParcelResource.java" from="list()" to="list(track)"/>
+  <scenario id="S1" uc="UC1" before="весь реестр" after="только совпавшие" nodes="src/ParcelResource.java"/>
+  <touched path="src/ParcelResource.java"/>
+</frd>
+`
 const designRoot = (flag = "needed") => {
   const root = tempRoot()
   mkdirSync(join(root, ".agent", "staging"), { recursive: true })
-  writeFileSync(join(root, ".agent", "frd.xml"), FRD_R)
+  writeFileSync(join(root, ".agent", "frd.xml"), FRD_D)
   writeFileSync(join(root, ".agent", "ripple.xml"), DESIGN_RIPPLE)
   writeFileSync(join(root, ".agent", "mode"), "minor")   // step 7: the graph types itself with it
   if (flag) writeFileSync(join(root, ".agent", "design"), flag)
@@ -617,10 +632,10 @@ const designRoot = (flag = "needed") => {
 
 // D6: the three passes on disk. The working artifacts of A and B for the SAME change as STAGED above.
 const W_VALUES = `<values>
-  <value id="v1" text="GET /parcels?track=&lt;v&gt;"/>
+  <value id="v1" text="GET /parcels?track=&lt;v&gt;" closes="UC1/in"/>
   <value id="v2" text="all()"/>
   <value id="v3" text="Set&lt;Parcel&gt;"/>
-  <value id="v4" text="Set&lt;Parcel&gt; (совпавшие)"/>
+  <value id="v4" text="Set&lt;Parcel&gt; (совпавшие)" closes="UC1/post"/>
 </values>`
 const W_NODES = `<design mode="minor" base=".agent/appgraph.xml">
   <module path="src/ParcelResource.java" delta="Changed">
@@ -1079,9 +1094,77 @@ test("three passes, three roles, three orders — and the role names are the one
 // Run 088fb3ee: attempt 2 of pass B regenerated the graph and knocked `out` off a node attempt 1 had
 // gotten right, because the order showed it blockers about a file it could not see.
 test("the order of pass B carries PREVIOUS — the artifact of the last attempt, read off disk", () => {
-  assert.match(IZI, /const PREVIOUS = p\.id === "nodes"/)
+  assert.match(IZI, /const PREVIOUS = p\.id === "values" \? "" : \(previous/)
   assert.match(IZI, /nodes: \{[^}]*PREVIOUS,[^}]*\}/)
   assert.match(IZI, /\(none — first attempt\)/)
+})
+
+// --- D25: the RE-ENTRY into a pass — the guardrail first, and the file the pass already wrote -----
+//
+// The same device as $START_BLAME at the bottom: the block is CUT OUT of workflows/izi.js and executed
+// here, so this is a seam over the real code and not a grep. The host functions it is given are the
+// real ones over a temp root — `reenter` decides by what is ON DISK, and a hand-made `read` would
+// prove nothing about a run.
+//
+// Run 5bbe5de4: pass C was re-entered three times, was shown nothing it had written, and wrote its 33
+// routes anew every circle; the verdict it was repairing had been computed against the graph of the
+// PREVIOUS circle — of 24 lines, 14 were still true. 2 455 854 tokens, $3.39, no plan.
+const REENTRY = new Function(`${IZI.slice(IZI.indexOf("// $START_REENTRY"), IZI.indexOf("// $END_REENTRY"))}
+  return { reenter }`)()
+
+// Passes A and B closed, and pass C's own staging left on disk — the state a re-entry finds.
+const reentryRoot = (routes = W_ROUTES) => {
+  const root = designRoot()
+  design.run({}, ctx(root))
+  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
+  design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root))
+  stage(root, "routes.xml", routes)
+  return root
+}
+const reenterAt = (root, from, judged = { n: 0 }) => REENTRY.reenter(
+  "routes", ".agent/staging/routes.xml", from,
+  (a) => readText.run(a, ctx(root)),
+  (a) => { judged.n++; return design.run(a, ctx(root)) },
+)
+
+test("D25: staging этого прогона зелен — проход закрывается БЕЗ роли, за 0 токенов", async () => {
+  const root = reentryRoot()
+  const r = await reenterAt(root, 9)
+
+  assert.equal(r.previous, W_ROUTES, "файл прошлой попытки — это {PREVIOUS} наряда")
+  assert.equal(r.verdict.ok, true)
+  // …и зелёный вердикт ЗАКРЫЛ проход: он промоутит, собирает пару и убирает staging. Звать роутера
+  // не за чем — и в izi.js это та самая ветка, что стоит ПЕРЕД agent().
+  assert.deepEqual(r.verdict, { ok: true, nodes: 2, routes: 1, units: 2 })
+  assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), true)
+  assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), false)
+  assert.match(IZI, /if \(verdict && verdict\.ok\) \{[^]*?i\+\+;[^]*?continue;/)
+  assert.match(IZI, /routes: \{[^}]*PREVIOUS,[^}]*\}/)
+})
+
+test("D25: красный staging — его блокеры и есть FEEDBACK, посчитанный по ТЕКУЩЕМУ графу", async () => {
+  // Маршрут кончается значением, которого у узла нет в `out`: правило 1, и роль позовут с ним.
+  const root = reentryRoot(W_ROUTES.replace("src/ParcelResource.java@v4", "src/ParcelResource.java@v3"))
+  const r = await reenterAt(root, 9)
+
+  assert.equal(r.verdict.ok, false)
+  assert.match(r.verdict.blockers, /^1 у узла src\/ParcelResource\.java нет значения v3/)
+  assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), true, "красный staging остаётся уликой")
+  assert.match(IZI, /if \(verdict\) feedback\[p\.id\] = verdict\.blockers;/)
+})
+
+test("D25: перемотка на шаг 6 — staging дропнут, гардрейл не зовётся, PREVIOUS = (none)", async () => {
+  const root = reentryRoot()
+  const judged = { n: 0 }
+  const r = await reenterAt(root, 6, judged)
+
+  // FRD переписан: файл, записанный против прежнего, — артефакт про другое изменение.
+  assert.equal(r.previous, "")
+  assert.equal(r.verdict, null)
+  assert.equal(judged.n, 0, "судить нечего — вердикт не запрашивается вовсе")
+  assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false, "ничего не промоутнуто")
+  // …и пустой остаток превращается в «(none — first attempt)» ровно там, где собирается PREVIOUS.
+  assert.match(IZI, /const PREVIOUS = p\.id === "values" \? "" : \(previous[^]*?\(none — first attempt\)"\);/)
 })
 
 test("the valuer returns a count, so the envelope carries it — additionalProperties is false", () => {

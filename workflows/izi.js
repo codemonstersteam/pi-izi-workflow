@@ -876,6 +876,33 @@ const blameSplit = (pass, blockers) => {
 }
 // $END_BLAME
 
+// $START_REENTRY — cut out of the source and EXECUTED by ext/index.test.mjs, the device $START_BLAME
+// above uses: no test may import this file. The names below are that test's interface.
+//
+// A PASS IS RE-ENTERED whenever the ladder sends it back, and then its own staging file is still on
+// disk: the gate drops PROMOTED artifacts and never staging (ext/index.mjs). Two things follow, and
+// this is the only place either of them is decided:
+//   · the file is the {PREVIOUS} of the order — the role REPAIRS it instead of writing it again;
+//   · the guardrail is asked BEFORE the role. Green closes the pass for zero tokens; red hands the
+//     role a verdict about the artifact it is actually going to repair, computed against the graph as
+//     it stands NOW and not as it stood before the repair.
+// `from <= 6` disqualifies both and the staged remnant is dropped: the FRD was rewritten, so whatever
+// a pass staged against the old one is an artifact about another change — the same argument that
+// empties `reused` below, one artifact lower.
+//
+// BUG_FIX_CONTEXT: live run 5bbe5de4 (sandbox/runbox/eddi), pass C. `.agent/staging/routes.xml`
+//   (13 815 B) physically survived every rewind and was read by nobody, so the router wrote its 33
+//   routes ANEW on every circle and grew a fresh crop of rule 3/4 violations each time. The routes of
+//   circle 2, checked against the graph of circle 3, gave 14 blockers and ZERO rules 3 and 4 — the
+//   designer had converged, and the router was called to write it all again regardless. The last call
+//   spent 121 498 output tokens, hit the 32 768 output ceiling on three turns of four and never
+//   called `workflow_result`: `crashed`, 2 455 854 tokens, $3.39, no plan.
+const reenter = async (pass, path, from, read, judge) => {
+  const previous = from > 6 ? String(await read({ path })).trim() : "";
+  return { previous, verdict: previous ? await judge({ pass, path }) : null };
+};
+// $END_REENTRY
+
 async function designing(from = 6) {
   const gate = await design({});
   if (!gate.ok) exit(err("blocked", { subject: gate.why, evidence: ".agent/design-graph.xml не написан" }));
@@ -904,34 +931,60 @@ async function designing(from = 6) {
   // itself on — but the loop still has to be bounded, and nothing else bounds it. Two counters, two
   // meanings, exactly as LOOPS and QUESTION_ROUNDS are two.
   const silent = { values: 0, nodes: 0, routes: 0 };
+  // One green verdict, one sentence — written once and read from both places a pass can close: after
+  // the role, and before it (the re-entry below), where the counts are the same numbers.
+  const green = (id, check) => log(id === "routes"
+    ? `design: узлов ${check.nodes}, маршрутов ${check.routes}, списков юнитов ${check.units} → .agent/design-graph.xml + .agent/data-flow.md`
+    : `design/${id}: зелен — ${id === "values" ? `значений ${check.values}` : `узлов ${check.nodes}`}`);
 
   while (i < PASSES.length) {
     const p = PASSES[i];
     if (attempt[p.id] >= LOOPS) exit(err("escalate", { subject: feedback[p.id], evidence: `проход ${p.id} шага 9: цикл исчерпан за ${LOOPS} попыток` }));
 
+    // THE GUARDRAIL BEFORE THE ROLE, when this pass already staged a file in this run — see
+    // $START_REENTRY. Passes A and B have had their "green NOW" since D6 (ext/index.mjs::design, the
+    // gate's `reused`); this is the same question asked one round later, and pass C was the only pass
+    // without it.
+    const { previous, verdict } = await reenter(p.id, p.out, from, readText, design);
+    if (verdict && verdict.ok) {
+      log(`design/${p.id}: staging этого прогона зелен сейчас — проход закрыт без роли, 0 токенов`);
+      green(p.id, verdict);
+      i++;
+      continue;
+    }
+    // …and red is not a wasted call either: THESE blockers are the ones about the current graph, so
+    // the role repairs what is broken now instead of what was broken before the previous pass moved.
+    if (verdict) feedback[p.id] = verdict.blockers;
+
     const seen = await answers({});
     const VALUES = i > 0 ? await readText({ path: ".agent/values.xml" }) : "";
     const CARDS = p.id === "routes" ? (await design({ pass: "routes", cards: true })).text : "";
-    // THE ORDER OF PASS B CARRIES THE FILE PASS B WROTE LAST TIME. Without it the FEEDBACK names nodes
-    // in an artifact the role cannot see, so "repair" is a word for "write it all again" — and a
-    // regeneration loses whatever was green. Two paths, one artifact: `design({pass:"nodes"})` MOVES
-    // staging to .agent/design-nodes.xml the moment the graph is green (ext/index.mjs), so the staging
-    // copy exists only between two red rounds, and the promoted one is what a rewind from pass C is
-    // sent back to repair. `newRun` carries a previous run's leftovers into .agent/prev/, so neither
-    // path can hand this run a graph belonging to another one.
+    // THE ORDER OF A REPAIRING PASS CARRIES THE FILE IT WROTE LAST TIME. Without it the FEEDBACK names
+    // nodes and routes in an artifact the role cannot see, so "repair" is a word for "write it all
+    // again" — and a regeneration loses whatever was green. Two paths for pass B, one artifact:
+    // `design({pass:"nodes"})` MOVES staging to .agent/design-nodes.xml the moment the graph is green
+    // (ext/index.mjs), so the staging copy exists only between two red rounds, and the promoted one is
+    // what a rewind from pass C is sent back to repair. Pass C has the staging path alone: its own
+    // artifact is never promoted — a green C assembles the deliverable out of it in the same breath
+    // (docs/design-step-by-step.md §7). `newRun` carries a previous run's leftovers into .agent/prev/,
+    // so no path can hand this run a file belonging to another one.
+    //
+    // Pass A does not repair: its dictionary is judged against the FRD alone, and a red one is a
+    // vocabulary to rewrite, not a graph to patch. The key is therefore absent from its order.
     //
     // BUG_FIX_CONTEXT: live run 088fb3ee (sandbox/runbox/eddi), pass B. Attempt 1 was blocked on two
     //   nodes; attempt 2 wrote the whole file anew and paid for the two repairs with a THIRD node —
     //   `Glossary.java: out="v94"` became `out=""` — so the report of attempt 2 was one blocker about
     //   a node attempt 1 had gotten right. Attempt 3 never called a tool at all: `crashed`. This is
-    //   the same defect D13 addressed for feedback lines, one operand short.
-    const PREVIOUS = p.id === "nodes"
-      ? ((await readText({ path: p.out })).trim() || (await readText({ path: ".agent/design-nodes.xml" })).trim() || "(none — first attempt)")
-      : "";
+    //   the same defect D13 addressed for feedback lines, one operand short. Run 5bbe5de4 paid for the
+    //   same asymmetry on pass C — see $START_REENTRY.
+    const PREVIOUS = p.id === "values" ? "" : (previous
+      || (p.id === "nodes" ? (await readText({ path: ".agent/design-nodes.xml" })).trim() : "")
+      || "(none — first attempt)");
     const keys = {
       values: { FRD, RIPPLE, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"values", path}) — steps/design/values.mjs::checkValues по staging` },
       nodes: { VALUES, FRD, RIPPLE, ANSWERS: answersBlock(seen, "(no operator answers yet)"), MODE, DELTA_FORMS: FORM.deltaForms, PREVIOUS, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"nodes", path}) — steps/design/nodes.mjs::checkGraph по staging` },
-      routes: { FRD, CARDS, ANSWERS: answersBlock(seen, "(no operator answers yet)"), FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"routes", path}) — steps/design/routes.mjs::checkRoutes по staging` },
+      routes: { FRD, CARDS, ANSWERS: answersBlock(seen, "(no operator answers yet)"), PREVIOUS, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"routes", path}) — steps/design/routes.mjs::checkRoutes по staging` },
     }[p.id];
     const env = await agent(prompt(tpl[p.id], keys), { role: p.role, outputSchema: ENVELOPE });
 
@@ -946,9 +999,7 @@ async function designing(from = 6) {
 
     const check = await design({ pass: p.id, path: p.out }); // the check runs ON STAGING, before promote
     if (check.ok) {
-      log(p.id === "routes"
-        ? `design: узлов ${check.nodes}, маршрутов ${check.routes}, списков юнитов ${check.units} → .agent/design-graph.xml + .agent/data-flow.md`
-        : `design/${p.id}: зелен — ${p.id === "values" ? `значений ${check.values}` : `узлов ${check.nodes}`}`);
+      green(p.id, check);
       i++;
       continue;
     }
@@ -980,7 +1031,7 @@ async function designing(from = 6) {
       if (q.id !== p.id && !back) back = q.id;                  // PASSES are in order — the EARLIEST culprit
     }
     if (back) {
-      log(`design/${p.id}: красный по вине прохода ${back} — возврат туда, а маршруты переживут: они называют значения ИМЕНЕМ`);
+      log(`design/${p.id}: красный по вине прохода ${back} — возврат туда, а staging этого прохода переживёт и приедет обратно как {PREVIOUS}`);
       i = PASSES.findIndex((x) => x.id === back);
     }
   }

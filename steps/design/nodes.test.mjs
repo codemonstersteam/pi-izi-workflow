@@ -437,3 +437,249 @@ test("13: use case, чьи сценарии не называют узлов, н
   const b = checkGraph({ nodes: parseNodes(GRAPH_1DF9.replace('out=""', 'out="v15"')), values: VALUES_1DF9, frd, known: null })
   assert.deepEqual(b.filter((l) => l.startsWith("13 ")), [])
 })
+
+// --- Правило 15, реинтродукция из прогона 5bbe5de4 -----------------------------------------------
+//
+// Живые артефакты прогона: 14 узлов, 137 значений, `v47 «readGlossaries()»` в `in` у IResourceSource
+// и ни в одном `out`. Проходы A и B закрылись зелёными, правило 10 нашло сироту на проходе C, а
+// `blameOf` оставляет строку правила 10 проходу C — роутеру, который значение произвести не может.
+// Одиннадцать запусков ролей, 2 455 854 токена, $3.39, `.agent/plan-index.json` не написан.
+//
+// Фикстура ДОСЛОВНА. `design-nodes.xml` — целиком; `values.xml` — строки 1-64, 145-158 и 194-206
+// (`~/IdeaProjects/codemonstersdev/sandbox/runbox/eddi/.agent/`). Выброшен ripple-блок: 70 значений,
+// которых не называет ни один контракт этого графа. Что выписка ничего не исказила, проверяет сам
+// тест: безномерный чек «нет в словаре» молчит, а значит все имена графа на месте.
+const VALUES_5BBE = `<values>
+  <!-- ===== FAILURE DOMAIN VALUES (LAW 4: node-detecting-node answer) ===== -->
+  <value id="v1" text="GlossaryNotFound(id)"/>
+  <value id="v2" text="TermKeyInvalid(key)"/>
+  <value id="v3" text="TermKeyDuplicate(key)"/>
+  <value id="v4" text="VersionConflict(expected,actual)"/>
+  <value id="v5" text="TermNotFound(key)"/>
+  <value id="v6" text="AgentNotFound(agentId)"/>
+  <value id="v7" text="ImportInvalidData()"/>
+
+  <!-- ===== FAILURE HTTP STATUS STRINGS (LAW 4: boundary-to-client string) ===== -->
+  <value id="v8" text="404 GLOSSARY_NOT_FOUND"/>
+  <value id="v9" text="400 TERM_KEY_INVALID"/>
+  <value id="v10" text="409 TERM_KEY_DUPLICATE"/>
+  <value id="v11" text="409 VERSION_CONFLICT"/>
+  <value id="v12" text="404 TERM_NOT_FOUND"/>
+  <value id="v13" text="404 AGENT_NOT_FOUND"/>
+  <value id="v14" text="400 IMPORT_INVALID_DATA"/>
+
+  <!-- ===== USE CASE ENTRIES (= first step) ===== -->
+  <!-- v15-v22 are also glossary CRUD endpoints (new modules from delta) -->
+  <value id="v15" text="POST /glossarystore/glossaries {body}" closes="UC1/in"/>
+  <value id="v16" text="GET /glossarystore/glossaries/{id}?version=N" closes="UC2/in"/>
+  <value id="v17" text="PUT /glossarystore/glossaries/{id}?version=N {body}" closes="UC3/in"/>
+  <value id="v18" text="DELETE /glossarystore/glossaries/{id}?version=N" closes="UC4/in"/>
+  <value id="v19" text="POST /glossarystore/glossaries/{id}/terms {key,value}" closes="UC5/in"/>
+  <value id="v20" text="GET /glossarystore/glossaries/{id}/terms" closes="UC6/in"/>
+  <value id="v21" text="PUT /glossarystore/glossaries/{id}/terms/{key}?version=N {key,value}" closes="UC7/in"/>
+  <value id="v22" text="DELETE /glossarystore/glossaries/{id}/terms/{key}?version=N" closes="UC8/in"/>
+  <!-- UC9 entry = LlmTask.execute (merged with ripple v104) -->
+  <value id="v23" text="execute(IConversationMemory memory, Object component)" closes="UC9/in"/>
+  <!-- UC10 entry = POST /backup/export/{agentId} (merged with ripple v49) -->
+  <value id="v24" text="POST /backup/export/{agentId}" closes="UC10/in"/>
+  <!-- UC11 entry = POST /backup/import (merged with ripple v51) -->
+  <value id="v25" text="POST /backup/import {ZIP}" closes="UC11/in"/>
+
+  <!-- ===== EXTENSION OUTCOME VALUES (one per ext id, LAW 6) ===== -->
+  <value id="v26" text="Глоссарий не вернут, HTTP 404" closes="UC2/2a"/>
+  <value id="v27" text="Глоссарий не обновлён, HTTP 404" closes="UC3/3a"/>
+  <value id="v28" text="Глоссарий не обновлён, HTTP 409" closes="UC3/3b"/>
+  <value id="v29" text="Глоссарий не удалён, HTTP 404" closes="UC4/4a"/>
+  <value id="v30" text="Глоссарий не удалён, HTTP 409" closes="UC4/4b"/>
+  <value id="v31" text="Термин не создан, HTTP 404" closes="UC5/5a"/>
+  <value id="v32" text="Термин не создан, HTTP 400" closes="UC5/5b"/>
+  <value id="v33" text="Термин не создан, HTTP 409" closes="UC5/5c"/>
+  <value id="v34" text="Термины не вернут, HTTP 404" closes="UC6/6a"/>
+  <value id="v35" text="Термин не обновлён, HTTP 404 (Глоссарий)" closes="UC7/7a"/>
+  <value id="v36" text="Термин не обновлён, HTTP 404 (Термин)" closes="UC7/7b"/>
+  <value id="v37" text="Термин не обновлён, HTTP 409" closes="UC7/7c"/>
+  <value id="v38" text="Термин не удалён, HTTP 404 (Глоссарий)" closes="UC8/8a"/>
+  <value id="v39" text="Термин не удалён, HTTP 404 (Термин)" closes="UC8/8b"/>
+  <value id="v40" text="Термин не удалён, HTTP 409" closes="UC8/8c"/>
+  <value id="v41" text="{{glossary.&lt;key&gt;}} не заменён — Глоссарий удалён" closes="UC9/9a"/>
+  <value id="v42" text="{{glossary.&lt;key&gt;}} не заменён — Термин отсутствует" closes="UC9/9b"/>
+  <value id="v43" text="экспорт не выполнен, HTTP 404" closes="UC10/10a"/>
+  <value id="v44" text="Глоссарий не импортирован, HTTP 400" closes="UC11/11a"/>
+
+  <!-- ===== DATA RECORDS (from FRD data dictionary, all kind="field") ===== -->
+  <value id="v45" text="Glossary(id,resourceType,version,terms)"/>
+  <value id="v46" text="Term(key,value)"/>
+
+  <!-- ===== DELTA: NEW METHOD added to 3 modules ===== -->
+  <value id="v47" text="readGlossaries()"/>
+
+  <!-- PromptSnippetService (seed, changed by delta) -->
+  <value id="v102" text="getAll()"/>
+  <value id="v103" text="invalidateCache()"/>
+
+  <!-- LlmTask (seed, changed by delta) — execute merged with UC9 entry v23 -->
+  <value id="v104" text="configure(Map&lt;String, Object&gt; configuration, Map&lt;String, Object&gt; extensions)"/>
+  <value id="v105" text="getId()"/>
+  <value id="v106" text="getType()"/>
+  <value id="v107" text="getExtensionDescriptor()"/>
+
+  <!-- TemplatingEngine (seed, changed by delta) -->
+  <value id="v108" text="TemplatingEngine(Engine engine)"/>
+  <value id="v109" text="processTemplate(String template, Map&lt;String, Object&gt; dynamicAttributesMap)"/>
+  <value id="v110" text="processTemplate(String template, Map&lt;String, Object&gt; dynamicAttributesMap, TemplateMode templateMode)"/>
+  <!-- ===== POST-SUCCESS VALUES (last step of each usecase, LAW 6) ===== -->
+  <value id="v129" text="201 Created {Location}" closes="UC1/post"/>
+  <value id="v130" text="200 {Glossary(id,version,terms)}" closes="UC2/post"/>
+  <value id="v131" text="200 {Glossary(id,version,terms)}" closes="UC3/post"/>
+  <value id="v132" text="200 OK" closes="UC4/post"/>
+  <value id="v133" text="201 Created {Location}" closes="UC5/post"/>
+  <value id="v134" text="200 {List&lt;Term&gt;}" closes="UC6/post"/>
+  <value id="v135" text="200 {Glossary(id,version,terms)}" closes="UC7/post"/>
+  <value id="v136" text="200 {Glossary(id,version,terms)}" closes="UC8/post"/>
+  <value id="v137" text="RenderedTemplate(template)" closes="UC9/post"/>
+  <value id="v138" text="200 {ZIP}" closes="UC10/post"/>
+  <value id="v139" text="200 OK" closes="UC11/post"/>
+</values>`
+
+const NODES_5BBE = `<design mode="major" base=".agent/appgraph.xml">
+  <!-- ===== NEW GLOSSARY MODULES ===== -->
+
+  <module path="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" delta="Added">
+    <role>REST boundary for Glossary CRUD: /glossarystore/glossaries, /glossarystore/glossaries/{id}/terms</role>
+    <contract in="v15 | v16 | v17 | v18 | v19 | v20 | v21 | v22 | v1 | v2 | v3 | v4 | v5 | v45 | v8 | v9 | v10 | v11 | v12"
+              out="v45 | v46 | v8 | v9 | v10 | v11 | v12 | v129 | v130 | v131 | v132 | v133 | v134 | v135 | v136 | v26 | v27 | v28 | v29 | v30 | v31 | v32 | v33 | v34 | v35 | v36 | v37 | v38 | v39 | v40"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossaries/IGlossaryStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java"/>
+  </module>
+
+  <module path="src/main/java/ai/labs/eddi/configs/glossaries/IGlossaryStore.java" delta="Added">
+    <role>Domain interface for Glossary persistence operations</role>
+    <contract in="v45 | v46"
+              out="v1 | v2 | v3 | v4 | v5"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java"/>
+  </module>
+
+  <module path="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" delta="Added">
+    <role>MongoDB persistence for Glossary: CRUD, version checks, readGlossaries for template injection</role>
+    <contract in="v45 | v46 | v1 | v2 | v3 | v4 | v5"
+              out="v45 | v1 | v2 | v3 | v4 | v5 | v41 | v42"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossaries/IGlossaryStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossaries/model/Glossary.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java"/>
+  </module>
+
+  <module path="src/main/java/ai/labs/eddi/configs/glossaries/model/Glossary.java" delta="Added">
+    <role>Glossary data model: id, resourceType, version, terms</role>
+    <contract in="v45 | v46" out="v45"/>
+  </module>
+
+  <!-- ===== BACKUP: EXPORT (UC10) ===== -->
+
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" delta="Added">
+    <role>Export agent + glossaries as ZIP: POST /backup/export/{agentId}</role>
+    <contract in="v24 | v45 | v13"
+              out="v138 | v13 | v43"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+  </module>
+
+  <module path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" delta="Added">
+    <role>Resource source interface with readGlossaries() for export/import flows</role>
+    <contract in="v47" out="v45"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+  </module>
+
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java" delta="Added">
+    <role>Reads agent resources including glossaries from remote EDDI instance</role>
+    <contract in="" out="v45"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+  </module>
+
+  <module path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java" delta="Added">
+    <role>Reads agent resources including glossaries from unzipped ZIP directory</role>
+    <contract in="v45" out="v45"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+  </module>
+
+  <!-- ===== BACKUP: IMPORT (UC11) ===== -->
+
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" delta="Added">
+    <role>Import agent + glossaries from ZIP: POST /backup/import</role>
+    <contract in="v25 | v45 | v7 | v14" out="v45 | v7 | v139 | v14 | v44"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+  </module>
+
+  <module path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java" delta="Added">
+    <role>Structurally matches imported glossaries against existing local glossaries by resource URI</role>
+    <contract in="v45" out="v45"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+  </module>
+
+  <module path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java" delta="Added">
+    <role>Creates new or merges imported glossaries into existing ones: new version takes priority</role>
+    <contract in="v45" out="v45"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+  </module>
+
+  <!-- ===== TEMPLATE SUBSTITUTION (UC9) ===== -->
+
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" delta="Changed">
+    <role>LLM task orchestrator: resolves connected glossaries, prepares template context with glossary terms</role>
+    <contract in="v23 | v45 | v102 | v137 | v41 | v42"
+              out="v45 | v102 | v109 | v137 | v41 | v42"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/PromptSnippetService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/templating/impl/TemplatingEngine.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java"/>
+  </module>
+
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/PromptSnippetService.java" delta="Changed">
+    <role>Returns Snippets and Glossary Terms combined for template substitution via getAll()</role>
+    <contract in="v45 | v102"
+              out="v102"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java"/>
+  </module>
+
+  <module path="src/main/java/ai/labs/eddi/modules/templating/impl/TemplatingEngine.java" delta="Changed">
+    <role>Qute-based templating engine with glossary namespace support for {{glossary.&lt;key&gt;}} substitution</role>
+    <contract in="v109" out="v137"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java"/>
+  </module>
+</design>`
+
+const of5bbe = (xml = NODES_5BBE) => checkGraph({ nodes: parseNodes(xml), values: parseValues(VALUES_5BBE), frd: {}, known: null })
+
+const EXPORT_OUT = 'out="v138 | v13 | v43"'
+const SOURCE = "src/main/java/ai/labs/eddi/backup/IResourceSource.java"
+
+test("15: значение, принятое узлом, отдаёт кто-то — сирота ровно одна, и это v47", () => {
+  // Весь отчёт по живому графу — одна строка. Снять правило 15, и дефект, стоивший прогона, зелен.
+  assert.deepEqual(of5bbe(), [
+    `15 значение v47 «readGlossaries()» стоит в in узла ${SOURCE}, но не стоит в out ни одного узла: отдавать его некому. Назови узел, который его производит, либо убери из in.`,
+  ])
+
+  // Ремонт — одно слово в `out` узла, который это значение производит (вызывающий его RestExportService).
+  assert.deepEqual(of5bbe(NODES_5BBE.replace(EXPORT_OUT, 'out="v138 | v13 | v43 | v47"')), [])
+})
+
+test("15: входные значения не судятся — их приносит актёр, эмитента у них нет", () => {
+  const values = parseValues(VALUES_5BBE)
+  const nodes = parseNodes(NODES_5BBE)
+  const entries = [...values.closes].filter(([, ts]) => ts.some((t) => t.endsWith("/in"))).map(([id]) => id)
+  const accepted = new Set([...nodes.values()].flatMap((n) => n.in))
+  const produced = new Set([...nodes.values()].flatMap((n) => n.out))
+
+  // Одиннадцать входов use case, каждый стоит в `in` какого-то узла и ни один — ни в одном `out`:
+  // ровно те одиннадцать ложных блокеров, которые даёт правило без исключения.
+  assert.equal(entries.length, 11)
+  for (const id of entries) {
+    assert.equal(accepted.has(id), true, id)
+    assert.equal(produced.has(id), false, id)
+    assert.equal(of5bbe().some((l) => l.startsWith(`15 значение ${id} `)), false, id)
+  }
+})

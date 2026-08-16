@@ -172,7 +172,7 @@ export function parseNodes(xml) {
 //   Antecedent:   nodes — parseNodes' Map; values — parseValues' Map (a missing one is read as an
 //                 empty dictionary, and then every id a contract names is unknown, which is true);
 //                 frd — an object, a missing `failures` read as empty; known — a Set or null
-//   Consequent:   success: string[] of blockers, empty = green. Rules 6, 13 and 14 keep the numbers
+//   Consequent:   success: string[] of blockers, empty = green. Rules 6, 13, 14 and 15 keep the numbers
 //                          they have in docs/data-flow.md §6; the three checks the graph owns beside
 //                          them (an id outside the dictionary, an edge out of the file, rule 8's
 //                          other half) carry no number, because §6's table is the single declaration
@@ -282,6 +282,34 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
   }
 
   const produced = new Set([...nodes.values()].flatMap((n) => n.out))
+
+  // Rule 15. A value a node ACCEPTS has somebody who HANDS IT OVER. `in` is one half of a node's unit
+  // list exactly as `out` is the other (rule 10, docs/data-flow.md §6), and a value no node produces
+  // cannot be delivered by any route that could be written: pass C meets it as rule 10 and cannot
+  // repair it — a route to a value nobody emits does not exist to be found, however many rounds it is
+  // given. The defect is the GRAPH's, and here it is one edit away from a repair.
+  //
+  // THE ENTRIES OF THE CHANGE ARE NOT JUDGED. A value closing `UCx/in` is brought in by the ACTOR —
+  // that is why rule 13 seats it in `in` and not in `out` — so no node of this graph emits it and none
+  // ever will. Drop the exception and the dictionary of run 5bbe5de4 answers with 11 blockers about
+  // its 11 use case entries, every one of them false.
+  //
+  // BUG_FIX_CONTEXT: live run 5bbe5de4 (sandbox/runbox/eddi). `v47 «readGlossaries()»` stood in `in`
+  //   of `IResourceSource.java` and in no node's `out`. Passes A and B closed green, rule 10 found it
+  //   on pass C, and `blameOf` leaves a rule-10 line with pass C — the router, which cannot produce a
+  //   value. Eleven role runs went round that circle: 2 455 854 tokens, $3.39, no `.agent/plan-index.json`.
+  const entries = new Set()
+  for (const [id, tokens] of values.closes || []) {
+    if (tokens.some((t) => String(t).split("/")[1] === "in")) entries.add(id)
+  }
+  for (const n of nodes.values()) {
+    for (const id of n.in) {
+      // An id outside the dictionary is the unnumbered check's finding above — one defect, one blocker.
+      if (!values.has(id) || entries.has(id) || produced.has(id)) continue
+      B.push(`15 значение ${id} «${values.get(id)}» стоит в in узла ${n.path}, но не стоит в out ни одного узла: отдавать его некому. Назови узел, который его производит, либо убери из in.`)
+    }
+  }
+
   for (const f of frd.failures || []) {
     const code = String((f && f.code) || "").trim()
     if (!code) continue

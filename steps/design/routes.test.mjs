@@ -465,7 +465,12 @@ const ORDER_ROUTES = readFileSync(new URL("order-routes.tpl", import.meta.url), 
 // must NOT be here: the cards replace the subgraph WHOLE (docs/design-step-by-step.md §4.C), and that
 // is the only reason this order is four times lighter than pass B's. Put `{RIPPLE}` back into the
 // template and this goes red.
-const ORDER_KEYS = ["FRD", "CARDS", "ANSWERS", "FEEDBACK", "STAGING", "CHECK"]
+//
+// PREVIOUS is the key D25 added, and it is the artifact of the LAST attempt of THIS pass: run
+// 5bbe5de4 sent the router back three times and showed it nothing it had written, so it wrote 33
+// routes anew on every circle. Drop the key here (or the placeholder from the template) and `prompt()`
+// throws AT LAUNCH — an exact bidirectional match is what it demands.
+const ORDER_KEYS = ["FRD", "CARDS", "ANSWERS", "PREVIOUS", "FEEDBACK", "STAGING", "CHECK"]
 
 test("order-routes.tpl uses exactly the keys the band passes — cards instead of the ripple subgraph", () => {
   const keys = [...ORDER_ROUTES.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
