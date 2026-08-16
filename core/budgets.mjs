@@ -12,6 +12,7 @@
 //             number while the operator believed it had been raised
 // Interface:  DEFAULT_BUDGETS — the defaults, the only copy of these numbers
 //             BUDGETS_PATH — the name of the configuration file in the run's root
+//             ORDER_CAP_CHARS — the ceiling on ONE assembled order, in characters
 //             newBudgets(raw) -> Result<Budgets, "invalid-budgets">
 
 import { ok, err } from "./result.mjs"
@@ -54,6 +55,40 @@ import { ok, err } from "./result.mjs"
 // four loops (brd, scope, design, review) judge a narrower artifact and keep the shared `loops`.
 export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, intakeLoops: 6, questionRounds: 5, checkpointRetries: 2, maxParallel: 8, reviewRounds: 2 })
 export const BUDGETS_PATH = "izi.config.json"
+
+// ORDER_CAP_CHARS — how big ONE assembled order may be, in CHARACTERS, and it is NOT a budget of the
+// izi.config.json kind: nothing an operator prefers moves it. It is the window of the model the roles
+// run on, minus what the request claims beside the order, and it is declared here because the workflow
+// sandbox has no place to derive it in (it receives it through budgets(), it does not carry a copy).
+//
+// WHY IT EXISTS: the arithmetic is the one steps/intake/map.mjs writes out over MAP_CAP_BYTES, and its
+// closing sentence names this gap — "nobody measures the ASSEMBLED order against the window before the
+// role is launched, and the map cap cannot stand in for it: it sees one of five terms". Live run
+// 162e8b02 (form eddi) died of exactly that: the request was 112 tokens over the window, HTTP 400, and
+// the role never ran at all — an outcome indistinguishable, from the operator's chair, from a role that
+// answered badly.
+//
+// THE DERIVATION, every term measured on that run and on the model catalogue, none of them invented:
+//   262 144   the window of the roles' model (steps/intake/map.mjs, the comment over MAP_CAP_BYTES)
+//  − 32 768   claimed for the OUTPUT — pi's maxTokens for these roles, and the ceiling three crashed
+//             runs hit exactly (d5f1d0b4, 35972d1c, 5bbe5de4 — 98 304 = 3 × 32 768)
+//  −  8 192   the request beside the order: pi's own boilerplate ≈ 4 930 tokens + tool schemas ≈ 1 780
+//             + the role file itself (the project's AGENTS.md, 16 010 tokens on that run, no longer
+//             travels — every role declares `contextFiles: []`)
+//  = 221 184  tokens left for the order
+//  × 3.82     characters per token, MEASURED on that request's own order and map — not the 4.0 the
+//             provider's estimator assumes, because the estimator undershot by 4 208 tokens there and
+//             a cap built on it would refuse to notice the very request that died
+//  ≈ 844 923  characters, rounded DOWN to the number below
+//
+// WHAT IT IS NOT: it is not a cure for a role that reasons itself into the output ceiling. That failure
+// was measured and the size hypothesis did NOT explain it — what separates the orders that write a file
+// from the ones that do not is the number of independent obligations in them (145 for pass A on eddi
+// against 1-4 for a swarm part), and the cure is a projection or a swarm, never a resizer. This number
+// answers a different and narrower question: will the request the workflow is about to send exist at
+// all. Today's largest order is 49 884 characters, 6 % of it — a cap that fires is a cap that has just
+// prevented an HTTP 400.
+export const ORDER_CAP_CHARS = 800000
 
 const KEYS = Object.keys(DEFAULT_BUDGETS)
 

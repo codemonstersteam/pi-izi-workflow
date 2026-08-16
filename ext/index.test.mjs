@@ -29,7 +29,7 @@ import { askedNodes } from "../steps/review/review.mjs"
 import { parseFrd } from "../steps/intake/frd.mjs"
 import { checkRoutes } from "../steps/design/routes.mjs"
 import { checkGraph } from "../steps/design/nodes.mjs"
-import { DEFAULT_BUDGETS } from "../core/budgets.mjs"
+import { DEFAULT_BUDGETS, ORDER_CAP_CHARS } from "../core/budgets.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
 const ctx = (cwd) => ({ run: { cwd } })
@@ -278,6 +278,12 @@ test("every budget of core/budgets.mjs is declared in the host's output schema",
   const validate = Compile(budgets.output)   // the host's own check, run here instead of at launch
   assert.equal(validate.Check(out), true, JSON.stringify(out))
   assert.equal(out.intakeLoops, DEFAULT_BUDGETS.intakeLoops)
+
+  // D29b: потолок наряда едет тем же каналом и НЕ является бюджетом izi.config.json — проект не
+  // выбирает окно модели. Убери его из ответа — воркфлоу встаёт `blocked` на первом же шаге, потому
+  // что `симв > undefined` это `false`: проверка размера выключилась бы молча во всех пяти местах.
+  assert.equal(out.orderCap, ORDER_CAP_CHARS)
+  assert.equal(Object.keys(DEFAULT_BUDGETS).includes("orderCap"), false)
 })
 
 // --- the judges a resumed run leans on must be NON-DESTRUCTIVE --------------------------------
@@ -719,6 +725,31 @@ test("three green passes promote in turn, and the LAST one assembles the deliver
   assert.match(flow, /^1\. src\/ParcelResource\.java : GET \/parcels\?track=<v> -> all\(\)$/m)
   assert.match(flow, /\$START_TESTS path="src\/ParcelRepo\.java"\n1\. all\(\) -> Set<Parcel>\n\$END_TESTS/)
   assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), false)   // promote is a MOVE
+})
+
+// D29a: пройти A читает рябь, СПРОЕЦИРОВАННУЮ на узлы изменения. Чистое правило и его живые числа —
+// steps/design/parts.test.mjs; здесь шов хоста: та же функция `design`, что судит проходы, отдаёт эту
+// проекцию как ДАННЫЕ наряда — ровно так же, как отдаёт карточки прохода C.
+test("D29a: design({pass:\"values\", ripple:true}) отдаёт модули узлов изменения и ПУТИ соседей", () => {
+  const root = designRoot()
+  design.run({}, ctx(root))
+
+  const p = design.run({ pass: "values", ripple: true }, ctx(root))
+  assert.equal(p.ok, true)
+  assert.deepEqual([p.nodes, p.neighbours], [1, 1])
+  // Свой узел — байтами ряби, со всеми объявлениями.
+  assert.match(p.text, /<module path="src\/ParcelResource\.java"/)
+  assert.match(p.text, /<api name="GET \/parcels"/)
+  // Сосед — ПУТЁМ и без объявлений: операнд правила 6 сохранён,
+  assert.match(p.text, /^  src\/ParcelRepo\.java$/m)
+  assert.doesNotMatch(p.text, /name="all\(\)"/)
+  // …и это МЕНЬШЕ, чем файл ряби целиком — тот самый вычет, ради которого проекция и заведена.
+  assert.ok(p.text.length < readFileSync(join(root, ".agent", "ripple.xml"), "utf8").length)
+
+  // Гардрейл прохода A подграф не читает вовсе (checkValues судит словарь по FRD), а правило 6
+  // прохода B читает ФАЙЛ ряби целиком, не наряд: проекция ни одному правилу операнда не убавила.
+  assert.deepEqual(design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root)), { ok: true, values: 4 })
+  assert.deepEqual(design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root)), { ok: true, nodes: 2 })
 })
 
 // D17. Rule 9's second operand is the MAP's directed edges, and only the host can fetch them: the
@@ -2116,4 +2147,69 @@ test("D26: одна-две части роя не стоят — проход и
   const swarmFn = IZI.slice(IZI.indexOf("async function routePart"), IZI.indexOf("async function designing"))
   assert.doesNotMatch(swarmFn, /exit\(/)
   assert.doesNotMatch(swarmFn, /checkpoint\(|askOperator\(/)
+})
+
+// $START_ORDER — то же устройство, что $START_SWARM, $START_BLAME и $START_REENTRY: блок ВЫРЕЗАН из
+// workflows/izi.js и исполнен здесь, потому что импортировать этот файл нельзя. `prompt`, `log` и
+// потолок передаются параметрами — внутри песочницы это глобали хоста.
+//
+// D29b. До этого блока ни один шаг не знал, насколько разросся его наряд: рябь выросла с 2 311
+// символов (форма `t2`) до 30 281 (`eddi`), и не заметила этого ни одна строка лога. Прогон 162e8b02
+// ушёл за окно на 112 токенов — HTTP 400, роль не запускалась вовсе, и из чата это неотличимо от
+// роли, которая ответила плохо.
+const ORDER = (cap) => new Function("prompt", "log", "ORDER_CAP", `${IZI.slice(IZI.indexOf("// $START_ORDER"), IZI.indexOf("// $END_ORDER"))}
+  return { sized }`)(
+  (tpl, keys) => `${tpl}::${Object.values(keys).join("")}`,
+  (line) => LOGGED.push(line),
+  cap,
+)
+let LOGGED = []
+
+test("D29b: размер наряда печатается СЛАГАЕМЫМИ — иначе «наряд большой» это число, с которым нечего делать", () => {
+  LOGGED = []
+  const o = ORDER(1000).sized("intake", "tpl", { MAP: "m".repeat(300), BRD: "b".repeat(40), FEEDBACK: "" })
+
+  assert.equal(o.chars, o.text.length)
+  assert.equal(o.over, false)
+  assert.equal(LOGGED.length, 1)
+  // Слагаемые — по убыванию размера: первым стоит тот документ, который и разнесло.
+  assert.equal(LOGGED[0], "intake: наряд 345 симв из 1000 — шаблон 3 · MAP 300 · BRD 40 · FEEDBACK 0")
+})
+
+test("D29b: наряд выше потолка — отказ, и он НАЗЫВАЕТ слагаемые", () => {
+  LOGGED = []
+  const o = ORDER(100).sized("design/values", "tpl", { FRD: "f".repeat(60), RIPPLE: "r".repeat(60) })
+
+  assert.equal(o.over, true)
+  assert.match(o.why, /^наряд design\/values — 125 симв при потолке 100:/)
+  assert.match(o.why, /FRD 60/)
+  assert.match(o.why, /RIPPLE 60/)
+  // Строка лога печатается и в этом случае: отказ едет оператору, а лог остаётся в прогоне.
+  assert.equal(LOGGED.length, 1)
+})
+
+test("D29b: пять прямых сборок наряда идут через sized, и каждая отказывает по-своему", () => {
+  // ПЯТЬ мест — шаги 2, 4, 6, 9 и 11. Два вызова внутри роёв сюда не входят: часть несёт один
+  // сценарий и её размер ограничен построением (steps/design/parts.mjs).
+  assert.equal([...IZI.matchAll(/= sized\(/g)].length, 5, "пять прямых сборок наряда")
+  assert.match(IZI, /const order = sized\("brd", orderTpl, \{/)
+  assert.match(IZI, /const order = sized\(`scope\/\$\{cell\.id\}`, orderTpl, \{/)
+  assert.match(IZI, /const order = sized\("intake", orderTpl, \{/)
+  assert.match(IZI, /const o = sized\(`design\/\$\{p\.id\}`, tpl\[p\.id\], keys\);/)
+  assert.match(IZI, /const order = sized\("review", orderTpl, \{/)
+
+  // Ни одного `prompt(` мимо sized — кроме двух нарядов роя, у которых размер мал по построению.
+  const raw = [...IZI.matchAll(/prompt\(([A-Za-z.[\]"]+)/g)].map((m) => m[1])
+  assert.deepEqual(raw.sort(), ["tpl", "tplNodePart", "tplPart"], "prompt() вызывается только в sized и в двух частях роя")
+
+  // Отказ шага 4 — ЗНАЧЕНИЕ, а не exit: parallel() глотает бросок и перебрасывает свой.
+  const scoutFn = IZI.slice(IZI.indexOf("async function scout("), IZI.indexOf("// FUNCTION_CONTRACT: scope"))
+  assert.match(scoutFn, /if \(order\.over\) return \{ ok: false, why: order\.why \};/)
+  assert.doesNotMatch(scoutFn, /exit\(/)
+  // …а остальные четыре — blocked с диагнозом гардрейла.
+  assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 4)
+
+  // Потолок не переписан в этом файле: он приходит из core/budgets.mjs через budgets().
+  assert.match(IZI, /ORDER_CAP = b\.orderCap;/)
+  assert.doesNotMatch(IZI, new RegExp(`= ${ORDER_CAP_CHARS}`))
 })

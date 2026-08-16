@@ -17,7 +17,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { parseRoutes, checkRoutes, checkSteps, checkCoverage, blockerLine, scenarioOf } from "./routes.mjs"
-import { routeParts, mergeParts, blameByScenario, nodeParts, nodeOwner, mergeNodes, blameNodes } from "./parts.mjs"
+import { routeParts, mergeParts, blameByScenario, changeRipple, nodeParts, nodeOwner, mergeNodes, blameNodes } from "./parts.mjs"
 import { parseValues } from "./values.mjs"
 import { parseNodes, checkNodes, checkGraph, graphFacts } from "./nodes.mjs"
 import { parseFrd } from "../intake/frd.mjs"
@@ -789,4 +789,223 @@ test("тотальность: без FRD, без ряби и без графа �
   // превращает их в сегодняшний единственный наряд — рой там был бы чистыми накладными.
   const two = parseFrd(FRD_B.replace(/<scenario id="S6"[\s\S]*?\/>/, ""))
   assert.equal(nodeParts({ frd: two, ripple: RIPPLE_B, text: FRD_B }).length, 2)
+})
+
+// --- D29a: ПРОХОД A ЧИТАЕТ РЯБЬ, СПРОЕЦИРОВАННУЮ НА УЗЛЫ ИЗМЕНЕНИЯ --------------------------------
+//
+// ФИКСТУРА — ДОСЛОВНАЯ ВЫПИСКА живых артефактов прогона `d5f1d0b4` (`sandbox/runbox/eddi/.agent/`):
+// все тринадцать `<delta>`, два `<scenario>` из двенадцати (S1 и S10), все шесть `<touched>` — и из
+// ряби те шесть `<module>`, которые несут узлы изменения, плюс два соседних модуля из оставшихся
+// двадцати трёх. Прогон: наряд прохода A 49 884 символа, выход 98 304 = 3 x 32 768, ноль вызовов
+// инструментов, `crashed`, 1 104 секунды.
+//
+// ЧИСЛА ЖИВОЙ ФОРМЫ. Рябь целиком — 29 модулей, 30 281 символ, 106 объявлений (86 `<decl>` + 20
+// `<api>`). Проекция — 6 модулей, 9 573 символа, 37 объявлений; соседи 23 пути, 1 592 символа.
+// Отдай роли рябь целиком (`paths` = все модули ряби) — краснеют все три числа разом.
+const R_EDDI = `<ripple grammar="1" mode="major" seeds="6" nodes="29">
+  <module path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" seed="yes" pkg="ai.labs.eddi.backup" component="c1" level="5">
+    <role>Interface and record types for reading agent, workflow, and snippet source data from a backup source</role>
+    <decl kind="interface" name="IResourceSource" sig="public interface IResourceSource"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/IZipArchive.java" pkg="ai.labs.eddi.backup" component="c1" level="3" cut="1">
+    <role>Interface for zip archive creation and extraction operations</role>
+    <decl kind="interface" name="IZipArchive" sig="public interface IZipArchive"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" seed="yes" pkg="ai.labs.eddi.backup.impl" component="c1" level="1">
+    <role>REST service for exporting agents as ZIP archives with selective resource export and snippet reference scanning</role>
+    <api name="GET /backup/export/{agentFilename}" kind="http" scope="public"/>
+    <api name="POST /backup/export/{agentId}" kind="http" scope="public"/>
+    <api name="POST /backup/export/{agentId}/preview" kind="http" scope="public"/>
+    <decl kind="class" name="RestExportService" sig="public class RestExportService"/>
+    <decl kind="method" name="getAgentZipArchive(String agentFilename)" sig="public Response getAgentZipArchive(String agentFilename)"/>
+    <decl kind="method" name="exportAgent(String agentId, Integer agentVersion, String selectedResourceIds)" sig="public Response exportAgent(String agentId, Integer agentVersion, String selectedResourceIds)"/>
+    <decl kind="method" name="previewExport(String agentId, Integer agentVersion)" sig="public ExportPreview previewExport(String agentId, Integer agentVersion)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/AbstractBackupService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/CallbackMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IRestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IZipArchive.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" seed="yes" pkg="ai.labs.eddi.backup.impl" component="c1" level="2">
+    <role>REST service for importing agents from ZIP files and executing live instance-to-instance sync with merge/upgrade strategies</role>
+    <api name="GET /backup/import/sync/agents" kind="http" scope="public"/>
+    <api name="POST /backup/import" kind="http" scope="public"/>
+    <api name="POST /backup/import/initialAgents" kind="http" scope="public"/>
+    <api name="POST /backup/import/preview" kind="http" scope="public"/>
+    <api name="POST /backup/import/sync" kind="http" scope="public"/>
+    <api name="POST /backup/import/sync/batch" kind="http" scope="public"/>
+    <api name="POST /backup/import/sync/preview" kind="http" scope="public"/>
+    <api name="POST /backup/import/sync/preview/batch" kind="http" scope="public"/>
+    <decl kind="class" name="RestImportService" sig="public class RestImportService"/>
+    <decl kind="method" name="importInitialAgents()" sig="public List&lt;AgentDeploymentStatus&gt; importInitialAgents()"/>
+    <decl kind="method" name="previewImport(InputStream zippedAgentConfigFiles, String targetAgentId)" sig="public ImportPreview previewImport(InputStream zippedAgentConfigFiles, String targetAgentId)"/>
+    <decl kind="method" name="listRemoteAgents(String sourceUrl, String sourceAuth)" sig="public List&lt;DocumentDescriptor&gt; listRemoteAgents(String sourceUrl, String sourceAuth)"/>
+    <decl kind="method" name="previewSyncBatch(String sourceUrl, List&lt;SyncMapping&gt; mappings, String sourceAuth)" sig="public List&lt;ImportPreview&gt; previewSyncBatch(String sourceUrl, List&lt;SyncMapping&gt; mappings, String sourceAuth)"/>
+    <decl kind="method" name="executeSyncBatch(String sourceUrl, List&lt;SyncRequest&gt; requests, String sourceAuth)" sig="public Response executeSyncBatch(String sourceUrl, List&lt;SyncRequest&gt; requests, String sourceAuth)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/AbstractBackupService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/CallbackMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/SourceUrlValidator.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IRestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IZipArchive.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java" seed="yes" pkg="ai.labs.eddi.backup.impl" component="c1" level="3">
+    <role>Application-scoped service that executes upgrade/sync operations by creating or updating agent resources, workflows, extensions, and snippets from source data</role>
+    <decl kind="class" name="UpgradeExecutor" sig="public class UpgradeExecutor"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java" seed="yes" pkg="ai.labs.eddi.backup.impl" component="c1" level="3">
+    <role>Reads agent, workflow, and snippet source data from an unzipped ZIP directory structure for import operations</role>
+    <decl kind="class" name="ZipResourceSource" sig="public class ZipResourceSource"/>
+    <decl kind="method" name="ZipResourceSource(Path unzippedDirectory, IJsonSerialization jsonSerialization)" sig="public ZipResourceSource(Path unzippedDirectory, IJsonSerialization jsonSerialization)"/>
+    <decl kind="method" name="readAgent()" sig="public AgentSourceData readAgent()"/>
+    <decl kind="method" name="readWorkflows()" sig="public List&lt;WorkflowSourceData&gt; readWorkflows()"/>
+    <decl kind="method" name="readSnippets()" sig="public List&lt;SnippetSourceData&gt; readSnippets()"/>
+    <decl kind="method" name="close()" sig="public void close()"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/AbstractBackupService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/ConversationHistoryBuilder.java" pkg="ai.labs.eddi.modules.llm.impl" component="c1" level="3" cut="1">
+    <role>CDI-scoped builder that converts ConversationLog entries into langchain4j ChatMessage lists for LLM context windows</role>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" seed="yes" pkg="ai.labs.eddi.modules.llm.impl" component="c1" level="2">
+    <role>LLM lifecycle task that orchestrates agent/assistant LLM interactions, tool calling, HITL gating, RAG context injection, streaming and legacy chat dispatch, and token/cost accumulation</role>
+    <decl kind="class" name="LlmTask" sig="public class LlmTask"/>
+    <decl kind="method" name="getId()" sig="public TaskId getId()"/>
+    <decl kind="method" name="getType()" sig="public String getType()"/>
+    <decl kind="method" name="execute(IConversationMemory memory, Object component)" sig="public void execute(IConversationMemory memory, Object component)"/>
+    <decl kind="method" name="configure(Map&lt;String, Object&gt; configuration, Map&lt;String, Object&gt; extensions)" sig="public Object configure(Map&lt;String, Object&gt; configuration, Map&lt;String, Object&gt; extensions)"/>
+    <decl kind="method" name="getExtensionDescriptor()" sig="public ExtensionDescriptor getExtensionDescriptor()"/>
+    <decl kind="field" name="ID" sig="public static final String ID = &quot;ai.labs.llm&quot;"/>
+    <decl kind="field" name="TASK_ID" sig="public static final TaskId TASK_ID = new TaskId(ID)"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/ChatModelRegistry.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/ConversationHistoryBuilder.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LegacyChatExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/StreamingLegacyChatExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/CascadingModelExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/RagContextProvider.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/TokenCounterFactory.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/ConversationSummarizer.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/PromptSnippetService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/CounterweightService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/IdentityMaskingService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/templating/ITemplatingEngine.java"/>
+  </module>
+</ripple>
+`
+
+const F_EDDI = `<frd grammar="1" goal="Глоссарии">
+  <delta op="CRUD Glossary" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/model/Glossary.java" new="yes"/>
+  <delta op="GET glossarystore/glossaries/{id}" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/rest/RestGlossaryStore.java" new="yes"/>
+  <delta op="Term" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/model/Term.java" new="yes"/>
+  <delta op="IGlossaryStore CRUD" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/IGlossaryStore.java" new="yes"/>
+  <delta op="MongoDB Glossary store" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/mongo/GlossaryStore.java" new="yes"/>
+  <delta op="GlossaryService getAll" form="Added" node="src/main/java/ai/labs/eddi/modules/llm/impl/GlossaryService.java" new="yes"/>
+  <delta op="resolve glossary:" form="Added" node="src/main/java/ai/labs/eddi/modules/templating/impl/GlossaryNamespaceResolver.java" new="yes"/>
+  <delta op="readGlossaries()" form="Added" node="src/main/java/ai/labs/eddi/backup/IResourceSource.java" from="readSnippets()" to="readSnippets() + readGlossaries()"/>
+  <delta op="POST /backup/export/{agentId}" form="Changed" node="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" from="экспорт Агента, Workflow, Snippets" to="экспорт Агента, Workflow, Snippets, Glossaries"/>
+  <delta op="POST /backup/import" form="Changed" node="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" from="импорт без Глоссариев" to="импорт с восстановлением Глоссариев"/>
+  <delta op="readGlossaries()" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java" from="readSnippets()" to="readSnippets() + readGlossaries()"/>
+  <delta op="executeUpgrade()" form="Changed" node="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java" from="обновление Snippets, Workflow, Extensions" to="обновление Snippets, Workflow, Extensions, Glossaries с merge по URI"/>
+  <delta op="execute" form="Changed" node="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" from="решение Snippets и глобальных переменных в шаблонах" to="решение Snippets, глобальных переменных и Glossary значений в шаблонах"/>
+  <scenario id="S1" uc="UC1" before="нет операции создания Глоссария" after="POST glossarystore/glossaries создаёт Глоссарий с HTTP 201"
+            nodes="src/main/java/ai/labs/eddi/configs/glossary/model/Glossary.java src/main/java/ai/labs/eddi/configs/glossary/rest/RestGlossaryStore.java src/main/java/ai/labs/eddi/configs/glossary/IGlossaryStore.java src/main/java/ai/labs/eddi/configs/glossary/mongo/GlossaryStore.java"/>
+  <scenario id="S10" uc="UC10" before="экспорт агента не включает Глоссарии" after="экспорт агента сканирует configuration set на ссылки Глоссариев и включает их в ZIP-архив"
+            nodes="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java src/main/java/ai/labs/eddi/backup/IResourceSource.java src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" why="добавлен метод readGlossaries() и тип GlossarySourceData"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" why="сканирование configuration set на ссылки Глоссариев и включение их в экспорт"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" why="извлечение Глоссариев из ZIP и восстановление с merge по URI"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java" why="добавлен метод readGlossaries() для чтения Глоссариев из распакованного ZIP"/>
+  <touched path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java" why="добавлена обработка Глоссариев при upgrade с merge-стратегией по resource URI"/>
+  <touched path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" why="добавлено разрешение Glossary значений при рендеринге шаблонов промптов"/>
+</frd>
+`
+
+const declsIn = (s) => (String(s).match(/<decl\b/g) || []).length + (String(s).match(/<api\b/g) || []).length
+
+test("D29a: наряд прохода A несёт модули УЗЛОВ ИЗМЕНЕНИЯ — 6 модулей, 9 573 символа, 37 объявлений", () => {
+  const p = changeRipple({ frd: parseFrd(F_EDDI), ripple: R_EDDI })
+
+  assert.equal(p.paths.length, 6, "модулей в проекции")
+  const bytes = [...R_EDDI.matchAll(elem("module"))]
+    .filter((m) => p.paths.includes(attrs(m[1]).path))
+    .reduce((a, m) => a + m[0].length, 0)
+  assert.equal(bytes, 9573, "байты <module> проекции — то, что реально едет в наряд")
+  assert.equal(declsIn(p.text), 37, "объявлений в проекции")
+
+  // Семь узлов изменения из тринадцати — `<delta new="yes">`: их в подграфе нет и быть не может,
+  // и это случай, а не дефект — модуль заводит само изменение.
+  const width = new Set([...parseFrd(F_EDDI).deltas.map((d) => d.node), ...parseFrd(F_EDDI).touched])
+  assert.equal(width.size, 13)
+})
+
+test("D29a: пути соседей едут ОБЯЗАТЕЛЬНО, и едут именно путями — без единого объявления", () => {
+  const p = changeRipple({ frd: parseFrd(F_EDDI), ripple: R_EDDI })
+
+  // Операнд правила 6 (транзитный узел вне ряби, steps/design/nodes.mjs): узел без дельты законен
+  // ровно тогда, когда подграф его объявляет. Спрячь эти пути — и словарь не назовёт значение, за
+  // которое такой узел отвечает, а следующий проход упрётся в id, который никуда не резолвится.
+  assert.deepEqual([...p.neighbours], [
+    "src/main/java/ai/labs/eddi/backup/IZipArchive.java",
+    "src/main/java/ai/labs/eddi/modules/llm/impl/ConversationHistoryBuilder.java",
+  ])
+  for (const path of p.neighbours) assert.match(p.text, new RegExp(`^  ${path.replace(/[.]/g, "\\.")}$`, "m"))
+  // …и ни строчки их содержимого: объявления соседа — это те самые 68 % байт, ради которых всё
+  // затевалось (на форме `t2` из 16 значений словаря до поставки доехали 5).
+  assert.doesNotMatch(p.text, /name="IZipArchive"/)
+  assert.doesNotMatch(p.text, /name="ConversationHistoryBuilder"/)
+})
+
+test("D29a: узел, названный ТОЛЬКО сценарием, — узел изменения; чужой узел — сосед", () => {
+  const frd = parseFrd(`<frd grammar="1" goal="g">
+  <scenario id="S1" uc="UC1" before="a" after="b" nodes="src/a.js"/>
+</frd>`)
+  const ripple = `<ripple grammar="1">
+  <module path="src/a.js"><decl kind="fn" name="a" sig="a()"/></module>
+  <module path="src/b.js"><decl kind="fn" name="b" sig="b()"/></module>
+</ripple>`
+  const p = changeRipple({ frd, ripple })
+
+  // Транзит без дельты и без `<touched>` — самый случай правила 6: его объявления и есть то, из чего
+  // словарь называет значение, которое он передаёт дальше.
+  assert.deepEqual([...p.paths], ["src/a.js"])
+  assert.deepEqual([...p.neighbours], ["src/b.js"])
+  assert.match(p.text, /name="a"/)
+  assert.doesNotMatch(p.text, /name="b"/)
+})
+
+test("тотальность: без FRD и без ряби проекция пуста и не бросает", () => {
+  assert.deepEqual(changeRipple().paths, [])
+  assert.deepEqual(changeRipple({ frd: {}, ripple: "" }).neighbours, [])
+  // Без FRD весь подграф — соседи: это правда, и увидеть её должен вызвавший, а не догадываться.
+  const p = changeRipple({ frd: {}, ripple: R_EDDI })
+  assert.equal(p.paths.length, 0)
+  assert.equal(p.neighbours.length, 8)
+})
+
+// --- ШОВ: полоса отдаёт проходу A ПРОЕКЦИЮ, а не файл ряби -----------------------------------------
+test("D29a: наряд прохода A получает проекцию хоста, а не .agent/ripple.xml целиком", () => {
+  assert.match(IZI, /const CHANGE = await design\(\{ pass: "values", ripple: true \}\);/)
+  assert.match(IZI, /values: \{ FRD, RIPPLE: CHANGE\.text,/)
+  // …а проход B по-прежнему читает подграф ЦЕЛИКОМ: его правило 6 судит транзит по всей ряби.
+  assert.match(IZI, /nodes: \{ VALUES, FRD, RIPPLE,/)
 })

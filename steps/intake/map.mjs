@@ -103,9 +103,11 @@ import { attrs, elem, tag } from "../../core/xml.mjs"
 // 417 B/node (docs/graph.md §7, live run c166bd87). The number lives HERE — the workflow and the role
 // receive it through the host, they do not carry a copy.
 //
-// The guard this run showed to be MISSING is a different one: nobody measures the ASSEMBLED order
-// against the window before the role is launched, and the map cap cannot stand in for it — it sees
-// one of five terms. That check belongs in the workflow, next to the launch, and it is backlog.
+// The guard this run showed to be missing is a different one, and it now exists: the ASSEMBLED order
+// is measured against the window next to the launch — workflows/izi.js::sized, in all five places an
+// order is built, against core/budgets.mjs::ORDER_CAP_CHARS (D29b). This cap cannot stand in for that
+// one — it sees one of five terms — and that one cannot stand in for this: a map a role can read whole
+// is a policy about reading, not about fitting.
 export const MAP_CAP_BYTES = 115 * 1024
 
 // MAP_PRICE — what each ELEMENT of the map costs, and why this is a price list rather than an average.

@@ -1,12 +1,15 @@
-// MODULE_CONTRACT: parts — steps 9's passes B and C cut into the units of a SWARM: one agent, one FRD scenario
-// Purpose:    one decision: what ONE part of a pass is, and it is decided by the machine — for pass C
-//             the projection of the FRD the part may read, the ends of its use case with the route id
-//             assigned to each, and the cards of the connected component its scenario lives in; for
-//             pass B the nodes that scenario OWNS, their ripple bytes and the paths of their
-//             neighbours. Nothing here judges anything: the guardrail of a part is checkSteps /
-//             checkNodes, of the whole checkRoutes / checkGraph (steps/design/routes.mjs,
-//             steps/design/nodes.mjs). PURE: knows nothing of disk, io lives in
-//             ext/index.mjs::routeUnits and ext/index.mjs::nodeUnits.
+// MODULE_CONTRACT: parts — what step 9 CUTS an order down to: the units of a SWARM (passes B and C,
+//               one agent per FRD scenario) and the whole change for pass A
+// Purpose:    one decision: how much of the change one order carries, and it is decided by the machine —
+//             for pass C the projection of the FRD the part may read, the ends of its use case with the
+//             route id assigned to each, and the cards of the connected component its scenario lives in;
+//             for pass B the nodes that scenario OWNS, their ripple bytes and the paths of their
+//             neighbours; for pass A — which is NOT swarmed — the same cut over the whole change:
+//             the ripple bytes of the nodes of the change and the PATHS of every other node of the
+//             subgraph (changeRipple, D29a). Nothing here judges anything: the guardrail of a part is
+//             checkSteps / checkNodes, of the whole checkRoutes / checkGraph (steps/design/routes.mjs,
+//             steps/design/nodes.mjs), of pass A checkValues (steps/design/values.mjs). PURE: knows
+//             nothing of disk, io lives in ext/index.mjs::routeUnits, ::nodeUnits and ::design.
 // io:         none
 // EXTERNAL_DEPENDENCY: core/xml.mjs — the tag scanner every grammar of this repository is read with.
 //             The FRD's MEANING arrives already parsed (steps/intake/frd.mjs::parseFrd, the one
@@ -23,6 +26,7 @@
 // Interface:  routeParts({ frd, values, nodes, text }) -> Part[]
 //             mergeParts(files) -> { xml, owner }
 //             blameByScenario({ facts, frd, owner }) -> [{ scenario, lines }]
+//             changeRipple({ frd, ripple }) -> { text, paths, neighbours, chars }
 //             nodeParts({ frd, ripple, text }) -> NodePart[]
 //             nodeOwner(frd) -> Map<path, scenario>
 //             mergeNodes(files, { mode }) -> { xml, owner }
@@ -39,6 +43,11 @@ import { attrs, elem, esc } from "../../core/xml.mjs"
 import { blockerLine, parseRoutes, scenarioOf } from "./routes.mjs"
 import { endsOf } from "./values.mjs"
 import { cards } from "./nodes.mjs"
+// The width of the change has ONE home — step 8 measures the ripple by it and step 10 counts tickets
+// by it (steps/ripple/ripple.mjs::changeWidth, standards/code.md §1). changeRipple below adds the
+// scenario nodes to it and does not re-derive `<delta> ∪ <touched>`; the same import direction step 10
+// already takes (steps/plan/plan.mjs).
+import { changeWidth } from "../ripple/ripple.mjs"
 
 // The paths one `<scenario nodes>` names, in its own order. Written once: the FRD spells the list with
 // newlines inside the attribute, and three consumers below split it.
@@ -293,6 +302,75 @@ export function blameByScenario({ facts = [], frd = {}, owner = new Map() } = {}
     }
   }
   return [...out].filter(([, lines]) => lines.length).map(([scenario, lines]) => ({ scenario, lines }))
+}
+
+// --- D29a: PASS A READS THE RIPPLE PROJECTED ON THE CHANGE -----------------------------------------
+//
+// Live run d5f1d0b4 (sandbox/runbox/eddi), pass A: the order measured 49 884 characters, the role spent
+// 98 304 output tokens — exactly 3 × 32 768 — in 1 104 seconds, called no tool and wrote nothing
+// (`crashed`). The whole ripple travelled inside that order: 29 modules, 30 281 characters, 106
+// declarations (86 `<decl>` + 20 `<api>`). The nodes the dictionary can legally speak about are the
+// nodes of the CHANGE — 13 on that FRD, of which the repository already carries 6 — so 68 % of those
+// bytes describe code that cannot appear in the design graph at all: a part of pass B writes only its
+// own paths and may merely point a `<dep>` at anyone else's.
+//
+// Measured on the same two artifacts: the projection is 6 `<module>`, 9 573 characters and 37
+// declarations, and the neighbours' paths cost 1 592 more.
+//
+// WHY THE NEIGHBOURS TRAVEL AS PATHS, AND WHY THEY TRAVEL AT ALL. A node of the ripple that no delta,
+// no scenario and no `<touched>` names may still end up in the design graph as a TRANSIT node, and rule
+// 6's second half (steps/design/nodes.mjs) allows exactly that and nothing else: a node without a delta
+// must be one the subgraph declares. Hiding those paths from pass A would leave the dictionary with no
+// name for what such a node hands over, and the deficit would surface one pass later as an id that
+// resolves to nothing. Their DECLARATIONS are another matter and are measured: of the 16 values of the
+// finished `t2` design only 5 reach the deliverable, and `v3…v12` were verbatim copies of `<api name>`
+// and `<decl name>` that no contract, route or unit ever names.
+//
+// The set is the change's WIDTH plus the scenario nodes. The width is not re-derived here — it is
+// step 8's expression (changeWidth) — and the scenario nodes are added because a `<scenario nodes>` may
+// name a path the change only walks through: it carries no delta of its own, it is exactly the transit
+// case above, and its declarations are what the dictionary needs to name the value it passes on.
+
+// The sentence that explains a path with no declarations, written ONCE: it is the only thing the role
+// is told about the neighbours, and a second wording of it in the order template would be the same rule
+// written twice (standards/code.md §1).
+const NEIGHBOURS_HEAD = "Соседи по ряби — узлы подграфа, которых это изменение не меняет. Едут ПУТЯМИ, без объявлений: они существуют, их можно назвать транзитом в следующем проходе, но значения для них объявлять не надо."
+const NO_NEIGHBOURS = "Соседей у узлов изменения нет: подграф ряби — это ровно узлы изменения выше."
+
+// FUNCTION_CONTRACT: changeRipple — the ripple as pass A's order carries it
+//   Input:        { frd, ripple }
+//                 frd    — the parse of `.agent/frd.xml` AS steps/intake/frd.mjs::parseFrd returns it
+//                 ripple — the TEXT of `.agent/ripple.xml`, for the bytes of the change's own nodes and
+//                          for the paths of everything else in the subgraph
+//   Dependencies: elements, changeWidth, pathsOf
+//   Antecedent:   any values — no FRD projects nothing and lists every module of the ripple as a
+//                 neighbour, which is true and is what a caller with no change should see; no ripple
+//                 yields a projection with no modules and no neighbours
+//   Consequent:   success: { text, paths, neighbours, chars } — `text` is what the order's {RIPPLE}
+//                          carries: the VERBATIM `<module>` bytes of the change's nodes, in the ripple's
+//                          own order, then the paths of every other node of the subgraph as lines.
+//                          `paths` are the projected nodes, `neighbours` the listed ones, `chars` the
+//                          length of `text`
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    changeRipple({ frd, ripple }) -> { text, paths, neighbours, chars }
+//
+// A node of the change the ripple does NOT carry is silently absent from `paths`, and that is the case
+// rather than a defect: `<delta new="yes">` is a module this change creates, so the subgraph cannot hold
+// it — 7 of eddi's 13 change nodes are exactly that. The order says so in its own document header.
+export function changeRipple({ frd = {}, ripple = "" } = {}) {
+  const moduleXml = elements(ripple, "module", "path")
+  const width = changeWidth({ frd, tests: new Set() })
+  for (const s of (frd && frd.scenarios) || []) for (const p of pathsOf(s)) width.add(p)
+
+  const paths = [...moduleXml.keys()].filter((p) => width.has(p))
+  const neighbours = [...moduleXml.keys()].filter((p) => !width.has(p))
+  const text = [
+    paths.map((p) => moduleXml.get(p)).join("\n"),
+    neighbours.length ? `${NEIGHBOURS_HEAD}\n${neighbours.map((p) => `  ${p}`).join("\n")}` : NO_NEIGHBOURS,
+  ].filter(Boolean).join("\n\n")
+
+  return Object.freeze({ text, paths: Object.freeze(paths), neighbours: Object.freeze(neighbours), chars: text.length })
 }
 
 // --- D28: PASS B IS WRITTEN BY THE SAME SWARM ------------------------------------------------------

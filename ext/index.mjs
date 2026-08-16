@@ -79,13 +79,13 @@ import { parseDesign, parseRoutes, expand, assemble, unitsByPath } from "../step
 import { parseValues, checkValues } from "../steps/design/values.mjs"
 import { parseNodes, checkGraph, checkNodes, graphFacts, cards } from "../steps/design/nodes.mjs"
 import { parseRoutes as parseWorkRoutes, checkRoutes, checkSteps, checkCoverage, blockerLine, scenarioOf } from "../steps/design/routes.mjs"
-import { routeParts, mergeParts, blameByScenario, nodeParts, nodeOwner, mergeNodes, blameNodes } from "../steps/design/parts.mjs"
+import { routeParts, mergeParts, blameByScenario, changeRipple, nodeParts, nodeOwner, mergeNodes, blameNodes } from "../steps/design/parts.mjs"
 import { newPlanIndex } from "../steps/plan/plan.mjs"
 import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
-import { newBudgets, BUDGETS_PATH } from "../core/budgets.mjs"
+import { newBudgets, BUDGETS_PATH, ORDER_CAP_CHARS } from "../core/budgets.mjs"
 import { BRD_FORM, ABSENT_DOC } from "../core/form.mjs"
 import { carriedBlockers } from "../core/findings.mjs"
 import { writeAnswer } from "../bin/write-answer.mjs"
@@ -269,7 +269,7 @@ export const frdForm = {
 }
 
 export const budgets = {
-  description: "Run budgets from the project's izi.config.json (loops, intakeLoops, questionRounds, checkpointRetries, maxParallel, reviewRounds). A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
+  description: "Run budgets from the project's izi.config.json (loops, intakeLoops, questionRounds, checkpointRetries, maxParallel, reviewRounds), plus orderCap — the ceiling on ONE assembled order in CHARACTERS (core/budgets.mjs::ORDER_CAP_CHARS), which izi.config.json cannot move: it is the model's window minus the output reserve and the request's own boilerplate. A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -290,6 +290,11 @@ export const budgets = {
       // so the NEXT budget cannot be forgotten here at all.
       maxParallel: { type: "number" },
       reviewRounds: { type: "number" },
+      // orderCap is NOT a member of DEFAULT_BUDGETS and must not become one: newBudgets accepts any
+      // key it declares from izi.config.json, and a project lowering — or raising — the window of the
+      // model it does not choose would be a budget over somebody else's fact. It rides this channel
+      // because the workflow sandbox has no import and no other way to learn a constant.
+      orderCap: { type: "number" },
       source: { type: "string" },
     },
     required: ["ok"],
@@ -300,7 +305,7 @@ export const budgets = {
     const raw = readIfExists(root, BUDGETS_PATH)
     const r = newBudgets(raw)
     if (!r.ok) return { ok: false, why: r.error.detail }
-    return { ok: true, ...r.value, source: raw.trim() ? BUDGETS_PATH : "defaults" }
+    return { ok: true, ...r.value, orderCap: ORDER_CAP_CHARS, source: raw.trim() ? BUDGETS_PATH : "defaults" }
   },
 }
 
@@ -1411,10 +1416,10 @@ function partFiles(root, order, base) {
 const scenarioOrder = (frd) => ((frd && frd.scenarios) || []).map((s) => String((s && s.id) || "").trim()).filter(Boolean)
 
 export const design = {
-  description: "Step 9 in three passes. Without `pass`: the GATE — read .agent/design (needed|skip) and erase every artifact of the step that is not green NOW, so no previous run's design can survive. With `pass` and `path`: judge that pass's staged artifact by its own guardrail (values → steps/design/values.mjs, nodes → steps/design/nodes.mjs, routes → steps/design/routes.mjs) and promote it on green; a green `routes` pass also ASSEMBLES .agent/design-graph.xml and .agent/data-flow.md out of the three, in the form steps 10 and 14 read. With `pass` AND `scenario`: judge ONE part of that pass's swarm — that scenario's own file — by the rules decidable on a part alone (`nodes`: rule 6, an id outside the dictionary, rule 14 for a node with a delta; `routes`: rules 1, 3, 4, 9 and 11), promoting nothing. Without `scenario` the same pass MERGES every part of .agent/staging/nodes-parts or .agent/staging/routes-parts into `path` first, then judges the whole by every rule and addresses each blocker to the parts that must repair it (`blame`, and for a red `routes` also `nodeBlame` — the lines pass B must repair, addressed to ITS parts). Pass `cards: true` to get the node cards of pass C instead of judging.",
+  description: "Step 9 in three passes. Without `pass`: the GATE — read .agent/design (needed|skip) and erase every artifact of the step that is not green NOW, so no previous run's design can survive. With `pass` and `path`: judge that pass's staged artifact by its own guardrail (values → steps/design/values.mjs, nodes → steps/design/nodes.mjs, routes → steps/design/routes.mjs) and promote it on green; a green `routes` pass also ASSEMBLES .agent/design-graph.xml and .agent/data-flow.md out of the three, in the form steps 10 and 14 read. With `pass` AND `scenario`: judge ONE part of that pass's swarm — that scenario's own file — by the rules decidable on a part alone (`nodes`: rule 6, an id outside the dictionary, rule 14 for a node with a delta; `routes`: rules 1, 3, 4, 9 and 11), promoting nothing. Without `scenario` the same pass MERGES every part of .agent/staging/nodes-parts or .agent/staging/routes-parts into `path` first, then judges the whole by every rule and addresses each blocker to the parts that must repair it (`blame`, and for a red `routes` also `nodeBlame` — the lines pass B must repair, addressed to ITS parts). Pass `cards: true` to get the node cards of pass C instead of judging, or `ripple: true` to get the ripple PROJECTED on the nodes of the change — the `<module>` bytes of those nodes plus the paths of every other node of the subgraph — which is what the order of pass A carries instead of the whole subgraph (steps/design/parts.mjs::changeRipple).",
   input: {
     type: "object",
-    properties: { pass: { type: "string", enum: ["values", "nodes", "routes"] }, path: { type: "string" }, cards: { type: "boolean" }, scenario: { type: "string" } },
+    properties: { pass: { type: "string", enum: ["values", "nodes", "routes"] }, path: { type: "string" }, cards: { type: "boolean" }, ripple: { type: "boolean" }, scenario: { type: "string" } },
     additionalProperties: false,
   },
   output: {
@@ -1427,6 +1432,10 @@ export const design = {
       values: { type: "number" },
       text: { type: "string" },
       nodes: { type: "number" },
+      // `neighbours` — how many paths of the subgraph rode into pass A's order WITHOUT their
+      // declarations (D29a). It is printed by the workflow and by nothing else: the projection is the
+      // one place a run can see that the cut happened and how deep it went.
+      neighbours: { type: "number" },
       routes: { type: "number" },
       units: { type: "number" },
       blockers: { type: "string" },
@@ -1468,7 +1477,7 @@ export const design = {
     required: ["ok"],
     additionalProperties: false,
   },
-  run({ pass, path, cards: wantCards, scenario } = {}, context) {
+  run({ pass, path, cards: wantCards, ripple: wantRipple, scenario } = {}, context) {
     const root = runRoot(context)
     const read = (p) => readFileSync(at(root, p), "utf8")
     const drop = (...ps) => { for (const p of ps) if (existsSync(at(root, p))) rmSync(at(root, p)) }
@@ -1515,6 +1524,17 @@ export const design = {
     // it is one whose weight step 11 and the operator cannot read at all.
     for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"], [MODE_PATH, "шаг 7 weight не отработал"]]) {
       if (!existsSync(at(root, p))) return { ok: false, blockers: `${p} не существует — ${why}, судить дизайн не по чему` }
+    }
+
+    // The ripple of pass A is DATA of its order, not a verdict, and it is CUT to the nodes of the
+    // change (D29a): the guardrail of pass A never reads the subgraph at all (checkValues judges the
+    // dictionary against the FRD), and the guardrail that does — rule 6 of pass B — reads
+    // `.agent/ripple.xml` off disk right here, whole, so no rule loses an operand by this cut. What the
+    // role loses is 68 % of bytes about code that cannot enter the design graph; what it keeps is every
+    // neighbour's PATH, which is the operand of rule 6's transit half (steps/design/parts.mjs).
+    if (wantRipple) {
+      const p = changeRipple({ frd: frdNow(), ripple: read(RIPPLE_PATH) })
+      return { ok: true, text: p.text, nodes: p.paths.length, neighbours: p.neighbours.length }
     }
 
     // The cards of pass C are DATA of its order, not a verdict: the role picks a name it sees instead

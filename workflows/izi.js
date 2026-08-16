@@ -19,7 +19,9 @@
 // EXTERNAL_DEPENDENCY: izi.config.json in the RUN's root — loops · questions · checkpointRetries ·
 //               maxParallel. Read once, at the start, by budgets(); the defaults live in
 //               core/budgets.mjs and are NOT copied here. A broken config is a refusal, never a
-//               silent default.
+//               silent default. `orderCap` rides the same call and is NOT of that file: it is the
+//               model's window minus the output reserve (core/budgets.mjs::ORDER_CAP_CHARS), and every
+//               order this script assembles is measured against it — see sized().
 // EXTERNAL_DEPENDENCY: roles `gilb` (steps/brd/gilb.md), `scout` (steps/scope/scout.md), `intake`
 //               (steps/intake/intake.md), the THREE roles of step 9 — `valuer`
 //               (steps/design/valuer.md), `designer` (steps/design/designer.md) and `router`
@@ -59,6 +61,7 @@ let QUESTION_ROUNDS;    // trips to the operator allowed in one run — the roun
 let CHECKPOINT_RETRIES; // re-pauses on the SAME question when no matching answer showed up
 let MAX_PARALLEL;       // swarm batch size at step 4 — see scope() for why the sandbox needs one
 let REVIEW_ROUNDS;      // rewinds of steps 6-11 ordered by the critic — see band() at the bottom
+let ORDER_CAP;          // characters ONE assembled order may carry — core/budgets.mjs::ORDER_CAP_CHARS
 
 // The two counters the operator's budgets are actually spent from. They are MODULE state, not phase
 // state, because since S30 a phase can run more than once in a run: the critic rewinds the band to
@@ -143,6 +146,61 @@ async function task() {
 //   Consequent:   success: the UTF-8 byte length as a number
 //   Purity:       pure
 function byteLen(s) { return unescape(encodeURIComponent(String(s == null ? "" : s))).length; }
+
+// $START_ORDER — cut out of the source and EXECUTED by ext/index.test.mjs, the device $START_SWARM,
+// $START_BLAME and $START_REENTRY use: no test may import this file. The names below are that test's
+// interface.
+//
+// D29b. Until this block no step knew how big its own order had grown: the ripple went from 2 311
+// characters on form `t2` to 30 281 on `eddi` and not one line of any log noticed. `byteLen` above has
+// been in this file since the beginning and was used in exactly one place — the 1024-byte checkpoint
+// channel — while the five ORDERS, which are two orders of magnitude larger and are what the run
+// actually spends its window on, were assembled and sent unmeasured.
+//
+// TWO THINGS, ONE PLACE: the LINE and the REFUSAL. A size printed to the log is a diagnosis for the
+// operator reading a finished run; the refusal is what stops the request that cannot exist at all —
+// live run 162e8b02 went 112 tokens over the window and the role never ran, which from the chat looks
+// exactly like a role that answered badly. The ceiling is not restated here: it arrives from
+// core/budgets.mjs through budgets() (see ORDER_CAP), because a number copied into this file is a
+// number that drifts from the one the extension declares.
+//
+// NO AUTOMATIC SPLITTER, and that is a decision with evidence behind it: what separates the orders that
+// produce a file from the ones that burn three turns of reasoning is the number of independent
+// obligations, not the number of characters (pass A on `eddi` carried 145 of them, a swarm part 1-4).
+// A resizer cutting by bytes would cut an FRD in the middle of a use case; the unit of a cut belongs to
+// the slice that owns the artifact, and three of the five orders have no unit at all.
+//
+// FUNCTION_CONTRACT: sized — one assembled order, measured before it is sent
+//   Input:        step — the step's name, for the log and the refusal; tpl — the order template's text;
+//                 keys — the values prompt() substitutes, by placeholder name
+//   Dependencies: EXTERNAL — prompt, log (sandbox globals); ORDER_CAP
+//   Antecedent:   `keys` matches the template's placeholders exactly, both ways — prompt() throws
+//                 otherwise, and that throw is the launch's own seam, not this function's business
+//   Consequent:   success: { text, chars, over, why } — the order and its size. `over` says the request
+//                          would not fit the model's window; `why` NAMES EVERY ADDEND, because a
+//                          refusal that only carries a total tells the operator nothing about which
+//                          document grew
+//                 failure: none — every caller decides what a refusal is: an exit at steps 2, 6, 9 and
+//                          11, a returned value inside the swarm of step 4, where parallel() swallows
+//                          a throw and rethrows its own (see scout's BUG_FIX_CONTEXT)
+//   Purity:       io (log)
+function sized(step, tpl, keys) {
+  const text = prompt(tpl, keys);
+  const addends = Object.keys(keys)
+    .map((k) => ({ k, n: String(keys[k] == null ? "" : keys[k]).length }))
+    .sort((a, b) => b.n - a.n)
+    .map((x) => `${x.k} ${x.n}`)
+    .join(" · ");
+  const parts = `шаблон ${String(tpl == null ? "" : tpl).length} · ${addends}`;
+  log(`${step}: наряд ${text.length} симв из ${ORDER_CAP} — ${parts}`);
+  return {
+    text,
+    chars: text.length,
+    over: text.length > ORDER_CAP,
+    why: `наряд ${step} — ${text.length} симв при потолке ${ORDER_CAP}: ${parts}`,
+  };
+}
+// $END_ORDER
 
 // FUNCTION_CONTRACT: answersBlock — the operator's answers as they travel INTO an order
 //   Input:        seen — answers({})'s value: [{ n, question, text }]; absent — what to substitute
@@ -339,7 +397,7 @@ async function brd() {
   while (attempt < LOOPS) {
     const seen = await answers({});
     const ANSWERS = answersBlock(seen, FORM.absentDoc);
-    const order = prompt(orderTpl, {
+    const order = sized("brd", orderTpl, {
       TASK,
       ANSWERS,
       FEEDBACK: feedback,
@@ -350,7 +408,8 @@ async function brd() {
       SUBJECT_RULE: FORM.subjectRule,
       ANALOGUE_RULE: FORM.analogueRule,
     });
-    const env = await agent(order, { role: "gilb", outputSchema: ENVELOPE });
+    if (order.over) exit(err("blocked", { subject: order.why, evidence: "наряд шага 2 не помещается в окно модели — роль не запускалась" }));
+    const env = await agent(order.text, { role: "gilb", outputSchema: ENVELOPE });
 
     if (env.track === "err" && env.kind === "question") {
       // gilb asks ONE question per exchange, so its round IS its question (unlike intake, which
@@ -476,7 +535,7 @@ async function scout(cell, orderTpl, BRD) {
   if (!files.ok) return { ok: false, why: `${cell.id}: ${files.why}` };
 
   for (let attempt = 0; attempt < LOOPS; attempt++) {
-    const order = prompt(orderTpl, {
+    const order = sized(`scope/${cell.id}`, orderTpl, {
       CELL: cell.id,
       BRD,
       STAGING,
@@ -485,7 +544,10 @@ async function scout(cell, orderTpl, BRD) {
       SUBJECTS: cell.subjects.length ? cell.subjects.join(" · ") : "(no anchors matched this cell)",
       FILES: files.files,
     });
-    const env = await agent(order, { role: "scout", outputSchema: ENVELOPE });
+    // A VALUE, never an exit — the rule of this whole function: parallel() catches every throw and
+    // rethrows its own, so a cell that legitimately refuses would surface as `crashed`.
+    if (order.over) return { ok: false, why: order.why };
+    const env = await agent(order.text, { role: "scout", outputSchema: ENVELOPE });
     // There is no question rail at this step (docs/scope.md §6): what the scout could not read is a
     // <gap>, not a pause. Any err is therefore a cell failure, reported with the role's own words.
     if (env.track === "err") return { ok: false, why: `${cell.id}: ${env.kind || "err"} — ${env.subject || "(без subject)"}` };
@@ -669,7 +731,7 @@ async function intake(fromCritic) {
   while (attempt < INTAKE_LOOPS) {
     const seen = await answers({});
     const ANSWERS = answersBlock(seen, "(no operator answers yet)");
-    const order = prompt(orderTpl, {
+    const order = sized("intake", orderTpl, {
       BRD,
       MAP: map.text,
       ANSWERS,
@@ -679,7 +741,10 @@ async function intake(fromCritic) {
       DELTA_FORMS: FORM.deltaForms,
       SOURCES: FORM.sources,
     });
-    const env = await agent(order, { role: "intake", outputSchema: ENVELOPE });
+    // The map's own ceiling is NOT this check and cannot stand in for it: it sees one addend of five
+    // (steps/intake/map.mjs, the comment over MAP_CAP_BYTES; live run 162e8b02).
+    if (order.over) exit(err("blocked", { subject: order.why, evidence: "наряд шага 6 не помещается в окно модели — роль не запускалась" }));
+    const env = await agent(order.text, { role: "intake", outputSchema: ENVELOPE });
 
     // A BATCH, not one question (S21, the operator's decision): grilling a requirement on a real
     // project takes 25-30 questions, and the ROUND is what costs context — the role re-reads the BRD
@@ -1166,6 +1231,14 @@ async function designing(from = 6) {
 
   const FRD = await readText({ path: ".agent/frd.xml" });
   const RIPPLE = await readText({ path: ".agent/ripple.xml" });
+  // …AND THE SAME SUBGRAPH CUT TO THE NODES OF THE CHANGE, which is what pass A reads (D29a). The whole
+  // ripple stays for pass B: its order is judged by rule 6, whose transit half is decided against the
+  // subgraph entire, and its parts already get their own projection (ext/index.mjs::nodeUnits). Pass A
+  // has no such rule — its guardrail never opens the ripple at all — and it is the pass that crashed on
+  // the size: run d5f1d0b4, 49 884 characters in, 3 × 32 768 output tokens out, no artifact.
+  const CHANGE = await design({ pass: "values", ripple: true });
+  if (!CHANGE.ok) exit(err("blocked", { subject: CHANGE.why, evidence: "рябь не спроецирована на узлы изменения" }));
+  log(`design/values: рябь спроецирована на изменение — модулей ${CHANGE.nodes}, соседей ${CHANGE.neighbours} путями, ${CHANGE.text.length} симв из ${RIPPLE.length}`);
   const MODE = (await readText({ path: ".agent/mode" })).trim();
   const FORM = await frdForm({});
   const tpl = {};
@@ -1258,7 +1331,7 @@ async function designing(from = 6) {
       || (p.id === "nodes" ? (await readText({ path: ".agent/design-nodes.xml" })).trim() : "")
       || "(none — first attempt)");
     const keys = {
-      values: { FRD, RIPPLE, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"values", path}) — steps/design/values.mjs::checkValues по staging` },
+      values: { FRD, RIPPLE: CHANGE.text, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"values", path}) — steps/design/values.mjs::checkValues по staging` },
       nodes: { VALUES, FRD, RIPPLE, ANSWERS: answersBlock(seen, "(no operator answers yet)"), MODE, DELTA_FORMS: FORM.deltaForms, PREVIOUS, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"nodes", path}) — steps/design/nodes.mjs::checkGraph по staging` },
       routes: { FRD, CARDS, ANSWERS: answersBlock(seen, "(no operator answers yet)"), PREVIOUS, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"routes", path}) — steps/design/routes.mjs::checkRoutes по staging` },
     }[p.id];
@@ -1267,6 +1340,16 @@ async function designing(from = 6) {
     // are recomputed every time the pass is entered: a rewind changes the artifact under them — pass
     // B's parts are cut by the FRD, pass C's cards ARE pass B's graph. Below SWARM_MIN the list comes
     // back empty and the pass runs its single order — the very call this phase made before the swarms.
+    //
+    // THE WHOLE PASS'S ORDER, MEASURED — one place for all three passes (D29b). A swarmed pass never
+    // calls this: its parts are assembled by nodePart/routePart, and their size is bounded by
+    // construction (one scenario each, and the swarm's own line above prints the largest of them).
+    const whole = async () => {
+      const o = sized(`design/${p.id}`, tpl[p.id], keys);
+      if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд прохода ${p.id} шага 9 не помещается в окно модели — роль не запускалась` }));
+      return agent(o.text, { role: p.role, outputSchema: ENVELOPE });
+    };
+
     let env;
     if (p.id === "nodes") {
       // ERASED ONCE, AND ONLY WHEN THE FRD MOVED — the same operand `reenter` reads one screen up, and
@@ -1281,7 +1364,7 @@ async function designing(from = 6) {
       if (swarmingNodes) log(`design/nodes: рой — частей ${units.length}, узлов ${units.reduce((a, x) => a + x.paths, 0)}, наряд части ≈ ${Math.max(...units.map((x) => x.chars))} симв (целиком FRD ${FRD.length} + рябь ${RIPPLE.length})`);
       env = swarmingNodes
         ? await swarmNodes(units, tplNodePart, { VALUES, ANSWERS: answersBlock(seen, "(no operator answers yet)"), MODE, DELTA_FORMS: FORM.deltaForms }, nodeFeedback)
-        : await agent(prompt(tpl.nodes, keys), { role: p.role, outputSchema: ENVELOPE });
+        : await whole();
     } else if (p.id === "routes") {
       // ERASED ONCE, AND ONLY WHEN THE FRD MOVED. `from <= 6` is the same operand `reenter` reads one
       // screen up: the band rewound to intake, so every part staged against the previous FRD is about
@@ -1296,9 +1379,9 @@ async function designing(from = 6) {
       if (swarming) log(`design/routes: рой — частей ${units.length}, наряд части ≈ ${Math.max(...units.map((x) => x.chars))} симв (целиком FRD — ${FRD.length})`);
       env = swarming
         ? await swarmRoutes(units, tplPart, answersBlock(seen, "(no operator answers yet)"), partFeedback)
-        : await agent(prompt(tpl.routes, keys), { role: p.role, outputSchema: ENVELOPE });
+        : await whole();
     } else {
-      env = await agent(prompt(tpl[p.id], keys), { role: p.role, outputSchema: ENVELOPE });
+      env = await whole();
     }
 
     if (env.track === "err" && env.kind === "question") {
@@ -1459,8 +1542,9 @@ async function reviewing() {
   let feedback = "(none — first attempt)", attempt = 0, wasRed = [];
 
   while (attempt < LOOPS) {
-    const order = prompt(orderTpl, { PLAN, FRD, CODES: FORM.codes, OWED: FORM.owed, UNCHECKED: FORM.unchecked, FEEDBACK: feedback, STAGING, CHECK });
-    const env = await agent(order, { role: "critic", outputSchema: ENVELOPE });
+    const order = sized("review", orderTpl, { PLAN, FRD, CODES: FORM.codes, OWED: FORM.owed, UNCHECKED: FORM.unchecked, FEEDBACK: feedback, STAGING, CHECK });
+    if (order.over) exit(err("blocked", { subject: order.why, evidence: "наряд шага 11 не помещается в окно модели — роль не запускалась" }));
+    const env = await agent(order.text, { role: "critic", outputSchema: ENVELOPE });
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
 
     const check = await review({ path: STAGING }); // the check runs ON STAGING, before any promote
@@ -1629,7 +1713,13 @@ try {
   if (!b.ok) exit(err("blocked", { subject: b.why })); // a broken config is a refusal, not a default
   LOOPS = b.loops; INTAKE_LOOPS = b.intakeLoops; QUESTION_ROUNDS = b.questionRounds;
   CHECKPOINT_RETRIES = b.checkpointRetries; MAX_PARALLEL = b.maxParallel; REVIEW_ROUNDS = b.reviewRounds;
-  log(`budgets: loops=${LOOPS} intakeLoops=${INTAKE_LOOPS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} reviewRounds=${REVIEW_ROUNDS} (${b.source})`);
+  ORDER_CAP = b.orderCap;
+  // An ABSENT ceiling is a refusal, not a default: `chars > undefined` is false in JavaScript, so an
+  // extension older than this script would silently turn the size check off in all five places while
+  // every log line still printed a number. The same class of fault as a host function that is not
+  // defined — and it is silent, which the missing function is not.
+  if (!ORDER_CAP) exit(err("blocked", { subject: "budgets() не вернул orderCap — расширение в этой сессии pi старше воркфлоу, перезапусти pi" }));
+  log(`budgets: loops=${LOOPS} intakeLoops=${INTAKE_LOOPS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} reviewRounds=${REVIEW_ROUNDS} orderCap=${ORDER_CAP} (${b.source})`);
 
   // Observability is declared out loud, never assumed: with herdr unavailable the herdr extension
   // does not register at all and stays SILENT, so a run from an ordinary terminal looks exactly like
