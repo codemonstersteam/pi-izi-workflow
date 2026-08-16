@@ -14,6 +14,7 @@
 //             steps/brd/brd.mjs, constraint 2); FRD_FORM is fixed at module load.
 // Interface:  FRD_FORM — the artifact's form as data (grammar, deltaForms, sources)
 //             parseFrd(xml) -> Frd
+//             endsOf(frd) -> [{ token, uc, side, text }]  — the ends of every use case
 //             checkFrd({ frd, nodes, tests, entries, edges, known }) -> string[]  — blockers, empty = green
 //             newFrd({ xml, nodes, tests, entries, edges, sources }) -> Result<Frd, "invalid-frd">
 
@@ -32,12 +33,6 @@ import { numbersIn } from "../brd/brd.mjs"
 // the SAME set, on the FRD the role just rewrote. Not a cycle: review.mjs takes frd/plan as data and
 // never imports this module.
 import { frdIds } from "../review/review.mjs"
-// EXTERNAL_DEPENDENCY: steps/design/values.mjs::endsOf — "what are the ends of a use case" is answered
-// ONCE: step 9's pass A collapses the dictionary onto exactly this set, and F6c below judges the CAUSE
-// of that collapse on the artifact that feeds it. A second enumeration of the ends here would drift the
-// day an `<ext>` id gains a dot. Not a cycle: values.mjs takes the FRD as data and imports nothing but
-// core/xml.mjs.
-import { endsOf } from "../design/values.mjs"
 
 // THE FORM AS DATA, so the order can SUBSTITUTE it instead of restating it (ext/index.mjs::frdForm,
 // the same device as brdForm — see its BUG_FIX_CONTEXT G9e).
@@ -142,6 +137,46 @@ export function parseFrd(xml) {
     nfrs: list("nfr"),
     questions: list("question"),
   })
+}
+
+// FUNCTION_CONTRACT: endsOf — the ENDS of every use case, as tokens
+//   Input:        frd — parseFrd's object
+//   Dependencies: —
+//   Antecedent:   any value; a missing/garbage input is an empty list
+//   Consequent:   success: [{ token, uc, side, text }] in the FRD's order — per use case its entry
+//                          (`UCx/in`, side `in`, the text of the first `<step>`), its exit
+//                          (`UCx/post`, side `out`) and one per `<ext>` (`UCx/<ext id>`, side `out`,
+//                          the `outcome`). A use case or an `<ext>` without an id is skipped: a token
+//                          built on an empty id addresses nothing
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    endsOf(frd?: Frd) -> [{ token, uc, side, text }]
+//
+// WHY IT LIVES HERE. "How many ends does this change have, and what are they called" is a fact of the
+// REQUIREMENT'S grammar — it reads `<usecase>`, `<post>`, `<ext outcome>` and nothing else. Two
+// consumers ask it: F6c below (the text of an output end is unique per use case) and step 9's pass A,
+// whose skeleton IS this list — one row per end, its `closes` token already filled in. The set must be
+// the same set, or step 6 closes green on an artifact step 9 then refuses; and one set means one piece
+// of code (standards/code.md §1) — the day an `<ext>` id gains a dot, both move together.
+//
+// It used to live in steps/design/values.mjs and be imported here — step 6 depending on step 9, an
+// edge running backwards along the band. Deleting the design slice was then impossible without
+// stopping steps 6, 7, 10 and 11, so the function came home to the grammar it reads and step 9 now
+// imports it from here.
+export function endsOf(frd = {}) {
+  const ends = []
+  for (const u of frd.usecases || []) {
+    const id = String((u && u.id) || "").trim()
+    if (!id) continue
+    ends.push({ token: `${id}/in`, uc: id, side: "in", text: (u.steps || [])[0] || "" })
+    ends.push({ token: `${id}/post`, uc: id, side: "out", text: u.post || "" })
+    for (const e of u.exts || []) {
+      const eid = String((e && e.id) || "").trim()
+      if (!eid) continue
+      ends.push({ token: `${id}/${eid}`, uc: id, side: "out", text: e.outcome || "" })
+    }
+  }
+  return ends
 }
 
 // FUNCTION_CONTRACT: provenance — F5 for one value that carries a requirement's quantity
@@ -489,7 +524,7 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   for (const c of codes) if (!errs.has(c)) B.push(`F6 код «${c}» карты отказов не встречен ни одним <ext>`)
 
   // F6c — one cause of failure, a different OBSERVATION on every layer. The ends are taken from
-  // `endsOf` (steps/design/values.mjs), side `out`: `UCx/post` and every `<ext outcome>` — exactly the
+  // `endsOf` (above, this module), side `out`: `UCx/post` and every `<ext outcome>` — exactly the
   // set step 9's dictionary collapses onto, so the rule judges the cause of the dead end and not its
   // symptom. Two ends of DIFFERENT use cases may not carry one text; two ends of ONE use case may (two
   // branches of one layer with one observation is a legal shape, and step 9's dictionary rule judges

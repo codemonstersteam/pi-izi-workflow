@@ -18,7 +18,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, valueUnits, nodeUnits, routeUnits, plan, review, reviewForm, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, reviewForm, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
 // D23: the gate of step 6 — its question is a constant of the ripple slice, and the answer travels in
 // the format core/answers.mjs owns.
@@ -27,8 +27,6 @@ import { newExchange } from "../core/answers.mjs"
 // D23-11: наряд и правило шага 11 читают ОДНО выражение — тест держит их за одно и то же.
 import { askedNodes } from "../steps/review/review.mjs"
 import { parseFrd } from "../steps/intake/frd.mjs"
-import { checkRoutes } from "../steps/design/routes.mjs"
-import { checkGraph } from "../steps/design/nodes.mjs"
 import { DEFAULT_BUDGETS, ORDER_CAP_CHARS } from "../core/budgets.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
@@ -579,13 +577,16 @@ test("no .agent/mode at the run root: refusal naming step 7, and nothing left be
   assert.equal(existsSync(join(root, ".agent", "design")), false)
 })
 
-// --- design: the gate erases, the check promotes -------------------------------------------------
+// --- design: the gate erases, the SCRIPT composes, the check promotes ----------------------------
 //
-// Step 9's own version of the same rule, one layer on: the GATE (design({}) with no path) must erase
-// BOTH of yesterday's artifacts in EVERY branch — on `skip` nobody will rewrite them, and on `needed`
-// they are rewritten only if the role and the guardrail both succeed. Remove the rmSync loop in
-// ext/index.mjs::design and the first test below goes red: step 10 would then read a design graph
-// computed for a different FRD (docs/design.md §5).
+// Step 9's own version of the erasure rule, one layer on: the GATE (design({}) with no argument) must
+// take with it everything of the step that is not green NOW — including the artifacts of the two
+// passes that were DELETED while the step is rewritten. Remove the `drop` of that pair in
+// ext/index.mjs::design and the first test below goes red: step 10 would then plan on a design graph
+// left by a run of an older version of this pipeline.
+//
+// The other half is what replaced the pass: the composition of the dictionary is a SCRIPT
+// (steps/design/values.mjs::valuesSkeleton), and the role only names what the script left blank.
 const DESIGN_RIPPLE = `<ripple grammar="1" mode="minor" seeds="1" nodes="2">
   <module path="src/ParcelResource.java" seed="yes" level="3">
     <role>REST-ресурс посылок</role>
@@ -597,23 +598,6 @@ const DESIGN_RIPPLE = `<ripple grammar="1" mode="minor" seeds="1" nodes="2">
     <decl kind="method" name="all()" sig="public Set&lt;Parcel&gt; all()"/>
   </module>
 </ripple>`
-const STAGED = `<design mode="minor" base=".agent/appgraph.xml">
-  <module path="src/ParcelResource.java" delta="Added">
-    <role>REST-ресурс посылок</role>
-    <contract in="GET /parcels?track=&lt;v&gt; | Set&lt;Parcel&gt;" out="all() | Set&lt;Parcel&gt; (совпавшие)"/>
-    <dep path="src/ParcelRepo.java"/>
-  </module>
-  <module path="src/ParcelRepo.java">
-    <role>хранилище посылок</role>
-    <contract in="all()" out="Set&lt;Parcel&gt;"/>
-  </module>
-  <route scenario="S1" entry="1" steps="src/ParcelResource.java#1 -> src/ParcelRepo.java#1 -> src/ParcelResource.java#2"/>
-</design>`
-// D25: the FRD the DESIGN fixtures are judged against carries the use case FRD_R leaves out, and it
-// has to. Rule 12 turns every end of a use case into a value of the dictionary, rule 13 seats those
-// values in a contract, and rule 15 exempts exactly one of them — the ENTRY, which no node produces
-// because the ACTOR brings it. A dictionary with no `closes` at all therefore has an entry that looks
-// like an orphan, and that is a shape no live FRD has: step 6 refuses an FRD with no `<usecase>`.
 const FRD_D = `<frd grammar="1" goal="искать посылку">
   <usecase id="UC1" actor="http-client" goal="найти посылку по трек-номеру">
     <post>вернён список совпавших посылок</post>
@@ -629,34 +613,10 @@ const designRoot = (flag = "needed") => {
   mkdirSync(join(root, ".agent", "staging"), { recursive: true })
   writeFileSync(join(root, ".agent", "frd.xml"), FRD_D)
   writeFileSync(join(root, ".agent", "ripple.xml"), DESIGN_RIPPLE)
-  writeFileSync(join(root, ".agent", "mode"), "minor")   // step 7: the graph types itself with it
+  writeFileSync(join(root, ".agent", "mode"), "minor")
   if (flag) writeFileSync(join(root, ".agent", "design"), flag)
-  writeFileSync(join(root, ".agent", "design-graph.xml"), "<design/>")     // yesterday's graph
-  writeFileSync(join(root, ".agent", "data-flow.md"), "$START_FLOW id=\"вчера\"\n$END_FLOW\n")
   return root
 }
-
-// D6: the three passes on disk. The working artifacts of A and B for the SAME change as STAGED above.
-const W_VALUES = `<values>
-  <value id="v1" text="GET /parcels?track=&lt;v&gt;" closes="UC1/in"/>
-  <value id="v2" text="all()"/>
-  <value id="v3" text="Set&lt;Parcel&gt;"/>
-  <value id="v4" text="Set&lt;Parcel&gt; (совпавшие)" closes="UC1/post"/>
-</values>`
-const W_NODES = `<design mode="minor" base=".agent/appgraph.xml">
-  <module path="src/ParcelResource.java" delta="Changed">
-    <role>REST-точка поиска</role>
-    <contract in="v1 | v3" out="v2 | v4"/>
-    <dep path="src/ParcelRepo.java"/>
-  </module>
-  <module path="src/ParcelRepo.java">
-    <role>хранилище посылок</role>
-    <contract in="v2" out="v3"/>
-  </module>
-</design>`
-const W_ROUTES = `<routes>
-  <route scenario="S1" entry="v1" steps="src/ParcelResource.java@v2 -> src/ParcelRepo.java@v3 -> src/ParcelResource.java@v4"/>
-</routes>`
 
 const stage = (root, name, text) => {
   const p = join(".agent", "staging", name)
@@ -664,35 +624,41 @@ const stage = (root, name, text) => {
   return p
 }
 
-test("the gate erases the pair ALWAYS, and A and B only from the first one that is not green now", () => {
-  // skip — nothing of step 9 may survive, four artifacts including the two working ones
+// The dictionary as the role hands it back: the skeleton with its two blanks named. Written as a
+// FUNCTION of the skeleton on purpose — a fixture typed by hand would stop being the skeleton the
+// moment the composition moved, and then this file would prove nothing about the run.
+const named = (root) => {
+  design.run({ skeleton: ".agent/staging/values-skeleton.xml" }, ctx(root))
+  return readFileSync(join(root, ".agent", "staging", "values-skeleton.xml"), "utf8")
+    .replace('closes="UC1/in" side="in" text=""', 'closes="UC1/in" side="in" text="GET /parcels?track=T"')
+    .replace('closes="UC1/post" side="out" text=""', 'closes="UC1/post" side="out" text="Parcels(совпавшие)"')
+}
+
+test("гейт: артефакты снесённых проходов не переживают его НИКОГДА, а зелёный словарь переживает", () => {
+  // skip — от шага 9 не остаётся ничего
   const skip = designRoot("skip")
-  writeFileSync(join(skip, ".agent", "values.xml"), W_VALUES)
-  writeFileSync(join(skip, ".agent", "design-nodes.xml"), W_NODES)
+  writeFileSync(join(skip, ".agent", "values.xml"), "<values/>")
+  writeFileSync(join(skip, ".agent", "design-graph.xml"), "<design/>")
+  writeFileSync(join(skip, ".agent", "data-flow.md"), "$START_FLOW id=\"вчера\"\n$END_FLOW\n")
   assert.deepEqual(design.run({}, ctx(skip)), { ok: true, design: "skip" })
-  for (const f of ["values.xml", "design-nodes.xml", "design-graph.xml", "data-flow.md"]) {
+  for (const f of ["values.xml", "design-graph.xml", "data-flow.md"]) {
     assert.equal(existsSync(join(skip, ".agent", f)), false, f)
   }
 
-  // needed, both passes green — they are REUSED, and only the pair goes: its own input, the staged
-  // routes, is never promoted, so reaching the gate means pass C has to run again.
+  // needed, словарь зелен СЕЙЧАС — он переиспользуется, а пара прошлой версии полосы уходит
   const both = designRoot("needed")
-  writeFileSync(join(both, ".agent", "values.xml"), W_VALUES)
-  writeFileSync(join(both, ".agent", "design-nodes.xml"), W_NODES)
-  const r = design.run({}, ctx(both))
-  assert.deepEqual(r.reused, ["values", "nodes"])
+  writeFileSync(join(both, ".agent", "values.xml"), named(both))
+  writeFileSync(join(both, ".agent", "design-graph.xml"), "<design/>")
+  assert.deepEqual(design.run({}, ctx(both)).reused, ["values"])
   assert.equal(existsSync(join(both, ".agent", "values.xml")), true)
-  assert.equal(existsSync(join(both, ".agent", "design-nodes.xml")), true)
   assert.equal(existsSync(join(both, ".agent", "design-graph.xml")), false)
 
-  // needed, the graph no longer green — it goes, the dictionary stays. This is the resume INTO the
-  // middle of step 9, and it is judged, never assumed: the id v9 is in no dictionary.
-  const half = designRoot("needed")
-  writeFileSync(join(half, ".agent", "values.xml"), W_VALUES)
-  writeFileSync(join(half, ".agent", "design-nodes.xml"), W_NODES.replace('out="v2 | v4"', 'out="v2 | v9"'))
-  assert.deepEqual(design.run({}, ctx(half)).reused, ["values"])
-  assert.equal(existsSync(join(half, ".agent", "values.xml")), true)
-  assert.equal(existsSync(join(half, ".agent", "design-nodes.xml")), false)
+  // needed, словарь зелен когда-то, но не сейчас: строку из него убрали, состав перестал сходиться
+  // со скелетом — гейт сносит его, и проход A пойдёт заново.
+  const stale = designRoot("needed")
+  writeFileSync(join(stale, ".agent", "values.xml"), named(stale).replace(/\n.*id="v3".*/, ""))
+  assert.deepEqual(design.run({}, ctx(stale)).reused, [])
+  assert.equal(existsSync(join(stale, ".agent", "values.xml")), false)
 })
 
 test("no .agent/design at the run root: refusal naming step 8", () => {
@@ -701,134 +667,56 @@ test("no .agent/design at the run root: refusal naming step 8", () => {
   assert.match(r.why, /шаг 8 ripple не отработал/)
 })
 
-test("three green passes promote in turn, and the LAST one assembles the deliverable steps 10 and 14 read", () => {
-  const root = designRoot()
-  design.run({}, ctx(root))                                    // the gate: yesterday's pair goes
-
-  assert.deepEqual(design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root)), { ok: true, values: 4 })
-  assert.equal(existsSync(join(root, ".agent", "values.xml")), true)
-
-  assert.deepEqual(design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root)), { ok: true, nodes: 2 })
-  assert.equal(existsSync(join(root, ".agent", "design-nodes.xml")), true)
-
-  // The cards of pass C are DATA, not a verdict — and they never carry a position.
-  const c = design.run({ pass: "routes", cards: true }, ctx(root))
-  assert.match(c.text, /v1 GET \/parcels\?track=<v>/)
-  assert.doesNotMatch(c.text, /#\d/)
-
-  const r = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root))
-  assert.deepEqual(r, { ok: true, nodes: 2, routes: 1, units: 2 })
-
-  // THE DELIVERABLE DID NOT MOVE: byte for byte the shape step 14 cut yesterday.
-  assert.match(readFileSync(join(root, ".agent", "design-graph.xml"), "utf8"), /^<design mode="minor"/)
-  const flow = readFileSync(join(root, ".agent", "data-flow.md"), "utf8")
-  assert.match(flow, /^1\. src\/ParcelResource\.java : GET \/parcels\?track=<v> -> all\(\)$/m)
-  assert.match(flow, /\$START_TESTS path="src\/ParcelRepo\.java"\n1\. all\(\) -> Set<Parcel>\n\$END_TESTS/)
-  assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), false)   // promote is a MOVE
-})
-
-// D29a: пройти A читает рябь, СПРОЕЦИРОВАННУЮ на узлы изменения. Чистое правило и его живые числа —
-// steps/design/parts.test.mjs; здесь шов хоста: та же функция `design`, что судит проходы, отдаёт эту
-// проекцию как ДАННЫЕ наряда — ровно так же, как отдаёт карточки прохода C.
-test("D29a: design({pass:\"values\", ripple:true}) отдаёт модули узлов изменения и ПУТИ соседей", () => {
+test("скрипт составляет словарь, роль называет пустые, промоут снимает леса", () => {
   const root = designRoot()
   design.run({}, ctx(root))
 
-  const p = design.run({ pass: "values", ripple: true }, ctx(root))
-  assert.equal(p.ok, true)
-  assert.deepEqual([p.nodes, p.neighbours], [1, 1])
-  // Свой узел — байтами ряби, со всеми объявлениями.
-  assert.match(p.text, /<module path="src\/ParcelResource\.java"/)
-  assert.match(p.text, /<api name="GET \/parcels"/)
-  // Сосед — ПУТЁМ и без объявлений: операнд правила 6 сохранён,
-  assert.match(p.text, /^  src\/ParcelRepo\.java$/m)
-  assert.doesNotMatch(p.text, /name="all\(\)"/)
-  // …и это МЕНЬШЕ, чем файл ряби целиком — тот самый вычет, ради которого проекция и заведена.
-  assert.ok(p.text.length < readFileSync(join(root, ".agent", "ripple.xml"), "utf8").length)
+  // СОСТАВ — скрипта: два конца use case и вызов узла изменения. Текст вызова списан из ряби
+  // дословно, остальное — работа роли, и её объём назван числом.
+  const s = design.run({ skeleton: ".agent/staging/values-skeleton.xml" }, ctx(root))
+  assert.deepEqual(s, { ok: true, rows: 3, filled: 1, blank: 2 })
+  const skel = readFileSync(join(root, ".agent", "staging", "values-skeleton.xml"), "utf8")
+  assert.match(skel, /<value id="v1" closes="UC1\/in" side="in" text="" end="клиент отправляет GET/)
+  assert.match(skel, /<value id="v3" text="GET \/parcels" src="api src\/ParcelResource.java"\/>/)
+  // Объявление СОСЕДА по ряби значением не является: изменение его не меняет.
+  assert.doesNotMatch(skel, /all\(\)/)
 
-  // Гардрейл прохода A подграф не читает вовсе (checkValues судит словарь по FRD), а правило 6
-  // прохода B читает ФАЙЛ ряби целиком, не наряд: проекция ни одному правилу операнда не убавила.
-  assert.deepEqual(design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root)), { ok: true, values: 4 })
-  assert.deepEqual(design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root)), { ok: true, nodes: 2 })
+  // Незаполненный скелет — красный: строка, которую никто не назвал, это дефект, а не пустое место.
+  const red = design.run({ path: stage(root, "values.xml", skel) }, ctx(root))
+  assert.equal(red.ok, false)
+  assert.equal(red.blockers.split("\n").length, 2)
+  assert.equal(existsSync(join(root, ".agent", "values.xml")), false)
+
+  // Заполненный — зелёный, и наружу уходит грамматика без лесов, которые читала роль.
+  const green = design.run({ path: stage(root, "values.xml", named(root)) }, ctx(root))
+  assert.deepEqual(green, { ok: true, values: 3 })
+  const out = readFileSync(join(root, ".agent", "values.xml"), "utf8")
+  assert.match(out, /^<values grammar="2">/)
+  assert.equal(/side=|end=|src=|form=/.test(out), false)
+  assert.match(out, /<value id="v1" text="GET \/parcels\?track=T" closes="UC1\/in"\/>/)
+  assert.equal(existsSync(join(root, ".agent", "staging", "values.xml")), false)   // promote is a MOVE
 })
 
-// D17. Rule 9's second operand is the MAP's directed edges, and only the host can fetch them: the
-// ripple projects every edge BOTH ways (steps/ripple/ripple.mjs), so `.agent/ripple.xml` cannot say
-// who calls whom. Replace `edges: mapEdges` with `edges: []` in ext/index.mjs::design and this goes
-// green while the live defect walks straight through step 9 into step 10's `cycle` — the refusal on a
-// step with no role (live run f7bf154a).
-test("the routes pass is judged against the MAP's direction, which only the host can read", () => {
+test("роль переписала состав: строка добавлена — красный, staging остаётся уликой, промоута нет", () => {
   const root = designRoot()
   design.run({}, ctx(root))
-  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
-  design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root))
+  const p = stage(root, "values.xml", named(root).replace("</values>", '  <value id="v9" text="Parcel(track)"/>\n</values>'))
 
-  // The map says the repo is used BY the resource. W_ROUTES walks resource → repo, which agrees —
-  // green. Reverse the map's edge and the very same routes now close a loop with it.
-  const appgraph = (from, to) => `<appgraph grammar="3" modules="2">
-  <module path="src/ParcelResource.java" level="1"><role>resource</role></module>
-  <module path="src/ParcelRepo.java" level="2"><role>repo</role></module>
-  <edge from="${from}" to="${to}" via="uses"/>
-</appgraph>`
-
-  writeFileSync(join(root, ".agent", "appgraph.xml"), appgraph("src/ParcelResource.java", "src/ParcelRepo.java"))
-  assert.equal(design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root)).ok, true)
-
-  design.run({}, ctx(root))   // the gate: the pair goes, A and B are reused
-  writeFileSync(join(root, ".agent", "appgraph.xml"), appgraph("src/ParcelRepo.java", "src/ParcelResource.java"))
-  const r = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root))
+  const r = design.run({ path: p }, ctx(root))
   assert.equal(r.ok, false)
-  assert.match(r.blockers, /^9 .*зовут друг друга/)
-  assert.match(r.blockers, /ребро карты/)
+  assert.match(r.blockers, /v9/)
+  assert.equal(existsSync(join(root, ".agent", "values.xml")), false)
+  assert.equal(existsSync(join(root, p)), true, "красный staging остаётся уликой")
 })
 
-// D13. A role that returns track:"ok" and writes nothing is not a red artifact — it is no artifact.
-// The two are told apart by a FLAG, not by matching this module's Russian sentence from the workflow:
-// live run a900de7b, occurrence 3, where `{"track":"ok","artifact":".agent/staging/routes.xml"}` cost
-// pass C a whole redelegation. Drop `missing: true` from ext/index.mjs::design and this goes red —
-// and with it the workflow's free retry, which is the point of the flag.
 test("nothing written to the staging path is MISSING, not merely red", () => {
   const root = designRoot()
   design.run({}, ctx(root))
-  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
-  design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root))
-
-  const r = design.run({ pass: "routes", path: ".agent/staging/routes.xml" }, ctx(root))
+  const r = design.run({ path: ".agent/staging/values.xml" }, ctx(root))
   assert.equal(r.ok, false)
-  assert.equal(r.missing, true, "the caller spends a different budget on this refusal")
-  assert.match(r.blockers, /не существует/)
-
-  // A red artifact is NOT missing: there is a file, and the blockers are what repairs it.
-  const bad = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES.replace("@v4", "@v9")) }, ctx(root))
-  assert.equal(bad.ok, false)
-  assert.equal(bad.missing, undefined)
+  assert.equal(r.missing, true)
+  assert.match(r.blockers, /роль ничего не записала/)
 })
-
-test("a red pass promotes nothing, keeps its staging file, and does not reach the pass after it", () => {
-  const root = designRoot()
-  design.run({}, ctx(root))
-  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
-
-  // The graph names an id the dictionary does not carry.
-  const p = stage(root, "design-nodes.xml", W_NODES.replace('in="v2"', 'in="v9"'))
-  const r = design.run({ pass: "nodes", path: p }, ctx(root))
-  assert.equal(r.ok, false)
-  assert.match(r.blockers, /v9/)
-  assert.equal(existsSync(join(root, p)), true)                                    // the rejected file stays
-  assert.equal(existsSync(join(root, ".agent", "design-nodes.xml")), false)
-
-  // And pass C refuses to stitch onto a graph that was never accepted.
-  const rc = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root))
-  assert.equal(rc.ok, false)
-  assert.match(rc.blockers, /проходы A и B не зелены/)
-  assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false)
-})
-
-// --- izi_answer: the operator's numbering does not reach the VALUES -----------------------------
-//
-// The wiring seam for core/answers.mjs::stripOrdinal (live run 9d126ef3): removing the call from
-// izi_answer's byNumber map turns this test red — the digits the operator addressed the batch with
-// land on disk as part of the answers, and from there they are legal numbers for a `fit:`.
 
 test("izi_answer drops the number the operator addressed each answer with, on disk and in the table", async () => {
   const root = tempRoot()
@@ -1089,121 +977,55 @@ test("review names the step that did not run instead of reading an absent artifa
   assert.match(review.run({ path: ".agent/staging/review.xml" }, ctx(root)).blockers, /шаг 10 plan не отработал/)
 })
 
-// --- D10: the phase of step 9 is a LADDER of three passes, and it is read out of izi.js ----------
+// --- D10: the phase of step 9 is ONE pass while the step is rewritten ----------------------------
 //
 // `workflows/` is covered by no test of its own — it runs in a host vm sandbox with no imports — so
 // the only seam available for its structure is the one the ENVELOPE test above already uses: read the
-// source and hold it to what the passes require. Three claims, each of which a live run would
-// otherwise be the first to check.
-
+// source and hold it to what the pass requires.
 const IZI = readFileSync(new URL("../workflows/izi.js", import.meta.url), "utf8")
 
+//
+// Passes B and C were deleted, so the ladder of three is gone with them. What is asserted here is the
+// shape that replaced it and the two facts a live run cannot recover from being wrong about: the
+// phase is handed WHERE THE BAND STARTED (a rewind to step 6 must not reuse a dictionary extracted
+// from the previous FRD), and the band STOPS after the pass instead of walking into step 10 with no
+// design at all — step 10 accepts a missing design as legal input, so nothing below would refuse.
 test("the band hands the design phase where it STARTED, and the phase re-runs pass A on a rewind", () => {
-  // Without the argument a rewind to step 6 would rebuild the FRD and then reuse a dictionary
-  // extracted from the previous one — structurally green, and about another change.
   assert.match(IZI, /await designing\(from\)/)
-  assert.match(IZI, /from <= 6 \? \[\] : \(gate\.reused \|\| \[\]\)/)
+  assert.match(IZI, /if \(from > 6 && \(gate\.reused \|\| \[\]\)\.includes\("values"\)\)/)
 })
 
-test("three passes, three roles, three orders — and the role names are the ones pi resolves by FILENAME", () => {
-  for (const [id, role, tpl] of [
-    ["values", "valuer", "order-values.tpl"],
-    ["nodes", "designer", "order-nodes.tpl"],
-    ["routes", "router", "order-routes.tpl"],
-  ]) {
-    assert.match(IZI, new RegExp(`id: "${id}",\\s+role: "${role}",\\s+tpl: "steps/design/${tpl}"`), id)
-    assert.equal(existsSync(new URL(`../steps/design/${role}.md`, import.meta.url).pathname), true, role)
-    assert.equal(existsSync(new URL(`../steps/design/${tpl}`, import.meta.url).pathname), true, tpl)
+test("проход A — одна роль, один наряд, и имя роли то, которое pi резолвит по ФАЙЛУ", () => {
+  assert.match(IZI, /role: "valuer"/)
+  assert.equal(existsSync(new URL("../steps/design/valuer.md", import.meta.url).pathname), true)
+  assert.equal(existsSync(new URL("../steps/design/order-values.tpl", import.meta.url).pathname), true)
+  // Роли и наряды снесённых проходов не лежат там, где их найдёт pi: они уехали в архив.
+  for (const gone of ["designer.md", "router.md", "order-nodes.tpl", "order-routes.tpl", "order.tpl"]) {
+    assert.equal(existsSync(new URL(`../steps/design/${gone}`, import.meta.url).pathname), false, gone)
   }
-  // The one-generation order died with the phase that read it.
-  assert.equal(existsSync(new URL("../steps/design/order.tpl", import.meta.url).pathname), false)
 })
 
-// D20: the order of pass B carries the file pass B wrote last time. `prompt()` demands an exact
-// bidirectional match, so a `{PREVIOUS}` in the template with no key here throws AT LAUNCH — after the
-// gate, the dictionary and every token of pass A. The seam is a grep, and it costs a millisecond.
-// Run 088fb3ee: attempt 2 of pass B regenerated the graph and knocked `out` off a node attempt 1 had
-// gotten right, because the order showed it blockers about a file it could not see.
-test("the order of pass B carries PREVIOUS — the artifact of the last attempt, read off disk", () => {
-  assert.match(IZI, /const PREVIOUS = p\.id === "values" \? "" : \(previous/)
-  assert.match(IZI, /nodes: \{[^}]*PREVIOUS,[^}]*\}/)
+test("полоса ОСТАНАВЛИВАЕТСЯ после прохода A, а не идёт в шаг 10 без дизайна", () => {
+  // Шаг 10 принимает отсутствующий дизайн как законный вход (steps/plan/plan.mjs) — значит молча
+  // построит план с пустым dod на каждом узле. Остановка объявлена здесь и нигде больше.
+  assert.match(IZI, /const made = await designing\(from\);/)
+  assert.match(IZI, /if \(made !== "\.agent\/design"\) \{\n\s+exit\(err\("blocked"/)
+  // …и `skip` шага 8 — другой случай: там дизайна нет по решению, и полоса идёт дальше.
+  assert.match(IZI, /return "\.agent\/design"; \/\/ the flag file IS the receipt of the skip/)
+})
+
+// Наряд прохода A несёт СКЕЛЕТ и файл прошлой попытки. `prompt()` требует точного двустороннего
+// совпадения ключей, поэтому `{SKELETON}` в шаблоне без ключа здесь бросает НА ЗАПУСКЕ — после
+// гейта и после расчёта скелета. Шов — grep, и стоит он миллисекунду.
+test("наряд прохода A несёт скелет, число пустых строк и файл прошлой попытки", () => {
+  assert.match(IZI, /FRD, SKELETON, PREVIOUS, BLANK: String\(s\.blank\), FEEDBACK: feedback/)
   assert.match(IZI, /\(none — first attempt\)/)
-})
-
-// --- D25: the RE-ENTRY into a pass — the guardrail first, and the file the pass already wrote -----
-//
-// The same device as $START_BLAME at the bottom: the block is CUT OUT of workflows/izi.js and executed
-// here, so this is a seam over the real code and not a grep. The host functions it is given are the
-// real ones over a temp root — `reenter` decides by what is ON DISK, and a hand-made `read` would
-// prove nothing about a run.
-//
-// Run 5bbe5de4: pass C was re-entered three times, was shown nothing it had written, and wrote its 33
-// routes anew every circle; the verdict it was repairing had been computed against the graph of the
-// PREVIOUS circle — of 24 lines, 14 were still true. 2 455 854 tokens, $3.39, no plan.
-const REENTRY = new Function(`${IZI.slice(IZI.indexOf("// $START_REENTRY"), IZI.indexOf("// $END_REENTRY"))}
-  return { reenter }`)()
-
-// Passes A and B closed, and pass C's own staging left on disk — the state a re-entry finds.
-const reentryRoot = (routes = W_ROUTES) => {
-  const root = designRoot()
-  design.run({}, ctx(root))
-  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
-  design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root))
-  stage(root, "routes.xml", routes)
-  return root
-}
-const reenterAt = (root, from, judged = { n: 0 }) => REENTRY.reenter(
-  "routes", ".agent/staging/routes.xml", from,
-  (a) => readText.run(a, ctx(root)),
-  (a) => { judged.n++; return design.run(a, ctx(root)) },
-)
-
-test("D25: staging этого прогона зелен — проход закрывается БЕЗ роли, за 0 токенов", async () => {
-  const root = reentryRoot()
-  const r = await reenterAt(root, 9)
-
-  assert.equal(r.previous, W_ROUTES, "файл прошлой попытки — это {PREVIOUS} наряда")
-  assert.equal(r.verdict.ok, true)
-  // …и зелёный вердикт ЗАКРЫЛ проход: он промоутит, собирает пару и убирает staging. Звать роутера
-  // не за чем — и в izi.js это та самая ветка, что стоит ПЕРЕД agent().
-  assert.deepEqual(r.verdict, { ok: true, nodes: 2, routes: 1, units: 2 })
-  assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), true)
-  assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), false)
-  assert.match(IZI, /if \(verdict && verdict\.ok\) \{[^]*?i\+\+;[^]*?continue;/)
-  assert.match(IZI, /routes: \{[^}]*PREVIOUS,[^}]*\}/)
-})
-
-test("D25: красный staging — его блокеры и есть FEEDBACK, посчитанный по ТЕКУЩЕМУ графу", async () => {
-  // Маршрут кончается значением, которого у узла нет в `out`: правило 1, и роль позовут с ним.
-  const root = reentryRoot(W_ROUTES.replace("src/ParcelResource.java@v4", "src/ParcelResource.java@v3"))
-  const r = await reenterAt(root, 9)
-
-  assert.equal(r.verdict.ok, false)
-  assert.match(r.verdict.blockers, /^1 у узла src\/ParcelResource\.java нет значения v3/)
-  assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), true, "красный staging остаётся уликой")
-  assert.match(IZI, /if \(verdict\) feedback\[p\.id\] = verdict\.blockers;/)
-})
-
-test("D25: перемотка на шаг 6 — staging дропнут, гардрейл не зовётся, PREVIOUS = (none)", async () => {
-  const root = reentryRoot()
-  const judged = { n: 0 }
-  const r = await reenterAt(root, 6, judged)
-
-  // FRD переписан: файл, записанный против прежнего, — артефакт про другое изменение.
-  assert.equal(r.previous, "")
-  assert.equal(r.verdict, null)
-  assert.equal(judged.n, 0, "судить нечего — вердикт не запрашивается вовсе")
-  assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false, "ничего не промоутнуто")
-  // …и пустой остаток превращается в «(none — first attempt)» ровно там, где собирается PREVIOUS.
-  assert.match(IZI, /const PREVIOUS = p\.id === "values" \? "" : \(previous[^]*?\(none — first attempt\)"\);/)
 })
 
 test("the valuer returns a count, so the envelope carries it — additionalProperties is false", () => {
   assert.match(IZI, /values: \{ type: "number" \}/)
 })
 
-// R-shippable: наряд критика показывает узлу без своей команды ЕГО ЮНИТЫ рядом с кандидатами.
-// Прогон d8ef8c60: роль спросили «какая из этих команд исполняет узел», показав только id и команды,
 // и она ответила `<witness cmd="mvn verify -Pnative"/>` для HTML-страницы — команда машинную сверку
 // проходит (она у закрывающего сценария) и страницу не открывает. Убери `dod` из строки — красный.
 test("reviewForm: строка {UNCHECKED} несёт юниты узла, а не один его id", () => {
@@ -1740,8 +1562,6 @@ const ROLE_FILES = [
   ["scope/scout.md", /REVERSE ENGINEER/],
   ["intake/intake.md", /requirements analyst/],
   ["design/valuer.md", /INTERFACE ANALYST/],
-  ["design/designer.md", /software architect/],
-  ["design/router.md", /SYSTEMS ANALYST/],
   ["review/critic.md", /DESIGN REVIEWER/],
 ]
 const roleText = (f) => readFileSync(new URL(`../steps/${f}`, import.meta.url), "utf8")
@@ -1756,569 +1576,6 @@ test("no role carries a word of a form this pipeline is run against — the exam
   }
 })
 
-// --- D13: the blame is addressed PER LINE, and the guardrails' own texts are what address it ------
-//
-// `workflows/izi.js` cannot be imported — it runs in a host vm sandbox with no module system — so the
-// block that decides blame is CUT OUT of the source between two markers and executed here. That makes
-// this a seam over the real code rather than a grep: `blameOf` and `blameSplit` below are the very
-// functions the run calls.
-//
-// And the blocker lines they are fed are not invented either. Every rule of blame matches PROSE that
-// lives in another module (steps/design/routes.mjs, steps/design/nodes.mjs), so the two texts can
-// drift apart in silence — a reworded blocker would quietly send the whole report back to the pass
-// that did not write the defect. The fixtures below are therefore produced by the REAL guardrails.
-//
-// Reintroduce any of the three defects and a branch here goes red:
-//   · make blameOf take the whole set again (`lines.some(...)`) — the split test fails;
-//   · delete the «вход в контракте узла не объявлен» line — rule 1's boundary goes back to pass C;
-//   · move `attempt[p.id]++` above the `check.missing` branch — the last test fails.
-const BLAME = new Function(`${IZI.slice(IZI.indexOf("// $START_BLAME"), IZI.indexOf("// $END_BLAME"))}
-  return { blameOf, blameSplit }`)()
-
-// A graph a route can be walked over: the page accepts v3 and hands out v1, the store accepts v1.
-const BNODES = new Map([
-  ["fruits.html", { path: "fruits.html", delta: "Changed", in: ["v3"], out: ["v1"], deps: ["store.js"] }],
-  ["store.js", { path: "store.js", delta: "", in: ["v1"], out: ["v3"], deps: [] }],
-])
-const BVALUES = new Map([["v1", "save(glossary)"], ["v3", "Fruit"]])
-const bRoute = (steps, entry = "v1") => [{ scenario: "S1", entry, steps }]
-const bStep = (path, value) => ({ path, value })
-
-test("rule 1 at the BOUNDARY is the graph's fault — the guardrail's own line says so, and blameOf reads it", () => {
-  // The scenario enters at fruits.html with v1, and fruits.html's contract declares no such input.
-  const lines = checkRoutes({
-    routes: bRoute([bStep("fruits.html", "v1")]),
-    nodes: BNODES, values: BVALUES, frd: { scenarios: [{ id: "S1" }] },
-  })
-  const rule1 = lines.filter((l) => l.startsWith("1 "))
-  assert.equal(rule1.length, 1, lines.join("\n"))
-  assert.equal(BLAME.blameOf("routes", rule1[0]), "nodes", "«вход в контракте узла не объявлен» — чинит проход B")
-
-  // The other half of rule 1 stays with pass C: it named an `out` the node does not have, and the
-  // node's contract is not what is wrong.
-  const outLine = checkRoutes({
-    routes: bRoute([bStep("fruits.html", "v9")], "v3"),
-    nodes: BNODES, values: BVALUES, frd: { scenarios: [{ id: "S1" }] },
-  }).filter((l) => l.startsWith("1 "))
-  assert.equal(outLine.length, 1, "one defect, one blocker")
-  assert.equal(BLAME.blameOf("routes", outLine[0]), "routes")
-})
-
-test("a pass gets ITS OWN lines and nothing else — the report is split, not forwarded whole", () => {
-  // One red pass C carrying two facts with two different addresses: an undeclared edge (rule 3, the
-  // graph's) and a node with a delta no route walks (rule 2, the route's).
-  const lines = checkRoutes({
-    routes: bRoute([bStep("store.js", "v3"), bStep("far.js", "v3")], "v1"),
-    nodes: new Map([...BNODES, ["far.js", { path: "far.js", delta: "Added", in: ["v3"], out: ["v3"], deps: [] }]]),
-    values: BVALUES,
-    frd: { scenarios: [{ id: "S1" }] },
-  })
-  const parts = BLAME.blameSplit("routes", lines.join("\n"))
-  assert.ok(parts.nodes && parts.nodes.length, lines.join("\n"))
-  assert.ok(parts.routes && parts.routes.length, lines.join("\n"))
-  // THE POINT: nothing addressed to the graph mentions a route's own rules. Live run a900de7b handed
-  // pass B rules 2 and 5 and got back an invented `in="v1 | v3"` and a flipped delta.
-  for (const l of parts.nodes) assert.match(l, /^[34] /)
-  for (const l of parts.routes) assert.doesNotMatch(l, /^[34] /)
-  assert.equal(parts.nodes.length + parts.routes.length, lines.length, "разделение без потерь")
-})
-
-test("a graph naming an id the frozen dictionary does not carry is pass A's fault", () => {
-  // Pass B cannot repair it however many times it is re-delegated (backlog D8) — the dictionary is
-  // frozen for it. Again the fixture is the real guardrail's line, not a copy of its wording.
-  const lines = checkGraph({
-    // `out` is non-empty on purpose: a delta node with nothing to hand on is rule 14's finding, and
-    // this fixture is about WHOSE fault an unknown id is, not about that.
-    nodes: new Map([["a.js", { path: "a.js", delta: "Added", in: ["v9"], out: ["v9"], deps: [] }]]),
-    values: new Map(), frd: {}, known: null,
-  })
-  const parts = BLAME.blameSplit("nodes", lines.join("\n"))
-  assert.deepEqual(Object.keys(parts), ["values"], lines.join("\n"))
-})
-
-test("the workflow addresses the lines it was handed, and «файла нет» does not spend a repair round", () => {
-  // The split is what the phase actually calls, and `carried` is given the addressee's OWN lines.
-  assert.match(IZI, /const parts = blameSplit\(p\.id, check\.blockers\)/)
-  assert.match(IZI, /carried\(\{ blockers: mine\.join\("\\n"\), seen: wasRed\[q\.id\] \}\)/)
-  // And the missing-file rail is decided BEFORE the repair budget is charged. Order is the whole
-  // claim: `attempt[p.id]++` above the branch would charge the round it exists to save.
-  const missingAt = IZI.indexOf("if (check.missing)")
-  const chargeAt = IZI.indexOf("attempt[p.id]++")
-  assert.ok(missingAt > 0 && chargeAt > missingAt, "круг ремонта тратится ПОСЛЕ ветки «файла нет»")
-  assert.match(IZI, /silent\[p\.id\]\+\+/, "bounded by its own counter, not by LOOPS")
-})
-
-// --- D26: проход C собирается РОЕМ — один агент на сценарий FRD ------------------------------------
-//
-// Три рельсы io и одно решение полосы. Рельсы: часть судится ОДНА (по правилам 1, 3, 4, 9, 11),
-// слияние собирает файл прохода из частей и судит его целиком, а перемотка на шаг 6 сносит каталог
-// частей — не один файл. Решение полосы — вырождение: одна-две части роя не стоят, и проход идёт
-// одним нарядом, как до D26.
-//
-// Прогон c433e01d: роль прохода C на целой задаче выдала три хода чистого рассуждения по 32 768
-// токенов, `stop: length`, и ни байта текста. Она же на одном сценарии написала свою часть за пять
-// ходов и 10 600 токенов (исследование И2).
-const swarmRoot = (parts = { S1: W_ROUTES }) => {
-  const root = designRoot()
-  design.run({}, ctx(root))
-  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
-  design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root))
-  mkdirSync(join(root, ".agent", "staging", "routes-parts"), { recursive: true })
-  for (const [id, xml] of Object.entries(parts)) writeFileSync(join(root, ".agent", "staging", "routes-parts", `${id}.xml`), xml)
-  return root
-}
-
-test("D26: единица роя — сценарий FRD: свой entry из closes=\"UC1/in\", свои id, карточки компоненты", () => {
-  const root = swarmRoot({})
-  const u = routeUnits.run({}, ctx(root))
-  assert.equal(u.ok, true, u.why)
-  assert.equal(u.units.length, 1)
-  const [one] = u.units
-  assert.equal(one.id, "S1")
-  assert.equal(one.entry, "v1", "значение с closes=\"UC1/in\"")
-  assert.equal(one.routes, 1, "один конец UC1/post — один маршрут")
-  assert.equal(one.nodes, 2, "связная компонента: ресурс и его хранилище")
-  assert.match(one.ends, /S1 — конец UC1\/post/)
-  assert.match(one.cards, /src\/ParcelResource\.java/)
-  // Проекция FRD — свой сценарий и свой use case, не весь артефакт.
-  assert.match(one.frd, /<scenario id="S1"/)
-  assert.match(one.frd, /<usecase id="UC1"/)
-})
-
-test("D26: часть судится ОДНА — правилами 1, 3, 4, 9, 11, и ничего не промоутит", () => {
-  const root = swarmRoot()
-  const ok = design.run({ pass: "routes", path: ".agent/staging/routes-parts/S1.xml", scenario: "S1" }, ctx(root))
-  assert.deepEqual(ok, { ok: true, routes: 1 })
-  // Ни сборки, ни промоута: часть — вход слияния, а не артефакт шага.
-  assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false)
-  assert.equal(existsSync(join(root, ".agent", "staging", "routes-parts", "S1.xml")), true)
-
-  // Правило 1 на части — полное: значение, которого узел не отдаёт, красит её саму.
-  const red = swarmRoot({ S1: W_ROUTES.replace("src/ParcelResource.java@v4", "src/ParcelResource.java@v3") })
-  const bad = design.run({ pass: "routes", path: ".agent/staging/routes-parts/S1.xml", scenario: "S1" }, ctx(red))
-  assert.equal(bad.ok, false)
-  assert.match(bad.blockers, /^1 у узла src\/ParcelResource\.java нет значения v3/)
-
-  // А покровные правила части не задаются вовсе: у неё нет их операнда.
-  for (const l of String(bad.blockers).split("\n")) assert.doesNotMatch(l.trim(), /^(2|5|7|10) /)
-
-  // Чужой маршрут в файле части — блокер: id дизъюнктны, и на этом стоит слияние без разрешения
-  // конфликтов. Верни startsWith в scenarioOf — и часть S1 заберёт себе маршрут S10.
-  const alien = swarmRoot({ S1: W_ROUTES.replace('scenario="S1"', 'scenario="S10"') })
-  const stolen = design.run({ pass: "routes", path: ".agent/staging/routes-parts/S1.xml", scenario: "S1" }, ctx(alien))
-  assert.equal(stolen.ok, false)
-  assert.match(stolen.blockers, /маршрут S10 не принадлежит сценарию S1/)
-})
-
-test("D26: слияние — скрипт: части в порядке сценариев FRD, вердикт целого, сборка пары", () => {
-  const root = swarmRoot()
-  // Файла прохода нет вовсе — его пишет слияние из частей, и только потом судит.
-  assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), false)
-  const merged = design.run({ pass: "routes", path: ".agent/staging/routes.xml" }, ctx(root))
-  assert.deepEqual(merged, { ok: true, nodes: 2, routes: 1, parts: 1, units: 2 })
-  assert.equal(readFileSync(join(root, ".agent", "design-graph.xml"), "utf8").includes("<route"), true)
-  // Части переживают зелёное слияние: перемотка в проход B пере-судит их, а зелёная закроется за 0 токенов.
-  assert.equal(existsSync(join(root, ".agent", "staging", "routes-parts", "S1.xml")), true)
-  assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), false, "файл прохода убран как всегда")
-})
-
-test("D26: красное слияние адресует каждую строку части, которая её чинит", () => {
-  // Маршрут обрывается на ресурсе: правило 7 (ветка v4 не пройдена) и правило 10 — покровные, и
-  // никакая часть в одиночку их не увидит.
-  const root = swarmRoot({ S1: `<routes>\n  <route scenario="S1" entry="v1" steps="src/ParcelResource.java@v2"/>\n</routes>` })
-  const red = design.run({ pass: "routes", path: ".agent/staging/routes.xml" }, ctx(root))
-  assert.equal(red.ok, false)
-  assert.equal(red.parts, 1)
-  assert.match(red.blockers, /^7 узел src\/ParcelResource\.java/m)
-  // Адрес — сценарий, который называет этот узел в `<scenario nodes>`; строки едут ему целиком.
-  assert.deepEqual(red.blame.map((b) => b.scenario), ["S1"])
-  assert.equal(red.blame[0].lines.some((l) => l.startsWith("7 ")), true)
-  assert.equal(existsSync(join(root, ".agent", "staging", "routes.xml")), true, "красное слияние остаётся уликой")
-})
-
-test("D26: перемотка на шаг 6 роняет ВЕСЬ каталог частей — и роняет его ОДИН раз за фазу", () => {
-  // Часть, написанная против прежнего FRD, — артефакт про другое изменение, и её имя (`S9.xml`)
-  // втащило бы её в слияние по одному только имени файла.
-  const root = swarmRoot({ S1: W_ROUTES, S9: "<routes/>" })
-  const kept = routeUnits.run({}, ctx(root))
-  assert.equal(kept.dropped, 0)
-  assert.equal(existsSync(join(root, ".agent", "staging", "routes-parts", "S9.xml")), true)
-
-  const dropped = routeUnits.run({ drop: true }, ctx(root))
-  assert.equal(dropped.dropped, 2)
-  assert.equal(existsSync(join(root, ".agent", "staging", "routes-parts")), false)
-  // …и полоса тратит этот флаг ОДИН раз: второй заход в проход C (после ремонта прохода B) сносил бы
-  // части, написанные этой же фазой, и рой переписывал бы их каждый круг — счёт прогона 5bbe5de4.
-  assert.match(IZI, /let dropParts = from <= 6;/)
-  assert.match(IZI, /await routeUnits\(\{ drop: dropParts \}\);[\s\S]{0,200}dropParts = false;/)
-  // …и слияние после этого судит ровно то, что записала роль, как до D26.
-  const alone = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root))
-  assert.deepEqual(alone, { ok: true, nodes: 2, routes: 1, units: 2 })
-})
-
-// --- D28: проход B собирается ТЕМ ЖЕ РОЕМ ---------------------------------------------------------
-//
-// Те же три рельсы io и то же решение полосы, что у D26, одним проходом ниже. Прогон 35972d1c: роль
-// прохода B звалась трижды, третий вызов — 98 304 токена выхода (3 × 32 768), ноль вызовов
-// инструментов, `crashed`; 60 % цены прогона за ноль артефактов. Она же на одном сценарии написала
-// свою часть за три хода и 7 361 токен (исследование И3).
-//
-// FRD этой фикстуры называет ОБА узла в `<scenario nodes>`: узел, которого не называет ни один
-// сценарий, не достаётся никакой части, и владение — это ровно то, что делает файлы частей
-// непересекающимися.
-const FRD_B28 = FRD_D.replace(
-  '<scenario id="S1" uc="UC1" before="весь реестр" after="только совпавшие" nodes="src/ParcelResource.java"/>',
-  '<scenario id="S1" uc="UC1" before="весь реестр" after="только совпавшие" nodes="src/ParcelResource.java"/>\n  <scenario id="S2" uc="UC1" before="весь реестр" after="хранилище фильтрует" nodes="src/ParcelRepo.java"/>')
-const nodeSwarmRoot = (parts = {}) => {
-  const root = designRoot()
-  writeFileSync(join(root, ".agent", "frd.xml"), FRD_B28)
-  design.run({}, ctx(root))
-  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
-  mkdirSync(join(root, ".agent", "staging", "nodes-parts"), { recursive: true })
-  for (const [id, xml] of Object.entries(parts)) writeFileSync(join(root, ".agent", "staging", "nodes-parts", `${id}.xml`), xml)
-  return root
-}
-// Файлы двух частей: у каждой ОДИН узел, и ребро между ними пересекает границу частей — ровно тот
-// стык, на котором правила целого фантомны, а частные работают.
-const PART_R = `<design mode="minor" base=".agent/appgraph.xml">
-  <module path="src/ParcelResource.java" delta="Changed">
-    <role>REST-точка поиска</role>
-    <contract in="v1 | v3" out="v2 | v4"/>
-    <dep path="src/ParcelRepo.java"/>
-  </module>
-</design>`
-const PART_P = `<design mode="minor" base=".agent/appgraph.xml">
-  <module path="src/ParcelRepo.java">
-    <role>хранилище посылок</role>
-    <contract in="v2" out="v3"/>
-  </module>
-</design>`
-
-test("D28: единица роя прохода B — сценарий FRD: свои узлы, дельты своих узлов, пути соседей", () => {
-  const root = nodeSwarmRoot()
-  const u = nodeUnits.run({}, ctx(root))
-  assert.equal(u.ok, true, u.why)
-  assert.deepEqual(u.units.map((x) => [x.id, x.paths]), [["S1", 1], ["S2", 1]], "узел — первому назвавшему")
-  const [one] = u.units
-  assert.match(one.frd, /<scenario id="S1"/)
-  assert.match(one.frd, /<usecase id="UC1"/)
-  assert.match(one.frd, /<delta op="GET \/parcels"/)
-  assert.doesNotMatch(one.frd, /<scenario id="S2"/)
-  assert.match(one.nodes, /src\/ParcelResource\.java — delta="Added"/)
-  // Сосед — путь без карточки: ребро туда провести можно, <module> написать нельзя.
-  assert.match(one.nodes, /Соседи[\s\S]*src\/ParcelRepo\.java/)
-  assert.doesNotMatch(one.nodes, /<contract/)
-  // Рябь — проекция на свои узлы, а не весь подграф.
-  assert.match(one.ripple, /src\/ParcelResource\.java/)
-  assert.doesNotMatch(one.ripple, /src\/ParcelRepo\.java" /)
-  // Проход A не зелен — частей нет: словарь и есть то, чем контракт называет значения.
-  const noValues = designRoot()
-  writeFileSync(join(noValues, ".agent", "frd.xml"), FRD_B28)
-  assert.equal(nodeUnits.run({}, ctx(noValues)).ok, false)
-})
-
-test("D28: часть прохода B судится ЧАСТНЫМИ правилами — ребро в чужую часть её не краснит", () => {
-  const root = nodeSwarmRoot({ S1: PART_R, S2: PART_P })
-  const ok = design.run({ pass: "nodes", path: ".agent/staging/nodes-parts/S1.xml", scenario: "S1" }, ctx(root))
-  assert.deepEqual(ok, { ok: true, nodes: 1 })
-  // Именно здесь разложение и стоит: у этой части ребро ведёт наружу её файла, а `v3` в её `in` не
-  // отдаёт ни один её узел. Спроси у части правила ЦЕЛОГО — и она красна навсегда.
-  const whole = design.run({ pass: "nodes", path: ".agent/staging/design-nodes.xml" }, ctx(nodeSwarmRoot({ S1: PART_R, S2: PART_P })))
-  assert.equal(whole.ok, true, whole.blockers)
-  // Ни сборки, ни промоута: часть — вход слияния, а не артефакт шага.
-  assert.equal(existsSync(join(root, ".agent", "design-nodes.xml")), false)
-  assert.equal(existsSync(join(root, ".agent", "staging", "nodes-parts", "S1.xml")), true)
-
-  // Частное правило на части — полное: id вне словаря красит её саму.
-  const red = nodeSwarmRoot({ S1: PART_R.replace('out="v2 | v4"', 'out="v2 | v44"') })
-  const bad = design.run({ pass: "nodes", path: ".agent/staging/nodes-parts/S1.xml", scenario: "S1" }, ctx(red))
-  assert.equal(bad.ok, false)
-  assert.match(bad.blockers, /в out стоит v44, которого нет в словаре/)
-
-  // Чужой узел в файле части — блокер: пути дизъюнктны, и на этом стоит слияние без разрешения
-  // конфликтов. Свой узел, которого в файле нет, — тоже блокер: часть отвечает за каждый свой путь.
-  const alien = nodeSwarmRoot({ S1: PART_R.replace("</design>", `${PART_P.split("\n").slice(1, -1).join("\n")}\n</design>`) })
-  const stolen = design.run({ pass: "nodes", path: ".agent/staging/nodes-parts/S1.xml", scenario: "S1" }, ctx(alien))
-  assert.equal(stolen.ok, false)
-  assert.match(stolen.blockers, /узел src\/ParcelRepo\.java — не твой/)
-  const empty = nodeSwarmRoot({ S1: "<design/>" })
-  const lost = design.run({ pass: "nodes", path: ".agent/staging/nodes-parts/S1.xml", scenario: "S1" }, ctx(empty))
-  assert.match(lost.blockers, /узел src\/ParcelResource\.java назван твоим, а <module> для него в файле нет/)
-})
-
-test("D28: слияние прохода B — скрипт: части в порядке сценариев FRD, вердикт целого, промоут", () => {
-  const root = nodeSwarmRoot({ S1: PART_R, S2: PART_P })
-  assert.equal(existsSync(join(root, ".agent", "staging", "design-nodes.xml")), false, "файла прохода нет — его пишет слияние")
-  const merged = design.run({ pass: "nodes", path: ".agent/staging/design-nodes.xml" }, ctx(root))
-  assert.deepEqual(merged, { ok: true, nodes: 2, parts: 2 })
-  const promoted = readFileSync(join(root, ".agent", "design-nodes.xml"), "utf8")
-  assert.equal(promoted.indexOf("src/ParcelResource.java") < promoted.indexOf("src/ParcelRepo.java"), true, "порядок сценариев FRD")
-  assert.match(promoted, /^<design mode="minor" base="\.agent\/appgraph\.xml">/)
-  assert.equal(existsSync(join(root, ".agent", "staging", "nodes-parts", "S1.xml")), true, "части переживают зелёное слияние")
-  assert.equal(existsSync(join(root, ".agent", "staging", "design-nodes.xml")), false, "файл прохода убран как всегда")
-})
-
-test("D28: красное слияние прохода B адресует каждую строку части, которая её чинит", () => {
-  // У ресурса пустой out — правило 14 целого; чинит его та часть, что написала этот узел.
-  const root = nodeSwarmRoot({ S1: PART_R.replace('out="v2 | v4"', 'out=""'), S2: PART_P })
-  const red = design.run({ pass: "nodes", path: ".agent/staging/design-nodes.xml" }, ctx(root))
-  assert.equal(red.ok, false)
-  assert.equal(red.parts, 2)
-  assert.match(red.blockers, /^14 узел src\/ParcelResource\.java/m)
-  const to = new Map(red.blame.map((b) => [b.scenario, b.lines]))
-  // Строка про УЗЕЛ уезжает ровно одной части — той, что его написала.
-  assert.equal(to.get("S1").filter((l) => l.startsWith("14 ")).length, 2, "узел с дельтой и touched-путь — оба про её узел")
-  assert.deepEqual((to.get("S2") || []).filter((l) => l.startsWith("14 ")), [])
-  // …а строка про USE CASE (правило 13: конец UC1 больше не поселён) — всем сценариям этого use case,
-  // потому что узел, который должен его посадить, может лежать в любой из их частей.
-  for (const id of ["S1", "S2"]) assert.equal(to.get(id).some((l) => l.startsWith("13 ")), true, id)
-  assert.equal(existsSync(join(root, ".agent", "staging", "design-nodes.xml")), true, "красное слияние остаётся уликой")
-})
-
-test("D28: красный проход C адресует части ПРОХОДА B ровно те строки, что чинит проход B", () => {
-  // Ребра нет: правило 3 — вина прохода B (workflows/izi.js::blameOf), и оно называет узел.
-  const root = nodeSwarmRoot({ S1: PART_R.replace('    <dep path="src/ParcelRepo.java"/>\n', ""), S2: PART_P })
-  design.run({ pass: "nodes", path: ".agent/staging/design-nodes.xml" }, ctx(root))
-  const red = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root))
-  assert.equal(red.ok, false)
-  assert.match(red.blockers, /^3 src\/ParcelRepo\.java недостижим/m)
-  // Адрес прохода B — по УЗЛУ, и это та часть, которая узел написала.
-  // Строку правила 3 получает часть ТОГО узла, который стал недостижим, и никто больше: ребро
-  // ненаправленно, и `<dep>` к соседу дописывает у себя именно она. Маршрут ходит туда и обратно, так
-  // что недостижимы обе стороны — и каждая часть получает ровно свою строку, а не обе.
-  const three = new Map(red.nodeBlame.map((b) => [b.scenario, b.lines.filter((l) => l.startsWith("3 "))]))
-  assert.deepEqual(three.get("S2"), ["3 src/ParcelRepo.java недостижим из src/ParcelResource.java — нет ребра <dep> между ними (S1)"])
-  assert.deepEqual(three.get("S1"), ["3 src/ParcelResource.java недостижим из src/ParcelRepo.java — нет ребра <dep> между ними (S1)"])
-  // …и полоса читает именно этот канал: подставь сюда `check.blame` (адреса прохода C), и части
-  // прохода B получат чужой отчёт — либо не получат никакого, и рой проснётся целиком.
-  assert.match(IZI, /addressToParts\(parts\.nodes \|\| \[\], p\.id === "nodes" \? check\.blame : check\.nodeBlame, wasRedNode\)/)
-})
-
-test("D28: перемотка на шаг 6 роняет ВЕСЬ каталог частей прохода B — и роняет его ОДИН раз за фазу", () => {
-  const root = nodeSwarmRoot({ S1: PART_R, S9: "<design/>" })
-  assert.equal(nodeUnits.run({}, ctx(root)).dropped, 0)
-  const dropped = nodeUnits.run({ drop: true }, ctx(root))
-  assert.equal(dropped.dropped, 2)
-  assert.equal(existsSync(join(root, ".agent", "staging", "nodes-parts")), false)
-  assert.match(IZI, /let dropNodeParts = from <= 6;/)
-  assert.match(IZI, /await nodeUnits\(\{ drop: dropNodeParts \}\);[\s\S]{0,200}dropNodeParts = false;/)
-  // …и слияние после этого судит ровно то, что записала роль, как до D28.
-  const alone = design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root))
-  assert.deepEqual(alone, { ok: true, nodes: 2 })
-})
-
-test("D28: рой прохода B — литеральный слот, вырождение общее с проходом C", () => {
-  // Порог один на оба прохода: SWARM_MIN уже проверен выше, здесь — что проход B читает именно его.
-  assert.match(IZI, /swarmingNodes\s*\n?\s*\? await swarmNodes\(units, tplNodePart/)
-  assert.match(IZI, /const units = swarmParts\(u\.units\);[\s\S]{0,200}swarmingNodes = units\.length > 0;/)
-  // Слот роя — литеральная запись с ЛИТЕРАЛЬНЫМ именем: хост валидирует parallel() по исходнику.
-  assert.match(IZI, /await parallel\("nodes-batch", \{[\s\S]*?n8: \(\) => nodeSlot\(batch, 7,/)
-  // Внутри parallel нет ни exit, ни рельсы вопроса: отказ части — ЗНАЧЕНИЕ.
-  const swarmFn = IZI.slice(IZI.indexOf("async function nodePart"), IZI.indexOf("// FUNCTION_CONTRACT: routePart"))
-  assert.doesNotMatch(swarmFn, /exit\(/)
-  assert.doesNotMatch(swarmFn, /checkpoint\(|askOperator\(/)
-  // Наряд ЦЕЛОГО прохода B не тронут: у части свой файл, и полоса читает оба.
-  assert.match(IZI, /steps\/design\/order-nodes\.tpl/)
-  assert.match(IZI, /steps\/design\/order-nodes-part\.tpl/)
-})
-
-// --- D31: ПРОХОД A СОБИРАЕТСЯ ТЕМ ЖЕ РОЕМ ----------------------------------------------------------
-//
-// Те же три рельсы io и то же решение полосы, что у D26 и D28, одним проходом выше. Два прогона на
-// ОДНОМ наряде формы `eddi` после проекции ряби: 27b37fdb — 31 173 симв, файл записан; f3c7be97 —
-// 31 430 симв, три хода в потолок 32 768, 98 304 токена, `failed`. Единица берётся у `routeParts`:
-// `nodeParts` выбросил бы сценарий, все узлы которого уже присвоены, и его концы не написал бы никто.
-//
-// FRD этой фикстуры несёт ветвление и отказ: без них правило 8 нечем показать, а оно — единственное
-// правило прохода A, которое на части фантомно.
-const FRD_A31 = FRD_B28
-  .replace("<step n=\"1\">клиент отправляет GET /parcels?track=…</step>",
-           "<step n=\"1\">клиент отправляет GET /parcels?track=…</step>\n    <ext id=\"1a\" error=\"PARCEL_NOT_FOUND\" outcome=\"посылка не найдена, клиент получит HTTP 404\"/>")
-  .replace("  <touched path=\"src/ParcelResource.java\"/>",
-           "  <failure code=\"PARCEL_NOT_FOUND\" status=\"404\" client=\"посылка не найдена\" operator=\"-\" from=\"UC1/1a\"/>\n  <touched path=\"src/ParcelResource.java\"/>")
-
-const valueSwarmRoot = (parts = {}) => {
-  const root = designRoot()
-  writeFileSync(join(root, ".agent", "frd.xml"), FRD_A31)
-  design.run({}, ctx(root))
-  mkdirSync(join(root, ".agent", "staging", "values-parts"), { recursive: true })
-  for (const [id, xml] of Object.entries(parts)) writeFileSync(join(root, ".agent", "staging", "values-parts", `${id}.xml`), xml)
-  return root
-}
-// Файлы двух частей ОДНОГО use case: обе закрывают его концы своими id, и совпавшие строки склеит
-// слияние. Код отказа несёт только первая — правило 8 судится по ОБЪЕДИНЕНИЮ.
-const VAL_P1 = `<values>
-  <value id="S1v1" text="GET /parcels?track=&lt;v&gt;" closes="UC1/in"/>
-  <value id="S1v2" text="all()"/>
-  <value id="S1v3" text="Set&lt;Parcel&gt;"/>
-  <value id="S1v4" text="Set&lt;Parcel&gt; (совпавшие)" closes="UC1/post"/>
-  <value id="S1v5" text="404 PARCEL_NOT_FOUND" closes="UC1/1a"/>
-</values>`
-const VAL_P2 = `<values>
-  <value id="S2v1" text="GET /parcels?track=&lt;v&gt;" closes="UC1/in"/>
-  <value id="S2v2" text="Set&lt;Parcel&gt; (совпавшие)" closes="UC1/post"/>
-  <value id="S2v3" text="404 не найдено" closes="UC1/1a"/>
-</values>`
-
-test("D31: единица роя прохода A — сценарий FRD: свой префикс id, концы своего use case, проекция ряби", () => {
-  const root = valueSwarmRoot()
-  const u = valueUnits.run({}, ctx(root))
-  assert.equal(u.ok, true, u.why)
-  assert.deepEqual(u.units.map((x) => x.id), ["S1", "S2"], "часть на КАЖДЫЙ сценарий")
-  const [one] = u.units
-  assert.equal(one.uc, "UC1")
-  assert.match(one.ends, /Твои id: S1v1, S1v2, S1v3…/)
-  assert.match(one.ends, /closes="UC1\/in" — вход/)
-  assert.match(one.ends, /closes="UC1\/1a" — окончание/)
-  assert.match(one.ends, /Отказы UC1: PARCEL_NOT_FOUND \(404\)/)
-  assert.match(one.frd, /<scenario id="S1"/)
-  assert.match(one.frd, /<usecase id="UC1"/)
-  assert.match(one.frd, /<failure code="PARCEL_NOT_FOUND"/)
-  assert.doesNotMatch(one.frd, /<scenario id="S2"/)
-  // Рябь — проекция на узлы своего сценария плюс ПУТИ остальных: без них правило 6 прохода B ломается
-  // тихо (D29a, условие 1).
-  assert.match(one.ripple, /src\/ParcelResource\.java/)
-  assert.match(one.ripple, /Соседи по ряби[\s\S]*src\/ParcelRepo\.java/)
-  // Проход A — ПЕРВЫЙ: зелёного предшественника у него нет и требовать нечего, кроме шагов 6 и 8.
-  const noFrd = tempRoot()
-  mkdirSync(join(noFrd, ".agent"), { recursive: true })
-  assert.equal(valueUnits.run({}, ctx(noFrd)).ok, false)
-})
-
-test("D31: часть прохода A судится ЧАСТНЫМИ правилами — отказ соседней части её не краснит", () => {
-  const root = valueSwarmRoot({ S1: VAL_P1, S2: VAL_P2 })
-  const ok = design.run({ pass: "values", path: ".agent/staging/values-parts/S2.xml", scenario: "S2" }, ctx(root))
-  assert.deepEqual(ok, { ok: true, values: 3 })
-  // Именно здесь разложение и стоит: код отказа несёт строка ДРУГОЙ части, и правило 8 на этой части
-  // — ложь. Спроси у части правила целого — она красна навсегда.
-  const whole = design.run({ pass: "values", path: ".agent/staging/values.xml" }, ctx(valueSwarmRoot({ S1: VAL_P1, S2: VAL_P2 })))
-  assert.equal(whole.ok, true, whole.blockers)
-  // Ни промоута, ни сборки: часть — вход слияния, а не артефакт шага.
-  assert.equal(existsSync(join(root, ".agent", "values.xml")), false)
-  assert.equal(existsSync(join(root, ".agent", "staging", "values-parts", "S2.xml")), true)
-
-  // Частное правило на части — полное: незакрытый конец СВОЕГО use case красит её саму.
-  const open = valueSwarmRoot({ S2: VAL_P2.replace(/\s*<value id="S2v2"[^>]*\/>/, "") })
-  const red = design.run({ pass: "values", path: ".agent/staging/values-parts/S2.xml", scenario: "S2" }, ctx(open))
-  assert.equal(red.ok, false)
-  assert.match(red.blockers, /12 конец UC1\/post не закрыт/)
-
-  // Чужой префикс в файле части — блокер: на дизъюнктности id стоит слияние без разрешения конфликтов.
-  const alien = valueSwarmRoot({ S2: VAL_P2.replace('id="S2v3"', 'id="S1v9"') })
-  const stolen = design.run({ pass: "values", path: ".agent/staging/values-parts/S2.xml", scenario: "S2" }, ctx(alien))
-  assert.equal(stolen.ok, false)
-  assert.match(stolen.blockers, /значение S1v9 — не твоё: id этой части начинаются с S2v/)
-
-  // Чужой конец в closes — тоже блокер, и это то, что делает правило 12 на части МОНОТОННЫМ: конец,
-  // который эта часть не закрыла, не закроет за неё никто.
-  const t2 = FRD_A31.replace('<scenario id="S2" uc="UC1"', '<scenario id="S2" uc="UC2"')
-  const two = designRoot()
-  writeFileSync(join(two, ".agent", "frd.xml"), t2.replace("</frd>", "  <usecase id=\"UC2\" actor=\"http-client\" goal=\"вторая цель\">\n    <post>второе окончание</post>\n    <step n=\"1\">второй первый шаг</step>\n  </usecase>\n</frd>"))
-  design.run({}, ctx(two))
-  mkdirSync(join(two, ".agent", "staging", "values-parts"), { recursive: true })
-  writeFileSync(join(two, ".agent", "staging", "values-parts", "S2.xml"), VAL_P2)
-  const stray = design.run({ pass: "values", path: ".agent/staging/values-parts/S2.xml", scenario: "S2" }, ctx(two))
-  assert.equal(stray.ok, false)
-  assert.match(stray.blockers, /конец UC1\/in, UC1\/post, UC1\/1a — не твой/)
-})
-
-test("D31: слияние прохода A — скрипт: части в порядке сценариев FRD, вердикт целого, промоут", () => {
-  const root = valueSwarmRoot({ S1: VAL_P1, S2: VAL_P2 })
-  assert.equal(existsSync(join(root, ".agent", "staging", "values.xml")), false, "файла прохода нет — его пишет слияние")
-  const merged = design.run({ pass: "values", path: ".agent/staging/values.xml" }, ctx(root))
-  // Шесть строк, а не восемь: `S2v1` и `S2v2` несут ТОТ ЖЕ текст с ТЕМ ЖЕ closes, что строки S1.
-  assert.deepEqual(merged, { ok: true, values: 6, parts: 2 })
-  const promoted = readFileSync(join(root, ".agent", "values.xml"), "utf8")
-  assert.equal(promoted.indexOf("S1v1") < promoted.indexOf("S2v3"), true, "порядок сценариев FRD")
-  assert.equal(promoted.includes("S2v1"), false, "дубль текста И closes склеен")
-  assert.equal(existsSync(join(root, ".agent", "staging", "values-parts", "S1.xml")), true, "части переживают зелёное слияние")
-  assert.equal(existsSync(join(root, ".agent", "staging", "values.xml")), false, "файл прохода убран как всегда")
-})
-
-test("D31: красное слияние прохода A адресует каждую строку части, которая её чинит", () => {
-  // Код отказа не назван НИ ОДНОЙ строкой — правило 8 целого; конец 1a больше никем не закрыт.
-  const root = valueSwarmRoot({
-    S1: VAL_P1.replace('text="404 PARCEL_NOT_FOUND" closes="UC1/1a"', 'text="404 неизвестно"'),
-    S2: VAL_P2.replace(' closes="UC1/1a"', ""),
-  })
-  const red = design.run({ pass: "values", path: ".agent/staging/values.xml" }, ctx(root))
-  assert.equal(red.ok, false)
-  assert.equal(red.parts, 2)
-  assert.match(red.blockers, /^8 отказ PARCEL_NOT_FOUND/m)
-  assert.match(red.blockers, /^\s*12 конец UC1\/1a не закрыт/m)
-  const to = new Map(red.blame.map((b) => [b.scenario, b.lines]))
-  // Обе строки — про USE CASE, и обе уезжают всем сценариям этого use case: закрыть конец и назвать
-  // отказ может любая из двух частей.
-  for (const id of ["S1", "S2"]) {
-    assert.equal(to.get(id).some((l) => l.startsWith("8 ")), true, id)
-    assert.equal(to.get(id).some((l) => l.startsWith("12 конец UC1/1a")), true, id)
-  }
-  assert.equal(existsSync(join(root, ".agent", "staging", "values.xml")), true, "красное слияние остаётся уликой")
-
-  // …а строка про РЯД уезжает ровно той части, что её написала: адрес — файл, а не разбор id.
-  const one = valueSwarmRoot({ S1: VAL_P1.replace('text="all()"', 'text=""'), S2: VAL_P2 })
-  const row = design.run({ pass: "values", path: ".agent/staging/values.xml" }, ctx(one))
-  assert.equal(row.ok, false)
-  assert.deepEqual(row.blame.map((b) => b.scenario), ["S1"])
-  assert.match(row.blame[0].lines[0], /значение S1v2 без text/)
-})
-
-test("D31: перемотка на шаг 6 роняет ВЕСЬ каталог частей прохода A — и роняет его ОДИН раз за фазу", () => {
-  const root = valueSwarmRoot({ S1: VAL_P1, S9: "<values/>" })
-  assert.equal(valueUnits.run({}, ctx(root)).dropped, 0)
-  const dropped = valueUnits.run({ drop: true }, ctx(root))
-  assert.equal(dropped.dropped, 2)
-  assert.equal(existsSync(join(root, ".agent", "staging", "values-parts")), false)
-  assert.match(IZI, /let dropValueParts = from <= 6;/)
-  assert.match(IZI, /await valueUnits\(\{ drop: dropValueParts \}\);[\s\S]{0,200}dropValueParts = false;/)
-  // …и слияние после этого судит ровно то, что записала роль, как до D31.
-  const alone = design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES.replace("</values>", '  <value id="v5" text="404 PARCEL_NOT_FOUND" closes="UC1/1a"/>\n</values>')) }, ctx(root))
-  assert.deepEqual(alone, { ok: true, values: 5 })
-})
-
-test("D31: рой прохода A — литеральный слот, вырождение общее с проходами B и C", () => {
-  // Порог один на все три прохода: SWARM_MIN проверен ниже, здесь — что проход A читает именно его.
-  assert.match(IZI, /swarmingValues\s*\n?\s*\? await swarmValues\(units, tplValuePart/)
-  assert.match(IZI, /const units = swarmParts\(u\.units\);[\s\S]{0,200}swarmingValues = units\.length > 0;/)
-  // Слот роя — литеральная запись с ЛИТЕРАЛЬНЫМ именем: хост валидирует parallel() по исходнику.
-  assert.match(IZI, /await parallel\("values-batch", \{[\s\S]*?a8: \(\) => valueSlot\(batch, 7,/)
-  // Внутри parallel нет ни exit, ни рельсы вопроса: отказ части — ЗНАЧЕНИЕ.
-  const swarmFn = IZI.slice(IZI.indexOf("async function valuePart"), IZI.indexOf("// FUNCTION_CONTRACT: nodePart"))
-  assert.doesNotMatch(swarmFn, /exit\(/)
-  assert.doesNotMatch(swarmFn, /checkpoint\(|askOperator\(/)
-  // Наряд ЦЕЛОГО прохода A не тронут: у части свой файл, и полоса читает оба.
-  assert.match(IZI, /steps\/design\/order-values\.tpl/)
-  assert.match(IZI, /steps\/design\/order-values-part\.tpl/)
-  // Возврат из прохода B про id вне словаря адресуется частям ПРОХОДА A по тому же каналу.
-  assert.match(IZI, /addressToParts\(parts\.values \|\| \[\], check\.blame, wasRedValue\)/)
-})
-
-// $START_SWARM — то же устройство, что $START_BLAME и $START_REENTRY: блок ВЫРЕЗАН из workflows/izi.js
-// и исполнен здесь, потому что импортировать этот файл нельзя.
-//
-// ВЫРОЖДЕНИЕ ОБЯЗАТЕЛЬНО. На форме `t2` сценариев два: сегодня это один вызов роли на 20 секунд и
-// 1 591 токен, а рой там — два вызова плюс слияние, то есть чистые накладные. Сделай рой безусловным
-// (`swarmParts = (units) => units`) — этот тест краснеет.
-const SWARM = new Function(`${IZI.slice(IZI.indexOf("// $START_SWARM"), IZI.indexOf("// $END_SWARM"))}
-  return { swarmParts, SWARM_MIN }`)()
-
-test("D26: одна-две части роя не стоят — проход идёт одним нарядом, как до роя", () => {
-  const u = (n) => Array.from({ length: n }, (_, k) => ({ id: `S${k + 1}` }))
-  assert.deepEqual(SWARM.swarmParts(u(1)), [], "одна часть — сегодняшний вызов")
-  assert.deepEqual(SWARM.swarmParts(u(2)), [], "две части — сегодняшний вызов (форма t2)")
-  assert.equal(SWARM.swarmParts(u(3)).length, 3)
-  assert.equal(SWARM.swarmParts(u(11)).length, 11, "eddi")
-  assert.deepEqual(SWARM.swarmParts(), [])
-  // И полоса читает именно это: пустой список = наряд целиком, непустой = рой.
-  assert.match(IZI, /const units = swarmParts\(u\.units\);/)
-  assert.match(IZI, /swarming\s*\n?\s*\? await swarmRoutes\(units, tplPart/)
-  // Слот роя — литеральная запись, как у скаутов: хост валидирует parallel\(\) по исходнику.
-  assert.match(IZI, /await parallel\("routes-batch", \{[\s\S]*?r8: \(\) => routeSlot\(batch, 7,/)
-  // Внутри parallel нет ни exit, ни рельсы вопроса: отказ части — ЗНАЧЕНИЕ.
-  const swarmFn = IZI.slice(IZI.indexOf("async function routePart"), IZI.indexOf("async function designing"))
-  assert.doesNotMatch(swarmFn, /exit\(/)
-  assert.doesNotMatch(swarmFn, /checkpoint\(|askOperator\(/)
-})
 
 // $START_ORDER — то же устройство, что $START_SWARM, $START_BLAME и $START_REENTRY: блок ВЫРЕЗАН из
 // workflows/izi.js и исполнен здесь, потому что импортировать этот файл нельзя. `prompt`, `log` и
@@ -2360,18 +1617,19 @@ test("D29b: наряд выше потолка — отказ, и он НАЗЫ�
 })
 
 test("D29b: пять прямых сборок наряда идут через sized, и каждая отказывает по-своему", () => {
-  // ПЯТЬ мест — шаги 2, 4, 6, 9 и 11. Три вызова внутри роёв сюда не входят: часть несёт один
-  // сценарий и её размер ограничен построением (steps/design/parts.mjs).
+  // ПЯТЬ мест — шаги 2, 4, 6, 9 и 11. Роёв больше нет: проход A шага 9 собирает ОДИН наряд, и он
+  // идёт через ту же меру, что остальные четыре.
   assert.equal([...IZI.matchAll(/= sized\(/g)].length, 5, "пять прямых сборок наряда")
   assert.match(IZI, /const order = sized\("brd", orderTpl, \{/)
   assert.match(IZI, /const order = sized\(`scope\/\$\{cell\.id\}`, orderTpl, \{/)
   assert.match(IZI, /const order = sized\("intake", orderTpl, \{/)
-  assert.match(IZI, /const o = sized\(`design\/\$\{p\.id\}`, tpl\[p\.id\], keys\);/)
+  assert.match(IZI, /const o = sized\("design\/values", tpl, \{/)
   assert.match(IZI, /const order = sized\("review", orderTpl, \{/)
 
-  // Ни одного `prompt(` мимо sized — кроме трёх нарядов роя, у которых размер мал по построению.
+  // Ни одного `prompt(` мимо sized: наряд, собранный в обход меры, — это наряд, размер которого
+  // впервые узнают из HTTP 400 (прогон 162e8b02).
   const raw = [...IZI.matchAll(/prompt\(([A-Za-z.[\]"]+)/g)].map((m) => m[1])
-  assert.deepEqual(raw.sort(), ["tpl", "tplNodePart", "tplPart", "tplValuePart"], "prompt() вызывается только в sized и в трёх частях роя")
+  assert.deepEqual(raw.sort(), ["tpl"], "prompt() вызывается только внутри sized")
 
   // Отказ шага 4 — ЗНАЧЕНИЕ, а не exit: parallel() глотает бросок и перебрасывает свой.
   const scoutFn = IZI.slice(IZI.indexOf("async function scout("), IZI.indexOf("// FUNCTION_CONTRACT: scope"))

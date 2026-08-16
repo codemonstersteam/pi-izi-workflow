@@ -1,33 +1,27 @@
-// MODULE_CONTRACT: design — two projections of a change: the design graph and the data flow, aligned by a script
-// Purpose:    one decision: where the structural projection (nodes with contracts) diverges from the temporal
-//             one (a scenario played out step by step). The role writes the graph and the ROUTE (a node path
-//             plus the number of its `out` alternative); expand substitutes the values into the flow, so
-//             divergence INSIDE the flow is inexpressible, and the only remaining seam is the joint between
-//             neighboring contracts.
+// MODULE_CONTRACT: design — the GRAMMAR of step 9's deliverable: the design graph and what it owes
+// Purpose:    one decision: how `.agent/design-graph.xml` is READ — its nodes with their contracts,
+//             its routes, and the units each node owes. It is a READER and nothing else: the passes
+//             that WROTE this artifact (the node graph and the routes) were deleted while step 9 is
+//             rewritten, so today nothing in this repository produces the file and step 10 treats it
+//             as absent — which was always a legal input (steps/plan/plan.mjs). The rewritten passes
+//             B and C will write this same form: the deliverable's grammar does not move because the
+//             way it is filled did.
 //             PURE: knows nothing of disk, io lives in ext/index.mjs. Parsing — docs/data-flow.md §3–§6.
 // io:         none
 // Invariants: parseDesign/parseRoutes are total — any input, including undefined, yields an empty parse,
-//             never an exception; expand's antecedent is a route where every step resolves to a node
-//             and to an existing alternative — TODAY nothing in this file establishes it any more,
-//             see checkDesign: the eight rules moved to values.mjs, nodes.mjs and routes.mjs, and the
-//             passes that call them are wired in D5/D6. The rule lives in exactly one place, and for
-//             this file that place is now elsewhere
+//             never an exception; unitsByPath's antecedent is a route where every step resolves to a
+//             node and to an existing alternative — nothing in this file establishes it, the guardrail
+//             that will is pass C's, and the rule lives in exactly one place
 // Interface:  parseDesign(xml) -> Map<path, Node>
 //             parseRoutes(xml) -> Route[]
-//             expand(nodes, routes) -> string
-//             checkDesign({ nodes, routes, frd, known }) -> string[]  — EMPTY, see its contract
-//             newDesign({ xml, frd, known }) -> Result<Design, "invalid-design">
+//             unitsByPath(nodes, routes) -> Map<path, string[]>
 
-import { ok, err } from "../../core/result.mjs"
+import { attrs, ATTRS, tag, alts } from "../../core/xml.mjs"
 // EXTERNAL_DEPENDENCY: core/xml.mjs — tag scanner (attrs · ATTRS · tag) shared with steps/scope: one
 // grammar for two slices is read by one piece of code, otherwise part-parsing and design-parsing would drift apart.
 // The same file holds the BUG_FIX_CONTEXT for ATTRS' quote-resilience, and `alts` — a contract's `in`
 // and `out` carry TEXT with spaces and commas inside, so `|` is their only separator (the class
 // boundary is declared once, in core/xml.mjs; run 27b37fdb bought it).
-import { attrs, ATTRS, tag, esc, alts } from "../../core/xml.mjs"
-// The slice's dependency on steps/intake/frd.mjs::FRD_FORM moved with rule 6 to
-// steps/design/nodes.mjs (backlog D2) — the vocabulary of a delta's FORM is read where the delta is
-// judged, and importing it here for nobody would be a second claim on the same fact.
 
 // FUNCTION_CONTRACT: parseDesign — nodes of the design graph from its text
 //   Input:        xml — text of `.agent/design-graph.xml`; type unconstrained
@@ -133,49 +127,6 @@ function walk(nodes, routes) {
   return out
 }
 
-// FUNCTION_CONTRACT: expand — route + contracts → the text of .agent/data-flow.md
-//   Input:        nodes — parseDesign's parse; routes — parseRoutes' parse
-//   Dependencies: walk
-//   Antecedent:   GREEN checkDesign: every step resolves to a node that has the `alt` alternative,
-//                 and every route names an `entry` its first node actually has.
-//                 Calling this on an unchecked route is a defect of the caller, not of this function
-//   Consequent:   success: text of `.agent/data-flow.md` — TWO kinds of section:
-//                          `$START_FLOW id="<scenario>"` … `$END_FLOW`, lines `<n>. <path> : <in> -> <out>`
-//                            — the change played out in time, one block per FRD scenario;
-//                          `$START_TESTS path="<node>"` … `$END_TESTS`, lines `<n>. <in> -> <out>`
-//                            — the node's units, one per DISTINGUISHABLE pair, deduplicated, in
-//                            first-appearance order. The count is the LENGTH of the list and is not
-//                            written beside it: a tally next to the list it counts is two places for
-//                            one fact (docs/ripple.md §4, why fanin is not copied into the subgraph)
-//                 failure: none, given the antecedent holds
-//   Purity:       pure
-// The machine substitutes the values, not the role: a copy is the one thing a weak tier survives
-// (it paraphrases), and the one thing the script does for free.
-//
-// `1 happy + Σ branches` (standards/code.md) reads on this data as: every pair a route traverses IS a
-// branch of the antecedent with a distinguishable consequent, and the FRD's main scenario is the FIRST
-// of them. Adding one on top of the list would inflate the `<dod>` of every node in the pipeline by a
-// unit — the happy path is a line here, never a summand (docs/design.md §2).
-export function expand(nodes, routes) {
-  const steps = walk(nodes, routes)
-  const out = []
-
-  for (const r of routes) {
-    out.push(`$START_FLOW id="${r.scenario}"`)
-    steps.filter((s) => s.scenario === r.scenario).forEach((s, k) => out.push(`${k + 1}. ${s.path} : ${s.in} -> ${s.out}`))
-    out.push("$END_FLOW")
-  }
-
-  // The section is named exactly as the TICKET's section (docs/workflow.md §3.14): step 14 CUTS it by
-  // `path` into the ticket, it does not retell it — the same device by which it cuts $START_FLOW.
-  for (const [path, units] of unitsByPath(nodes, routes)) {
-    out.push(`$START_TESTS path="${path}"`)
-    units.forEach((u, k) => out.push(`${k + 1}. ${u}`))
-    out.push("$END_TESTS")
-  }
-
-  return out.join("\n")
-}
 
 // FUNCTION_CONTRACT: unitsByPath — the DoD of every node: its units, one per distinguishable pair
 //   Input:        nodes — parseDesign's parse; routes — parseRoutes' parse (of the promoted form)
@@ -212,108 +163,6 @@ export function unitsByPath(nodes, routes) {
   return byPath
 }
 
-// FUNCTION_CONTRACT: assemble — the three working artifacts of step 9 into the ONE promoted file
-//   Input:        { values, nodes, routes, mode }
-//                 values — steps/design/values.mjs::parseValues (id → text)
-//                 nodes  — steps/design/nodes.mjs::parseNodes, whose contracts carry IDS
-//                 routes — steps/design/routes.mjs::parseRoutes, whose steps carry `path@id`
-//                 mode   — the weight of step 7, the attribute the role used to type itself
-//   Dependencies: esc (core/xml.mjs)
-//   Antecedent:   all three artifacts GREEN by their own guardrails. Nothing is re-judged here: an id
-//                 the dictionary does not carry survives as itself, because checkGraph already
-//                 refused that graph and assembly of a refused artifact never happens
-//   Consequent:   success: the text of `.agent/design-graph.xml` in TODAY's form — contracts as
-//                          texts, route steps as `path#n`, `entry` as a number
-//                 failure: none — total
-//   Purity:       pure
-//   Interface:    assemble({ values, nodes, routes, mode }) -> string
-//
-// THE FORM OF THE DELIVERABLE DOES NOT MOVE, and that is the whole point of this function. Passes A,
-// B and C write by ID because a name survives a regenerated graph and a position does not
-// (steps/design/routes.mjs). Their consumers — `steps/plan/plan.mjs`, `ext/index.mjs`, step 14 and
-// `parseDesign`/`parseRoutes` right here — read TEXT and `#n`, exactly as they read yesterday. The
-// translation lives in one place, costs no tokens, and is proved by a ROUND TRIP: what this writes,
-// today's readers read back into the same nodes and routes, and `expand` yields the same data-flow.
-//
-// This is CLAUDE.md's constraint 5 answered rather than argued with: widening the shape of a value is
-// a change to every consumer of it — so the widened shape stops at staging, and not one consumer of
-// the promoted artifact is touched.
-//
-// The position is computed HERE and never asked of a model: `#n` is the index of the named value in
-// the node's own list. The number a script derives cannot disagree with the list it derived it from —
-// which is precisely what live run 0bbf7054 could not manage, spending blockers on «нет альтернативы
-// #12» in a contract the role itself had typed a hundred lines earlier.
-export function assemble({ values, nodes, routes = [], mode = "" }) {
-  const text = (id) => (values && values.get(id) != null ? values.get(id) : id)
-  const at = (list, id) => list.indexOf(id) + 1        // 0 means "not there" — impossible after checkRoutes
-  const out = [`<design mode="${esc(mode)}" base=".agent/appgraph.xml">`]
-
-  for (const n of nodes.values()) {
-    out.push(`  <module path="${esc(n.path)}"${n.delta ? ` delta="${esc(n.delta)}"` : ""}>`)
-    if (n.role) out.push(`    <role>${esc(n.role)}</role>`)
-    out.push(`    <contract in="${n.in.map((v) => esc(text(v))).join(" | ")}" out="${n.out.map((v) => esc(text(v))).join(" | ")}"/>`)
-    for (const d of n.deps) out.push(`    <dep path="${esc(d)}"/>`)
-    out.push("  </module>")
-  }
-
-  for (const r of routes) {
-    const first = nodes.get((r.steps[0] || {}).path)
-    const steps = r.steps.map((s) => `${s.path}#${at((nodes.get(s.path) || { out: [] }).out, s.value)}`).join(" -> ")
-    out.push(`  <route scenario="${esc(r.scenario)}" entry="${first ? at(first.in, r.entry) : 0}" steps="${esc(steps)}"/>`)
-  }
-
-  out.push("</design>")
-  return out.join("\n")
-}
-
-// FUNCTION_CONTRACT: checkDesign — EMPTY: every rule it carried has moved out, and the function is
-//                 kept only until D5 replaces its caller
-//   Input:        { nodes, routes, frd, known } — all four accepted and none of them read
-//   Dependencies: —
-//   Antecedent:   any value
-//   Consequent:   success: `[]`, always
-//                 failure: none — total
-//   Purity:       pure
-//
-// ALL EIGHT RULES NOW LIVE ONE ARTIFACT EARLIER, and no number was reused:
-//   8 → steps/design/values.mjs::checkValues (backlog D1). The dictionary of pass A is the earliest
-//     artifact in which a declared failure is decidable, and everything after it refers to values by
-//     id. What that move costs is repaid in checkGraph: over a flat dictionary the rule only says
-//     "declared somewhere", so "produced by SOME node's out" is judged there, in the pass that owns
-//     the contracts (backlog, «Что концепт обещает, а код не подтвердил», п. 2).
-//   6 → steps/design/nodes.mjs::checkGraph (backlog D2), whole, both halves. It reads only NODES,
-//     never a route, so it belongs to the pass whose only subject is the graph.
-//   1, 2, 3, 4, 5, 7 → steps/design/routes.mjs::checkRoutes (backlog D4), with the numbers unchanged
-//     and the blocker rewritten as a FACT: no `<scenario>#<k>` prefix, the scenarios in the tail of
-//     the line, rules 3 and 4 grouped by the receiving node (docs/design-step-by-step.md §8).
-//
-// So this function decides NOTHING, and it is not given new work to look busy: the honest note is
-// that `newDesign` is unguarded until D5 replaces it with `assemble` and D6 wires the three
-// guardrails to the three passes. Until then a live step 9 rejects exactly one thing — a text with no
-// `<module>` in it. That window is the one the backlog names («Окно без правил 8 и 6»), now open on
-// all eight; the alternative — a second copy of six rules living for three tickets — is worse, because
-// two copies drift and the window closes with one ticket.
-export function checkDesign({ nodes, routes = [], frd = {}, known = null }) {
-  return []
-}
-
-// FUNCTION_CONTRACT: newDesign — step 9's artifacts from the role's text
-//   Input:        { xml, frd, known } — xml as the role wrote it in staging
-//   Dependencies: parseDesign, parseRoutes, checkDesign, expand
-//   Antecedent:   xml — any value (empty text yields an empty graph and a "not one node" rejection);
-//                 frd, known — same as checkDesign
-//   Consequent:   success: { nodes, routes, flow } — flow is the text of `.agent/data-flow.md`,
-//                          expanded OUT of the contracts, not out of whatever the role typed
-//                 failure: "invalid-design" — blockers joined into one line by `\n  `, the same way
-//                          newBrd does it: this text rides in the FEEDBACK of the re-delegation order
-//   Purity:       pure
-export function newDesign({ xml, frd = {}, known = null }) {
-  const nodes = parseDesign(xml)
-  const routes = parseRoutes(xml)
-  if (!nodes.size) return err("invalid-design", "в дизайн-графе нет ни одного <module> — картировать изменение нечем")
-
-  const blockers = checkDesign({ nodes, routes, frd, known })
-  if (blockers.length) return err("invalid-design", blockers.join("\n  "))
-
-  return ok(Object.freeze({ nodes, routes: Object.freeze(routes), flow: expand(nodes, routes) }))
-}
+// checkDesign, newDesign и assemble удалены вместе с проходами B и C шага 9: их писала
+// роль, которой больше нет. Читателей у них не осталось — а код, до которого доходит только тест,
+// это тест, который не краснеет ни от одной правки (standards/code.md §2).

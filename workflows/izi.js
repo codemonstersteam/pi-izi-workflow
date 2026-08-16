@@ -11,7 +11,7 @@
 //               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
-//               valueUnits · nodeUnits · routeUnits · plan · review · reviewForm. They are not
+//               plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -864,752 +864,113 @@ async function rippling() {
   log(`ripple: design=${r.design} узлов ${r.nodes} из ${r.total} (затравок ${r.seeds}, mode=${r.mode})`);
 }
 
-// FUNCTION_CONTRACT: designing — step 9 in three passes: dictionary, graph, routes
+// FUNCTION_CONTRACT: designing — step 9, pass A: the dictionary of the change
 //   Input:        from — the step the BAND started at (workflows/izi.js::bandStart). `from <= 6`
 //                 means the FRD was rewritten, and then nothing extracted from the old one is reused
-//   Dependencies: EXTERNAL — design (gate, cards, and the guardrail of each pass), readText, answers,
-//                 frdForm, agent(roles "valuer" | "designer" | "router"), prompt, carried;
-//                 askOperator, charge
-//   Antecedent:   step 8 left .agent/design and .agent/ripple.xml; step 7 left .agent/mode; LOOPS ≥ 1
-//   Consequent:   success: RETURNS ".agent/data-flow.md" with the pair promoted, or ".agent/design"
-//                          when step 8 said `skip` and no role was called at all
-//                 failure: exits — err("escalate") when one PASS spent its LOOPS, naming which
+//   Dependencies: EXTERNAL — design (the gate, the skeleton, the guardrail), readText,
+//                 agent(role "valuer"); askOperator, charge, sized
+//   Antecedent:   step 8 left .agent/design and .agent/ripple.xml; LOOPS ≥ 1
+//   Consequent:   success: RETURNS ".agent/values.xml" with the dictionary promoted, or
+//                          ".agent/design" when step 8 said `skip` and no role was called at all
+//                 failure: exits — err("escalate") when the pass spent its LOOPS
 //   Purity:       io (host functions, roles)
-// THE PASSES OF STEP 9, AND WHO IS BLAMED WHEN THEY DISAGREE.
 //
-// Step 9 stopped being one generation because one generation could not hold it: live run 0bbf7054
-// wrote the values, the graph and the routes in one 23 KB artifact and came back with 81 and 91
-// blocker lines carrying 48 and 42 facts, whose overlap between attempts was 17 % — the role was not
-// repairing, it was writing the whole thing again (docs/design-step-by-step.md §1).
+// THE PASS IS A FILL-IN-THE-BLANK, AND THAT IS THE WHOLE DESIGN OF IT.
 //
-// Three passes, three roles, three guardrails, and the ladder here is the same device as the band's:
-// a pass is skipped when its artifact is green NOW, and the gate is what judged that
-// (ext/index.mjs::design). The one thing the gate cannot know is whether the FRD under it was
-// rewritten — so `from` says it: a rewind to step 6 re-runs pass A whatever the dictionary looks
-// like, because a dictionary extracted from yesterday's FRD is structurally green and about another
-// change.
-const PASSES = [
-  { id: "values", role: "valuer",   tpl: "steps/design/order-values.tpl", out: ".agent/staging/values.xml" },
-  { id: "nodes",  role: "designer", tpl: "steps/design/order-nodes.tpl",  out: ".agent/staging/design-nodes.xml" },
-  { id: "routes", role: "router",   tpl: "steps/design/order-routes.tpl", out: ".agent/staging/routes.xml" },
-]
-
-// WHOSE FAULT IS A RED PASS. The blocker's own rule number decides, because the number IS the
-// declaration of what the rule judges (docs/data-flow.md §6):
-//   · rules 2, 5, 7 — the route walks past a node with a delta, misses an FRD scenario or leaves a
-//     branch of a contract untaken. The graph is fine; pass C wrote it wrong.
-//   · rules 3, 4 — the route asked for an edge that is not declared, or handed a neighbour what it
-//     does not accept. The ROUTE cannot fix that: the donor calls this "return to Step 5"
-//     (program-design/reference/step-09-contracts-graph.md), and here it is pass B.
-//   · rule 1 AT THE BOUNDARY — «у первого узла … нет значения … в in». The line ENDS in the words
-//     «вход в контракте узла не объявлен», and that ending is the address: an FRD scenario has to
-//     enter the graph somewhere, so a first node whose `in` names no such value has an unfinished
-//     contract — the defect is pass B's, not the route's. The other halves of rule 1 (an unknown
-//     node, an `out` the node does not have) stay with pass C, which named them.
-//   · a graph naming an id the dictionary does not carry — pass B cannot fix it either, because the
-//     dictionary is frozen for it. Found while writing role B (backlog D8): §7 of the concept knew
-//     only two addresses, and this is the third.
+// Step 9 used to be three passes, three roles and three swarms, and every one of them wrote its
+// artifact whole. Measured on the two live dictionaries, the defects were defects of COMPOSITION —
+// `eddi`'s role wrote 38 rows carrying a `closes` where the FRD has 35 ends, six groups of duplicate
+// texts and seven holes in the numbering; `t2`'s was exact but tiny. Composition is computable, so it
+// is computed: `design({skeleton})` writes the artifact with every row, every id and every `closes`
+// already in place, and with every text a script can honestly write already written (a failure
+// branch is «статус код», a call of a node of the change is the ripple's own `<api>`/`<decl>` byte
+// for byte). The role is handed that file and names what is left blank — 24 rows on `eddi`, 6 on
+// `t2` — and the guardrail asks exactly one question of the answer: is this the skeleton with the
+// blanks filled, or is it something else.
 //
-// ONE LINE AT A TIME, NOT ONE SET. This is the whole of D13, and it is bought by live run a900de7b:
-// pass C was red three rounds running, and `feedback[blame] = carry.text` handed pass B the WHOLE
-// report — rules 2 and 5 included, which are statements about routes and which pass B cannot act on
-// at all. The graph of round 1 was RIGHT (`fruits.html (Changed) принимает: v3 · отдаёт: v1`); round
-// 3 answered the borrowed blockers with `in="v1 | v3"` and a `delta` flipped from `Changed` to
-// `Added`. A role handed a demand it cannot satisfy does not stop — it invents.
-//
-// $START_BLAME — this block is cut out of the source and EXECUTED by ext/index.test.mjs. It is the
-// only seam workflows/ can have: no test may import this file, so the test reads it (the device the
-// ENVELOPE test already uses). The names below are that test's interface — renaming one is a change
-// to it.
-const linesOf = (t) => String(t || "").split("\n").map((l) => l.trim()).filter(Boolean)
-
-const blameOf = (pass, line) => {
-  const l = String(line || "").trim()
-  if (pass === "nodes" && /которого нет в словаре/.test(l)) return "values"
-  if (pass === "routes" && /^[34] /.test(l)) return "nodes"
-  if (pass === "routes" && /вход в контракте узла не объявлен/.test(l)) return "nodes"
-  return pass
-}
-
-// blameSplit — a red check's blockers, ADDRESSED: { pass id → the lines that pass must repair }. A
-// pass that owns nothing in this report is absent from the result, so its feedback is not touched at
-// all — the round it is holding stays whatever the last check that actually blamed it wrote.
-const blameSplit = (pass, blockers) => {
-  const out = {}
-  for (const l of linesOf(blockers)) {
-    const b = blameOf(pass, l)
-    if (!out[b]) out[b] = []
-    out[b].push(l)
-  }
-  return out
-}
-// $END_BLAME
-
-// $START_REENTRY — cut out of the source and EXECUTED by ext/index.test.mjs, the device $START_BLAME
-// above uses: no test may import this file. The names below are that test's interface.
-//
-// A PASS IS RE-ENTERED whenever the ladder sends it back, and then its own staging file is still on
-// disk: the gate drops PROMOTED artifacts and never staging (ext/index.mjs). Two things follow, and
-// this is the only place either of them is decided:
-//   · the file is the {PREVIOUS} of the order — the role REPAIRS it instead of writing it again;
-//   · the guardrail is asked BEFORE the role. Green closes the pass for zero tokens; red hands the
-//     role a verdict about the artifact it is actually going to repair, computed against the graph as
-//     it stands NOW and not as it stood before the repair.
-// `from <= 6` disqualifies both and the staged remnant is dropped: the FRD was rewritten, so whatever
-// a pass staged against the old one is an artifact about another change — the same argument that
-// empties `reused` below, one artifact lower.
-//
-// BUG_FIX_CONTEXT: live run 5bbe5de4 (sandbox/runbox/eddi), pass C. `.agent/staging/routes.xml`
-//   (13 815 B) physically survived every rewind and was read by nobody, so the router wrote its 33
-//   routes ANEW on every circle and grew a fresh crop of rule 3/4 violations each time. The routes of
-//   circle 2, checked against the graph of circle 3, gave 14 blockers and ZERO rules 3 and 4 — the
-//   designer had converged, and the router was called to write it all again regardless. The last call
-//   spent 121 498 output tokens, hit the 32 768 output ceiling on three turns of four and never
-//   called `workflow_result`: `crashed`, 2 455 854 tokens, $3.39, no plan.
-const reenter = async (pass, path, from, read, judge) => {
-  const previous = from > 6 ? String(await read({ path })).trim() : "";
-  return { previous, verdict: previous ? await judge({ pass, path }) : null };
-};
-// $END_REENTRY
-
-// $START_SWARM — cut out of the source and EXECUTED by ext/index.test.mjs, the device $START_BLAME and
-// $START_REENTRY use: no test may import this file. The name below is that test's interface.
-//
-// A PASS IS SWARMED ONLY WHERE THE SWARM BUYS SOMETHING, and the floor is ONE constant for both of
-// them. One agent per FRD scenario was bought twice by the same defect: pass C produced three turns of
-// pure reasoning and zero bytes on the whole task and wrote its part in five turns when given one
-// scenario (research И2), and pass B did the same on run 35972d1c — 3 × 32 768 output tokens, no tool
-// call, 60 % of the run's cost for zero artifacts — and wrote S3 in three turns for 7 361 (research И3).
-// On a change with one or two parts there is nothing to buy: the whole task is already the size of a
-// part, and a swarm there would be two role calls plus a merge instead of one call of twenty seconds.
-// Below the floor a pass runs exactly as it ran before its swarm — one order, one file, one verdict —
-// and `design({pass})` judges that file because there are no parts on disk to merge.
-const SWARM_MIN = 3;
-const swarmParts = (units) => ((units || []).length >= SWARM_MIN ? units : []);
-// $END_SWARM
-
-// The step a PART's re-entry is measured against, and it is not the band's `from`: the parts on disk
-// were erased by nodeUnits({drop}) / routeUnits({drop}) the moment the FRD moved, so whatever is there
-// now belongs to this phase and is the file this part must REPAIR (see routePart's contract).
-const AFTER_INTAKE = 9;
-
-// FUNCTION_CONTRACT: valuePart — one seat of pass A's swarm: one FRD scenario into one page of values
-//   Input:        unit — one element of valueUnits({}): its FRD projection, its own scenario's ripple
-//                 bytes, the block naming its id prefix and the ends of its use case; tplValuePart —
-//                 the part's order; feedback — the lines of the LAST red merge addressed to this part,
-//                 or ""
-//   Dependencies: EXTERNAL — reenter, readText, design, prompt, agent(role "valuer"); ENVELOPE
-//   Antecedent:   steps 6 and 8 are done; the part's staging path is this scenario's and no other
-//   Consequent:   success: { ok: true, id, called } — `called` says whether the role was paid for.
-//                          A part whose own file is green NOW and which no blocker names closes for
-//                          ZERO tokens (the D25 re-entry, one file lower)
-//                 failure: { ok: false, id, why } — RETURNED AS A VALUE, never thrown: parallel()
-//                          catches every error a task throws and rethrows its own (execution.ts:253-262)
-//   Purity:       io (through the host)
-//
-// THERE IS NO QUESTION RAIL HERE and there cannot be: checkpoint() from inside parallel() is the
-// scout's rule. Pass A has never had one anyway — its role's OUTPUT_FORMAT offers `invalid` alone.
-//
-// THE PART REPAIRS, AND THE WHOLE PASS DOES NOT, and that is not an inconsistency: the whole pass A
-// rewrites a whole vocabulary and its order carries no {PREVIOUS} for that reason, while a part holds
-// a handful of rows about one use case and its blockers name them by id. Rewriting the page instead of
-// repairing it is what loses the rows that were green — run 088fb3ee's defect, one artifact higher.
-async function valuePart(unit, tplValuePart, feedback) {
-  const STAGING = `.agent/staging/values-parts/${unit.id}.xml`;
-  const CHECK = `design({pass:"values", scenario:"${unit.id}", path}) — steps/design/values.mjs::checkEnds по файлу этой части`;
-  // THE GUARDRAIL BEFORE THE ROLE, per part: its own file judged against the FRD as it stands NOW.
-  const { previous, verdict } = await reenter("values", STAGING, AFTER_INTAKE, readText, (a) => design({ pass: a.pass, path: a.path, scenario: unit.id }));
-  if (verdict && verdict.ok && !feedback) return { ok: true, id: unit.id, called: false };
-
-  const env = await agent(prompt(tplValuePart, {
-    ENDS: unit.ends,
-    FRD: unit.frd,
-    RIPPLE: unit.ripple,
-    PREVIOUS: previous || "(none — first attempt)",
-    FEEDBACK: feedback || (verdict && verdict.blockers) || "(none — first attempt)",
-    STAGING,
-    CHECK,
-  }), { role: "valuer", outputSchema: ENVELOPE });
-  if (env.track === "err") return { ok: false, id: unit.id, why: `${unit.id}: ${env.kind || "err"} — ${env.subject || "(без subject)"}` };
-  return { ok: true, id: unit.id, called: true };
-}
-
-// FUNCTION_CONTRACT: valueSlot — one seat of pass A's swarm, empty seats included
-//   Input:        batch — the units of this batch; i — the seat's index; the rest as valuePart takes it
-//   Dependencies: valuePart
-//   Antecedent:   i is within 0..SWARM_WIDTH-1; the batch may be SHORTER than the swarm
-//   Consequent:   success: valuePart's result, or null when this seat has no unit
-//   Purity:       io (through valuePart)
-async function valueSlot(batch, i, tplValuePart, fb) {
-  const unit = batch[i];
-  if (!unit) return null;
-  return valuePart(unit, tplValuePart, fb[unit.id] || "");
-}
-
-// FUNCTION_CONTRACT: swarmValues — pass A's parts, in batches of SWARM_WIDTH
-//   Input:        units — valueUnits' list, already through swarmParts; the rest as valuePart takes it
-//   Dependencies: parallel, valueSlot, log; SWARM_WIDTH, MAX_PARALLEL
-//   Antecedent:   units is non-empty; MAX_PARALLEL ≥ 1
-//   Consequent:   success: { track: "ok" } — every part has a file, or had one and kept it
-//                 failure: { track: "err", kind: "escalate" } naming EVERY part that failed in the batch
-//   Purity:       io (through the host)
-//
-// The literal record of slots is the host's contract, not a style: validation.ts:755 demands a literal
-// name and a literal ObjectExpression of tasks, so this record cannot be built from a width read at run
-// time and cannot be shared with the swarms of passes B and C either — `parallel("values-batch", …)`,
-// `parallel("nodes-batch", …)` and `parallel("routes-batch", …)` are three literal names by the host's
-// rule (steps/scope's swarm, BUG_FIX_CONTEXT).
-async function swarmValues(units, tplValuePart, fb) {
-  const width = Math.min(MAX_PARALLEL, SWARM_WIDTH);
-  let called = 0;
-  for (let i = 0; i < units.length; i += width) {
-    const batch = units.slice(i, i + width);
-    log(`design/values: батч ${batch.map((u) => u.id).join(" ")}`);
-
-    const done = await parallel("values-batch", {
-      a1: () => valueSlot(batch, 0, tplValuePart, fb),
-      a2: () => valueSlot(batch, 1, tplValuePart, fb),
-      a3: () => valueSlot(batch, 2, tplValuePart, fb),
-      a4: () => valueSlot(batch, 3, tplValuePart, fb),
-      a5: () => valueSlot(batch, 4, tplValuePart, fb),
-      a6: () => valueSlot(batch, 5, tplValuePart, fb),
-      a7: () => valueSlot(batch, 6, tplValuePart, fb),
-      a8: () => valueSlot(batch, 7, tplValuePart, fb),
-    });
-
-    const results = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8"].map((k) => done[k]).filter((r) => r);
-    const bad = results.filter((r) => !r.ok);
-    // A lost part is a lost use case — its ends would be closed by nobody — so no part is skipped "to
-    // salvage the rest", and the operator sees all of them at once.
-    if (bad.length) {
-      return { track: "err", kind: "escalate", subject: bad.map((r) => r.why).join("\n  "), evidence: "часть прохода A вернула ошибку; рельсы вопроса у части нет" };
-    }
-    called += results.filter((r) => r.called).length;
-  }
-  log(`design/values: частей ${units.length}, роль звалась ${called} раз`);
-  return { track: "ok" };
-}
-
-// FUNCTION_CONTRACT: nodePart — one seat of pass B's swarm: one FRD scenario into one file of modules
-//   Input:        unit — one element of nodeUnits({}): its FRD projection, its own nodes' ripple bytes,
-//                 the block naming what it writes and which neighbours it may reach; tplNodePart — the
-//                 part's order; DATA — the keys every part of pass B shares (the dictionary, the
-//                 operator's answers, the weight, the delta vocabulary);
-//                 feedback — the lines of the LAST red merge addressed to this part, or ""
-//   Dependencies: EXTERNAL — reenter, readText, design, prompt, agent(role "designer"); ENVELOPE
-//   Antecedent:   pass A is green; the part's staging path is this scenario's and no other
-//   Consequent:   success: { ok: true, id, called } — `called` says whether the role was paid for.
-//                          A part whose own file is green NOW and which no blocker names closes for
-//                          ZERO tokens (the D25 re-entry, one file lower)
-//                 failure: { ok: false, id, why } — RETURNED AS A VALUE, never thrown: parallel()
-//                          catches every error a task throws and rethrows its own (execution.ts:253-262)
-//   Purity:       io (through the host)
-//
-// THERE IS NO QUESTION RAIL HERE and there cannot be: checkpoint() from inside parallel() is the
-// scout's rule. The one case that made pass B ask — a node whose FRD delta says `op="-"`, so there is
-// nothing for it to hand out — is answered by rule 14's own blocker, which names the deficit as step
-// 6's and the rail as the whole pass's (steps/design/nodes.mjs::outCandidates).
-//
-// AFTER_INTAKE is the operand `reenter` reads as "the FRD did not move under this file": for a PART it
-// is true by construction, because nodeUnits({drop}) erased everything written against a previous FRD
-// before the first batch ran. Passing the band's `from` here instead would hide a part's own file from
-// it on every fresh run, and the swarm would rewrite all of them after each repair round.
-async function nodePart(unit, tplNodePart, DATA, feedback) {
-  const STAGING = `.agent/staging/nodes-parts/${unit.id}.xml`;
-  const CHECK = `design({pass:"nodes", scenario:"${unit.id}", path}) — steps/design/nodes.mjs::checkNodes по файлу этой части`;
-  // THE GUARDRAIL BEFORE THE ROLE, per part: its own file judged against the dictionary as it stands NOW.
-  const { previous, verdict } = await reenter("nodes", STAGING, AFTER_INTAKE, readText, (a) => design({ pass: a.pass, path: a.path, scenario: unit.id }));
-  if (verdict && verdict.ok && !feedback) return { ok: true, id: unit.id, called: false };
-
-  const env = await agent(prompt(tplNodePart, {
-    NODES: unit.nodes,
-    FRD: unit.frd,
-    RIPPLE: unit.ripple,
-    VALUES: DATA.VALUES,
-    ANSWERS: DATA.ANSWERS,
-    MODE: DATA.MODE,
-    DELTA_FORMS: DATA.DELTA_FORMS,
-    PREVIOUS: previous || "(none — first attempt)",
-    FEEDBACK: feedback || (verdict && verdict.blockers) || "(none — first attempt)",
-    STAGING,
-    CHECK,
-  }), { role: "designer", outputSchema: ENVELOPE });
-  if (env.track === "err") return { ok: false, id: unit.id, why: `${unit.id}: ${env.kind || "err"} — ${env.subject || "(без subject)"}` };
-  return { ok: true, id: unit.id, called: true };
-}
-
-// FUNCTION_CONTRACT: nodeSlot — one seat of pass B's swarm, empty seats included
-//   Input:        batch — the units of this batch; i — the seat's index; the rest as nodePart takes it
-//   Dependencies: nodePart
-//   Antecedent:   i is within 0..SWARM_WIDTH-1; the batch may be SHORTER than the swarm
-//   Consequent:   success: nodePart's result, or null when this seat has no unit
-//   Purity:       io (through nodePart)
-async function nodeSlot(batch, i, tplNodePart, DATA, fb) {
-  const unit = batch[i];
-  if (!unit) return null;
-  return nodePart(unit, tplNodePart, DATA, fb[unit.id] || "");
-}
-
-// FUNCTION_CONTRACT: swarmNodes — pass B's parts, in batches of SWARM_WIDTH
-//   Input:        units — nodeUnits' list, already through swarmParts; the rest as nodePart takes it
-//   Dependencies: parallel, nodeSlot, log; SWARM_WIDTH, MAX_PARALLEL
-//   Antecedent:   units is non-empty; MAX_PARALLEL ≥ 1
-//   Consequent:   success: { track: "ok" } — every part has a file, or had one and kept it
-//                 failure: { track: "err", kind: "escalate" } naming EVERY part that failed in the batch
-//   Purity:       io (through the host)
-//
-// The literal record of slots is the host's contract, not a style: validation.ts:755 demands a literal
-// name and a literal ObjectExpression of tasks, so this record cannot be built from a width read at run
-// time and cannot be shared with the swarm of pass C either — `parallel("nodes-batch", …)` and
-// `parallel("routes-batch", …)` are two literal names by the host's rule (steps/scope's swarm,
-// BUG_FIX_CONTEXT).
-async function swarmNodes(units, tplNodePart, DATA, fb) {
-  const width = Math.min(MAX_PARALLEL, SWARM_WIDTH);
-  let called = 0;
-  for (let i = 0; i < units.length; i += width) {
-    const batch = units.slice(i, i + width);
-    log(`design/nodes: батч ${batch.map((u) => u.id).join(" ")}`);
-
-    const done = await parallel("nodes-batch", {
-      n1: () => nodeSlot(batch, 0, tplNodePart, DATA, fb),
-      n2: () => nodeSlot(batch, 1, tplNodePart, DATA, fb),
-      n3: () => nodeSlot(batch, 2, tplNodePart, DATA, fb),
-      n4: () => nodeSlot(batch, 3, tplNodePart, DATA, fb),
-      n5: () => nodeSlot(batch, 4, tplNodePart, DATA, fb),
-      n6: () => nodeSlot(batch, 5, tplNodePart, DATA, fb),
-      n7: () => nodeSlot(batch, 6, tplNodePart, DATA, fb),
-      n8: () => nodeSlot(batch, 7, tplNodePart, DATA, fb),
-    });
-
-    const results = ["n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8"].map((k) => done[k]).filter((r) => r);
-    const bad = results.filter((r) => !r.ok);
-    // A lost part is a lost group of nodes, so no part is skipped "to salvage the rest" — the same rule
-    // the scout swarm keeps, and the operator sees all of them at once.
-    if (bad.length) {
-      return { track: "err", kind: "escalate", subject: bad.map((r) => r.why).join("\n  "), evidence: "часть прохода B вернула ошибку; рельсы вопроса у части нет" };
-    }
-    called += results.filter((r) => r.called).length;
-  }
-  log(`design/nodes: частей ${units.length}, роль звалась ${called} раз`);
-  return { track: "ok" };
-}
-
-// FUNCTION_CONTRACT: routePart — one seat of pass C's swarm: one FRD scenario into one file of routes
-//   Input:        unit — one element of routeUnits({}): its FRD projection, its ends with the route
-//                 ids already assigned, the cards of its component; tplPart — the part's order;
-//                 ANSWERS — the operator's answers block;
-//                 feedback — the lines of the LAST red merge addressed to this part, or ""
-//   Dependencies: EXTERNAL — reenter, readText, design, prompt, agent(role "router"); ENVELOPE
-//   Antecedent:   passes A and B are green; the part's staging path is this scenario's and no other
-//   Consequent:   success: { ok: true, id, called } — `called` says whether the role was paid for.
-//                          A part whose own file is green NOW and which no blocker names closes for
-//                          ZERO tokens (the D25 re-entry, one file lower)
-//                 failure: { ok: false, id, why } — RETURNED AS A VALUE, never thrown: parallel()
-//                          catches every error a task throws and rethrows its own (the reason
-//                          steps/scope's scout does the same, execution.ts:253-262)
-//   Purity:       io (through the host)
-//
-// THERE IS NO QUESTION RAIL HERE and there cannot be: checkpoint() from inside parallel() is the
-// scout's rule, and the one case that made the router ask — a card with no value on either side — is
-// refused one pass earlier by rule 14 of pass B. A part that asks is a part that failed.
-//
-// AFTER_INTAKE is the operand `reenter` reads as "the FRD did not move under this file". For a PART it
-// is always true by construction: routeUnits({drop}) erased everything written against a previous FRD
-// before the first batch ran, so what is on disk now belongs to this phase. Passing the band's `from`
-// here instead would hide a part's own file from it on every fresh run — the swarm would write all
-// eleven anew after each repair round of pass B, which is run 5bbe5de4's bill in eleven copies.
-async function routePart(unit, tplPart, ANSWERS, feedback) {
-  const STAGING = `.agent/staging/routes-parts/${unit.id}.xml`;
-  const CHECK = `design({pass:"routes", scenario:"${unit.id}", path}) — steps/design/routes.mjs::checkSteps по файлу этой части`;
-  // THE GUARDRAIL BEFORE THE ROLE, per part: its own file judged against the graph as it stands NOW.
-  const { previous, verdict } = await reenter("routes", STAGING, AFTER_INTAKE, readText, (a) => design({ pass: a.pass, path: a.path, scenario: unit.id }));
-  if (verdict && verdict.ok && !feedback) return { ok: true, id: unit.id, called: false };
-
-  const env = await agent(prompt(tplPart, {
-    FRD: unit.frd,
-    ENDS: unit.ends,
-    CARDS: unit.cards,
-    ANSWERS,
-    PREVIOUS: previous || "(none — first attempt)",
-    FEEDBACK: feedback || (verdict && verdict.blockers) || "(none — first attempt)",
-    STAGING,
-    CHECK,
-  }), { role: "router", outputSchema: ENVELOPE });
-  if (env.track === "err") return { ok: false, id: unit.id, why: `${unit.id}: ${env.kind || "err"} — ${env.subject || "(без subject)"}` };
-  return { ok: true, id: unit.id, called: true };
-}
-
-// FUNCTION_CONTRACT: routeSlot — one seat of the swarm, empty seats included
-//   Input:        batch — the units of this batch; i — the seat's index; the rest as routePart takes it
-//   Dependencies: routePart
-//   Antecedent:   i is within 0..SWARM_WIDTH-1; the batch may be SHORTER than the swarm
-//   Consequent:   success: routePart's result, or null when this seat has no unit
-//   Purity:       io (through routePart)
-async function routeSlot(batch, i, tplPart, ANSWERS, fb) {
-  const unit = batch[i];
-  if (!unit) return null;
-  return routePart(unit, tplPart, ANSWERS, fb[unit.id] || "");
-}
-
-// FUNCTION_CONTRACT: swarmRoutes — pass C's parts, in batches of SWARM_WIDTH
-//   Input:        units — routeUnits' list, already through swarmParts; the rest as routePart takes it
-//   Dependencies: parallel, routeSlot, log; SWARM_WIDTH, MAX_PARALLEL
-//   Antecedent:   units is non-empty; MAX_PARALLEL ≥ 1
-//   Consequent:   success: { track: "ok" } — every part has a file, or had one and kept it
-//                 failure: { track: "err", kind: "escalate" } naming EVERY part that failed in the
-//                          batch. It is an ENVELOPE, not an exit: the caller is the pass, and the pass
-//                          is what decides between a redelegation and the end of the run
-//   Purity:       io (through the host)
-//
-// The literal record of slots is the host's contract, not a style: validation.ts:755 demands a literal
-// name and a literal ObjectExpression of tasks, and a width read from a config file at run time is
-// therefore impossible here (steps/scope's swarm, BUG_FIX_CONTEXT).
-async function swarmRoutes(units, tplPart, ANSWERS, fb) {
-  const width = Math.min(MAX_PARALLEL, SWARM_WIDTH);
-  let called = 0;
-  for (let i = 0; i < units.length; i += width) {
-    const batch = units.slice(i, i + width);
-    log(`design/routes: батч ${batch.map((u) => u.id).join(" ")}`);
-
-    const done = await parallel("routes-batch", {
-      r1: () => routeSlot(batch, 0, tplPart, ANSWERS, fb),
-      r2: () => routeSlot(batch, 1, tplPart, ANSWERS, fb),
-      r3: () => routeSlot(batch, 2, tplPart, ANSWERS, fb),
-      r4: () => routeSlot(batch, 3, tplPart, ANSWERS, fb),
-      r5: () => routeSlot(batch, 4, tplPart, ANSWERS, fb),
-      r6: () => routeSlot(batch, 5, tplPart, ANSWERS, fb),
-      r7: () => routeSlot(batch, 6, tplPart, ANSWERS, fb),
-      r8: () => routeSlot(batch, 7, tplPart, ANSWERS, fb),
-    });
-
-    const results = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8"].map((k) => done[k]).filter((r) => r);
-    const bad = results.filter((r) => !r.ok);
-    // A lost part is a lost scenario, so no part is skipped "to salvage the rest" — the same rule the
-    // scout swarm keeps, and the operator sees all of them at once.
-    if (bad.length) {
-      return { track: "err", kind: "escalate", subject: bad.map((r) => r.why).join("\n  "), evidence: "часть прохода C вернула ошибку; рельсы вопроса у части нет" };
-    }
-    called += results.filter((r) => r.called).length;
-  }
-  log(`design/routes: частей ${units.length}, роль звалась ${called} раз`);
-  return { track: "ok" };
-}
-
-// FUNCTION_CONTRACT: addressToParts — a red report split among the parts of a swarm, and carried
-//   Input:        mine — the lines of THIS pass, as blameSplit left them; blame — the host's addressing
-//                 ([{ scenario, lines }]); was — the per-part memory of what was already red, MUTATED
-//                 here exactly as `wasRed` is one level up
-//   Dependencies: EXTERNAL — carried
-//   Antecedent:   `mine` are lines of the same report `blame` was computed from — otherwise every line
-//                 is an orphan
-//   Consequent:   success: { feedback: { part → text }, orphan: lines nobody owns }. A part absent from
-//                          `feedback` has nothing to repair and must not be called
-//                 failure: none
-//   Purity:       io (through carried)
-const addressToParts = async (mine, blame, was) => {
-  const addressed = {};
-  const feedback = {};
-  for (const b of blame || []) {
-    const lines = b.lines.filter((l) => mine.indexOf(l) >= 0);
-    if (!lines.length) continue;
-    for (const l of lines) addressed[l] = true;
-    const carry = await carried({ blockers: lines.join("\n"), seen: was[b.scenario] || [] });
-    feedback[b.scenario] = carry.text; was[b.scenario] = carry.seen;
-  }
-  return { feedback, orphan: mine.filter((l) => !addressed[l]) };
-};
+// PASSES B AND C DO NOT EXIST IN THIS VERSION. They were deleted with their swarms, together with
+// the artifacts they wrote (`.agent/design-nodes.xml`, `.agent/design-graph.xml`,
+// `.agent/data-flow.md`). The band stops right after this pass and says so — see band().
+const VALUES_STAGING = ".agent/staging/values.xml";
+const VALUES_SKELETON = ".agent/staging/values-skeleton.xml";
 
 async function designing(from = 6) {
   const gate = await design({});
-  if (!gate.ok) exit(err("blocked", { subject: gate.why, evidence: ".agent/design-graph.xml не написан" }));
+  if (!gate.ok) exit(err("blocked", { subject: gate.why, evidence: ".agent/values.xml не написан" }));
   if (gate.design === "skip") {
     log("design: skip — шаг 8 решил, что синхронизировать нечего (patch на одном узле); роли не зовутся, 0 токенов");
     return ".agent/design"; // the flag file IS the receipt of the skip — there is no second artifact
   }
+  // A rewind to step 6 rewrote the FRD, so a dictionary extracted from the old one is structurally
+  // green and about another change. Otherwise the gate's own verdict stands: green NOW, not green once.
+  if (from > 6 && (gate.reused || []).includes("values")) {
+    log("design/values: .agent/values.xml зелен сейчас — проход закрыт без роли, 0 токенов");
+    return ".agent/values.xml";
+  }
 
+  // THE SKELETON IS RECOMPUTED EVERY ROUND, and it is written to its OWN path. The role's file and
+  // the composition it must follow are two documents on purpose: a repair round hands the role the
+  // authoritative skeleton next to the blockers about the file it wrote, so «строки v41 нет в файле»
+  // is a line the role can act on without reconstructing anything from memory.
+  const s = await design({ skeleton: VALUES_SKELETON });
+  if (!s.ok) exit(err("blocked", { subject: s.blockers, evidence: "скелет словаря не посчитан — шаг 9 звать роль не на что" }));
+  log(`design/values: скелет — строк ${s.rows}, из них заполнено скриптом ${s.filled}, роли назвать ${s.blank}`);
+
+  const SKELETON = await readText({ path: VALUES_SKELETON });
+  // A CHANGE WHOSE EVERY ROW THE SCRIPT COULD WRITE COSTS NO ROLE AT ALL. It is not a hypothetical:
+  // a change with no use cases and only calls of its own nodes has no blank left, and calling a model
+  // to hand back a file it was given is a call that can only make it worse.
+  if (!s.blank) {
+    await promote({ from: VALUES_SKELETON, to: VALUES_STAGING });
+    const check = await design({ path: VALUES_STAGING });
+    if (check.ok) {
+      log(`design/values: зелен без роли — все ${s.filled} значений вычислены, 0 токенов → .agent/values.xml`);
+      return ".agent/values.xml";
+    }
+    exit(err("blocked", { subject: check.blockers, evidence: "скелет не проходит собственный гардрейл — дефект скрипта, не роли" }));
+  }
+
+  const tpl = await readText({ path: "steps/design/order-values.tpl" });
   const FRD = await readText({ path: ".agent/frd.xml" });
-  const RIPPLE = await readText({ path: ".agent/ripple.xml" });
-  // …AND THE SAME SUBGRAPH CUT TO THE NODES OF THE CHANGE, which is what pass A reads (D29a). The whole
-  // ripple stays for pass B: its order is judged by rule 6, whose transit half is decided against the
-  // subgraph entire, and its parts already get their own projection (ext/index.mjs::nodeUnits). Pass A
-  // has no such rule — its guardrail never opens the ripple at all — and it is the pass that crashed on
-  // the size: run d5f1d0b4, 49 884 characters in, 3 × 32 768 output tokens out, no artifact.
-  const CHANGE = await design({ pass: "values", ripple: true });
-  if (!CHANGE.ok) exit(err("blocked", { subject: CHANGE.why, evidence: "рябь не спроецирована на узлы изменения" }));
-  log(`design/values: рябь спроецирована на изменение — модулей ${CHANGE.nodes}, соседей ${CHANGE.neighbours} путями, ${CHANGE.text.length} симв из ${RIPPLE.length}`);
-  const MODE = (await readText({ path: ".agent/mode" })).trim();
-  const FORM = await frdForm({});
-  const tpl = {};
-  for (const p of PASSES) tpl[p.id] = await readText({ path: p.tpl });
-  // The order of a PART is its own document, and not a switch inside the whole pass's order: the
-  // whole-pass order still carries the obligations of the whole (every node of the change is in the
-  // file, every FRD scenario has a route, every touched path is walked), and a part answers for none of
-  // them — it is one scenario and it is told so. Two passes, two part orders, and neither touches the
-  // whole-pass template it stands beside.
-  const tplValuePart = await readText({ path: "steps/design/order-values-part.tpl" });
-  const tplNodePart = await readText({ path: "steps/design/order-nodes-part.tpl" });
-  const tplPart = await readText({ path: "steps/design/order-routes-part.tpl" });
+  let feedback = "(none — first attempt)";
+  // TWO COUNTERS, TWO MEANINGS. `attempt` is the repair budget: a red artifact was written and must be
+  // rewritten. `silent` bounds the case where the role returns track:"ok" and writes no file at all —
+  // there is nothing to repair, so no round of the repair budget is charged, but the loop still has to
+  // end (live run a900de7b).
+  let attempt = 0, silent = 0;
+  for (;;) {
+    if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `проход A шага 9: цикл исчерпан за ${LOOPS} попыток` }));
+    if (silent > LOOPS) exit(err("escalate", { subject: `роль ${silent} раз вернула track:"ok", не записав ${VALUES_STAGING}`, evidence: "проход A шага 9: артефакта нет" }));
 
-  // A rewind to step 6 rewrote the FRD, so nothing extracted from the old one may be reused.
-  const reused = from <= 6 ? [] : (gate.reused || []);
-  let i = reused.includes("values") ? (reused.includes("nodes") ? 2 : 1) : 0;
-  if (i) log(`design: проходы ${reused.join(" и ")} закрыты — их артефакты зелены сейчас`);
-
-  const attempt = { values: 0, nodes: 0, routes: 0 };
-  const feedback = { values: "(none — first attempt)", nodes: "(none — first attempt)", routes: "(none — first attempt)" };
-  const wasRed = { values: [], nodes: [], routes: [] };
-  // A SECOND counter, and it is not a duplicate of `attempt`. A role that returns track:"ok" and
-  // writes no file has produced no artifact to repair, so the repair budget has nothing to spend
-  // itself on — but the loop still has to be bounded, and nothing else bounds it. Two counters, two
-  // meanings, exactly as LOOPS and QUESTION_ROUNDS are two.
-  const silent = { values: 0, nodes: 0, routes: 0 };
-  // The feedback of pass C is now TWO things, and they are not the same fact: `feedback.routes` is the
-  // whole report, read by the single order of a degenerate pass C; `partFeedback` is the report SPLIT
-  // by the part that must repair each line (design's `blame`). It is rebuilt from every red merge —
-  // a part the new report does not name is a part with nothing left to repair, and its stale feedback
-  // would call the role for nothing.
-  let partFeedback = {};
-  const wasRedPart = {};
-  let swarming = false;
-  let dropParts = from <= 6;   // spent on the FIRST entry into pass C — see routeUnits' call below
-  // …and the same three, one pass lower: pass B is swarmed by the same rule (D28). `nodeFeedback` is
-  // filled from TWO reports — a red merge of pass B, and the lines a red pass C sends back here
-  // (design's `nodeBlame`) — because both name a node, and the node names its part.
-  let nodeFeedback = {};
-  const wasRedNode = {};
-  let swarmingNodes = false;
-  let dropNodeParts = from <= 6;
-  // …and the same three, one pass higher: pass A is swarmed by the same rule (D31). `valueFeedback` is
-  // filled from ONE report — a red merge of pass A — because no later pass sends a line back here as a
-  // line about a VALUE: a graph naming an id the dictionary does not carry is blamed on pass A as a
-  // whole (blameOf), and what it asks for is a row that does not exist yet, addressed to no part.
-  let valueFeedback = {};
-  const wasRedValue = {};
-  let swarmingValues = false;
-  let dropValueParts = from <= 6;
-  // One green verdict, one sentence — written once and read from both places a pass can close: after
-  // the role, and before it (the re-entry below), where the counts are the same numbers.
-  const green = (id, check) => log(id === "routes"
-    ? `design: узлов ${check.nodes}, маршрутов ${check.routes}, списков юнитов ${check.units} → .agent/design-graph.xml + .agent/data-flow.md`
-    : `design/${id}: зелен — ${id === "values" ? `значений ${check.values}` : `узлов ${check.nodes}`}`);
-
-  while (i < PASSES.length) {
-    const p = PASSES[i];
-    if (attempt[p.id] >= LOOPS) exit(err("escalate", { subject: feedback[p.id], evidence: `проход ${p.id} шага 9: цикл исчерпан за ${LOOPS} попыток` }));
-
-    // THE GUARDRAIL BEFORE THE ROLE, when this pass already staged a file in this run — see
-    // $START_REENTRY. Passes A and B have had their "green NOW" since D6 (ext/index.mjs::design, the
-    // gate's `reused`); this is the same question asked one round later, and pass C was the only pass
-    // without it.
-    const { previous, verdict } = await reenter(p.id, p.out, from, readText, design);
-    if (verdict && verdict.ok) {
-      log(`design/${p.id}: staging этого прогона зелен сейчас — проход закрыт без роли, 0 токенов`);
-      green(p.id, verdict);
-      i++;
-      continue;
-    }
-    // …and red is not a wasted call either: THESE blockers are the ones about the current graph, so
-    // the role repairs what is broken now instead of what was broken before the previous pass moved.
-    if (verdict) feedback[p.id] = verdict.blockers;
-
-    const seen = await answers({});
-    const VALUES = i > 0 ? await readText({ path: ".agent/values.xml" }) : "";
-    const CARDS = p.id === "routes" ? (await design({ pass: "routes", cards: true })).text : "";
-    // THE ORDER OF A REPAIRING PASS CARRIES THE FILE IT WROTE LAST TIME. Without it the FEEDBACK names
-    // nodes and routes in an artifact the role cannot see, so "repair" is a word for "write it all
-    // again" — and a regeneration loses whatever was green. Two paths for pass B, one artifact:
-    // `design({pass:"nodes"})` MOVES staging to .agent/design-nodes.xml the moment the graph is green
-    // (ext/index.mjs), so the staging copy exists only between two red rounds, and the promoted one is
-    // what a rewind from pass C is sent back to repair. Pass C has the staging path alone: its own
-    // artifact is never promoted — a green C assembles the deliverable out of it in the same breath
-    // (docs/design-step-by-step.md §7). `newRun` carries a previous run's leftovers into .agent/prev/,
-    // so no path can hand this run a file belonging to another one.
-    //
-    // Pass A does not repair: its dictionary is judged against the FRD alone, and a red one is a
-    // vocabulary to rewrite, not a graph to patch. The key is therefore absent from its order.
-    //
-    // BUG_FIX_CONTEXT: live run 088fb3ee (sandbox/runbox/eddi), pass B. Attempt 1 was blocked on two
-    //   nodes; attempt 2 wrote the whole file anew and paid for the two repairs with a THIRD node —
-    //   `Glossary.java: out="v94"` became `out=""` — so the report of attempt 2 was one blocker about
-    //   a node attempt 1 had gotten right. Attempt 3 never called a tool at all: `crashed`. This is
-    //   the same defect D13 addressed for feedback lines, one operand short. Run 5bbe5de4 paid for the
-    //   same asymmetry on pass C — see $START_REENTRY.
-    const PREVIOUS = p.id === "values" ? "" : (previous
-      || (p.id === "nodes" ? (await readText({ path: ".agent/design-nodes.xml" })).trim() : "")
-      || "(none — first attempt)");
-    const keys = {
-      values: { FRD, RIPPLE: CHANGE.text, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"values", path}) — steps/design/values.mjs::checkValues по staging` },
-      nodes: { VALUES, FRD, RIPPLE, ANSWERS: answersBlock(seen, "(no operator answers yet)"), MODE, DELTA_FORMS: FORM.deltaForms, PREVIOUS, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"nodes", path}) — steps/design/nodes.mjs::checkGraph по staging` },
-      routes: { FRD, CARDS, ANSWERS: answersBlock(seen, "(no operator answers yet)"), PREVIOUS, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"routes", path}) — steps/design/routes.mjs::checkRoutes по staging` },
-    }[p.id];
-
-    // A PASS IS A SWARM WHEN THERE IS SOMETHING TO SWARM (D26 for pass C, D28 for pass B). The units
-    // are recomputed every time the pass is entered: a rewind changes the artifact under them — pass
-    // B's parts are cut by the FRD, pass C's cards ARE pass B's graph. Below SWARM_MIN the list comes
-    // back empty and the pass runs its single order — the very call this phase made before the swarms.
-    //
-    // THE WHOLE PASS'S ORDER, MEASURED — one place for all three passes (D29b). A swarmed pass never
-    // calls this: its parts are assembled by nodePart/routePart, and their size is bounded by
-    // construction (one scenario each, and the swarm's own line above prints the largest of them).
-    const whole = async () => {
-      const o = sized(`design/${p.id}`, tpl[p.id], keys);
-      if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд прохода ${p.id} шага 9 не помещается в окно модели — роль не запускалась` }));
-      return agent(o.text, { role: p.role, outputSchema: ENVELOPE });
-    };
-
-    let env;
-    if (p.id === "nodes") {
-      // ERASED ONCE, AND ONLY WHEN THE FRD MOVED — the same operand `reenter` reads one screen up, and
-      // the same flag spent on the FIRST entry into this pass. Erasing on the second entry would throw
-      // away the parts THIS phase wrote and make the swarm rewrite every one of them each circle.
-      const u = await nodeUnits({ drop: dropNodeParts });
-      if (u.dropped) log(`design/nodes: полоса перемотана на шаг 6 — сброшено частей ${u.dropped}`);
-      dropNodeParts = false;
-      if (!u.ok) exit(err("blocked", { subject: u.why, evidence: "части прохода B не собраны" }));
-      const units = swarmParts(u.units);
-      swarmingNodes = units.length > 0;
-      if (swarmingNodes) log(`design/nodes: рой — частей ${units.length}, узлов ${units.reduce((a, x) => a + x.paths, 0)}, наряд части ≈ ${Math.max(...units.map((x) => x.chars))} симв (целиком FRD ${FRD.length} + рябь ${RIPPLE.length})`);
-      env = swarmingNodes
-        ? await swarmNodes(units, tplNodePart, { VALUES, ANSWERS: answersBlock(seen, "(no operator answers yet)"), MODE, DELTA_FORMS: FORM.deltaForms }, nodeFeedback)
-        : await whole();
-    } else if (p.id === "routes") {
-      // ERASED ONCE, AND ONLY WHEN THE FRD MOVED. `from <= 6` is the same operand `reenter` reads one
-      // screen up: the band rewound to intake, so every part staged against the previous FRD is about
-      // another change. Erasing on the SECOND entry of this pass would throw away the parts THIS phase
-      // wrote — the swarm would rewrite all of them after every repair round of pass B.
-      const u = await routeUnits({ drop: dropParts });
-      if (u.dropped) log(`design/routes: полоса перемотана на шаг 6 — сброшено частей ${u.dropped}`);
-      dropParts = false;
-      if (!u.ok) exit(err("blocked", { subject: u.why, evidence: "части прохода C не собраны" }));
-      const units = swarmParts(u.units);
-      swarming = units.length > 0;
-      if (swarming) log(`design/routes: рой — частей ${units.length}, наряд части ≈ ${Math.max(...units.map((x) => x.chars))} симв (целиком FRD — ${FRD.length})`);
-      env = swarming
-        ? await swarmRoutes(units, tplPart, answersBlock(seen, "(no operator answers yet)"), partFeedback)
-        : await whole();
-    } else {
-      // ERASED ONCE, AND ONLY WHEN THE FRD MOVED — the same operand and the same flag as the two passes
-      // below. Pass A's parts are cut by the FRD alone, so a rewind to step 6 is the only thing that can
-      // make them artifacts about another change.
-      const u = await valueUnits({ drop: dropValueParts });
-      if (u.dropped) log(`design/values: полоса перемотана на шаг 6 — сброшено частей ${u.dropped}`);
-      dropValueParts = false;
-      if (!u.ok) exit(err("blocked", { subject: u.why, evidence: "части прохода A не собраны" }));
-      const units = swarmParts(u.units);
-      swarmingValues = units.length > 0;
-      if (swarmingValues) log(`design/values: рой — частей ${units.length}, наряд части ≈ ${Math.max(...units.map((x) => x.chars))} симв (целиком FRD ${FRD.length} + проекция ряби ${CHANGE.text.length})`);
-      env = swarmingValues
-        ? await swarmValues(units, tplValuePart, valueFeedback)
-        : await whole();
-    }
+    // The role's own file from the previous round, when there was one: the blockers name its rows, and
+    // a report about an artifact the role cannot see is a word for «напиши всё заново» (D13).
+    const PREVIOUS = (await readText({ path: VALUES_STAGING })).trim() || "(none — first attempt)";
+    const o = sized("design/values", tpl, {
+      FRD, SKELETON, PREVIOUS, BLANK: String(s.blank), FEEDBACK: feedback, STAGING: VALUES_STAGING,
+      CHECK: 'design({path}) — steps/design/values.mjs::checkValues по staging',
+    });
+    if (o.over) exit(err("blocked", { subject: o.why, evidence: "наряд прохода A шага 9 не помещается в окно модели — роль не запускалась" }));
+    const env = await agent(o.text, { role: "valuer", outputSchema: ENVELOPE });
 
     if (env.track === "err" && env.kind === "question") {
       const q = charge(env);
-      if (q.spent) exit(noRoundsLeft(env, `design/${p.id}`));   // no <question> in the design grammar
-      log(`design/${p.id}: вопрос ${q.n} — «${env.subject}»`);
-      await askOperator(env, q.n, `design-${p.id}`, p.role);
+      if (q.spent) exit(noRoundsLeft(env, "design/values"));
+      log(`design/values: вопрос ${q.n} — «${env.subject}»`);
+      await askOperator(env, q.n, "design-values", "valuer");
       continue; // a question does not spend the redelegation budget
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
 
-    const check = await design({ pass: p.id, path: p.out }); // the check runs ON STAGING, before promote
+    const check = await design({ path: VALUES_STAGING }); // the check runs ON STAGING, before promote
     if (check.ok) {
-      green(p.id, check);
-      i++;
-      continue;
+      log(`design/values: зелен — значений ${check.values} (роль назвала ${s.blank}) → .agent/values.xml`);
+      return ".agent/values.xml";
     }
-
-    // «ФАЙЛА НЕТ» IS A DEFECT OF THE MOVE, NOT OF THE ARTIFACT, and it therefore spends no round of
-    // the repair budget: there is no artifact to repair and no blocker to carry. Live run a900de7b,
-    // `function/design`, occurrence 3: the role returned {"track":"ok","artifact":".agent/staging/
-    // routes.xml"} while `design/5` reported the file did not exist — a whole redelegation of pass C
-    // was charged for a role that had simply not written anything. What it needs is not the last
-    // check's blockers (there are none) but the fact itself, and `silent` keeps it bounded.
-    if (check.missing) {
-      silent[p.id]++;
-      if (silent[p.id] >= LOOPS) exit(err("escalate", { subject: check.blockers, evidence: `проход ${p.id} шага 9: роль ${LOOPS} раз вернула track:"ok", не записав ${p.out}` }));
-      log(`design/${p.id}: роль вернула ok, а ${p.out} не существует — попытка ${silent[p.id]} из ${LOOPS}, круг ремонта не потрачен`);
-      feedback[p.id] = check.blockers;
-      continue;
-    }
-
-    attempt[p.id]++;
-    // PER LINE. Every pass named in this report gets ITS OWN lines and nothing else; a pass this
-    // report does not blame keeps the feedback it already holds.
-    const parts = blameSplit(p.id, check.blockers);
-    let back = "";
-    for (const q of PASSES) {
-      const mine = parts[q.id];
-      if (!mine || !mine.length) continue;
-      const carry = await carried({ blockers: mine.join("\n"), seen: wasRed[q.id] });
-      feedback[q.id] = carry.text; wasRed[q.id] = carry.seen;   // the loop's memory is the RUN, not the round
-      if (q.id !== p.id && !back) back = q.id;                  // PASSES are in order — the EARLIEST culprit
-    }
-
-    // AND ONE LEVEL DEEPER, WHEN THE PASS WAS SWARMED: the lines that stayed with a pass are addressed
-    // to the PARTS that must repair them. The address is the host's (`blame` / `nodeBlame`, computed
-    // from the guardrail's own facts — steps/design/parts.mjs), never a regular expression over the
-    // blocker's prose here. The map is rebuilt, not merged: a part the new report does not name has
-    // nothing left to repair and must not be called again.
-    if (p.id === "routes" && swarming) {
-      const split = await addressToParts(parts.routes || [], check.blame, wasRedPart);
-      partFeedback = split.feedback;
-      // A LINE WITH NO ADDRESSEE HAS NO REPAIR RAIL. Measured on eddi: two of them, both rule 2 on a
-      // node with a `delta` that no `<scenario nodes>` of the FRD names at all — a deficit of step 6,
-      // which no part of pass C can answer for. Sending it to every part would order eleven roles to
-      // repair a scenario none of them owns.
-      if (split.orphan.length) {
-        exit(err("escalate", {
-          subject: split.orphan.join("\n  "),
-          evidence: `проход C собран роем из ${(check.parts || 0)} частей; у этих блокеров нет ни одного сценария FRD в адресатах — их чинит шаг 6, а не маршрут`,
-        }));
-      }
-      log(`design/routes: красный после слияния — блокеров ${(parts.routes || []).length}, адресовано частям ${Object.keys(partFeedback).length}`);
-    }
-
-    // THE SAME, ONE PASS LOWER, AND FROM TWO REPORTS (D28). A red merge of pass B addresses its own
-    // lines; a red pass C addresses the lines it sends BACK to pass B — rules 3 and 4 and rule 1 at the
-    // boundary, every one of them naming a node, and the node names the one part that wrote it. Without
-    // the second half a rewind from pass C wakes every part of pass B to repair three lines about one
-    // node, which is D25's re-entry cancelled.
-    // The map is rebuilt on EVERY red round of pass B — even one that blames nobody here, because then
-    // its parts have nothing left to repair and stale feedback would call their roles for nothing. A
-    // red pass C touches it only when it actually sends lines back.
-    if (swarmingNodes && (p.id === "nodes" || (parts.nodes || []).length)) {
-      const split = await addressToParts(parts.nodes || [], p.id === "nodes" ? check.blame : check.nodeBlame, wasRedNode);
-      nodeFeedback = split.feedback;
-      if (split.orphan.length) {
-        exit(err("escalate", {
-          subject: split.orphan.join("\n  "),
-          evidence: `проход B собран роем; у этих блокеров нет ни одного узла с владельцем среди сценариев FRD — их чинит шаг 6, а не дизайн`,
-        }));
-      }
-      log(`design/nodes: красный (${p.id}) — блокеров ${(parts.nodes || []).length}, адресовано частям ${Object.keys(nodeFeedback).length}`);
-    }
-
-    // AND THE SAME, ONE PASS HIGHER (D31). ONE channel, not two: `parts.values` is non-empty only after
-    // a red pass A (its own lines) or a red pass B naming an id the dictionary does not carry
-    // (blameOf), and `check.blame` addresses BOTH — blameValues keys a row by its id and an end by its
-    // use case, blameNodes keys the missing id by the NODE, and the scenario that owns that node has a
-    // part of pass A too, because pass A gives every scenario one.
-    if (swarmingValues && (p.id === "values" || (parts.values || []).length)) {
-      const split = await addressToParts(parts.values || [], check.blame, wasRedValue);
-      valueFeedback = split.feedback;
-      if (split.orphan.length) {
-        exit(err("escalate", {
-          subject: split.orphan.join("\n  "),
-          evidence: `проход A собран роем из ${(check.parts || 0)} частей; у этих блокеров нет ни одного сценария FRD в адресатах — их чинит шаг 6, а не словарь`,
-        }));
-      }
-      log(`design/values: красный (${p.id}) — блокеров ${(parts.values || []).length}, адресовано частям ${Object.keys(valueFeedback).length}`);
-    }
-
-    if (back) {
-      log(`design/${p.id}: красный по вине прохода ${back} — возврат туда, а staging этого прохода переживёт и приедет обратно как {PREVIOUS}`);
-      i = PASSES.findIndex((x) => x.id === back);
-    }
+    feedback = check.blockers;
+    if (check.missing) { silent++; log(`design/values: роль не записала ${VALUES_STAGING} — попытка ${silent}, бюджет починки не тратится`); continue; }
+    attempt++;
+    log(`design/values: красный — попытка ${attempt} из ${LOOPS}`);
   }
-  return ".agent/data-flow.md";
 }
 
 // FUNCTION_CONTRACT: planning — step 10: the accepted change as an ordered DAG of work
@@ -1750,20 +1111,23 @@ function blockerKey(b) { return `${b.code}|${b.node}`; }
 // partial graph-parts/, a focus.json out of step with the plan, a missing graph-computed.xml.
 //
 // Steps 7, 8 and 10 are host functions with no role. They are NOT judged, and the ladder in band()
-// still skips them when the band starts later — deliberately: step 8's gate ERASES the design pair
-// (ext/index.mjs::design), so re-running ripple on a run resumed at step 11 would delete the very
-// design its plan was built from.
+// still skips them when the band starts later — deliberately: step 8's gate ERASES the artifacts of
+// step 9 (ext/index.mjs::design), so re-running ripple on a run resumed at step 11 would delete the
+// very design its plan was built from.
 async function bandStart() {
   const frd = await checkFrd({ path: ".agent/frd.xml" });
   if (!frd.ok) return 6;
 
-  const graph = await readText({ path: ".agent/design-graph.xml" });
-  const flow = await readText({ path: ".agent/data-flow.md" });
   const skipped = (await readText({ path: ".agent/design" })).trim() === "skip";
-  // Step 9's receipt is the PAIR, or step 8's decision that there is nothing to synchronise. Judging
-  // the graph by its own guardrail is not possible from here: design({path}) promotes and erases, so
-  // asking it "is this green" would consume the answer.
-  if (!skipped && !(graph && flow)) { log(`resume: шаг 6 закрыт — .agent/frd.xml зелен сейчас (дельт ${frd.deltas})`); return 9; }
+  // STEP 9 HAS NO RECEIPT THIS FUNCTION CAN READ, so it is always re-entered. It used to be the pair
+  // `design-graph.xml` + `data-flow.md`, and while passes B and C are being rewritten nothing writes
+  // that pair — a resume would land here forever. The dictionary cannot stand in for it by its mere
+  // EXISTENCE either: a `values.xml` left by an older version of this pipeline is a file in another
+  // grammar, and reading it as a receipt would skip the step that was supposed to replace it. Whether
+  // it is green is a question only the guardrail answers, and asking it from here would consume the
+  // answer (design({path}) promotes and erases). So the band goes into step 9, where the GATE asks
+  // that question properly and a dictionary still green closes the pass for zero tokens.
+  if (!skipped) { log(`resume: шаг 6 закрыт — .agent/frd.xml зелен сейчас (дельт ${frd.deltas})`); return 9; }
 
   const verdict = await readText({ path: ".agent/review.xml" });
   if (!/verdict="Pass"/.test(verdict)) { log("resume: шаги 6 и 9 закрыты — их артефакты зелены сейчас"); return 11; }
@@ -1782,7 +1146,24 @@ async function band(from0) {
     if (from <= 6) { phase("intake"); await intake(fromCritic); }
     if (from <= 7) { phase("weight"); await weigh(); }
     if (from <= 8) { phase("ripple"); await rippling(); }
-    if (from <= 9) { phase("design"); await designing(from); }
+    if (from <= 9) {
+      phase("design");
+      const made = await designing(from);
+      // THE BAND STOPS HERE WHILE STEP 9 IS BEING REWRITTEN, and it stops LOUDLY. Passes B and C —
+      // the node graph and the routes — were deleted, so `.agent/design-graph.xml` and
+      // `.agent/data-flow.md` are written by nothing. Walking on is the one thing that must not
+      // happen: step 10 accepts a missing design as a legal input (steps/plan/plan.mjs), and would
+      // silently cut tickets with an empty `dod` on every node and without the edges the routes
+      // assert — live run c6bc2e54 shows what that plan looks like, a page ordered before the module
+      // it links to. A skip of step 8 is a different case and keeps walking: there the change is one
+      // node and there is genuinely no design to build the plan on.
+      if (made !== ".agent/design") {
+        exit(err("blocked", {
+          subject: `шаг 9 переписывается: проход A закрыт — словарь собран и зелен (${made}). Проходы B (граф узлов) и C (маршруты) в этой версии не реализованы, поэтому .agent/design-graph.xml и .agent/data-flow.md не пишутся, и шаги 10-11 идти не на чем`,
+          evidence: made,
+        }));
+      }
+    }
     if (from <= 10) { phase("plan"); planned = await planning(edges); }
     if (from >= 12) return planned;
     phase("review"); const verdict = await reviewing();

@@ -1,30 +1,26 @@
-// Slice `design`: the two projections of a change — a PURE core; its io lives in ext/index.mjs
+// The GRAMMAR of step 9's deliverable — a PURE reader; its io lives in ext/index.mjs
 // (standards/code.md: an io pipe is not unit-tested). Formula: 1 happy + Σ antecedent branches with a
-// DISTINGUISHABLE consequent. The branches are the seven rules of docs/data-flow.md §6 plus "not one
-// <module>"; each was built by REINTRODUCING the defect into a green fixture, so the seam is proven
-// rather than claimed.
+// DISTINGUISHABLE consequent.
 //
-// The FRD fixture is PARSED, not typed: `frd` reaches this core exactly as steps/intake/frd.mjs hands
-// it over, and a fixture that invents its own shape is how discrepancy A got in (rule 5 reddening on
-// every real artifact with «[object Object]» — steps/design/design.mjs, BUG_FIX_CONTEXT of checkDesign).
+// WHAT THIS FILE STOPPED TESTING, AND WHY. Until step 9 was rewritten this module also ASSEMBLED the
+// deliverable out of the three working artifacts and EXPANDED it into `.agent/data-flow.md`. Both
+// functions were deleted with the passes that fed them: nothing writes the working artifacts any
+// more, so `assemble` had no caller and `expand` had no input, and code only a test can reach is a
+// test no edit of the code can turn red. What is left is what step 10 READS — the nodes, the routes
+// and the units each node owes — and those three keep their seams here.
+//
+// The fixture is the PROMOTED form on purpose: it is the form step 10 receives, and a reader tested
+// against a form nobody stores is a reader tested against nothing.
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
-import { newDesign, parseDesign, parseRoutes, expand, assemble, unitsByPath } from "./design.mjs"
-import { parseValues } from "./values.mjs"
-import { parseNodes } from "./nodes.mjs"
-import { parseRoutes as parseWorkRoutes } from "./routes.mjs"
-import { parseFrd } from "../intake/frd.mjs"
+import { parseDesign, parseRoutes, unitsByPath } from "./design.mjs"
 
 // Fixture: booking a taken slot (S1 → 409) and a successful booking (S2 → 201). The return unwinds
-// along the same edges backwards — which is why rule 3 checks an edge UNDIRECTED.
-//
-// `src/SlotLock.java` carries a delta and is NOT in the subgraph: a NEW module is the designer's own
-// judgement (rule 6). `src/SlotRepo.java` is the mirror case — no delta, so it may only be COPIED
-// from the subgraph.
+// along the same edges backwards — which is why a route may name a node it has already walked.
 const GRAPH = `<design mode="major" base=".agent/appgraph.xml">
   <module path="src/BookingResource.java" delta="Changed">
+    <role>REST-точка брони</role>
     <contract in="POST /bookings {slotId,userId} | Booked(bookingId) | Conflict(slotId)"
               out="book(slotId,userId) | 201 {bookingId} | 409 {conflict}"/>
     <dep path="src/BookingService.java"/>
@@ -45,193 +41,44 @@ const GRAPH = `<design mode="major" base=".agent/appgraph.xml">
   <route scenario="S2" entry="1" steps="src/BookingResource.java#1 -> src/BookingService.java#1 -> src/SlotLock.java#2 -> src/SlotRepo.java#1 -> src/SlotLock.java#3 -> src/BookingService.java#3 -> src/BookingResource.java#2"/>
 </design>`
 
-const FRD_XML = `<frd grammar="1" goal="бронь слота с блокировкой">
-  <usecase id="UC1" actor="client" goal="забронировать слот">
-    <post>слот забронирован либо отказ 409</post>
-    <step n="1">клиент отправляет POST /bookings</step>
-  </usecase>
-  <delta op="POST /bookings" form="Changed" node="src/BookingResource.java" from="бронь без блокировки" to="бронь с блокировкой слота"/>
-  <scenario id="S1" uc="UC1" before="двойная бронь проходит" after="вторая бронь получает 409" nodes="src/BookingResource.java"/>
-  <scenario id="S2" uc="UC1" before="бронь не ставит блокировку" after="бронь ставит блокировку слота" nodes="src/BookingResource.java"/>
-  <touched path="src/BookingResource.java" why="ветка 409"/>
-  <touched path="src/BookingService.java" why="блокировка перед записью"/>
-  <touched path="src/SlotLock.java" why="новый модуль блокировки"/>
-</frd>`
-
-const FRD = parseFrd(FRD_XML)
-// The ripple subgraph as step 8 cuts it: what EXISTS. SlotLock is absent on purpose — it is new.
-const KNOWN = new Set(["src/BookingResource.java", "src/BookingService.java", "src/SlotRepo.java"])
-
-test("happy: both projections agree, the flow is expanded OUT of the contracts, and the units are the flow regrouped", () => {
-  const r = newDesign({ xml: GRAPH, frd: FRD, known: KNOWN })
-  assert.equal(r.ok, true)
-
-  const { nodes, routes, flow } = r.value
-  assert.equal(nodes.size, 4)
-  assert.deepEqual(routes.map((x) => x.scenario), ["S1", "S2"])
-
-  // The values in the flow are a copy of the contracts, not the role's own: a route carried only `path#alt`.
-  assert.match(flow, /\$START_FLOW id="S1"/)
-  assert.match(flow, /^3\. src\/SlotLock\.java : lock\(slotId,ttl\) -> Taken$/m)
-  assert.match(flow, /^5\. src\/BookingResource\.java : Conflict\(slotId\) -> 409 \{conflict\}$/m)
-  assert.match(flow, /^4\. src\/SlotRepo\.java : save\(slotId,lock\) -> Saved$/m)
-  assert.equal(flow.match(/\$END_FLOW/g).length, 2)
-
-  // The unit list of a node is the SAME lines grouped by path and deduplicated — the happy path is the
-  // first line, never a summand on top (docs/design.md §2). BookingService is entered three
-  // DISTINGUISHABLE ways across the two scenarios, and `book(slotId,userId) -> lock(slotId,ttl)`
-  // happens in both — one line, not two.
-  assert.match(flow, /\$START_TESTS path="src\/BookingService\.java"\n1\. book\(slotId,userId\) -> lock\(slotId,ttl\)\n2\. Taken -> Conflict\(slotId\)\n3\. Lock -> Booked\(bookingId\)\n\$END_TESTS/)
-  // No count beside the list: the count IS the list (docs/ripple.md §4, why fanin is not copied).
-  assert.doesNotMatch(flow, /tests="/)
-  assert.equal(flow.match(/\$START_TESTS/g).length, 4)
-})
-
-test("not one <module> — there is nothing to map the change onto", () => {
-  const r = newDesign({ xml: "<design></design>", frd: FRD, known: KNOWN })
-  assert.equal(r.ok, false)
-  assert.equal(r.error.cls, "invalid-design")
-  assert.match(r.error.detail, /ни одного <module>/)
-})
-
-// The seam of live run ffe8cb7b, the half of it that belongs to THIS file: what starts a scenario is
-// named, and `walk` copies THAT alternative into the flow's first line. Reintroducing the defect —
-// `in: k === 0 ? n.in[0] : …` in walk — turns the assertion below red. The other half, the BLOCKER
-// that demands the entry be named, moved with rule 1 (steps/design/routes.mjs).
-test("the entry of a route is a copy of the named alternative, never in[0] by position", () => {
-  const flow = expand(parseDesign(GRAPH), parseRoutes(GRAPH.replace('scenario="S1" entry="1"', 'scenario="S1" entry="2"')))
-  assert.match(flow, /^1\. src\/BookingResource\.java : Booked\(bookingId\) -> book\(slotId,userId\)$/m)
-})
-
-// NOT ONE RULE'S SEAM IS IN THIS FILE ANY MORE, and each moved BESIDE the rule it proves — otherwise
-// the next reader deletes a rule and watches a green suite:
-//   8 → steps/design/values.test.mjs ("rule 8"), with the rule, backlog D1;
-//   6 → steps/design/nodes.test.mjs (the two "rule 6" tests), backlog D2;
-//   1, 2, 3, 4, 5, 7 → steps/design/routes.test.mjs, backlog D4 — and their blockers were REWRITTEN
-//     there as facts (docs/design-step-by-step.md §8), which is why they could not be moved verbatim.
-// What is left here is `checkDesign` deciding nothing at all (see its contract) — untested on purpose:
-// a test that no code change can turn red is a comment (standards/code.md). D5 replaces the function
-// with `assemble` and the round trip that proves it.
-
-// The seam the SLICE keeps outside the core: the order carries exactly the keys the workflow passes.
-// `steps/scope/part.test.mjs` keeps the same one for its own slice — the device is the repository's,
-// not this file's invention.
-const ORDER_KEYS = ["FRD", "RIPPLE", "ANSWERS", "MODE", "DELTA_FORMS", "FEEDBACK", "STAGING", "CHECK"]
-
-// The two tests that stood here judged `steps/design/order.tpl` — the order of the ONE-generation
-// step 9. The file is deleted with D10: the phase now reads three orders, one per pass, and each is
-// judged beside the guardrail that owns it (order-values.tpl in values.test.mjs, order-nodes.tpl in
-// nodes.test.mjs, order-routes.tpl in routes.test.mjs). A test for a file nobody reads is a test for
-// a claim nobody makes.
-test("totality of parsing: garbage and undefined are read as an empty graph, not thrown", () => {
-  assert.equal(parseDesign(undefined).size, 0)
-  assert.deepEqual(parseRoutes(null), [])
-  assert.equal(expand(parseDesign(GRAPH), []), "")
-})
-
-// --- D5: assembly. THE ROUND TRIP IS THE SEAM ------------------------------------------------
-//
-// Passes A/B/C write by ID; steps 10 and 14, `parseDesign`, `parseRoutes` and `expand` read TEXT and
-// `#n`. `assemble` is the only place that translates, so the only honest proof that the deliverable
-// did not move is to read its output back with TODAY's readers and get the same change.
-
-const WORK_VALUES = `<values>
-  <value id="v1" text="POST /bookings {slotId,userId}"/>
-  <value id="v2" text="book(slotId,userId)"/>
-  <value id="v3" text="lock(slotId,ttl)"/>
-  <value id="v4" text="409 {conflict}"/>
-  <value id="v5" text="Taken"/>
-  <value id="v6" text="Conflict(slotId)"/>
-  <value id="v7" text="Booked(bookingId)"/>
-  <value id="v8" text="201 {bookingId}"/>
-  <value id="v9" text="save(slotId,lock)"/>
-  <value id="v10" text="Saved"/>
-  <value id="v11" text="Lock"/>
-</values>`
-
-// The SAME change as GRAPH above, in the working form: contracts speak ids, routes name values.
-const WORK_NODES = `<design mode="major" base=".agent/appgraph.xml">
-  <module path="src/BookingResource.java" delta="Changed">
-    <role>REST-точка брони</role>
-    <contract in="v1 | v7 | v6" out="v2 | v8 | v4"/>
-    <dep path="src/BookingService.java"/>
-  </module>
-  <module path="src/BookingService.java" delta="Changed">
-    <contract in="v2 | v5 | v11" out="v3 | v6 | v7"/>
-    <dep path="src/SlotLock.java"/>
-  </module>
-  <module path="src/SlotLock.java" delta="Added">
-    <contract in="v3 | v10" out="v5 | v9 | v11"/>
-    <dep path="src/SlotRepo.java"/>
-  </module>
-  <module path="src/SlotRepo.java">
-    <contract in="v9" out="v10"/>
-  </module>
-</design>`
-
-const WORK_ROUTES = `<routes>
-  <route scenario="S1" entry="v1" steps="src/BookingResource.java@v2 -> src/BookingService.java@v3 -> src/SlotLock.java@v5 -> src/BookingService.java@v6 -> src/BookingResource.java@v4"/>
-  <route scenario="S2" entry="v1" steps="src/BookingResource.java@v2 -> src/BookingService.java@v3 -> src/SlotLock.java@v9 -> src/SlotRepo.java@v10 -> src/SlotLock.java@v11 -> src/BookingService.java@v7 -> src/BookingResource.java@v8"/>
-</routes>`
-
-const assembled = () => assemble({
-  values: parseValues(WORK_VALUES),
-  nodes: parseNodes(WORK_NODES),
-  routes: parseWorkRoutes(WORK_ROUTES),
-  mode: "major",
-})
-
-test("assembly: what the passes wrote by id, today's readers read as the change they read yesterday", () => {
-  const out = assembled()
-  const back = parseDesign(out)
-  const backRoutes = parseRoutes(out)
-  const was = parseDesign(GRAPH)
-
-  // structure: the same nodes, the same deltas, the same edges
-  assert.deepEqual([...back.keys()], [...was.keys()])
-  for (const [path, n] of was) {
-    assert.equal(back.get(path).delta, n.delta, path)
-    assert.deepEqual(back.get(path).deps, n.deps, path)
-    assert.deepEqual(back.get(path).in, n.in, `in of ${path}`)     // ids became TEXTS
-    assert.deepEqual(back.get(path).out, n.out, `out of ${path}`)
-  }
-
-  // time: the same routes, with the positions a SCRIPT computed instead of a model counting
-  assert.deepEqual(backRoutes, parseRoutes(GRAPH))
-
-  // and the deliverable step 14 cuts: identical, line for line
-  assert.equal(expand(back, backRoutes), expand(was, parseRoutes(GRAPH)))
-})
-
-test("assembly: the number is the position of the NAMED value, and off-by-one is visible", () => {
-  const out = assembled()
-  // `entry` names v1 — the FIRST `in` of the first node, so `entry="1"`, never 0 and never 2.
-  assert.match(out, /entry="1"/)
-  // S1's last step hands back v4, the THIRD alternative of BookingResource's out.
-  assert.match(out, /src\/BookingResource\.java#3"/)
-  // Reintroduction: number from zero in assemble — both assertions above and the round trip go red.
-  assert.doesNotMatch(out, /#0/)
-
-  // `<role>` is read by NO guardrail, and precisely therefore it needs a seam: a projection that
-  // quietly drops a section of the deliverable would pass every other test in this file.
-  assert.match(out, /<role>REST-точка брони<\/role>/)
-})
-
-// R-shippable: одна деривация, два потребителя. Шаг 9 пишет юниты в `data-flow.md`, шаг 10 кладёт их
-// же на узел плана как `dod` — тикет режется из ПЛАНА, и без DoD исполнителю нечем закрыть узел
-// (живой прогон d8ef8c60: команда узла зелена до начала работы). Вторая копия деривации разойдётся с
-// первой молча, поэтому она одна и сверяется здесь круговым швом.
-test("unitsByPath и $START_TESTS — одна деривация: секции потока собираются из той же карты", () => {
+test("happy: узлы, их контракты и маршруты читаются так, как их пишет поставка", () => {
   const nodes = parseDesign(GRAPH)
   const routes = parseRoutes(GRAPH)
-  const units = unitsByPath(nodes, routes)
-  const flow = expand(nodes, routes)
+  assert.equal(nodes.size, 4)
+  assert.deepEqual(routes.map((r) => r.scenario), ["S1", "S2"])
+  // Альтернативы контракта режутся ТОЛЬКО по `|`: текст значения несёт и пробелы, и запятые.
+  assert.deepEqual(nodes.get("src/BookingService.java").out, ["lock(slotId,ttl)", "Conflict(slotId)", "Booked(bookingId)"])
+  assert.deepEqual(nodes.get("src/BookingResource.java").deps, ["src/BookingService.java"])
+  assert.equal(nodes.get("src/SlotLock.java").delta, "Added")
+})
 
-  for (const [path, list] of units) {
-    const block = (flow.match(new RegExp(`\\$START_TESTS path="${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\n([\\s\\S]*?)\\$END_TESTS`)) || ["", ""])[1]
-    assert.deepEqual(block.trim().split("\n").map((l) => l.replace(/^\d+\.\s*/, "")), list, path)
-  }
+// R-shippable: одна деривация, два потребителя. Шаг 9 кладёт юниты узла в поставку, шаг 10 кладёт их
+// же на узел плана как `dod` — тикет режется из ПЛАНА, и без DoD исполнителю нечем закрыть узел
+// (живой прогон d8ef8c60: команда узла зелена до начала работы).
+test("юниты узла — пары «вход -> выход», по одной на РАЗЛИЧИМУЮ, в порядке первого появления", () => {
+  const units = unitsByPath(parseDesign(GRAPH), parseRoutes(GRAPH))
+  // BookingService входят тремя различимыми путями за два сценария, и `book -> lock` случается в
+  // обоих — одна строка, не две. Счастливый путь это первая строка, а не слагаемое сверху.
+  assert.deepEqual(units.get("src/BookingService.java"), [
+    "book(slotId,userId) -> lock(slotId,ttl)",
+    "Taken -> Conflict(slotId)",
+    "Lock -> Booked(bookingId)",
+  ])
   // Узел, через который не идёт ни один маршрут, в карте ОТСУТСТВУЕТ — не лежит там с пустым списком.
   assert.equal([...units.values()].every((l) => l.length > 0), true)
-  assert.equal(units.size, (flow.match(/\$START_TESTS /g) || []).length)
+  assert.equal(units.size, 4)
+})
+
+// Шов живого прогона ffe8cb7b: чем маршрут НАЧИНАЕТСЯ — названо, и `walk` копирует именно ту
+// альтернативу. Вернуть дефект (`in: k === 0 ? n.in[0] : …` в walk) — и утверждение краснеет.
+test("вход маршрута — копия НАЗВАННОЙ альтернативы, а не in[0] по позиции", () => {
+  const moved = GRAPH.replace('scenario="S1" entry="1"', 'scenario="S1" entry="2"')
+  const units = unitsByPath(parseDesign(moved), parseRoutes(moved))
+  assert.equal(units.get("src/BookingResource.java")[0], "Booked(bookingId) -> book(slotId,userId)")
+})
+
+test("тотальность чтения: мусор и undefined читаются как пустая поставка, а не бросают", () => {
+  assert.equal(parseDesign(undefined).size, 0)
+  assert.deepEqual(parseRoutes(null), [])
+  assert.equal(unitsByPath(parseDesign(GRAPH), []).size, 0)
 })

@@ -75,11 +75,8 @@ import { newGraph, graphXml } from "../steps/graph/graph.mjs"
 import { newFrd, parseFrd, FRD_FORM } from "../steps/intake/frd.mjs"
 import { newMode } from "../steps/weight/weight.mjs"
 import { newRipple, blindNodes, waiverFor } from "../steps/ripple/ripple.mjs"
-import { parseDesign, parseRoutes, expand, assemble, unitsByPath } from "../steps/design/design.mjs"
-import { parseValues, checkValues, checkEnds, valueFacts } from "../steps/design/values.mjs"
-import { parseNodes, checkGraph, checkNodes, graphFacts, cards } from "../steps/design/nodes.mjs"
-import { parseRoutes as parseWorkRoutes, checkRoutes, checkSteps, checkCoverage, blockerLine, scenarioOf } from "../steps/design/routes.mjs"
-import { routeParts, mergeParts, blameByScenario, changeRipple, nodeParts, nodeOwner, mergeNodes, blameNodes, valueParts, valuePrefix, mergeValues, blameValues } from "../steps/design/parts.mjs"
+import { parseDesign, parseRoutes, unitsByPath } from "../steps/design/design.mjs"
+import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/design/values.mjs"
 import { newPlanIndex } from "../steps/plan/plan.mjs"
 import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
@@ -1349,19 +1346,28 @@ export const ripple = {
   },
 }
 
-// --- design: the two projections of the change, and the gate that decides they are needed ---------
+// --- design: the change's dictionary, composed by the script and named by the role ----------------
 //
-// ONE function, TWO calls, told apart by `path` — the same step, asked two different questions:
-//   design({})            the GATE: reads `.agent/design` (written by step 8) and ALWAYS erases both
-//                         of this step's artifacts. Yesterday's design must not survive into today's
-//                         run in any branch: on `skip` nobody will rewrite it, and on `needed` it is
-//                         rewritten only if the role and the guardrail both succeed. The argument is
-//                         the one `.agent/mode` and `.agent/ripple.xml` are erased by (docs/weight.md
-//                         §4, docs/ripple.md §5): newRun carries the run's STATE into .agent/prev and
-//                         leaves the ARTIFACTS.
-//   design({ path })      the CHECK: judges what the role staged, and on green promotes it and writes
-//                         `.agent/data-flow.md` — the flow AND the unit list of every node, both
-//                         expanded by the script out of the contracts (steps/design/design.mjs).
+// STEP 9 IS BEING REWRITTEN, AND TODAY IT ENDS AFTER PASS A. What survives of the old three-pass
+// construction is its DELIVERABLE grammar (steps/design/design.mjs, read by step 10); the two passes
+// that used to fill it — the node graph and the routes — were deleted with their swarms, and the
+// artifacts they produced (`.agent/design-graph.xml`, `.agent/data-flow.md`) are not written by any
+// code in this file any more. The band says so out loud instead of walking on (workflows/izi.js).
+//
+// ONE function, THREE calls, told apart by their arguments — the same step, asked three questions:
+//   design({})              the GATE: reads `.agent/design` (written by step 8) and erases every
+//                           artifact of the step that is not green NOW. Yesterday's design must not
+//                           survive into today's run in any branch. The argument is the one
+//                           `.agent/mode` and `.agent/ripple.xml` are erased by (docs/weight.md §4,
+//                           docs/ripple.md §5): newRun carries the run's STATE into .agent/prev and
+//                           leaves the ARTIFACTS.
+//   design({ skeleton: p }) COMPOSE: write the dictionary's skeleton to the staging path `p` — one
+//                           row per end of every use case with its `closes` already filled in, one
+//                           row per call of every node of the change copied verbatim out of the
+//                           ripple. This is the whole composition of the artifact, and it costs no
+//                           tokens (steps/design/values.mjs::valuesSkeleton).
+//   design({ path })        the CHECK: judge what the role staged against a freshly recomputed
+//                           skeleton, and on green NORMALIZE and promote it to `.agent/values.xml`.
 //
 // The FRD is read by THE frd parser and the subgraph by THE map reader — the same discipline the
 // ripple keeps: a second parser of either grammar is how two readers of one file start disagreeing.
@@ -1369,61 +1375,24 @@ const DESIGN_GRAPH_PATH = ".agent/design-graph.xml"
 const VALUES_PATH = ".agent/values.xml"
 const NODES_PATH = ".agent/design-nodes.xml"
 const DATA_FLOW_PATH = ".agent/data-flow.md"
-// The swarm of pass C writes ONE FILE PER PART, and the merge is a script (D26). The directory is
-// staging and nothing else: no part is ever promoted, and a green merge assembles the deliverable out
-// of them in the same breath (docs/design-step-by-step.md §7).
-const PARTS_DIR = ".agent/staging/routes-parts"
-// …and pass B has its own, one directory lower in the ladder and the same in every other respect
-// (D28). Two constants, not one with an argument: the two swarms write two grammars, and a single
-// directory would make a leftover part of one pass an input of the other's merge.
-const NODE_PARTS_DIR = ".agent/staging/nodes-parts"
-// …and pass A has its own, one directory higher and the same in every other respect (D31). Three
-// constants and not one with an argument, for the reason above: three grammars, and a leftover part of
-// one pass must never become an input of another pass's merge.
-const VALUE_PARTS_DIR = ".agent/staging/values-parts"
 
-// GREEN NOW, NOT GREEN ONCE — the same rule `reuse` applies to a cached swarm part and `bandStart` to
-// the band (workflows/izi.js). A promoted artifact of pass A or B is reusable only while its own
-// guardrail still accepts it: the ripple may have moved under it since. Both live at module scope
-// because `routeUnits` asks the same question `design` does, and two readings of "is pass A green"
-// would be one rule written twice (standards/code.md §1).
+// GREEN NOW, NOT GREEN ONCE — the same rule `bandStart` applies to the band (workflows/izi.js). A
+// promoted dictionary is reusable only while its own guardrail still accepts it: the FRD or the
+// ripple may have moved under it since, and the skeleton is a function of both.
 const frdOf = (root) => parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
 const greenValues = (root) => {
-  if (!existsSync(at(root, VALUES_PATH))) return null
-  const values = parseValues(readFileSync(at(root, VALUES_PATH), "utf8"))
-  return checkValues({ values, frd: frdOf(root) }).length ? null : values
+  if (!existsSync(at(root, VALUES_PATH)) || !existsSync(at(root, FRD_PATH)) || !existsSync(at(root, RIPPLE_PATH))) return null
+  const staged = readFileSync(at(root, VALUES_PATH), "utf8")
+  const frd = frdOf(root)
+  const ripple = readFileSync(at(root, RIPPLE_PATH), "utf8")
+  return checkValues({ staged, frd, ripple }).length ? null : parseValues(staged)
 }
-const greenNodes = (root, values) => {
-  if (!values || !existsSync(at(root, NODES_PATH))) return null
-  const nodes = parseNodes(readFileSync(at(root, NODES_PATH), "utf8"))
-  const known = parseMap(readFileSync(at(root, RIPPLE_PATH), "utf8")).nodes
-  return checkGraph({ nodes, values, frd: frdOf(root), known }).length ? null : nodes
-}
-
-// partFiles — the parts of ONE swarm on disk (`base` says whose), in the FRD's SCENARIO ORDER, then
-// whatever else the directory holds. The order is the FRD's because the deliverable's flow sections are
-// cut by scenario and a run must not depend on how a filesystem lists a directory; the tail is there
-// because a merge that silently drops a file it did not expect is a lost route or a lost node, and the
-// whole's guardrail would report it as a missing scenario instead of as the lost file it is.
-function partFiles(root, order, base) {
-  const dir = at(root, base)
-  if (!existsSync(dir)) return []
-  const have = new Set(readdirSync(dir).filter((f) => f.endsWith(".xml")))
-  const out = []
-  for (const id of order) if (have.has(`${id}.xml`)) { out.push({ id, file: `${base}/${id}.xml` }); have.delete(`${id}.xml`) }
-  for (const f of [...have].sort()) out.push({ id: f.slice(0, -4), file: `${base}/${f}` })
-  return out
-}
-
-// The FRD's scenario order, the order both merges concatenate in — read in one place because a file
-// order that depends on how a filesystem lists a directory is a run that cannot be replayed.
-const scenarioOrder = (frd) => ((frd && frd.scenarios) || []).map((s) => String((s && s.id) || "").trim()).filter(Boolean)
 
 export const design = {
-  description: "Step 9 in three passes. Without `pass`: the GATE — read .agent/design (needed|skip) and erase every artifact of the step that is not green NOW, so no previous run's design can survive. With `pass` and `path`: judge that pass's staged artifact by its own guardrail (values → steps/design/values.mjs, nodes → steps/design/nodes.mjs, routes → steps/design/routes.mjs) and promote it on green; a green `routes` pass also ASSEMBLES .agent/design-graph.xml and .agent/data-flow.md out of the three, in the form steps 10 and 14 read. With `pass` AND `scenario`: judge ONE part of that pass's swarm — that scenario's own file — by the rules decidable on a part alone (`values`: a row with no id or no text, a repeated id, rule 12 for the ends of THIS use case and its mirror; `nodes`: rule 6, an id outside the dictionary, rule 14 for a node with a delta; `routes`: rules 1, 3, 4, 9 and 11), promoting nothing. Without `scenario` the same pass MERGES every part of .agent/staging/values-parts, .agent/staging/nodes-parts or .agent/staging/routes-parts into `path` first, then judges the whole by every rule and addresses each blocker to the parts that must repair it (`blame`, and for a red `routes` also `nodeBlame` — the lines pass B must repair, addressed to ITS parts). Pass `cards: true` to get the node cards of pass C instead of judging, or `ripple: true` to get the ripple PROJECTED on the nodes of the change — the `<module>` bytes of those nodes plus the paths of every other node of the subgraph — which is what the order of pass A carries instead of the whole subgraph (steps/design/parts.mjs::changeRipple).",
+  description: "Step 9, pass A: the dictionary of everything the nodes of the change exchange. Without arguments: the GATE — read .agent/design (needed|skip) and erase every artifact of the step that is not green NOW, so no previous run's dictionary can survive. With `skeleton`: COMPOSE the artifact and write it to that staging path — one row per end of every use case (its `closes` token already filled in, and the text of a failure branch already written as «status code»), then one row per `<api>` and `<decl kind=method>` of every node of the change, copied verbatim out of .agent/ripple.xml. Costs no tokens and decides the whole composition: how many rows there are, what each closes, in what order, under what id. With `path`: the CHECK — recompute that skeleton and judge what the role staged against it (a row lost or added, an end re-attributed, a text the script prefilled edited, a text left blank), and on green strip the scaffolding and promote to .agent/values.xml.",
   input: {
     type: "object",
-    properties: { pass: { type: "string", enum: ["values", "nodes", "routes"] }, path: { type: "string" }, cards: { type: "boolean" }, ripple: { type: "boolean" }, scenario: { type: "string" } },
+    properties: { path: { type: "string" }, skeleton: { type: "string" } },
     additionalProperties: false,
   },
   output: {
@@ -1434,14 +1403,12 @@ export const design = {
       design: { type: "string" },
       reused: { type: "array", items: { type: "string" } },
       values: { type: "number" },
-      text: { type: "string" },
-      nodes: { type: "number" },
-      // `neighbours` — how many paths of the subgraph rode into pass A's order WITHOUT their
-      // declarations (D29a). It is printed by the workflow and by nothing else: the projection is the
-      // one place a run can see that the cut happened and how deep it went.
-      neighbours: { type: "number" },
-      routes: { type: "number" },
-      units: { type: "number" },
+      // What the composition cost the role: `rows` in the skeleton, `filled` of them written by the
+      // script, `blank` left to name. The three are printed by the workflow and are the only place a
+      // run can see how much of pass A a role was actually asked for.
+      rows: { type: "number" },
+      filled: { type: "number" },
+      blank: { type: "number" },
       blockers: { type: "string" },
       // `missing` — the role wrote NOTHING to the staging path. It is told apart from every other
       // refusal because the caller spends a different budget on it: there is no artifact to repair,
@@ -1449,52 +1416,16 @@ export const design = {
       // A boolean, not a regex over the blocker's Russian sentence — a rule read by matching another
       // module's prose is the same rule written twice (standards/code.md §1).
       missing: { type: "boolean" },
-      // `parts` — how many files the merge read, and `blame` — WHO repairs which line of a red merge.
-      // The address is computed from the FACTS the guardrail returns (rule number, the routes that met
-      // the fact, the node it names) and never from the blocker's prose: a workflow matching another
-      // module's Russian with a regular expression is that rule written twice (standards/code.md §1).
-      // A line addressed to nobody is simply absent from `blame` — see steps/design/parts.mjs.
-      parts: { type: "number" },
-      blame: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: { scenario: { type: "string" }, lines: { type: "array", items: { type: "string" } } },
-          required: ["scenario", "lines"],
-          additionalProperties: false,
-        },
-      },
-      // `nodeBlame` — the same red report of pass C addressed to the parts of PASS B, for the lines
-      // whose repair belongs there (rules 3, 4 and rule 1 at the boundary). It is the SAME computation
-      // over the SAME facts, keyed by the node instead of the route: a second channel would be a second
-      // description of one rule (standards/code.md §1).
-      nodeBlame: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: { scenario: { type: "string" }, lines: { type: "array", items: { type: "string" } } },
-          required: ["scenario", "lines"],
-          additionalProperties: false,
-        },
-      },
     },
     required: ["ok"],
     additionalProperties: false,
   },
-  run({ pass, path, cards: wantCards, ripple: wantRipple, scenario } = {}, context) {
+  run({ path, skeleton } = {}, context) {
     const root = runRoot(context)
     const read = (p) => readFileSync(at(root, p), "utf8")
     const drop = (...ps) => { for (const p of ps) if (existsSync(at(root, p))) rmSync(at(root, p)) }
-    const frdNow = () => frdOf(root)
-    const valuesNow = () => greenValues(root)
-    const nodesNow = (values) => greenNodes(root, values)
-    // Who wrote what, filled by whichever merge runs below: node path → part for pass B, route id →
-    // part for pass C. One call has one `pass`, so one meaning at a time — and it beats reading the id
-    // or the path itself, because the FILE is the fact.
-    let mergedOwner = new Map()
-    let mergedParts = 0
 
-    if (!pass) {
+    if (!path && !skeleton) {
       if (!existsSync(at(root, DESIGN_PATH))) {
         return { ok: false, why: `${DESIGN_PATH} не существует — шаг 8 ripple не отработал, решать про дизайн нечем` }
       }
@@ -1502,520 +1433,56 @@ export const design = {
       if (flag !== "needed" && flag !== "skip") {
         return { ok: false, why: `${DESIGN_PATH} содержит «${flag}» — допустимо needed | skip; артефакт из другой версии грамматики` }
       }
-
-      // THE PAIR NEVER SURVIVES THE GATE, and that is not the same rule as the two above. It is the
-      // artifact of pass C, whose own input — the staged routes — is deliberately not promoted
-      // (docs/design-step-by-step.md §7): a green C assembles the pair in the same breath, so there
-      // is nothing for the routes to survive INTO. Reaching the gate at all therefore means pass C
-      // has to run again, and yesterday's pair would otherwise be planned on by step 10.
-      if (flag === "skip") { drop(VALUES_PATH, NODES_PATH, DESIGN_GRAPH_PATH, DATA_FLOW_PATH); return { ok: true, design: flag } }
+      // THE ARTIFACTS OF THE DELETED PASSES NEVER SURVIVE THE GATE, and this is not the same rule as
+      // the dictionary's. `.agent/design-nodes.xml`, `.agent/design-graph.xml` and `.agent/data-flow.md`
+      // are written by no code in this repository any more; a copy left by an older run would be
+      // planned on by step 10 as if this run had produced it.
+      drop(NODES_PATH, DESIGN_GRAPH_PATH, DATA_FLOW_PATH)
+      if (flag === "skip") { drop(VALUES_PATH); return { ok: true, design: flag } }
 
       if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, RIPPLE_PATH))) {
         return { ok: false, why: `${FRD_PATH} или ${RIPPLE_PATH} не существует — судить, что из дизайна ещё живо, не по чему` }
       }
-      const values = valuesNow()
-      const nodes = nodesNow(values)
-      // From the first RED pass downward: a red dictionary takes the graph with it, because the graph
-      // speaks its ids and nothing else can resolve them.
-      if (!values) drop(VALUES_PATH, NODES_PATH, DESIGN_GRAPH_PATH, DATA_FLOW_PATH)
-      else if (!nodes) drop(NODES_PATH, DESIGN_GRAPH_PATH, DATA_FLOW_PATH)
-      else drop(DESIGN_GRAPH_PATH, DATA_FLOW_PATH)
-      return { ok: true, design: flag, reused: [values ? "values" : "", nodes ? "nodes" : ""].filter(Boolean) }
+      const values = greenValues(root)
+      if (!values) drop(VALUES_PATH)
+      return { ok: true, design: flag, reused: values ? ["values"] : [] }
     }
 
-    // MODE_PATH is demanded here and not only where it is read: the assembled graph types itself
-    // with the weight of step 7, and a deliverable that says mode="" is not a smaller deliverable —
-    // it is one whose weight step 11 and the operator cannot read at all.
-    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"], [MODE_PATH, "шаг 7 weight не отработал"]]) {
+    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"]]) {
       if (!existsSync(at(root, p))) return { ok: false, blockers: `${p} не существует — ${why}, судить дизайн не по чему` }
     }
 
-    // The ripple of pass A is DATA of its order, not a verdict, and it is CUT to the nodes of the
-    // change (D29a): the guardrail of pass A never reads the subgraph at all (checkValues judges the
-    // dictionary against the FRD), and the guardrail that does — rule 6 of pass B — reads
-    // `.agent/ripple.xml` off disk right here, whole, so no rule loses an operand by this cut. What the
-    // role loses is 68 % of bytes about code that cannot enter the design graph; what it keeps is every
-    // neighbour's PATH, which is the operand of rule 6's transit half (steps/design/parts.mjs).
-    if (wantRipple) {
-      const p = changeRipple({ frd: frdNow(), ripple: read(RIPPLE_PATH) })
-      return { ok: true, text: p.text, nodes: p.paths.length, neighbours: p.neighbours.length }
-    }
-
-    // The cards of pass C are DATA of its order, not a verdict: the role picks a name it sees instead
-    // of counting separators in a contract it typed itself (steps/design/nodes.mjs::cards).
-    if (wantCards) {
-      const values = valuesNow(), nodes = nodesNow(values)
-      if (!values || !nodes) return { ok: false, blockers: "проходы A и B ещё не зелены — карточки узлов собирать не из чего" }
-      return { ok: true, text: cards(values, nodes) }
-    }
-
-    // --- D31: PASS A IS WRITTEN BY A SWARM TOO, and its two rails are the same pair ----------------
-    //
-    // One part, judged ALONE (`scenario`): the findings whose operands lie inside one part — a row with
-    // no name or no text, a repeated id, rule 12's mirror, and rule 12's open ends OF THIS USE CASE
-    // (steps/design/values.mjs::checkEnds). Rule 8 and the other use cases' ends are not asked:
-    // measured on the dictionary of run 27b37fdb, the twelve parts answer them with 422 lines where the
-    // whole answers with none, and every one of those lines is a claim about a row another part wrote.
-    // Nothing is promoted — a part is an input of the merge.
-    if (pass === "values" && scenario) {
-      if (!existsSync(at(root, path))) {
-        return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт части это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
-      }
-      const frd = frdNow()
-      const own = ((frd && frd.scenarios) || []).find((s) => String((s && s.id) || "").trim() === scenario)
-      const uc = String((own && own.uc) || "").trim()
-      const mine = parseValues(read(path))
-      const prefix = valuePrefix(scenario)
-      // THE PART WRITES ITS OWN IDS AND ITS OWN ENDS, AND NOTHING ELSE. Both halves are decidable here
-      // because both are the MACHINE's (steps/design/parts.mjs::valueParts): the prefix is what makes
-      // the merge a union with no conflict resolution, and the use case is what makes rule 12 monotone
-      // on a part — an end this part leaves open can be closed by no one else.
-      const alien = [...mine.keys()].filter((id) => id && !id.startsWith(prefix))
-      const strayEnds = [...new Set([...(mine.closes || [])].flatMap(([, ts]) => ts).filter((t) => t.split("/")[0] !== uc))]
-      const blockers = [
-        ...(alien.length ? [`значение ${alien.join(", ")} — не твоё: id этой части начинаются с ${prefix}. В твоём файле только они`] : []),
-        ...(strayEnds.length ? [`конец ${strayEnds.join(", ")} — не твой: его закрывает другая часть. В closes твоих значений только концы ${uc}`] : []),
-        ...checkEnds({ values: mine, frd, uc }).map((f) => f.text),
-      ]
-      if (blockers.length) return { ok: false, blockers: blockers.join("\n  ") }
-      return { ok: true, values: mine.size }
-    }
-
-    // THE MERGE IS A SCRIPT, not a role: the parts are concatenated in the FRD's scenario order and the
-    // WHOLE is judged by today's `checkValues`, every rule of it. With no parts on disk the pass behaves
-    // exactly as it did before the swarm — one order, one file, one verdict — which is how the
-    // degenerate case (fewer than three scenarios) stays a single call to the role.
-    if (pass === "values") {
-      const files = partFiles(root, scenarioOrder(frdNow()), VALUE_PARTS_DIR)
-      if (files.length) {
-        const merged = mergeValues(files.map((f) => ({ id: f.id, xml: read(f.file) })))
-        mkdirSync(dirname(at(root, path)), { recursive: true })
-        writeFileSync(at(root, path), merged.xml)
-        mergedOwner = merged.owner
-        mergedParts = files.length
-      }
-    }
-
-    // --- D28: PASS B IS WRITTEN BY A SWARM TOO, and its two rails are the same pair ----------------
-    //
-    // One part, judged ALONE (`scenario`): the findings whose operands lie inside one node — rule 6's
-    // two halves, an id outside the dictionary, rule 14 for a node with a delta (steps/design/nodes.mjs
-    // ::checkNodes). The rules of the WHOLE are not asked: measured on the graph of run 35972d1c, the
-    // five parts answer them with 103 lines where the whole answers with three, and a part whose node
-    // has three co-owners can never make them green. Nothing is promoted — a part is an input of the merge.
-    if (pass === "nodes" && scenario) {
-      const values = valuesNow()
-      if (!values) return { ok: false, blockers: `${VALUES_PATH} не зелен — проход A не закрыт, а контракт узла говорит его id` }
-      if (!existsSync(at(root, path))) {
-        return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт части это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
-      }
-      const frd = frdNow()
-      const owner = nodeOwner(frd)
-      const mine = parseNodes(read(path))
-      // THE PART WRITES ITS OWN NODES AND NOTHING ELSE, and it writes ALL of them. Both halves are
-      // decidable here because the node list is the MACHINE's (steps/design/parts.mjs::nodeParts): it
-      // is what makes the merge a union with no conflict resolution, and what keeps a node from being
-      // silently dropped by the one part that was supposed to write it.
-      const alien = [...mine.keys()].filter((p) => owner.get(p) !== scenario)
-      const lost = [...owner].filter(([, s]) => s === scenario).map(([p]) => p).filter((p) => !mine.has(p))
-      const known = parseMap(read(RIPPLE_PATH)).nodes
-      const blockers = [
-        ...(alien.length ? [`узел ${alien.join(", ")} — не твой: его <module> пишет другая часть. В твоём файле только пути из списка твоих узлов`] : []),
-        ...(lost.length ? [`узел ${lost.join(", ")} назван твоим, а <module> для него в файле нет — часть отвечает за КАЖДЫЙ свой путь`] : []),
-        ...checkNodes({ nodes: mine, values, frd, known }).map(blockerLine),
-      ]
-      if (blockers.length) return { ok: false, blockers: blockers.join("\n  ") }
-      return { ok: true, nodes: mine.size }
-    }
-
-    // THE MERGE IS A SCRIPT, not a role: the parts are concatenated in the FRD's scenario order and the
-    // WHOLE is judged by today's `checkGraph`, every rule of it. With no parts on disk the pass behaves
-    // exactly as it did before the swarm — one order, one file, one verdict — which is how the
-    // degenerate case (fewer than three parts) stays a single call to the role.
-    if (pass === "nodes") {
-      const files = partFiles(root, scenarioOrder(frdNow()), NODE_PARTS_DIR)
-      if (files.length) {
-        const merged = mergeNodes(files.map((f) => ({ id: f.id, xml: read(f.file) })), { mode: read(MODE_PATH).trim() })
-        mkdirSync(dirname(at(root, path)), { recursive: true })
-        writeFileSync(at(root, path), merged.xml)
-        mergedOwner = merged.owner
-        mergedParts = files.length
-      }
-    }
-
-    // --- D26: PASS C IS WRITTEN BY A SWARM, and two of its rails live here --------------------------
-    //
-    // One part, judged ALONE (`scenario`): rules 1, 3, 4, 9 and 11 — every one of them decidable on the
-    // routes of one scenario. The covering rules are not asked: measured on `eddi`, one part S2 judged
-    // by them reports 51 lines by rules 2 and 7 and 10 by rule 5, and every one of them is a lie about
-    // a route another part had already written. Nothing is promoted and nothing is assembled — a part
-    // is an input of the merge, not an artifact of the step.
-    if (pass === "routes" && scenario) {
-      const values = valuesNow(), nodes = nodesNow(values)
-      if (!values || !nodes) return { ok: false, blockers: "проходы A и B не зелены — стыковать маршруты не с чем" }
-      if (!existsSync(at(root, path))) {
-        return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт части это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
-      }
-      const frd = frdNow()
-      const mine = parseWorkRoutes(read(path))
-      const ids = (frd.scenarios || []).map((s) => String((s && s.id) || "").trim()).filter(Boolean)
-      // THE PART WRITES ITS OWN SCENARIO AND NOTHING ELSE. It is what makes the merge a union with no
-      // conflict resolution at all: the ids are disjoint because each part may only use its own.
-      const alien = mine.filter((r) => scenarioOf(r.scenario, ids) !== scenario).map((r) => r.scenario)
-      const blockers = [
-        ...(alien.length ? [`маршрут ${[...new Set(alien)].join(", ")} не принадлежит сценарию ${scenario} — часть пишет только маршруты своего сценария: ${scenario}, ${scenario}b, ${scenario}c…`] : []),
-        ...checkSteps({ routes: mine, nodes, values, frd, edges: parseMap(readIfExists(root, GRAPH_PATH)).edges }).map(blockerLine),
-      ]
-      if (blockers.length) return { ok: false, blockers: blockers.join("\n  ") }
-      return { ok: true, routes: mine.length }
-    }
-
-    // THE MERGE IS A SCRIPT, not a role (D26): the parts are concatenated in the FRD's scenario order
-    // and the WHOLE is judged by today's checkRoutes, all nine rules. With no parts on disk the pass
-    // behaves exactly as it did before the swarm — one order, one file, one verdict — which is how the
-    // degenerate case (one or two scenarios) stays a single call to the role.
-    if (pass === "routes") {
-      const files = partFiles(root, scenarioOrder(frdNow()), PARTS_DIR)
-      if (files.length) {
-        const merged = mergeParts(files.map((f) => ({ id: f.id, xml: read(f.file) })))
-        mkdirSync(dirname(at(root, path)), { recursive: true })
-        writeFileSync(at(root, path), merged.xml)
-        mergedOwner = merged.owner
-        mergedParts = files.length
-      }
+    // COMPOSE. The skeleton is written to STAGING and to nowhere else: it is not an artifact of the
+    // step, it is the form of the answer, and the role's job is to hand back this same file with the
+    // blank texts filled. Writing it here rather than embedding it in the order is what makes «верни
+    // файл по этому пути» the whole instruction — the role edits a file it can read, and the check
+    // below compares it with a skeleton recomputed from the same two inputs.
+    if (skeleton) {
+      const s = valuesSkeleton({ frd: frdOf(root), ripple: read(RIPPLE_PATH) })
+      mkdirSync(dirname(at(root, skeleton)), { recursive: true })
+      writeFileSync(at(root, skeleton), `${s.xml}\n`)
+      return { ok: true, rows: s.rows, filled: s.filled, blank: s.blank }
     }
 
     if (!existsSync(at(root, path))) {
       return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт прохода это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
     }
+
+    // JUDGE ON STAGING, PROMOTE ONLY AFTER GREEN (standards/workflow.md). A red pass leaves its
+    // staging file where it is — that file is the evidence the operator diagnoses from, and it is
+    // also what the next round's order carries back to the role.
     const staged = read(path)
+    const blockers = checkValues({ staged, frd: frdOf(root), ripple: read(RIPPLE_PATH) })
+    if (blockers.length) return { ok: false, blockers: blockers.join("\n  ") }
 
-    // EVERY PASS: judge on STAGING, promote only after green (standards/workflow.md). A red pass
-    // leaves its staging file where it is — that file is the evidence the operator diagnoses from.
-    if (pass === "values") {
-      const values = parseValues(staged)
-      const frd = frdNow()
-      // The FACTS, not their lines, are what the address is computed from — the same records
-      // checkValues renders, so the report and its addressing cannot disagree (steps/design/parts.mjs).
-      const facts = valueFacts({ values, frd })
-      if (facts.length) {
-        return {
-          ok: false,
-          blockers: facts.map((f) => f.text).join("\n  "),
-          parts: mergedParts,
-          blame: blameValues({ facts, frd, owner: mergedOwner }),
-        }
-      }
-      copyFileSync(at(root, path), at(root, VALUES_PATH)); rmSync(at(root, path))
-      // The PARTS survive a green merge on purpose: a rewind from pass B or C sends the band back
-      // through them, each is re-judged against the FRD as it stands then, and a part still green closes
-      // for zero tokens (workflows/izi.js, the D25 re-entry).
-      return { ok: true, values: values.size, ...(mergedParts ? { parts: mergedParts } : {}) }
-    }
-
-    if (pass === "nodes") {
-      const values = valuesNow()
-      if (!values) return { ok: false, blockers: `${VALUES_PATH} не зелен — проход A не закрыт, а контракт узла говорит его id` }
-      const nodes = parseNodes(staged)
-      const known = parseMap(read(RIPPLE_PATH)).nodes
-      const frd = frdNow()
-      const blockers = checkGraph({ nodes, values, frd, known })
-      if (blockers.length) {
-        // The FACTS, not their lines, are what the address is computed from — the same records
-        // checkGraph renders, so the report and its addressing cannot disagree (steps/design/parts.mjs).
-        return {
-          ok: false,
-          blockers: blockers.join("\n  "),
-          parts: mergedParts,
-          blame: blameNodes({ facts: graphFacts({ nodes, values, frd, known }), frd, owner: mergedOwner }),
-        }
-      }
-      copyFileSync(at(root, path), at(root, NODES_PATH)); rmSync(at(root, path))
-      // The PARTS survive a green merge on purpose: a rewind from pass C sends the band back through
-      // them, each is re-judged against the dictionary as it stands then, and a part still green closes
-      // for zero tokens (workflows/izi.js, the D25 re-entry).
-      return { ok: true, nodes: nodes.size, ...(mergedParts ? { parts: mergedParts } : {}) }
-    }
-
-    // pass === "routes": the joint, and the only pass that writes the DELIVERABLE.
-    const values = valuesNow()
-    const nodes = nodesNow(values)
-    if (!values || !nodes) return { ok: false, blockers: "проходы A и B не зелены — стыковать маршруты не с чем" }
-    const routes = parseWorkRoutes(staged)
-    // Rule 9's second operand: the map's DIRECTED edges. `.agent/ripple.xml` cannot serve — the ripple
-    // projects every edge BOTH ways on purpose (steps/ripple/ripple.mjs), so the only place a
-    // direction the repository already has survives is the map itself. A missing map is read as no
-    // edges, and then rule 9 judges the routes against each other alone: this file is not the place
-    // that refuses on a missing step 5 (that is checkFrd's), and a guardrail that crashes on it turns
-    // data into code 2.
-    const mapEdges = parseMap(readIfExists(root, GRAPH_PATH)).edges
-    const frd = frdNow()
-    const blockers = checkRoutes({ routes, nodes, values, frd, edges: mapEdges })
-    if (blockers.length) {
-      // The FACTS, not their lines, are what the address is computed from — the same records
-      // checkRoutes renders, so the report and its addressing cannot disagree (steps/design/parts.mjs).
-      const facts = [
-        ...checkSteps({ routes, nodes, values, frd, edges: mapEdges }),
-        ...checkCoverage({ routes, nodes, values, frd }),
-      ]
-      return {
-        ok: false,
-        blockers: blockers.join("\n  "),
-        parts: mergedParts,
-        blame: blameByScenario({ facts, frd, owner: mergedOwner }),
-        // …AND THE SAME FACTS ADDRESSED TO THE PARTS OF PASS B (D28). Rules 3 and 4 and rule 1 at the
-        // boundary are pass B's to repair (workflows/izi.js::blameOf), and every one of them names a
-        // NODE — so the part that wrote that node is the one part that must be woken. Without this the
-        // rewind hands the whole report to all six parts and D25's re-entry is cancelled: six roles
-        // rewrite six files to repair three lines about one node.
-        nodeBlame: blameNodes({ facts, frd, owner: nodeOwner(frd) }),
-      }
-    }
-
-    const mode = read(MODE_PATH).trim()
-    const graph = assemble({ values, nodes, routes, mode })
-    writeFileSync(at(root, DESIGN_GRAPH_PATH), `${graph}\n`)
-    // The flow is expanded out of the ASSEMBLED graph, never out of the working form: one reader, the
-    // same one steps 10 and 14 use, so the deliverable cannot disagree with itself.
-    const flow = expand(parseDesign(graph), parseRoutes(graph))
-    writeFileSync(at(root, DATA_FLOW_PATH), `${flow}\n`)
+    // The scaffolding the role read (`side`, `end`, `src`, `form`) is stripped on the way out: a later
+    // pass reads `<value id text closes/>` and must never be able to judge by the requirement's prose
+    // instead of by the name (steps/design/values.mjs::normalize).
+    const values = parseValues(staged)
+    mkdirSync(dirname(at(root, VALUES_PATH)), { recursive: true })
+    writeFileSync(at(root, VALUES_PATH), `${normalize(staged)}\n`)
     rmSync(at(root, path))
-    // The PARTS survive a green merge on purpose: they are this run's staging, and a rewind to pass B
-    // sends the band back through them — each is re-judged against the graph as it stands then, and a
-    // part still green closes for zero tokens (workflows/izi.js, the D25 re-entry).
-    return { ok: true, nodes: nodes.size, routes: routes.length, ...(mergedParts ? { parts: mergedParts } : {}), units: (flow.match(/^\$START_TESTS /gm) || []).length }
-  },
-}
-
-// --- valueUnits: pass A cut into the units of its swarm -------------------------------------------
-// D31. One agent, one FRD scenario, and the ENDS of the use case that scenario closes — the obligation
-// pass A actually carries. The unit is routeParts' unit and not nodeParts': a scenario whose nodes are
-// all owned by an earlier one is still a use case with ends, and dropping it would leave 21 of eddi's
-// 35 ends written by nobody.
-//
-// Why it exists rather than the workflow slicing the FRD itself: the sandbox has no `fs` and no parser,
-// and a second reader of either grammar would be a second grammar (standards/workflow.md §1).
-export const valueUnits = {
-  description: "Step 9 pass A, the swarm: the change cut into ONE UNIT PER FRD SCENARIO. Each unit carries the FRD projected onto that scenario (the scenario, its use case, the failures of that use case), the subgraph of .agent/ripple.xml projected onto that scenario's nodes plus the paths of every other node of it, and the block naming the id prefix this part must use and every end of its use case it must close. With `drop: true` it first ERASES every staged part — the caller says so when the FRD was rewritten under them, because a part written against the previous FRD is an artifact about another change.",
-  input: { type: "object", properties: { drop: { type: "boolean" } }, additionalProperties: false },
-  output: {
-    type: "object",
-    properties: {
-      ok: { type: "boolean" },
-      why: { type: "string" },
-      dropped: { type: "number" },
-      units: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            uc: { type: "string" },
-            frd: { type: "string" },
-            ripple: { type: "string" },
-            ends: { type: "string" },
-            paths: { type: "number" },
-            chars: { type: "number" },
-          },
-          required: ["id", "frd", "ripple", "ends"],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ["ok"],
-    additionalProperties: false,
-  },
-  run({ drop = false } = {}, context) {
-    const root = runRoot(context)
-    // A REWIND TO STEP 6 REWROTE THE FRD, so every part staged against the old one is about another
-    // change — and unlike a single staging file, a directory cannot simply be overwritten by the next
-    // role: a part of a scenario that no longer exists would be merged in by its own file name. WHO
-    // SAYS SO IS THE CALLER, and it says it ONCE per phase (workflows/izi.js).
-    let dropped = 0
-    if (drop && existsSync(at(root, VALUE_PARTS_DIR))) {
-      dropped = readdirSync(at(root, VALUE_PARTS_DIR)).length
-      rmSync(at(root, VALUE_PARTS_DIR), { recursive: true, force: true })
-    }
-    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"]]) {
-      if (!existsSync(at(root, p))) return { ok: false, why: `${p} не существует — ${why}, резать проход A на части не по чему` }
-    }
-    // NO GREEN PREDECESSOR IS DEMANDED, and that is the whole difference from nodeUnits and routeUnits:
-    // pass A is the FIRST pass, its operands are step 6's requirement and step 8's subgraph, and both
-    // were just checked to exist.
-    const text = readFileSync(at(root, FRD_PATH), "utf8")
-    const ripple = readFileSync(at(root, RIPPLE_PATH), "utf8")
-    const units = valueParts({ frd: parseFrd(text), ripple, text })
-    return {
-      ok: true,
-      dropped,
-      units: units.map((u) => ({
-        id: u.id,
-        uc: u.uc,
-        frd: u.frd,
-        ripple: u.ripple,
-        ends: u.ends,
-        paths: u.paths.length,
-        chars: u.chars,
-      })),
-    }
-  },
-}
-
-// --- nodeUnits: pass B cut into the units of its swarm --------------------------------------------
-// D28. One agent, one FRD scenario, and the nodes that scenario OWNS — the first scenario naming a
-// path is what the machine gives it to (steps/design/parts.mjs::nodeOwner), so the parts' files are
-// disjoint and the merge is a concatenation. Everything the part may see is decided HERE: its own
-// nodes with their deltas, their bytes out of the ripple, and the PATHS of the other parts' nodes,
-// which its edges may reach and its file may not describe.
-//
-// Why it exists rather than the workflow slicing the FRD itself: the sandbox has no `fs` and no
-// parser, and a second reader of either grammar would be a second grammar (standards/workflow.md §1).
-export const nodeUnits = {
-  description: "Step 9 pass B, the swarm: the change cut into ONE UNIT PER FRD SCENARIO that owns nodes. Each unit carries the FRD projected onto that scenario (the scenario, its use case, the deltas of its OWN nodes, the failures of its use case), those nodes' bytes out of .agent/ripple.xml, and the block naming what the part must write and which neighbour paths its edges may reach. A scenario whose every node is already owned by an earlier one is NOT a unit — its part would be an order to write an empty file. Requires pass A green NOW. With `drop: true` it first ERASES every staged part — the caller says so when the FRD was rewritten under them, because a part written against the previous FRD is an artifact about another change.",
-  input: { type: "object", properties: { drop: { type: "boolean" } }, additionalProperties: false },
-  output: {
-    type: "object",
-    properties: {
-      ok: { type: "boolean" },
-      why: { type: "string" },
-      dropped: { type: "number" },
-      units: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            uc: { type: "string" },
-            frd: { type: "string" },
-            ripple: { type: "string" },
-            nodes: { type: "string" },
-            paths: { type: "number" },
-            chars: { type: "number" },
-          },
-          required: ["id", "frd", "ripple", "nodes"],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ["ok"],
-    additionalProperties: false,
-  },
-  run({ drop = false } = {}, context) {
-    const root = runRoot(context)
-    // A REWIND TO STEP 6 REWROTE THE FRD, so every part staged against the old one is about another
-    // change — and unlike a single staging file, a directory cannot simply be overwritten by the next
-    // role: a part of a scenario that no longer exists would be merged in by its own file name. WHO
-    // SAYS SO IS THE CALLER, and it says it ONCE per phase (workflows/izi.js): a directory erased on
-    // every repair round would take THIS phase's own parts with it.
-    let dropped = 0
-    if (drop && existsSync(at(root, NODE_PARTS_DIR))) {
-      dropped = readdirSync(at(root, NODE_PARTS_DIR)).length
-      rmSync(at(root, NODE_PARTS_DIR), { recursive: true, force: true })
-    }
-    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"]]) {
-      if (!existsSync(at(root, p))) return { ok: false, why: `${p} не существует — ${why}, резать проход B на части не по чему` }
-    }
-    if (!greenValues(root)) return { ok: false, why: "проход A ещё не зелен — части прохода B собирать не из чего", dropped }
-
-    const text = readFileSync(at(root, FRD_PATH), "utf8")
-    const ripple = readFileSync(at(root, RIPPLE_PATH), "utf8")
-    const units = nodeParts({ frd: parseFrd(text), ripple, text })
-    return {
-      ok: true,
-      dropped,
-      units: units.map((u) => ({
-        id: u.id,
-        uc: u.uc,
-        frd: u.frd,
-        ripple: u.ripple,
-        nodes: u.nodes,
-        paths: u.paths.length,
-        chars: u.chars,
-      })),
-    }
-  },
-}
-
-// --- routeUnits: pass C cut into the units of its swarm -------------------------------------------
-// D26. One agent, one FRD scenario. Everything the part is allowed to see is decided HERE and handed
-// over whole — the projection of the FRD, the ends of its use case with a route id already assigned to
-// each, and the cards of the connected component its scenario lives in. The role chooses nothing about
-// its own order, exactly as it does not choose the number of a question (CLAUDE.md, constraint 4).
-//
-// Why this function exists at all rather than the workflow slicing the FRD itself: the sandbox has no
-// `fs` and no parser, and a second reader of the FRD grammar would be a second grammar
-// (standards/workflow.md §1). The judgement is pure and lives in steps/design/parts.mjs.
-export const routeUnits = {
-  description: "Step 9 pass C, the swarm: the change cut into ONE UNIT PER FRD SCENARIO. Each unit carries the FRD projected onto that scenario (the scenario, its use case, its failures), the ends of the use case with the route id assigned to each, the entry value, and the node cards of the connected component the scenario's nodes lie in. Requires passes A and B green NOW. With `drop: true` it first ERASES every staged part — the caller says so when the FRD was rewritten under them, because a part written against the previous FRD is an artifact about another change.",
-  input: { type: "object", properties: { drop: { type: "boolean" } }, additionalProperties: false },
-  output: {
-    type: "object",
-    properties: {
-      ok: { type: "boolean" },
-      why: { type: "string" },
-      dropped: { type: "number" },
-      units: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            uc: { type: "string" },
-            entry: { type: "string" },
-            frd: { type: "string" },
-            ends: { type: "string" },
-            cards: { type: "string" },
-            nodes: { type: "number" },
-            routes: { type: "number" },
-            chars: { type: "number" },
-          },
-          required: ["id", "frd", "ends", "cards"],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ["ok"],
-    additionalProperties: false,
-  },
-  run({ drop = false } = {}, context) {
-    const root = runRoot(context)
-    // A REWIND TO STEP 6 REWROTE THE FRD, so every part staged against the old one is about another
-    // change — and unlike a single staging file, a directory cannot simply be overwritten by the next
-    // role: a part of a scenario that no longer exists would be merged in by its own file name.
-    //
-    // WHO SAYS SO IS THE CALLER, and it says it ONCE per phase (workflows/izi.js). A directory erased
-    // on every repair round of pass C would take THIS phase's own parts with it, and the swarm would
-    // rewrite every one of them each circle — the bill of live run 5bbe5de4 (33 routes rewritten three
-    // times over), reissued eleven times.
-    let dropped = 0
-    if (drop && existsSync(at(root, PARTS_DIR))) {
-      dropped = readdirSync(at(root, PARTS_DIR)).length
-      rmSync(at(root, PARTS_DIR), { recursive: true, force: true })
-    }
-    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"]]) {
-      if (!existsSync(at(root, p))) return { ok: false, why: `${p} не существует — ${why}, резать проход C на части не по чему` }
-    }
-    const values = greenValues(root)
-    const nodes = greenNodes(root, values)
-    if (!values || !nodes) return { ok: false, why: "проходы A и B ещё не зелены — части прохода C собирать не из чего", dropped }
-
-    const text = readFileSync(at(root, FRD_PATH), "utf8")
-    const units = routeParts({ frd: parseFrd(text), values, nodes, text })
-    return {
-      ok: true,
-      dropped,
-      units: units.map((u) => ({
-        id: u.id,
-        uc: u.uc,
-        entry: u.entry,
-        frd: u.frd,
-        ends: u.ends,
-        cards: u.cards,
-        nodes: u.nodes.length,
-        routes: u.routes.length,
-        chars: u.frd.length + u.ends.length + u.cards.length,
-      })),
-    }
+    return { ok: true, values: values.size }
   },
 }
 
@@ -2259,7 +1726,7 @@ export const review = {
     const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
     // The map is R6's reachability operand — which tests can observe a node. It is not demanded:
     // a run whose map is missing loses that half of the rule and keeps the rest, the same way
-    // checkGraph treats a missing ripple subgraph.
+    // `checkRoutes` of step 9 reads a missing map as no edges rather than as a refusal.
     const mapPath = at(root, GRAPH_PATH)
     const map = existsSync(mapPath) ? parseMap(readFileSync(mapPath, "utf8")) : null
     // The operator's waivers from step 6's gate, read by THE reader of that file — the same call
@@ -2380,7 +1847,7 @@ export default function extension(pi) {
     version: "1.12.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
     description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, valueUnits, nodeUnits, routeUnits, plan, review },
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, plan, review },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

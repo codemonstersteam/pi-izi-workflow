@@ -20,10 +20,8 @@
 // EXTERNAL_DEPENDENCY: steps/design/design.mjs — parseDesign AND parseRoutes, both parsed by the
 //             CALLER (ext/index.mjs) and handed in. The routes carry the change's own direction and
 //             are absent whenever step 9 was skipped, which is a legal input, not a failure.
-// EXTERNAL_DEPENDENCY: steps/design/routes.mjs — forwardLegs, the ONE derivation of "which directed
-//             edge does a route assert". Step 9's rule 9 refuses a set of routes whose order cannot be
-//             built, and it refuses it by this very function: the two steps must not be able to
-//             disagree about what a route says (backlog D17, live run f7bf154a).
+//             `forwardLegs` below reads those routes; it used to live in steps/design/routes.mjs and
+//             came here when that slice was deleted — its contract explains why this is the right home.
 // EXTERNAL_DEPENDENCY: core/xml.mjs — tokens, the ONE cut of a list-of-tokens attribute. `nodes` of a
 //             scenario is read here, at step 6 and at step 9, and three copies of that split are how
 //             one artifact means three routes (live run 27b37fdb).
@@ -39,13 +37,46 @@
 // Interface:  GRAMMAR_VERSION — stamped on the artifact
 //             TASK_KEY — the shape of the operator's answer
 //             KEY_QUESTION — the question's text, verbatim and byte-stable across runs
+//             forwardLegs(routes) -> [{ from, to, scenario }]  — the edges a route asserts
 //             newPlanIndex({ frd, map, mode, design, trunk, answers }) -> Result<Plan, ...>
 
 import { ok, err } from "../../core/result.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
-import { forwardLegs } from "../design/routes.mjs"
 import { hasOwnCheck } from "../../core/suites.mjs"
 import { tokens } from "../../core/xml.mjs"
+
+// FUNCTION_CONTRACT: forwardLegs — the DIRECTED edges a set of routes asserts
+//   Input:        routes — parseRoutes' array, of EITHER form: the staging one (a step's value is an
+//                 id) or the promoted one (`path#n`). Only `steps[].path` is read, and that field is
+//                 the same in both
+//   Dependencies: —
+//   Antecedent:   any value; a missing/garbage input is an empty list
+//   Consequent:   success: [{ from, to, scenario }] in appearance order, one per FORWARD transition.
+//                          A route RETURNS along the nodes it already walked, and a return is not an
+//                          edge: `A -> B -> A` says A calls B, never that B calls A. A node already
+//                          seen in THIS route is where its return begins
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    forwardLegs(routes?: Route[]) -> [{ from, to, scenario }]
+//
+// WHY IT LIVES HERE. This step derives the ORDER of the work from exactly these edges, and it is the
+// only consumer left: the function was written inside step 9's route guardrail (D17, live run
+// f7bf154a) so that "a set of routes whose order cannot be built" and "the order step 10 builds"
+// could not be two different derivations. Step 9's passes B and C are being rewritten and will import
+// it from here — the rule stays one piece of code, it simply lives with its consumer now.
+export function forwardLegs(routes) {
+  const out = []
+  for (const r of routes || []) {
+    const steps = (r && r.steps) || []
+    const seen = new Set()
+    for (const [k, s] of steps.entries()) {
+      seen.add(s.path)
+      const next = steps[k + 1]
+      if (next && !seen.has(next.path)) out.push({ from: s.path, to: next.path, scenario: r.scenario })
+    }
+  }
+  return out
+}
 
 // 2 — the node carries what a TICKET needs to be shippable: `dod` (its units, derived once at step 9
 //     by steps/design/design.mjs::unitsByPath) and `why` (the FRD's own words about why this node is
