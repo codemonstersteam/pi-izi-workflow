@@ -24,6 +24,9 @@
 //             edge does a route assert". Step 9's rule 9 refuses a set of routes whose order cannot be
 //             built, and it refuses it by this very function: the two steps must not be able to
 //             disagree about what a route says (backlog D17, live run f7bf154a).
+// EXTERNAL_DEPENDENCY: core/xml.mjs — tokens, the ONE cut of a list-of-tokens attribute. `nodes` of a
+//             scenario is read here, at step 6 and at step 9, and three copies of that split are how
+//             one artifact means three routes (live run 27b37fdb).
 // EXTERNAL_DEPENDENCY: steps/plan/git-conventions.md — the branch convention this module encodes:
 //             `<prefix>/<KEY>`, prefix from the weight, base a fact of git. TASK_KEY below is the ONE
 //             copy of the key's shape, and plan.test.mjs asserts that the file and this constant
@@ -42,6 +45,7 @@ import { ok, err } from "../../core/result.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
 import { forwardLegs } from "../design/routes.mjs"
 import { hasOwnCheck } from "../../core/suites.mjs"
+import { tokens } from "../../core/xml.mjs"
 
 // 2 — the node carries what a TICKET needs to be shippable: `dod` (its units, derived once at step 9
 //     by steps/design/design.mjs::unitsByPath) and `why` (the FRD's own words about why this node is
@@ -245,7 +249,7 @@ export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, e
   //   expression is what keeps "the node closes itself" from meaning two things.
   const closesItself = (path) => hasOwnCheck(m, path)
   for (const s of (frd && frd.scenarios) || []) {
-    const over = String(s.nodes || "").split(/\s+/).filter((p) => codeIds.has(p))
+    const over = tokens(s.nodes).filter((p) => codeIds.has(p))
     if (!over.length) continue
     if (over.length < 2 && over.every(closesItself)) continue
     const node = { id: `scenario:${s.id}`, kind: "scenario", scenario: s.id, deps: [...new Set(over)], check: [], coveredBy: [] }

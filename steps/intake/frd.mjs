@@ -21,7 +21,7 @@ import { ok, err } from "../../core/result.mjs"
 // EXTERNAL_DEPENDENCY: core/xml.mjs — the tag scanner shared with steps/scope and steps/design. One
 // grammar family, one piece of code reading it; the BUG_FIX_CONTEXT for ATTRS' quote-resilience lives
 // there and is inherited here for free.
-import { attrs, ATTRS, tag } from "../../core/xml.mjs"
+import { attrs, ATTRS, tag, tokens } from "../../core/xml.mjs"
 // EXTERNAL_DEPENDENCY: steps/brd/brd.mjs::numbersIn — provenance of a number is ONE rule in this
 // pipeline, and it already has a home: the same function that judges `fit` at step 2, together with
 // its defence against designations (ISO-8601, RFC 3339, HTTP/2). A second copy here would drift.
@@ -258,8 +258,9 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   const newNodes = new Set(frd.deltas.filter((d) => d.new === "yes" && d.node).map((d) => d.node))
   // The routes of the FRD, as one set of paths. Declared ONCE here and read by both rules that ask
   // «does a scenario run through this node» — F2b just below and F3c after it. Two spellings of one
-  // expression would drift the day `nodes` gains a separator (standards/code.md §1).
-  const scenarioNodes = new Set(frd.scenarios.flatMap((s) => String(s.nodes || "").split(/\s+/).filter(Boolean)))
+  // expression would drift the day `nodes` gains a separator (standards/code.md §1) — and the
+  // separator itself is declared once for the whole class, in core/xml.mjs::tokens.
+  const scenarioNodes = new Set(frd.scenarios.flatMap((s) => tokens(s.nodes)))
   // F2b — a touched must be EXPLAINED: it carries a delta of its own, or a scenario runs through it.
   // Since step 8 measures the WIDTH of the change by `touched` (docs/ripple.md §3), a node declared
   // touched on nothing but the role's say-so orders the `designer` role for free — and step 10 would
@@ -421,7 +422,7 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     if (!sc.uc || !ucs.has(sc.uc)) B.push(`F4 ${at}: uc="${sc.uc || ""}" — такого <usecase> нет`)
     if (!sc.before || !sc.after) B.push(`F4 ${at}: before/after пусты — сценарий не различающий`)
     else if (sc.before.trim() === sc.after.trim()) B.push(`F4 ${at}: before и after совпадают — сценарий зелен и до изменения`)
-    const route = String(sc.nodes || "").split(/\s+/).filter(Boolean)
+    const route = tokens(sc.nodes)
     if (!route.length) B.push(`F4 ${at}: nodes пуст — через какие узлы карты идёт сценарий, не названо`)
     // A scenario may run through a node this change creates — that is the whole point of adding one.
     for (const p of route) if (!nodes.has(p) && !newNodes.has(p)) B.push(`F4 ${at}: узла «${p}» нет ни в карте, ни среди создаваемых этим изменением (<delta new="yes">) — маршрут сценария опирается на выдуманный путь`)
@@ -541,9 +542,9 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   const named = new Map()
   for (const f of frd.failures) {
     if (!judged.has(f.code)) continue
-    const tokens = String(f.from || "").split(/[\s,]+/).map((t) => t.trim()).filter(Boolean)
+    const branchesOfCode = tokens(f.from)
     if (!named.has(f.code)) named.set(f.code, new Set())
-    for (const t of tokens) {
+    for (const t of branchesOfCode) {
       named.get(f.code).add(t)
       if (!branchTokens.has(t)) {
         B.push(`F6d <failure code="${f.code}"> ссылается на «${t}», а такой ветки нет: токен ветки это id use case и id её <ext> через косую черту (UC1/1a)`)

@@ -35,7 +35,7 @@
 //             newReview({ xml, plan, frd, map, answers }) -> Result<{ verdict, blockers[] }, cls>
 
 import { ok, err } from "../../core/result.mjs"
-import { attrs, elem, tag } from "../../core/xml.mjs"
+import { attrs, elem, tag, tokens } from "../../core/xml.mjs"
 import { reachedBy } from "../../core/suites.mjs"
 import { waiverFor } from "../ripple/ripple.mjs"
 
@@ -251,7 +251,7 @@ export function owedItems(frd, plan) {
   const named = new Set([
     ...((frd && frd.touched) || []),
     ...((frd && frd.deltas) || []).map((d) => (d && d.node) || ""),
-    ...((frd && frd.scenarios) || []).flatMap((s) => String((s && s.nodes) || "").split(/\s+/)),
+    ...((frd && frd.scenarios) || []).flatMap((s) => tokens(s && s.nodes)),
   ].filter(Boolean))
   for (const n of (plan && plan.nodes) || []) {
     const id = (n && n.id) || ""
@@ -421,11 +421,11 @@ export function newReview({ xml, plan, frd, map = null, answers = [] } = {}) {
   // on another node entirely — inside a green Pass. The operands are already in parseFrd.
   const scenarioNodes = (id) => {
     const sc = ((frd && frd.scenarios) || []).find((x) => x && String(x.id).trim() === id)
-    return sc ? [`scenario:${id}`, ...String(sc.nodes || "").split(/\s+/).filter(Boolean)] : null
+    return sc ? [`scenario:${id}`, ...tokens(sc.nodes)] : null
   }
   const ucNodes = (uc) => {
     const own = ((frd && frd.scenarios) || []).filter((x) => x && String(x.uc || "").trim() === uc)
-    return own.length ? own.flatMap((x) => [`scenario:${String(x.id).trim()}`, ...String(x.nodes || "").split(/\s+/).filter(Boolean)]) : null
+    return own.length ? own.flatMap((x) => [`scenario:${String(x.id).trim()}`, ...tokens(x.nodes)]) : null
   }
   const allowedFor = (item) => {
     if (item.startsWith("nfr:")) return null                       // an NFR has no node of its own in the FRD

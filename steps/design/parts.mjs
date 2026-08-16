@@ -39,7 +39,7 @@
 // handed measured 11 262 characters against 32 779, and the FRD projection is what made that possible:
 // the whole FRD is 24 955 bytes, so a part carrying it entire would be no smaller than the whole.
 
-import { attrs, elem, esc } from "../../core/xml.mjs"
+import { attrs, elem, esc, tokens } from "../../core/xml.mjs"
 import { blockerLine, parseRoutes, scenarioOf } from "./routes.mjs"
 import { endsOf } from "./values.mjs"
 import { cards } from "./nodes.mjs"
@@ -50,8 +50,9 @@ import { cards } from "./nodes.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
 
 // The paths one `<scenario nodes>` names, in its own order. Written once: the FRD spells the list with
-// newlines inside the attribute, and three consumers below split it.
-const pathsOf = (s) => String((s && s.nodes) || "").split(/\s+/).map((x) => x.trim()).filter(Boolean)
+// newlines inside the attribute, and three consumers below split it. The separator is not decided
+// here — `nodes` is a list of TOKENS and its whole class is cut by core/xml.mjs::tokens.
+const pathsOf = (s) => tokens(s && s.nodes)
 
 // byNode — path → the FRD scenarios that name it, in the FRD's order. It is the ONE reading of "who
 // speaks about this node", and both swarms stand on it: pass C addresses a blocker about a node to
@@ -158,7 +159,7 @@ const componentOf = (nodes, seeds) => {
 export function routeParts({ frd = {}, values = new Map(), nodes = new Map(), text = "" } = {}) {
   const closes = (values && values.closes) || new Map()
   const byToken = new Map()                       // `UC5/post` → the value that closes it
-  for (const [id, tokens] of closes) for (const t of tokens) if (!byToken.has(t)) byToken.set(t, id)
+  for (const [id, ends] of closes) for (const t of ends) if (!byToken.has(t)) byToken.set(t, id)
 
   const scenarioXml = elements(text, "scenario")
   const usecaseXml = elements(text, "usecase")
@@ -185,9 +186,9 @@ export function routeParts({ frd = {}, values = new Map(), nodes = new Map(), te
 
     // The failures of this use case: the `<failure from>` naming any end of it. A failure of another
     // use case is another part's business and would only widen this order.
-    const mine = (frd.failures || []).filter((f) => String((f && f.from) || "").split(/\s+/).some((t) => t.split("/")[0] === uc))
+    const mine = (frd.failures || []).filter((f) => tokens(f && f.from).some((t) => t.split("/")[0] === uc))
 
-    const seeds = String((s && s.nodes) || "").split(/\s+/).map((x) => x.trim()).filter(Boolean)
+    const seeds = pathsOf(s)
     const comp = componentOf(nodes, seeds)
     // NO COMPONENT IS A CASE, not an empty card block: a scenario whose nodes pass B did not draw
     // leaves the role blind, and blind is worse than wide. It gets the whole graph and the merge's
@@ -455,7 +456,7 @@ export function nodeParts({ frd = {}, ripple = "", text = "" } = {}) {
     // The failures of this use case: the `<failure from>` naming any end of it. A failure of another
     // use case is another part's business and would only widen this order — the same cut routeParts
     // makes one pass later.
-    const failures = ((frd && frd.failures) || []).filter((f) => String((f && f.from) || "").split(/\s+/).some((t) => t.split("/")[0] === uc))
+    const failures = ((frd && frd.failures) || []).filter((f) => tokens(f && f.from).some((t) => t.split("/")[0] === uc))
 
     const projection = [
       scenarioXml.get(id) || "",
@@ -585,7 +586,7 @@ export function blameNodes({ facts = [], frd = {}, owner = new Map() } = {}) {
     // `uc` carries one use case or several (a `<failure from>` may name ends of many), and every
     // scenario of each of them is an addressee: the value has to be seated somewhere among their nodes,
     // and which of them owns that node is not this function's judgement to make.
-    if (!to.size && f.uc) for (const u of String(f.uc).split(/\s+/).filter(Boolean)) for (const s of ofUc.get(u) || []) to.add(s)
+    if (!to.size && f.uc) for (const u of tokens(f.uc)) for (const s of ofUc.get(u) || []) to.add(s)
     const line = blockerLine(f)
     for (const s of to) {
       if (!out.has(s)) out.set(s, [])

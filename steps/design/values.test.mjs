@@ -210,3 +210,73 @@ test("12: несколько токенов на одном значении, и
   assert.deepEqual(openEnds(checkValues({ values: parseValues(two), frd: FRD_1DF9 })), ["UC1/in", "UC2/in", "UC2/post"])
   assert.deepEqual(checkValues({ values: parseValues(VALUES_1DF9), frd: {} }), [])
 })
+
+// --- D30: ОДИН РАЗДЕЛИТЕЛЬ НА КЛАСС ---------------------------------------------------------------
+//
+// ШОВ A — ДЕФЕКТ. Фикстура — дословные строки живого `staging/values.xml` прогона `27b37fdb`
+// (`sandbox/runbox/eddi`): четыре многотокенных `closes` из ста значений, все через ` | `, потому что
+// ` | ` — форма, которой учил их СОБСТВЕННЫЙ наряд. Читатель знал только пробел, и черта приезжала
+// сюда токеном: 8 блокеров правила 12 про несуществующий конец «|» на артефакте, который был
+// ЗАКОННЫМ. Цена: 3 запуска `valuer`, 318 605 токенов, $0.754, 37 минут, ноль артефактов.
+// Мутация: вернуть `split(/\s+/)` в parseValues — у `v5` станет три токена, среди них `|`.
+const VALUES_27B = `<values>
+  <value id="v5" text="400 TERM_KEY_INVALID" closes="UC7/2a | UC8/2a"/>
+  <value id="v6" text="404 GLOSSARY_NOT_FOUND" closes="UC2/2a | UC4/2a | UC5/2a | UC6/2a | UC7/2b | UC8/2b"/>
+  <value id="v7" text="409 VERSION_CONFLICT" closes="UC4/2b | UC5/2b"/>
+  <value id="v19" text="POST /backup/import" closes="UC11/in | UC12/in"/>
+</values>`
+
+// Те use case живого FRD, концы которых закрывают эти четыре строки. Ветвления — по одному на токен;
+// входы UC11 и UC12 общие, и это законно: `v19` — одна внешняя точка входа для двух use case.
+const uc27b = (id, exts) =>
+  `<usecase id="${id}" actor="glossary-client" goal="цель ${id}">
+    <post>окончание ${id}</post>
+    <step n="1">первый шаг ${id}</step>
+    ${exts.map((e) => `<ext id="${e}" error="none" outcome="ветка ${id}/${e}"/>`).join("\n    ")}
+  </usecase>`
+const FRD_27B = parseFrd(`<frd grammar="1" goal="глоссарий с CRUD и импортом">
+  ${uc27b("UC2", ["2a"])}
+  ${uc27b("UC4", ["2a", "2b"])}
+  ${uc27b("UC5", ["2a", "2b"])}
+  ${uc27b("UC6", ["2a"])}
+  ${uc27b("UC7", ["2a", "2b"])}
+  ${uc27b("UC8", ["2a", "2b"])}
+  ${uc27b("UC11", [])}
+  ${uc27b("UC12", [])}
+</frd>`)
+
+test("D30 шов A: дословные `closes` прогона 27b37fdb — токены целы, ни одной строки «не резолвится»", () => {
+  const values = parseValues(VALUES_27B)
+  assert.deepEqual(values.closes.get("v5"), ["UC7/2a", "UC8/2a"])
+  assert.deepEqual(values.closes.get("v6"), ["UC2/2a", "UC4/2a", "UC5/2a", "UC6/2a", "UC7/2b", "UC8/2b"])
+  assert.deepEqual(values.closes.get("v7"), ["UC4/2b", "UC5/2b"])
+  assert.deepEqual(values.closes.get("v19"), ["UC11/in", "UC12/in"])
+
+  // Гардрейл на этих строках молчит: ни один их токен не выдуман. Открытые концы (входы и выходы,
+  // которые несут ДРУГИЕ 96 значений живого файла) — другой блокер и не предмет этого шва.
+  const b = checkValues({ values, frd: FRD_27B })
+  assert.deepEqual(b.filter((l) => l.includes("не резолвится")), [], b.join("\n"))
+})
+
+// ШОВ B — РЕЦИДИВ КЛАССА, главный. До D30 ни один тест не судил СХЕМУ НАРЯДА тем же читателем, что
+// судит артефакт роли: проверялись только плейсхолдеры `{…}`, то есть согласованность КЛЮЧЕЙ, но не
+// грамматики. Схема учила `closes="UC1/in | UC1/post | UC1/<id расширения>"` — строку, которую
+// парсер не видел ВООБЩЕ (`<` внутри значения атрибута обрывает тег), а роль копировала буквально.
+// Здесь схема прогоняется настоящим парсером: она обязана прочитаться целиком и каждый её токен
+// обязан иметь форму конца use case.
+test("D30 шов B: схема наряда читается парсером роли, и каждый токен `closes` — конец use case", () => {
+  const tpl = readFileSync(new URL("order-values.tpl", import.meta.url), "utf8")
+  const xml = (tpl.match(/<values>[\s\S]*?<\/values>/) || [""])[0]
+  const parsed = parseValues(xml)
+
+  // Настоящий пример, а не плейсхолдер: каждая строка схемы дошла до парсера.
+  assert.equal(parsed.size, (xml.match(/<value\b/g) || []).length, xml)
+  // Схема показывает СПИСОК, иначе учить в ней нечему.
+  assert.ok([...parsed.closes.values()].some((ts) => ts.length > 1), xml)
+  for (const t of [...parsed.closes.values()].flat()) assert.match(t, /^UC\S+\/\S+$/)
+
+  // …и та же форма стоит в LAW 6 роли — подстановкой, а не пересказом: роль копирует одну форму.
+  const law = 'её `closes` перечисляет оба конца через ` | `: `closes="UC2/2a | UC7/2b"`'
+  assert.ok(tpl.includes(law), tpl)
+  assert.ok(role().includes(law), "LAW 6 роли несёт ту же строку дословно")
+})

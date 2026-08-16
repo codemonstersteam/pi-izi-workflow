@@ -37,7 +37,7 @@
 // an accepted node).
 
 import { ok, err } from "../../core/result.mjs"
-import { attrs, elem, esc } from "../../core/xml.mjs"
+import { attrs, elem, esc, tokens } from "../../core/xml.mjs"
 import { MAP_CAP_BYTES } from "../intake/map.mjs"
 import { reachedBy, hasOwnCheck } from "../../core/suites.mjs"
 
@@ -234,7 +234,7 @@ export function newRipple({ xml, frd, mode, map, cap = MAP_CAP_BYTES } = {}) {
   // otherwise be missing exactly where step 9 must have it. F4 of step 6 already made these paths
   // resolvable, on the rail that can still repair them.
   const deltaNodes = deltas.map((d) => d.node).filter(Boolean)
-  const routeNodes = (frd.scenarios || []).flatMap((s) => String(s.nodes || "").split(/\s+/).filter(Boolean))
+  const routeNodes = (frd.scenarios || []).flatMap((s) => tokens(s.nodes))
   const named = [...new Set([...deltaNodes, ...(frd.touched || []).filter(Boolean), ...routeNodes])]
 
   // The modules this change CREATES (`<delta new="yes">`, declared and judged at step 6 — F3n,

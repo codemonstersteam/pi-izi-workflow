@@ -16,7 +16,10 @@
 // Interface:  ATTRS — the attribute-body sub-pattern, for callers building their own regexes
 //             attrs(tagText) -> Record<string, string>
 //             tag(name, tail?) -> RegExp — global, one match per occurrence
+//             elem(name) -> RegExp — global, matches BOTH shapes of one tag
 //             esc(value) -> string — an attribute value, entity-encoded
+//             tokens(value) -> readonly string[] — a LIST of tokens out of one attribute
+//             alts(value) -> readonly string[] — the ALTERNATIVES of one attribute
 
 // ATTRS — the body of a tag: quote-aware, and bounded by the tag it belongs to.
 //
@@ -76,6 +79,59 @@ export const attrs = (tagText) =>
 // `attrs` decodes, or a value survives one round trip and not the next.
 export const esc = (v) => String(v == null ? "" : v)
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+
+// THE CLASS BOUNDARY, and it is a boundary, not an exception. One attribute value carries either a
+// LIST OF TOKENS or a set of ALTERNATIVES OF TEXT, and the two classes are told apart by what a
+// member of the value is allowed to contain — never by which slice is reading:
+//
+//   tokens — a member is a TOKEN: a path (`src/LoanResource.java`), a value id (`v14`), an end of a
+//            use case (`UC1/2a`), a use case id. No token of any grammar of this pipeline contains a
+//            space, a comma or a bar, so admitting all three as separators cannot merge two members
+//            or split one. `nodes`, `closes`, `from`, `uc`, `seeds`.
+//   alts   — a member is TEXT, and the text carries spaces, commas, braces and parentheses of its
+//            own (`out="201 {bookingId} | 409 {conflict}"`, `verdict="Pass | Reject"`). There the
+//            separator is `|` and nothing else, because a space and a comma are CONTENT. `in`, `out`.
+//
+// Substituting one for the other is not a style choice: `tokens` on an `out` shreds every text into
+// words, `alts` on a `closes` returns whichever separator the author happened to type.
+//
+// BUG_FIX_CONTEXT: live run 27b37fdb (sandbox/runbox/eddi), pass A of step 9 — four red rounds in a
+//   row, 3 launches of `valuer`, 318 605 tokens, $0.754, 37 minutes, zero artifacts.
+//   Previous: every reader of a token list wrote its own `split(/\s+/)` inline — eleven copies of one
+//             decision — while the schemas of the same pipeline used ` | ` for "list them all"
+//             (`in="v1 | v14"`, `order-values.tpl`'s own `closes=`). One symbol, two meanings.
+//   Problem:  the role read its order's `closes="UC1/in | UC1/post | …"` as a list — semantically
+//             RIGHT — and the reader cut it on spaces, so `|` arrived as a token that resolves to no
+//             end of any FRD. Rule 12 then reported a token, not a separator, so four rounds repaired
+//             the wrong thing; the only way to obey the blocker was to split one failure across six
+//             rows, which the role's own LAW 3 forbids. The loop was unwinnable by construction, and
+//             the artifact it rejected was LEGAL: with this parse the same file yields 0 blockers
+//             instead of 8.
+//   Fix:      one declaration per CLASS, here, so the separator is a property of the class and not of
+//             whoever typed the schema. Widening the token class costs nothing — no token can carry a
+//             separator — and the text class is left with its single legal separator untouched.
+
+// FUNCTION_CONTRACT: tokens — the members of a LIST-OF-TOKENS attribute
+//   Input:        v — an attribute value; type unconstrained
+//   Dependencies: —
+//   Antecedent:   every member is a token with no space, comma or bar inside it (see the class
+//                 boundary above) — a value carrying TEXT belongs to `alts`, not here
+//   Consequent:   success: frozen string[] in order of appearance, empty for undefined/null/""
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    tokens(v: unknown) -> readonly string[]
+export const tokens = (v) => Object.freeze(String(v ?? "").split(/[\s,|]+/).map((t) => t.trim()).filter(Boolean))
+
+// FUNCTION_CONTRACT: alts — the alternatives of a TEXT-BEARING attribute
+//   Input:        v — an attribute value; type unconstrained
+//   Dependencies: —
+//   Antecedent:   a member is text that may contain spaces and commas; `|` is the one separator
+//   Consequent:   success: frozen string[] in order of appearance, each trimmed at the edges, empty
+//                          for undefined/null/""
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    alts(v: unknown) -> readonly string[]
+export const alts = (v) => Object.freeze(String(v ?? "").split("|").map((x) => x.trim()).filter(Boolean))
 
 // FUNCTION_CONTRACT: tag — a global matcher for one tag name
 //   Input:        name — the tag name, used verbatim in the pattern (`\b`-bounded)

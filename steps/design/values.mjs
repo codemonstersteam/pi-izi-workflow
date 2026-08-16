@@ -29,11 +29,12 @@
 //   Fix:      the value is declared ONCE, in its own artifact, and everything downstream refers to it
 //             by id. A red dictionary regenerates a page, not 23,5 KB.
 
-import { attrs, tag } from "../../core/xml.mjs"
+import { attrs, tag, tokens } from "../../core/xml.mjs"
 
 // FUNCTION_CONTRACT: parseValues — the dictionary from its text
 //   Input:        xml — text of `.agent/values.xml`; type unconstrained
-//   Dependencies: —
+//   Dependencies: core/xml.mjs::tokens — `closes` is a list of TOKENS, and its separator is declared
+//                 for the whole class there, not chosen here
 //   Antecedent:   any value — undefined/null/garbage are read as an empty dictionary
 //   Consequent:   success: Map<id, text> in appearance order, texts trimmed at the edges; a missing
 //                          `id` keys as "" and a missing `text` values as "", so neither is silently
@@ -61,8 +62,11 @@ export function parseValues(xml) {
     const id = a.id || ""
     if (values.has(id)) { dups.push(id); continue }
     values.set(id, String(a.text || "").trim())
-    const tokens = String(a.closes || "").split(/\s+/).map((t) => t.trim()).filter(Boolean)
-    if (tokens.length) closes.set(id, Object.freeze(tokens))
+    // `closes` is a list of TOKENS, cut by the one declaration of that class (core/xml.mjs::tokens).
+    // The separator is not this reader's decision: run 27b37fdb died on this line reading ` | ` — the
+    // form its OWN order taught — as three tokens, one of them `|`.
+    const ends = tokens(a.closes)
+    if (ends.length) closes.set(id, ends)
   }
   values.dups = Object.freeze(dups)
   values.closes = closes
@@ -160,10 +164,15 @@ export function checkValues({ values = new Map(), frd = {} } = {}) {
     }
     // The mirror of rule 1: a token that resolves to no end of this FRD closes nothing, and the value
     // wearing it would be seated by rule 13 against a use case that does not exist.
+    // The blocker quotes the WHOLE attribute and then names the offending token inside it. Naming
+    // the token alone is what let run 27b37fdb repair the wrong thing four rounds running: the role
+    // saw «closes="|"», a string it had never written, and could not tell that the reader had cut
+    // its list. The attribute is rendered in the ONE separator the schema teaches — a dictionary
+    // written with commas is quoted back in the form its order shows.
     const known = new Set(ends.map((e) => e.token))
-    for (const [id, tokens] of values.closes || []) {
-      for (const t of tokens) {
-        if (!known.has(t)) B.push(`12 значение ${id}: closes="${t}" не резолвится ни в один конец FRD — токены этого требования: ${[...known].join(", ")}`)
+    for (const [id, ts] of values.closes || []) {
+      for (const t of ts) {
+        if (!known.has(t)) B.push(`12 значение ${id}: closes="${ts.join(" | ")}" — токен «${t}» не резолвится ни в один конец FRD; концы этого требования: ${[...known].join(", ")}`)
       }
     }
   }

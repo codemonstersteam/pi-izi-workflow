@@ -1009,3 +1009,64 @@ test("D29a: наряд прохода A получает проекцию хос
   // …а проход B по-прежнему читает подграф ЦЕЛИКОМ: его правило 6 судит транзит по всей ряби.
   assert.match(IZI, /nodes: \{ VALUES, FRD, RIPPLE,/)
 })
+
+// --- D30, ШОВ D: `from` — СПИСОК, И ЕГО РАЗДЕЛИТЕЛЬ ОБЪЯВЛЕН НА КЛАСС -----------------------------
+//
+// D22 починил `from` как список, но только у ОДНОГО читателя из четырёх — `steps/intake/frd.mjs`.
+// Здесь читателей два (`routeParts` и `nodeParts`), и оба резали атрибут по пробелам: отказ, чьи
+// ветки принадлежат ДВУМ use case, доезжал в наряд не каждой части, а той, чей токен оказался первым
+// куском. Черта без пробелов — ровно та форма, которой схемы конвейера учат перечислять всё, и
+// которая убила прогон 27b37fdb на шаге 9.
+const FRD_D30_XML = `<frd grammar="1" goal="карточка фрукта одним запросом и на странице списка">
+  <usecase id="UC1" actor="api-client" goal="получить фрукт по имени">
+    <post>вернулся один фрукт</post>
+    <step n="1">клиент отправляет GET /fruits/{name}</step>
+    <ext id="1a" error="FRUIT_NOT_FOUND" outcome="фрукт не найден, вернуто HTTP 404"/>
+  </usecase>
+  <usecase id="UC2" actor="list-page-user" goal="увидеть карточку фрукта на странице списка">
+    <post>карточка показана inline</post>
+    <step n="1">пользователь выбирает фрукт из списка</step>
+    <ext id="2a" error="FRUIT_NOT_FOUND" outcome="карточка не открылась, показано «фрукт не найден»"/>
+  </usecase>
+  <delta op="GET /fruits/{name}" form="Added" node="src/FruitResource.java" from="—" to="эндпоинт отдаёт один фрукт"/>
+  <delta op="карточка inline" form="Changed" node="src/fruits.html" from="карточки нет" to="карточка раскрыта inline"/>
+  <scenario id="S1" uc="UC1" before="эндпоинта нет" after="эндпоинт отдаёт фрукт" nodes="src/FruitResource.java"/>
+  <scenario id="S2" uc="UC2" before="карточки нет" after="карточка раскрыта" nodes="src/fruits.html"/>
+  <failure code="FRUIT_NOT_FOUND" status="404" client="показать «фрукт не найден»" operator="—" from="UC1/1a | UC2/2a"/>
+</frd>`
+const RIPPLE_D30 = `<ripple grammar="1" mode="minor" seeds="2" nodes="2">
+  <module path="src/FruitResource.java" seed="yes" level="1"><role>fruits endpoint</role></module>
+  <module path="src/fruits.html" seed="yes" level="1"><role>list page</role></module>
+</ripple>`
+
+test("D30 шов D: `<failure from=\"UC1/1a | UC2/2a\">` адресует блокер ОБЕИМ частям", () => {
+  const frd = parseFrd(FRD_D30_XML)
+  // Обе ветки резолвятся: это ОДИН отказ двух use case, а не два отказа.
+  assert.deepEqual(frd.failures.map((f) => f.from), ["UC1/1a | UC2/2a"])
+
+  for (const sep of [" | ", "|", " ", ","]) {
+    const xml = FRD_D30_XML.replace('from="UC1/1a | UC2/2a"', `from="UC1/1a${sep}UC2/2a"`)
+    const f = parseFrd(xml)
+
+    const byNodes = nodeParts({ frd: f, ripple: RIPPLE_D30, text: xml })
+    assert.deepEqual(byNodes.map((p) => p.id), ["S1", "S2"], JSON.stringify(sep))
+    for (const p of byNodes) assert.match(p.frd, /<failure code="FRUIT_NOT_FOUND"/, `${p.id} @ ${JSON.stringify(sep)}`)
+
+    const values = parseValues(`<values>
+      <value id="v1" text="GET /fruits/{name}" closes="UC1/in"/>
+      <value id="v2" text="Выбор(name)" closes="UC2/in"/>
+      <value id="v3" text="200 {Fruit}" closes="UC1/post"/>
+      <value id="v4" text="Карточка(name)" closes="UC2/post"/>
+      <value id="v5" text="404 FRUIT_NOT_FOUND" closes="UC1/1a | UC2/2a"/>
+    </values>`)
+    const nodes = parseNodes(`<design mode="minor" base=".agent/appgraph.xml">
+      <module path="src/FruitResource.java" delta="Added"><role>fruits endpoint</role><contract in="v1" out="v3 | v5"/></module>
+      <module path="src/fruits.html" delta="Changed"><role>list page</role><contract in="v2" out="v4 | v5"/></module>
+    </design>`)
+    const byRoutes = routeParts({ frd: f, values, nodes, text: xml })
+    assert.deepEqual(byRoutes.map((p) => p.id), ["S1", "S2"], JSON.stringify(sep))
+    for (const p of byRoutes) assert.match(p.frd, /<failure code="FRUIT_NOT_FOUND"/, `${p.id} @ ${JSON.stringify(sep)}`)
+    // …и один и тот же id закрывает конец у обеих частей: значение объявлено ОДИН раз (LAW 3 роли).
+    for (const p of byRoutes) assert.ok(p.routes.some((r) => r.value === "v5"), `${p.id} @ ${JSON.stringify(sep)}`)
+  }
+})

@@ -21,13 +21,13 @@
 import { ok, err } from "../../core/result.mjs"
 // EXTERNAL_DEPENDENCY: core/xml.mjs — tag scanner (attrs · ATTRS · tag) shared with steps/scope: one
 // grammar for two slices is read by one piece of code, otherwise part-parsing and design-parsing would drift apart.
-// The same file holds the BUG_FIX_CONTEXT for ATTRS' quote-resilience.
-import { attrs, ATTRS, tag, esc } from "../../core/xml.mjs"
+// The same file holds the BUG_FIX_CONTEXT for ATTRS' quote-resilience, and `alts` — a contract's `in`
+// and `out` carry TEXT with spaces and commas inside, so `|` is their only separator (the class
+// boundary is declared once, in core/xml.mjs; run 27b37fdb bought it).
+import { attrs, ATTRS, tag, esc, alts } from "../../core/xml.mjs"
 // The slice's dependency on steps/intake/frd.mjs::FRD_FORM moved with rule 6 to
 // steps/design/nodes.mjs (backlog D2) — the vocabulary of a delta's FORM is read where the delta is
 // judged, and importing it here for nobody would be a second claim on the same fact.
-
-const alts = (s) => String(s || "").split("|").map((x) => x.trim()).filter(Boolean)
 
 // FUNCTION_CONTRACT: parseDesign — nodes of the design graph from its text
 //   Input:        xml — text of `.agent/design-graph.xml`; type unconstrained

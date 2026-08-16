@@ -44,6 +44,9 @@ $START_CONSTRAINTS
   если их `outcome` не совпадают символ в символ.
   Строка `<failure>` закрывает расширение только тогда, когда её текст стоит ВНУТРИ `outcome`.
   Считаются usecase и их расширения, а не delta.
+- Один текст под двумя id запрещён. Значит одинаковый отказ ДВУХ use case — ОДНА строка,
+  и её `closes` перечисляет оба конца через ` | `: `closes="UC2/2a | UC7/2b"`.
+  Общий вход двух use case — так же: `closes="UC11/in | UC12/in"`.
 - `id` идут подряд: `v1`, `v2`, `v3`… в порядке записи. Не перенумеровывай.
 - Текст вызова копируй символ в символ из атрибута `name=`.
 - Каждый `<failure code>` FRD должен стоять внутри текста какого-то значения вместе со своим status.
@@ -66,8 +69,9 @@ $START_OUTPUT
 path: {STAGING}
 schema:
   <values>
-    <value id="v1" text="…"/>
-    <value id="v2" text="…" closes="UC1/in | UC1/post | UC1/<id расширения>"/>
+    <value id="v1" text="…" closes="UC1/in"/>
+    <value id="v2" text="…"/>
+    <value id="v3" text="…" closes="UC2/2a | UC7/2b"/>
   </values>
 check: {CHECK}
 return: вызови workflow_result по OUTPUT_FORMAT своей ROLE

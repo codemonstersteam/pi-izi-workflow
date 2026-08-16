@@ -51,10 +51,8 @@
 //   Fix:      the graph is the ONLY subject of this generation — there are no routes yet to outrun
 //             the edges. A red graph regenerates ten kilobytes, not twenty-three and a half.
 
-import { attrs, ATTRS, tag } from "../../core/xml.mjs"
+import { attrs, ATTRS, tag, alts, tokens } from "../../core/xml.mjs"
 import { FRD_FORM, OP_STUB } from "../intake/frd.mjs"
-
-const alts = (s) => String(s || "").split("|").map((x) => x.trim()).filter(Boolean)
 
 // The three grounds rule 14 may offer, as TEXT — one wording each, written once. A ground names WHERE
 // the value comes from, because a candidate with no provenance is the invention the rule exists to
@@ -107,13 +105,13 @@ function outCandidates(n, frd = {}, values = new Map()) {
   // 3. The end of a use case whose scenario names this node. The `in` side is somebody else's ground:
   // rule 13 seats an entry in `in`, and offering it here would push the node to answer with its own
   // input.
-  for (const [id, tokens] of values.closes || []) {
-    for (const token of tokens) {
+  for (const [id, ends] of values.closes || []) {
+    for (const token of ends) {
       const [uc, tail] = String(token).split("/")
       if (tail === "in") continue
       const names = (frd.scenarios || []).some((s) =>
         String((s && s.uc) || "").trim() === uc &&
-        String((s && s.nodes) || "").split(/\s+/).filter(Boolean).includes(n.path))
+        tokens(s && s.nodes).includes(n.path))
       if (names) add(id, GROUND_CLOSES(token))
     }
   }
@@ -303,12 +301,12 @@ export function graphFacts({ nodes = new Map(), values = new Map(), frd = {}, kn
   for (const s of frd.scenarios || []) {
     const uc = String((s && s.uc) || "").trim()
     if (!uc) continue
-    const paths = String((s && s.nodes) || "").split(/\s+/).map((p) => p.trim()).filter(Boolean)
+    const paths = tokens(s && s.nodes)
     if (!seats.has(uc)) seats.set(uc, new Set())
     for (const p of paths) seats.get(uc).add(p)
   }
-  for (const [id, tokens] of values.closes || []) {
-    for (const token of tokens) {
+  for (const [id, ends] of values.closes || []) {
+    for (const token of ends) {
       const [uc, tail] = String(token).split("/")
       const where = seats.get(uc)
       if (!where || !where.size) continue
@@ -338,8 +336,8 @@ export function graphFacts({ nodes = new Map(), values = new Map(), frd = {}, kn
   //   on pass C, and `blameOf` leaves a rule-10 line with pass C — the router, which cannot produce a
   //   value. Eleven role runs went round that circle: 2 455 854 tokens, $3.39, no `.agent/plan-index.json`.
   const entries = new Set()
-  for (const [id, tokens] of values.closes || []) {
-    if (tokens.some((t) => String(t).split("/")[1] === "in")) entries.add(id)
+  for (const [id, ends] of values.closes || []) {
+    if (ends.some((t) => String(t).split("/")[1] === "in")) entries.add(id)
   }
   for (const n of nodes.values()) {
     for (const id of n.in) {
@@ -358,7 +356,7 @@ export function graphFacts({ nodes = new Map(), values = new Map(), frd = {}, kn
       // out of, so the parts that own those use cases' nodes are exactly who must hand it out. Without
       // this field the line has no addressee at all, and the swarm answers a repairable defect with an
       // escalation — measured on run 35972d1c, where it was one of the three live blockers.
-      const ucs = [...new Set(String((f && f.from) || "").split(/\s+/).map((t) => t.split("/")[0].trim()).filter(Boolean))]
+      const ucs = [...new Set(tokens(f && f.from).map((t) => t.split("/")[0].trim()).filter(Boolean))]
       B.push(fact(0, `отказ ${code} назван значением ${named.join(", ")}, но ни один узел не отдаёт его в out — отдавать отказ некому, маршрута у него не будет, значит не будет и юнита`, { uc: ucs.join(" ") }))
     }
   }
