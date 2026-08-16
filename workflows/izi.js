@@ -11,7 +11,7 @@
 //               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
-//               plan · review · reviewForm. They are not
+//               routeUnits · plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -29,7 +29,9 @@
 // EXTERNAL_DEPENDENCY: order templates read from disk at run time — steps/brd/order.tpl,
 //               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl, steps/intake/order.tpl,
 //               steps/design/order-values.tpl, steps/design/order-nodes.tpl,
-//               steps/design/order-routes.tpl (three passes, one order each), steps/review/order.tpl.
+//               steps/design/order-routes.tpl (three passes, one order each),
+//               steps/design/order-routes-part.tpl (ONE part of pass C's swarm — the same role, a
+//               different document), steps/review/order.tpl.
 //               prompt() demands an
 //               EXACT bidirectional match between a template's placeholders and the values passed
 //               here: an added key with no placeholder, or a placeholder with no key, throws at
@@ -903,6 +905,122 @@ const reenter = async (pass, path, from, read, judge) => {
 };
 // $END_REENTRY
 
+// $START_SWARM — cut out of the source and EXECUTED by ext/index.test.mjs, the device $START_BLAME and
+// $START_REENTRY use: no test may import this file. The name below is that test's interface.
+//
+// PASS C IS SWARMED ONLY WHERE THE SWARM BUYS SOMETHING. One agent per FRD scenario was bought by a
+// role that produced three turns of pure reasoning and zero bytes on the whole task and wrote its part
+// in five turns when given one scenario (research И2, backlog). On a change with one or two scenarios
+// there is nothing to buy: the whole task is already the size of a part, and a swarm there would be
+// two role calls plus a merge instead of one call of twenty seconds. Below the floor the pass runs
+// exactly as it ran before D26 — one order, one file, one verdict — and `design({pass:"routes"})`
+// judges that file because there are no parts on disk to merge.
+const SWARM_MIN = 3;
+const swarmParts = (units) => ((units || []).length >= SWARM_MIN ? units : []);
+// $END_SWARM
+
+// FUNCTION_CONTRACT: routePart — one seat of pass C's swarm: one FRD scenario into one file of routes
+//   Input:        unit — one element of routeUnits({}): its FRD projection, its ends with the route
+//                 ids already assigned, the cards of its component; tplPart — the part's order;
+//                 ANSWERS — the operator's answers block;
+//                 feedback — the lines of the LAST red merge addressed to this part, or ""
+//   Dependencies: EXTERNAL — reenter, readText, design, prompt, agent(role "router"); ENVELOPE
+//   Antecedent:   passes A and B are green; the part's staging path is this scenario's and no other
+//   Consequent:   success: { ok: true, id, called } — `called` says whether the role was paid for.
+//                          A part whose own file is green NOW and which no blocker names closes for
+//                          ZERO tokens (the D25 re-entry, one file lower)
+//                 failure: { ok: false, id, why } — RETURNED AS A VALUE, never thrown: parallel()
+//                          catches every error a task throws and rethrows its own (the reason
+//                          steps/scope's scout does the same, execution.ts:253-262)
+//   Purity:       io (through the host)
+//
+// THERE IS NO QUESTION RAIL HERE and there cannot be: checkpoint() from inside parallel() is the
+// scout's rule, and the one case that made the router ask — a card with no value on either side — is
+// refused one pass earlier by rule 14 of pass B. A part that asks is a part that failed.
+//
+// AFTER_INTAKE is the operand `reenter` reads as "the FRD did not move under this file". For a PART it
+// is always true by construction: routeUnits({drop}) erased everything written against a previous FRD
+// before the first batch ran, so what is on disk now belongs to this phase. Passing the band's `from`
+// here instead would hide a part's own file from it on every fresh run — the swarm would write all
+// eleven anew after each repair round of pass B, which is run 5bbe5de4's bill in eleven copies.
+const AFTER_INTAKE = 9;
+async function routePart(unit, tplPart, ANSWERS, feedback) {
+  const STAGING = `.agent/staging/routes-parts/${unit.id}.xml`;
+  const CHECK = `design({pass:"routes", scenario:"${unit.id}", path}) — steps/design/routes.mjs::checkSteps по файлу этой части`;
+  // THE GUARDRAIL BEFORE THE ROLE, per part: its own file judged against the graph as it stands NOW.
+  const { previous, verdict } = await reenter("routes", STAGING, AFTER_INTAKE, readText, (a) => design({ pass: a.pass, path: a.path, scenario: unit.id }));
+  if (verdict && verdict.ok && !feedback) return { ok: true, id: unit.id, called: false };
+
+  const env = await agent(prompt(tplPart, {
+    FRD: unit.frd,
+    ENDS: unit.ends,
+    CARDS: unit.cards,
+    ANSWERS,
+    PREVIOUS: previous || "(none — first attempt)",
+    FEEDBACK: feedback || (verdict && verdict.blockers) || "(none — first attempt)",
+    STAGING,
+    CHECK,
+  }), { role: "router", outputSchema: ENVELOPE });
+  if (env.track === "err") return { ok: false, id: unit.id, why: `${unit.id}: ${env.kind || "err"} — ${env.subject || "(без subject)"}` };
+  return { ok: true, id: unit.id, called: true };
+}
+
+// FUNCTION_CONTRACT: routeSlot — one seat of the swarm, empty seats included
+//   Input:        batch — the units of this batch; i — the seat's index; the rest as routePart takes it
+//   Dependencies: routePart
+//   Antecedent:   i is within 0..SWARM_WIDTH-1; the batch may be SHORTER than the swarm
+//   Consequent:   success: routePart's result, or null when this seat has no unit
+//   Purity:       io (through routePart)
+async function routeSlot(batch, i, tplPart, ANSWERS, fb) {
+  const unit = batch[i];
+  if (!unit) return null;
+  return routePart(unit, tplPart, ANSWERS, fb[unit.id] || "");
+}
+
+// FUNCTION_CONTRACT: swarmRoutes — pass C's parts, in batches of SWARM_WIDTH
+//   Input:        units — routeUnits' list, already through swarmParts; the rest as routePart takes it
+//   Dependencies: parallel, routeSlot, log; SWARM_WIDTH, MAX_PARALLEL
+//   Antecedent:   units is non-empty; MAX_PARALLEL ≥ 1
+//   Consequent:   success: { track: "ok" } — every part has a file, or had one and kept it
+//                 failure: { track: "err", kind: "escalate" } naming EVERY part that failed in the
+//                          batch. It is an ENVELOPE, not an exit: the caller is the pass, and the pass
+//                          is what decides between a redelegation and the end of the run
+//   Purity:       io (through the host)
+//
+// The literal record of slots is the host's contract, not a style: validation.ts:755 demands a literal
+// name and a literal ObjectExpression of tasks, and a width read from a config file at run time is
+// therefore impossible here (steps/scope's swarm, BUG_FIX_CONTEXT).
+async function swarmRoutes(units, tplPart, ANSWERS, fb) {
+  const width = Math.min(MAX_PARALLEL, SWARM_WIDTH);
+  let called = 0;
+  for (let i = 0; i < units.length; i += width) {
+    const batch = units.slice(i, i + width);
+    log(`design/routes: батч ${batch.map((u) => u.id).join(" ")}`);
+
+    const done = await parallel("routes-batch", {
+      r1: () => routeSlot(batch, 0, tplPart, ANSWERS, fb),
+      r2: () => routeSlot(batch, 1, tplPart, ANSWERS, fb),
+      r3: () => routeSlot(batch, 2, tplPart, ANSWERS, fb),
+      r4: () => routeSlot(batch, 3, tplPart, ANSWERS, fb),
+      r5: () => routeSlot(batch, 4, tplPart, ANSWERS, fb),
+      r6: () => routeSlot(batch, 5, tplPart, ANSWERS, fb),
+      r7: () => routeSlot(batch, 6, tplPart, ANSWERS, fb),
+      r8: () => routeSlot(batch, 7, tplPart, ANSWERS, fb),
+    });
+
+    const results = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8"].map((k) => done[k]).filter((r) => r);
+    const bad = results.filter((r) => !r.ok);
+    // A lost part is a lost scenario, so no part is skipped "to salvage the rest" — the same rule the
+    // scout swarm keeps, and the operator sees all of them at once.
+    if (bad.length) {
+      return { track: "err", kind: "escalate", subject: bad.map((r) => r.why).join("\n  "), evidence: "часть прохода C вернула ошибку; рельсы вопроса у части нет" };
+    }
+    called += results.filter((r) => r.called).length;
+  }
+  log(`design/routes: частей ${units.length}, роль звалась ${called} раз`);
+  return { track: "ok" };
+}
+
 async function designing(from = 6) {
   const gate = await design({});
   if (!gate.ok) exit(err("blocked", { subject: gate.why, evidence: ".agent/design-graph.xml не написан" }));
@@ -917,6 +1035,10 @@ async function designing(from = 6) {
   const FORM = await frdForm({});
   const tpl = {};
   for (const p of PASSES) tpl[p.id] = await readText({ path: p.tpl });
+  // The order of a PART is its own document, and not a switch inside pass C's order: the whole-pass
+  // order still carries the obligations of the whole (every FRD scenario has a route, every touched
+  // path is walked), and a part answers for none of them — it is one scenario and it is told so.
+  const tplPart = await readText({ path: "steps/design/order-routes-part.tpl" });
 
   // A rewind to step 6 rewrote the FRD, so nothing extracted from the old one may be reused.
   const reused = from <= 6 ? [] : (gate.reused || []);
@@ -931,6 +1053,15 @@ async function designing(from = 6) {
   // itself on — but the loop still has to be bounded, and nothing else bounds it. Two counters, two
   // meanings, exactly as LOOPS and QUESTION_ROUNDS are two.
   const silent = { values: 0, nodes: 0, routes: 0 };
+  // The feedback of pass C is now TWO things, and they are not the same fact: `feedback.routes` is the
+  // whole report, read by the single order of a degenerate pass C; `partFeedback` is the report SPLIT
+  // by the part that must repair each line (design's `blame`). It is rebuilt from every red merge —
+  // a part the new report does not name is a part with nothing left to repair, and its stale feedback
+  // would call the role for nothing.
+  let partFeedback = {};
+  const wasRedPart = {};
+  let swarming = false;
+  let dropParts = from <= 6;   // spent on the FIRST entry into pass C — see routeUnits' call below
   // One green verdict, one sentence — written once and read from both places a pass can close: after
   // the role, and before it (the re-entry below), where the counts are the same numbers.
   const green = (id, check) => log(id === "routes"
@@ -986,7 +1117,30 @@ async function designing(from = 6) {
       nodes: { VALUES, FRD, RIPPLE, ANSWERS: answersBlock(seen, "(no operator answers yet)"), MODE, DELTA_FORMS: FORM.deltaForms, PREVIOUS, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"nodes", path}) — steps/design/nodes.mjs::checkGraph по staging` },
       routes: { FRD, CARDS, ANSWERS: answersBlock(seen, "(no operator answers yet)"), PREVIOUS, FEEDBACK: feedback[p.id], STAGING: p.out, CHECK: `design({pass:"routes", path}) — steps/design/routes.mjs::checkRoutes по staging` },
     }[p.id];
-    const env = await agent(prompt(tpl[p.id], keys), { role: p.role, outputSchema: ENVELOPE });
+
+    // PASS C IS A SWARM WHEN THERE IS SOMETHING TO SWARM (D26). The units are recomputed every time
+    // this pass is entered: a rewind to pass B changes the graph, and a part's cards ARE that graph's
+    // component. Below SWARM_MIN the list comes back empty and the pass runs its single order — the
+    // very call this whole phase made before D26.
+    let env;
+    if (p.id === "routes") {
+      // ERASED ONCE, AND ONLY WHEN THE FRD MOVED. `from <= 6` is the same operand `reenter` reads one
+      // screen up: the band rewound to intake, so every part staged against the previous FRD is about
+      // another change. Erasing on the SECOND entry of this pass would throw away the parts THIS phase
+      // wrote — the swarm would rewrite all of them after every repair round of pass B.
+      const u = await routeUnits({ drop: dropParts });
+      if (u.dropped) log(`design/routes: полоса перемотана на шаг 6 — сброшено частей ${u.dropped}`);
+      dropParts = false;
+      if (!u.ok) exit(err("blocked", { subject: u.why, evidence: "части прохода C не собраны" }));
+      const units = swarmParts(u.units);
+      swarming = units.length > 0;
+      if (swarming) log(`design/routes: рой — частей ${units.length}, наряд части ≈ ${Math.max(...units.map((x) => x.chars))} симв (целиком FRD — ${FRD.length})`);
+      env = swarming
+        ? await swarmRoutes(units, tplPart, answersBlock(seen, "(no operator answers yet)"), partFeedback)
+        : await agent(prompt(tpl.routes, keys), { role: p.role, outputSchema: ENVELOPE });
+    } else {
+      env = await agent(prompt(tpl[p.id], keys), { role: p.role, outputSchema: ENVELOPE });
+    }
 
     if (env.track === "err" && env.kind === "question") {
       const q = charge(env);
@@ -1030,6 +1184,37 @@ async function designing(from = 6) {
       feedback[q.id] = carry.text; wasRed[q.id] = carry.seen;   // the loop's memory is the RUN, not the round
       if (q.id !== p.id && !back) back = q.id;                  // PASSES are in order — the EARLIEST culprit
     }
+
+    // AND ONE LEVEL DEEPER, WHEN PASS C WAS SWARMED: the lines that stayed with pass C are addressed
+    // to the PARTS that must repair them. The address is the host's (`blame`, computed from the
+    // guardrail's own facts — steps/design/parts.mjs), never a regular expression over the blocker's
+    // prose here. `partFeedback` is rebuilt, not merged: a part the new report does not name has
+    // nothing left to repair and must not be called again.
+    if (p.id === "routes" && swarming) {
+      const mineC = parts.routes || [];
+      const addressed = {};
+      partFeedback = {};
+      for (const b of check.blame || []) {
+        const lines = b.lines.filter((l) => mineC.indexOf(l) >= 0);
+        if (!lines.length) continue;
+        for (const l of lines) addressed[l] = true;
+        const carry = await carried({ blockers: lines.join("\n"), seen: wasRedPart[b.scenario] || [] });
+        partFeedback[b.scenario] = carry.text; wasRedPart[b.scenario] = carry.seen;
+      }
+      // A LINE WITH NO ADDRESSEE HAS NO REPAIR RAIL. Measured on eddi: two of them, both rule 2 on a
+      // node with a `delta` that no `<scenario nodes>` of the FRD names at all — a deficit of step 6,
+      // which no part of pass C can answer for. Sending it to every part would order eleven roles to
+      // repair a scenario none of them owns.
+      const orphan = mineC.filter((l) => !addressed[l]);
+      if (orphan.length) {
+        exit(err("escalate", {
+          subject: orphan.join("\n  "),
+          evidence: `проход C собран роем из ${(check.parts || 0)} частей; у этих блокеров нет ни одного сценария FRD в адресатах — их чинит шаг 6, а не маршрут`,
+        }));
+      }
+      log(`design/routes: красный после слияния — блокеров ${mineC.length}, адресовано частям ${Object.keys(partFeedback).length}`);
+    }
+
     if (back) {
       log(`design/${p.id}: красный по вине прохода ${back} — возврат туда, а staging этого прохода переживёт и приедет обратно как {PREVIOUS}`);
       i = PASSES.findIndex((x) => x.id === back);

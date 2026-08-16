@@ -20,7 +20,21 @@
 //             docs/data-flow.md §6 and are not restated here in prose
 // Interface:  parseRoutes(xml) -> Route[]
 //             forwardLegs(routes) -> [{ from, to, scenario }]  — read by step 10 as well
+//             scenarioOf(routeId, scenarios) -> string  — the FRD scenario a route id belongs to
+//             checkSteps({ routes, nodes, values, frd, edges }) -> Fact[]   — rules 1, 3, 4, 9, 11
+//             checkCoverage({ routes, nodes, values, frd }) -> Fact[]       — rules 2, 5, 7, 10
+//             blockerLine(fact) -> string
 //             checkRoutes({ routes, nodes, values, frd, edges }) -> string[]  — blockers, empty = green
+//
+// TWO FUNCTIONS, NINE RULES, AND THE LINE THAT DECIDES WHICH IS WHICH (D26). Pass C is written by a
+// SWARM — one agent per FRD scenario — and a part holds one scenario's routes and nothing else. A rule
+// whose operands are all inside the part is judged ON the part (`checkSteps`: 1, 3, 4 fully; 9 and 11
+// monotonically — the part's forward legs and its ordinary inputs are SUBSETS of the whole's, so red on
+// a part is red on the whole); a rule whose operand is the SET of routes cannot be asked of a part at
+// all (`checkCoverage`: 2, 5, 7, 10 — one part is one scenario, and other parts' routes are invisible
+// to it). Let the covering rules loose on a part and one S2 of `eddi` reports 51 phantom lines.
+// `checkRoutes` is the two of them in TODAY'S line order, which is why steps/design/routes.test.mjs
+// judges this decomposition without one edit — that file is the seam.
 //
 // A ROUTE NAMES THE VALUE, NOT ITS POSITION (`path@v9`, `entry="v1"`). Two reasons, both bought:
 //   - the role picks a name it SEES on the card of pass C (steps/design/nodes.mjs::cards), instead of
@@ -120,65 +134,84 @@ export function forwardLegs(routes) {
 // A fact is keyed by what must be REPAIRED, never by where it was met; the scenarios that met it are
 // collected into the tail of the line. Cutting the report by count is forbidden by §8.3 — a dropped
 // blocker comes back next round and spends a `LOOPS`.
+//
+// A record carries THREE fields nothing renders: `rule`, `path` and `scenario`. They are how the merge
+// of the swarm addresses a line to the part that must repair it (steps/design/parts.mjs::blameByScenario)
+// — the alternative is a regular expression over the blocker's Russian prose, which is one rule written
+// twice (standards/code.md §1).
 const facts = () => {
   const m = new Map()
   return {
-    add(key, text, scenario) {
-      if (!m.has(key)) m.set(key, { text, where: new Set() })
+    add(key, rule, text, scenario, about) {
+      if (!m.has(key)) m.set(key, { rule, text, where: new Set(), path: (about && about.path) || "", scenario: (about && about.scenario) || "" })
       if (scenario) m.get(key).where.add(scenario)
     },
-    lines: () => [...m.values()].map((f) => (f.where.size ? `${f.text} (${[...f.where].join(", ")})` : f.text)),
+    records: () => [...m.values()].map((f) => Object.freeze({ rule: f.rule, text: f.text, path: f.path, scenario: f.scenario, where: Object.freeze([...f.where]) })),
   }
 }
 
-// FUNCTION_CONTRACT: checkRoutes — the guardrail of pass C: the joint of the two projections
-//   Input:        { routes, nodes, values, frd, edges }
-//                 routes — parseRoutes' parse
-//                 nodes  — the graph of pass B AS steps/design/nodes.mjs::parseNodes returns it:
-//                          Map<path, Node> whose contracts carry IDS. Parsing it belongs to that
-//                          pass; here it is a DEPENDENCY, and it is NOT re-judged (§7)
-//                 values — the dictionary of pass A AS steps/design/values.mjs::parseValues returns
-//                          it: Map<id, text>. Used for the TEXT beside an id in a blocker — the
-//                          role's card speaks both, and a bare id is not a diagnosis
-//                 frd    — the parse of `.agent/frd.xml` AS steps/intake/frd.mjs::parseFrd returns
-//                          it: `scenarios` are the ELEMENTS (an id lives in `.id`), `touched` are
-//                          paths. Parsing that file belongs to the intake slice
-//                 edges  — the map's DIRECTED `<edge from to/>` AS steps/intake/map.mjs::parseMap
-//                          returns them (`.agent/appgraph.xml`), or [] when the caller has none. They
-//                          are rule 9's second operand and nothing else reads them here: `<dep>` of
-//                          the design graph is deliberately UNDIRECTED (rule 3 walks it both ways),
-//                          so the direction a repository already has can only come from the map
-//   Dependencies: facts, forwardLegs
-//   Antecedent:   routes — parseRoutes' array; nodes — parseNodes' Map; values — parseValues' Map (a
-//                 missing one only costs the blockers their texts); frd — an object with two arrays,
-//                 missing fields read as empty; edges — an array of {from, to}, missing read as empty,
-//                 and then rule 9 judges the routes against each other alone
-//   Consequent:   success: string[] of blockers, empty = green. Rules 1, 2, 3, 4, 5, 7 and 9 keep the
-//                          numbers they have in docs/data-flow.md §6. ONE LINE PER FACT: the line
-//                          names what to repair and ends with the scenarios that met it. Rules 3 and
-//                          4 are emitted grouped by the RECEIVING node — the place of the repair
-//                 failure: none — total, "the routes are bad" is DATA, not a function failure
+// FUNCTION_CONTRACT: blockerLine — a fact as the operator and the role read it
+//   Input:        f — one record of checkSteps/checkCoverage
+//   Dependencies: —
+//   Antecedent:   any value; a missing record reads as an empty line
+//   Consequent:   success: `<text>` or `<text> (<scenario>, <scenario>…)` — the FACT, with the
+//                          scenarios that met it as evidence in the tail (§8.1)
+//                 failure: none — total
 //   Purity:       pure
-//   BUG_FIX_CONTEXT: this slice was written BEFORE steps 6 and 8 existed, and its fixture was
-//                 invented rather than parsed. `frd.scenarios` was compared as a list of STRINGS
-//                 while parseFrd returns elements, so rule 5 reddened on every real FRD, with the
-//                 text «у сценария FRD [object Object] нет маршрута» — a blocker no role can repair,
-//                 burning every redelegation down to `escalate` (docs/design.md §3, discrepancy A).
-//
-// A route's node MUST be IN THE GRAPH even if it doesn't change: the role of pass B copies a transit
-// node out of the ripple subgraph with a contract it derives from that node's `<api>`/`<decl>`, and
-// WITHOUT `delta`. Otherwise assembly has nothing to unfold the step from, and rule 4 has nothing to
-// join — the contract lives on the node, and the script has no other source for it.
-export function checkRoutes({ routes = [], nodes = new Map(), values = new Map(), frd = {}, edges = [] } = {}) {
-  const named = (id) => (id ? (values.has(id) ? `${id} «${values.get(id)}»` : id) : "(значение не названо)")
+export const blockerLine = (f) => ((f && f.where && f.where.length) ? `${f.text} (${f.where.join(", ")})` : (f && f.text) || "")
 
+// FUNCTION_CONTRACT: scenarioOf — the FRD scenario a ROUTE id belongs to
+//   Input:        routeId — the `scenario` attribute of one `<route>`; scenarios — the FRD's scenario
+//                 ids, in the FRD's own order
+//   Dependencies: —
+//   Antecedent:   any values; a missing id or an empty list yields ""
+//   Consequent:   success: the id of the scenario this route is a route OF — the id verbatim, or the
+//                          id plus ONE lowercase letter (`S1` → `S1b`, the suffix the role's LAW 3
+//                          assigns to a second route through one scenario). "" when no scenario owns it
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    scenarioOf(routeId: unknown, scenarios?: readonly string[]) -> string
+//
+//   BUG_FIX_CONTEXT: research И2 (backlog), over the artifacts of run c433e01d (sandbox/runbox/eddi).
+//     Previous: `scenario === id || scenario.startsWith(id)` — a prefix test with no bound.
+//     Problem:  `eddi` declares eleven scenarios, so `S10` and `S11` are prefixed by `S1`. The route
+//               `S10` therefore READ as a route of scenario `S1`: rule 1 accepted it whatever the FRD
+//               said, and D26's swarm would have handed one part the other part's routes.
+//     Fix:      the base id is compared WHOLE, and the only tail allowed is a single lowercase letter.
+export function scenarioOf(routeId, scenarios = []) {
+  const rid = String(routeId || "").trim()
+  if (!rid) return ""
+  for (const id of scenarios) if (id && rid === id) return id
+  for (const id of scenarios) {
+    if (id && rid.length === id.length + 1 && rid.startsWith(id) && /^[a-z]$/.test(rid.slice(-1))) return id
+  }
+  return ""
+}
+
+// named — the id with the dictionary's text beside it. A bare id is not a diagnosis.
+const namedIn = (values) => (id) => (id ? (values.has(id) ? `${id} «${values.get(id)}»` : id) : "(значение не названо)")
+
+// FUNCTION_CONTRACT: traverse — the ONE walk of the routes both halves of the guardrail are made of
+//   Input:        { routes, nodes, values } — as checkRoutes takes them
+//   Dependencies: facts, namedIn
+//   Antecedent:   the same as checkRoutes'; every field is optional and read as empty
+//   Consequent:   success: { step, joints } — the records of rules 1 (a route naming what is not
+//                          there), 3 and 4 (the joints, grouped by the RECEIVING node) — plus the
+//                          operands the covering rules are decided on: `used`, `chosen`, `arrived`,
+//                          `answers` and `refused` (the paths rule 4 already blamed)
+//                 failure: none — total
+//   Purity:       pure
+// It is walked twice when `checkRoutes` calls both halves, and that is the price of a part being
+// judgeable ALONE: the alternative is one function with a flag, i.e. the covering rules living one
+// `if` away from a part that must never see them.
+function traverse({ routes = [], nodes = new Map(), values = new Map() } = {}) {
+  const named = namedIn(values)
   const step = facts()                  // rule 1 — the route refers to something that is not there
   const joints = new Map()              // receiving path → facts of rules 3 and 4, grouped by §8.2
   const joint = (path) => {
     if (!joints.has(path)) joints.set(path, facts())
     return joints.get(path)
   }
-  const tail = []                       // rules 2, 5, 7 — findings of the WHOLE set, no scenario to cite
   const used = new Set()
   const chosen = new Map()              // path → Set of the `out` ids some route actually took (rule 7)
   const arrived = new Map()             // path → Set of the `in` ids some route actually DELIVERED (rule 10)
@@ -186,14 +219,16 @@ export function checkRoutes({ routes = [], nodes = new Map(), values = new Map()
   // PER OCCURRENCE, not per set: which `out` answered which `in` AT THIS STEP. Sets would cross-
   // multiply — on an honest pair of routes through one node the product pairs the failure's `in` with
   // the happy `out` and rule 11 reddens a correct artifact. The `in` of step k is what step k-1
-  // handed over, or the route's `entry` when k is 0.
-  const answers = new Map()             // path → Map(in id → Set of out ids that answered it)
-  const answered = (path, inId, outId) => {
+  // handed over, or the route's `entry` when k is 0. The innermost Set is the ROUTES that made the
+  // pair: rule 11's evidence, and the swarm's address for its blocker.
+  const answers = new Map()             // path → Map(in id → Map(out id → Set of route ids))
+  const answered = (path, inId, outId, scenario) => {
     if (!inId || !outId) return
     if (!answers.has(path)) answers.set(path, new Map())
     const m = answers.get(path)
-    if (!m.has(inId)) m.set(inId, new Set())
-    m.get(inId).add(outId)
+    if (!m.has(inId)) m.set(inId, new Map())
+    if (!m.get(inId).has(outId)) m.get(inId).set(outId, new Set())
+    if (scenario) m.get(inId).get(outId).add(scenario)
   }
   const deliver = (path, id) => {
     if (!id) return
@@ -201,40 +236,28 @@ export function checkRoutes({ routes = [], nodes = new Map(), values = new Map()
     arrived.get(path).add(id)
   }
 
-  // Rule 1 at the ID: a route's `scenario` is DERIVED from the FRD — that scenario's id verbatim, or
-  // that id plus a suffix for a second route through it (`S1` → `S1b`). Rule 5 only walks the other
-  // way (every FRD scenario has a route), so until R1 an id belonging to no scenario at all was
-  // accepted in silence — live run 79650c98 wrote `S1b` and `S2b` with nothing checking them, and a
-  // typo would have passed the same way. The flow section of the deliverable is cut BY this id.
-  const frdScenarios = ((frd && frd.scenarios) || []).map((s) => String((s && s.id) || "").trim()).filter(Boolean)
-  for (const r of routes) {
-    if (r.scenario && !frdScenarios.some((id) => r.scenario === id || r.scenario.startsWith(id))) {
-      step.add(`s:${r.scenario}`, `1 маршрут ${r.scenario}: такого сценария в FRD нет — id маршрута это id сценария FRD дословно либо он же с суффиксом (${frdScenarios.join(", ") || "в FRD нет сценариев"})`)
-    }
-  }
-
   for (const r of routes) {
     for (const [k, s] of r.steps.entries()) {
       const n = nodes.get(s.path)
       // Rule 1. An unknown node short-circuits the rest of this pair's checks: three blockers for one
       // defect take the role three times as long to fix as one.
-      if (!n) { step.add(`n:${s.path}`, `1 узла нет в дизайн-графе — ${s.path}`, r.scenario); continue }
+      if (!n) { step.add(`n:${s.path}`, 1, `1 узла нет в дизайн-графе — ${s.path}`, r.scenario, { path: s.path }); continue }
       // Rule 1 at the BOUNDARY: what starts the scenario is NAMED, never guessed. Before S25 the
       // script took `in[0]` by position — a silent default, which standards/code.md forbids by
       // constraint 3 for exactly the reason a live run demonstrated: the page's only `in` alternative
       // was the RETURN one, and the flow's first line claimed a user's click was a Fruit
       // (steps/design/design.mjs, walk's BUG_FIX_CONTEXT).
       if (k === 0 && !n.in.includes(r.entry)) {
-        step.add(`e:${s.path}:${r.entry}`, `1 у первого узла ${s.path} нет значения ${named(r.entry)} в in — маршрут обязан НАЗВАТЬ, каким внешним вызовом он запущен; если подходящего значения нет, значит вход в контракте узла не объявлен`, r.scenario)
+        step.add(`e:${s.path}:${r.entry}`, 1, `1 у первого узла ${s.path} нет значения ${named(r.entry)} в in — маршрут обязан НАЗВАТЬ, каким внешним вызовом он запущен; если подходящего значения нет, значит вход в контракте узла не объявлен`, r.scenario, { path: s.path })
         continue
       }
       if (!n.out.includes(s.value)) {
-        step.add(`o:${s.path}:${s.value}`, `1 у узла ${s.path} нет значения ${named(s.value)} в out`, r.scenario)
+        step.add(`o:${s.path}:${s.value}`, 1, `1 у узла ${s.path} нет значения ${named(s.value)} в out`, r.scenario, { path: s.path })
         continue
       }
       used.add(s.path)
       if (k === 0) deliver(s.path, r.entry)   // the outside world hands the first node its entry
-      answered(s.path, k === 0 ? r.entry : r.steps[k - 1].value, s.value)
+      answered(s.path, k === 0 ? r.entry : r.steps[k - 1].value, s.value, r.scenario)
       if (!chosen.has(s.path)) chosen.set(s.path, new Set())
       chosen.get(s.path).add(s.value)
 
@@ -244,7 +267,7 @@ export function checkRoutes({ routes = [], nodes = new Map(), values = new Map()
       if (!m) continue
       // Rule 3. The edge is undirected: the return unwinds along the same <dep> backwards.
       if (!n.deps.includes(m.path) && !m.deps.includes(n.path)) {
-        joint(m.path).add(`3:${n.path}`, `3 ${m.path} недостижим из ${n.path} — нет ребра <dep> между ними`, r.scenario)
+        joint(m.path).add(`3:${n.path}`, 3, `3 ${m.path} недостижим из ${n.path} — нет ребра <dep> между ними`, r.scenario, { path: m.path })
       }
       // Rule 4 — the ONLY place where the role's manual judgement remains, and with the dictionary it
       // is no longer a spelling check: `out` of one node and `in` of its neighbour are the same id or
@@ -252,24 +275,226 @@ export function checkRoutes({ routes = [], nodes = new Map(), values = new Map()
       // means a real design error — node A hands over what node B does not accept
       // (docs/design-step-by-step.md §4.B).
       if (!m.in.includes(s.value)) {
-        joint(m.path).add(`4:${n.path}:${s.value}`, `4 ${m.path} не принимает ${named(s.value)} от ${n.path}`, r.scenario)
+        joint(m.path).add(`4:${n.path}:${s.value}`, 4, `4 ${m.path} не принимает ${named(s.value)} от ${n.path}`, r.scenario, { path: m.path })
         refused.add(m.path)
       }
       deliver(m.path, s.value)               // rule 10's operand: this transition DELIVERED that in
     }
   }
 
+  return {
+    step: step.records(),
+    joints: [...joints.values()].flatMap((f) => f.records()),
+    used, chosen, arrived, answers, refused,
+  }
+}
+
+// FUNCTION_CONTRACT: checkSteps — the rules a PART of pass C can be judged by, alone
+//   Input:        { routes, nodes, values, frd, edges }
+//                 routes — parseRoutes' parse: ONE part's routes, or the whole set
+//                 nodes  — the graph of pass B AS steps/design/nodes.mjs::parseNodes returns it:
+//                          Map<path, Node> whose contracts carry IDS. Parsing it belongs to that
+//                          pass; here it is a DEPENDENCY, and it is NOT re-judged (§7)
+//                 values — the dictionary of pass A AS steps/design/values.mjs::parseValues returns
+//                          it: Map<id, text>. Used for the TEXT beside an id in a blocker — the
+//                          role's card speaks both, and a bare id is not a diagnosis
+//                 frd    — the parse of `.agent/frd.xml` AS steps/intake/frd.mjs::parseFrd returns
+//                          it: `scenarios` are the ELEMENTS (an id lives in `.id`). Rule 1 reads the
+//                          ids, rule 11 the `<failure code>`s. Parsing that file belongs to intake
+//                 edges  — the map's DIRECTED `<edge from to/>` AS steps/intake/map.mjs::parseMap
+//                          returns them (`.agent/appgraph.xml`), or [] when the caller has none. They
+//                          are rule 9's second operand and nothing else reads them here: `<dep>` of
+//                          the design graph is deliberately UNDIRECTED (rule 3 walks it both ways),
+//                          so the direction a repository already has can only come from the map
+//   Dependencies: traverse, facts, namedIn, scenarioOf, forwardLegs
+//   Antecedent:   routes — parseRoutes' array; nodes — parseNodes' Map; values — parseValues' Map (a
+//                 missing one only costs the blockers their texts); frd — an object, missing fields
+//                 read as empty; edges — an array of {from, to}, missing read as empty, and then rule
+//                 9 judges the routes against each other alone
+//   Consequent:   success: Fact[] of rules 1, 3, 4, 11 and 9, IN THAT ORDER — rule 1 first, then the
+//                          joints grouped by the RECEIVING node, then 11, then the cycles. Every
+//                          record carries its rule NUMBER, the node it names and the routes that met
+//                          it; `blockerLine` is what turns one into the operator's line
+//                 failure: none — total, "the routes are bad" is DATA, not a function failure
+//   Purity:       pure
+//   Interface:    checkSteps({ routes, nodes, values, frd, edges }) -> Fact[]
+//
+// ON A PART, rules 1, 3 and 4 are COMPLETE — their operands are the part's own steps and the two
+// frozen artifacts — while 9 and 11 are MONOTONE: the part asserts a subset of the whole's forward
+// legs and receives a subset of its ordinary inputs, so red on a part is red on the whole and the
+// authority for green is the merge (docs/data-flow.md §6).
+//
+// A route's node MUST be IN THE GRAPH even if it doesn't change: the role of pass B copies a transit
+// node out of the ripple subgraph with a contract it derives from that node's `<api>`/`<decl>`, and
+// WITHOUT `delta`. Otherwise assembly has nothing to unfold the step from, and rule 4 has nothing to
+// join — the contract lives on the node, and the script has no other source for it.
+//
+export function checkSteps({ routes = [], nodes = new Map(), values = new Map(), frd = {}, edges = [] } = {}) {
+  const named = namedIn(values)
+
+  // Rule 1 at the ID: a route's `scenario` is DERIVED from the FRD — that scenario's id verbatim, or
+  // that id plus a suffix for a second route through it (`S1` → `S1b`). Rule 5 only walks the other
+  // way (every FRD scenario has a route), so until R1 an id belonging to no scenario at all was
+  // accepted in silence — live run 79650c98 wrote `S1b` and `S2b` with nothing checking them, and a
+  // typo would have passed the same way. The flow section of the deliverable is cut BY this id.
+  const ids = facts()
+  const frdScenarios = ((frd && frd.scenarios) || []).map((s) => String((s && s.id) || "").trim()).filter(Boolean)
+  for (const r of routes) {
+    if (r.scenario && !scenarioOf(r.scenario, frdScenarios)) {
+      ids.add(`s:${r.scenario}`, 1, `1 маршрут ${r.scenario}: такого сценария в FRD нет — id маршрута это id сценария FRD дословно либо он же с суффиксом (${frdScenarios.join(", ") || "в FRD нет сценариев"})`, "", { scenario: r.scenario })
+    }
+  }
+
+  const walk = traverse({ routes, nodes, values })
+  const out = [...ids.records(), ...walk.step, ...walk.joints]
+
+  // Rule 11 — A FAILURE BRANCH MAY NOT END IN SUCCESS. If a node with a `delta` answers a failure it
+  // received with the SAME value it answers an ordinary input with, then the two branches are one
+  // branch: `expand` writes a unit per DISTINGUISHABLE pair, and two antecedents sharing a consequent
+  // is a unit that proves nothing (standards/code.md — 1 happy + Σ branches with a distinguishable
+  // consequent).
+  //
+  // BUG_FIX_CONTEXT: live run 09d11a84 (sandbox/runbox/quarkus-rest-json-app-v2-t2), round 3.
+  //   Previous: nothing compared what a node answers a failure with against what it answers anything
+  //             else with.
+  //   Problem:  the dictionary had no value for the page's not-found ending, so rule 10's demand
+  //             («deliver the 404 to the page») could only be met by writing «404 → the card WITH THE
+  //             FRUIT'S DATA is shown». The role wrote it twice. One of the two forms — the one that
+  //             RETURNS to the page rather than starting at the resource — is green under all ten
+  //             rules: rule 9 sees no forward leg in a return, rule 4 is satisfied because the page
+  //             does accept the 404, and the lie ships into `data-flow.md` and into the ticket's units.
+  //             Measured: that set minus the other route gives checkRoutes → [].
+  //   Fix:      this rule. Measured against every artifact under sandbox/runbox — eddi (15+ routes,
+  //             four worded failure codes, chains of delegates), t3 and two slice snapshots — zero
+  //             false positives: a delegate answers a failure WITH a failure, which this rule allows.
+  const eleven = facts()
+  const codes = ((frd && frd.failures) || []).map((f) => String((f && f.code) || "").trim()).filter(Boolean)
+  const carriesFailure = (id) => codes.length > 0 && codes.some((c) => String(values.get(id) || "").includes(c))
+  for (const n of nodes.values()) {
+    if (!n.delta || !walk.used.has(n.path)) continue
+    const mine = walk.answers.get(n.path)
+    if (!mine) continue
+    const ordinary = new Set()
+    for (const [id, outs] of mine) if (!carriesFailure(id)) for (const o of outs.keys()) ordinary.add(o)
+    for (const [id, outs] of mine) {
+      if (!carriesFailure(id)) continue
+      for (const [o, who] of outs) {
+        if (!ordinary.has(o)) continue
+        for (const scenario of who.size ? who : [""]) {
+          eleven.add(`11:${n.path}:${id}:${o}`, 11, `11 узел ${n.path}: на отказ ${named(id)} маршрут отвечает тем же значением ${named(o)}, каким узел отвечает и на обычный вход — ветка отказа кончается успехом, и юнит у неё будет неотличим. Ответь значением, которым КОНЧАЕТСЯ это ветвление FRD; если такого значения нет — его нет в СЛОВАРЕ, и чинить надо там`, scenario, { path: n.path })
+        }
+      }
+    }
+  }
+
+  // Rule 9 — THE ORDER OF THE WORK MUST EXIST, and it is judged HERE because here there is a role to
+  // repair it. Step 10 sorts the tickets topologically over the map's directed edges plus the FORWARD
+  // legs of these very routes (steps/plan/plan.mjs); a cycle there is `err("cycle")` on a step with no
+  // role, no operator and no repair rail — the band dies with a diagnosis nobody can act on.
+  //
+  // BUG_FIX_CONTEXT: live run f7bf154a (sandbox/runbox/quarkus-rest-json-app-v2-t2), backlog D17.
+  //   Previous: nothing judged direction at step 9 at all — rule 3 walks a `<dep>` BOTH ways on
+  //             purpose, so the design graph cannot say who calls whom.
+  //   Problem:  rule 7 demanded a route through an `out` branch that predates the change (the
+  //             resource's existing list call). No FRD scenario exercises it, and pass C took the
+  //             branch by handing it to the page — a leg the map already declares in the opposite
+  //             direction. Step 9 went green, step 10 died: `неразрешимый порядок среди узлов плана`.
+  //   Fix:      this rule, plus the way OUT that makes it satisfiable — a route may simply END on the
+  //             node that produced the value (router.md). Rule 7 is unchanged: weakening it would need
+  //             a provenance per alternative, whose price docs/triggers.md rows 8 and 20 already
+  //             refused, and the shortened route satisfies BOTH rules at once.
+  //
+  // Only a leg some ROUTE asserts is reported. A cycle the map carries on its own is the repository's,
+  // not this artifact's — step 5 declares it (`<cycle>`) and step 10 refuses on it by its own rule; a
+  // blocker here would order pass C to repair something it did not write and cannot reach.
+  //
+  // ON A PART the rule is MONOTONE and not complete: the part asserts a SUBSET of the whole's forward
+  // legs, so a cycle it can see is a cycle of the whole, and a cycle closed by two different scenarios
+  // is found by the merge (D26). The authority is the merge; the part reports what it can.
+  const legs = forwardLegs(routes)
+
+  // WHO ASSERTS WHICH DIRECTION: from -> (to -> the artifact that says so). A Map of Maps, not a Map
+  // keyed by a joined string: a path may legally contain any character a filesystem allows, so every
+  // separator is a path that breaks the key, and the first draft of this rule proved it — the writer
+  // joined on one character and the reader split on another, and rule 9 was silent on its own fixture.
+  const dir = new Map()
+  const claim = (from, to, why) => {
+    if (from === to || !nodes.has(from) || !nodes.has(to)) return
+    if (!dir.has(from)) dir.set(from, new Map())
+    if (!dir.get(from).has(to)) dir.get(from).set(to, why)
+  }
+  const outOf = (p) => dir.get(p) || new Map()
+  for (const e of edges || []) claim(e.from, e.to, "ребро карты")
+  for (const l of legs) claim(l.from, l.to, `маршрут ${l.scenario}`)
+
+  // A leg is guilty when the graph can walk BACK from where it points to where it started: that, and
+  // only that, is a leg lying on a cycle. Kahn's leftovers will not do — everything standing BEHIND a
+  // cycle stays unsorted too, and blaming those legs hands pass C nodes that are perfectly ordered.
+  // Measured on this slice's own fixture while writing D17: three lines for one defect.
+  const reaches = (from, to) => {
+    const seen = new Set([from]), q = [from]
+    while (q.length) {
+      for (const y of outOf(q.pop()).keys()) {
+        if (y === to) return true
+        if (!seen.has(y)) { seen.add(y); q.push(y) }
+      }
+    }
+    return false
+  }
+
+  // ONE LINE PER FACT (docs/design-step-by-step.md §8.1), and the fact is the PAIR, not the leg: when
+  // two nodes call each other, both legs are the same defect and one of the two has to go. Keyed by
+  // the pair, so the report says it once and names who asserts each direction — a route the role can
+  // rewrite, or an edge of the map it cannot.
+  const cycle = facts()
+  for (const l of legs) {
+    if (!nodes.has(l.from) || !nodes.has(l.to) || !reaches(l.to, l.from)) continue
+    if (!outOf(l.to).has(l.from)) {
+      cycle.add(`9:${l.from}:${l.to}`, 9, `9 маршрут ведёт ${l.from} → ${l.to}, а обратный путь через другие узлы возвращается в ${l.from} — порядок работ шага 10 на этом круге не строится`, l.scenario, { path: l.from })
+      continue
+    }
+    const [a, b] = [l.from, l.to].sort()
+    cycle.add(`9:${a}:${b}`, 9, `9 ${a} и ${b} зовут друг друга: ${a} → ${b} (${outOf(a).get(b)}), ${b} → ${a} (${outOf(b).get(a)}) — порядок работ на этой паре не строится. Маршрут, которому дальше идти не к кому, ОБРЫВАЕТСЯ на узле, отдавшем значение: шаг из одного узла законен и ветку закрывает`, l.scenario, { path: a })
+  }
+
+  return [...out, ...eleven.records(), ...cycle.records()]
+}
+
+// FUNCTION_CONTRACT: checkCoverage — the rules whose operand is the WHOLE set of routes
+//   Input:        { routes, nodes, values, frd } — as checkSteps takes them, minus `edges`: no rule
+//                 here reads a direction
+//   Dependencies: traverse, facts, namedIn
+//   Antecedent:   the same as checkSteps'
+//   Consequent:   success: Fact[] of rules 2, 5, 7 and 10, in that order — every one of them a
+//                          statement about the set: a node no route visits, a scenario with no route,
+//                          a branch nobody takes, an input nobody delivers
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    checkCoverage({ routes, nodes, values, frd }) -> Fact[]
+//
+// NEVER ASKED OF A PART (D26). Each of these four is decided by what the OTHER parts wrote, and a part
+// cannot see them: measured on `eddi`, one part S2 judged by these rules reports 51 lines by rules 2
+// and 7 plus 10 by rule 5, every one of them a lie about a route another part had already written.
+export function checkCoverage({ routes = [], nodes = new Map(), values = new Map(), frd = {} } = {}) {
+  const named = namedIn(values)
+  const walk = traverse({ routes, nodes, values })
+  const used = walk.used
+  const chosen = walk.chosen
+  const arrived = walk.arrived
+  const refused = new Set(walk.refused)
+  const tail = facts()                  // rules 2, 5, 7, 10 — findings of the WHOLE set
+
   // Rule 2. A node with a delta that no route passes through is structure without time: nothing calls
   // it, and a ticket for it would be written blind.
-  for (const n of nodes.values()) if (n.delta && !used.has(n.path)) tail.push(`2 узел с delta="${n.delta}" не встречен ни в одном маршруте — ${n.path}`)
+  for (const n of nodes.values()) if (n.delta && !used.has(n.path)) tail.add(`2:${n.path}`, 2, `2 узел с delta="${n.delta}" не встречен ни в одном маршруте — ${n.path}`, "", { path: n.path })
 
   // Rule 5. A forgotten delta: an FRD scenario without a route, and a touched node outside all routes.
   const covered = new Set(routes.map((r) => r.scenario))
   for (const s of frd.scenarios || []) {
     const id = (s && s.id) || ""
-    if (!covered.has(id)) tail.push(`5 у сценария FRD ${id || "(без id)"} нет маршрута`)
+    if (!covered.has(id)) tail.add(`5:s:${id}`, 5, `5 у сценария FRD ${id || "(без id)"} нет маршрута`, "", { scenario: id })
   }
-  for (const t of frd.touched || []) if (!used.has(t)) tail.push(`5 touched FRD не встречен ни в одном маршруте — ${t}`)
+  for (const t of frd.touched || []) if (!used.has(t)) tail.add(`5:t:${t}`, 5, `5 touched FRD не встречен ни в одном маршруте — ${t}`, "", { path: t })
 
   for (const n of nodes.values()) {
     // Rule 7. An `out` alternative no route takes is either a dead branch of the contract or a missing
@@ -280,7 +505,7 @@ export function checkRoutes({ routes = [], nodes = new Map(), values = new Map()
     if (!n.delta || !used.has(n.path)) continue
     const took = chosen.get(n.path) || new Set()
     for (const id of n.out) {
-      if (!took.has(id)) { tail.push(`7 узел ${n.path} с delta="${n.delta}": значение ${named(id)} в out не пройдено ни одним маршрутом — ветка мертва либо сценария FRD не хватает`); refused.add(n.path) }
+      if (!took.has(id)) { tail.add(`7:${n.path}:${id}`, 7, `7 узел ${n.path} с delta="${n.delta}": значение ${named(id)} в out не пройдено ни одним маршрутом — ветка мертва либо сценария FRD не хватает`, "", { path: n.path }); refused.add(n.path) }
     }
   }
 
@@ -309,112 +534,65 @@ export function checkRoutes({ routes = [], nodes = new Map(), values = new Map()
     if (!n.delta || !used.has(n.path) || refused.has(n.path)) continue
     const got = arrived.get(n.path) || new Set()
     for (const id of n.in) {
-      if (!got.has(id)) tail.push(`10 узел ${n.path} с delta="${n.delta}": значение ${named(id)} в in не доставлено ни одним маршрутом — вход мёртв либо маршрут оборван раньше этого узла`)
+      if (!got.has(id)) tail.add(`10:${n.path}:${id}`, 10, `10 узел ${n.path} с delta="${n.delta}": значение ${named(id)} в in не доставлено ни одним маршрутом — вход мёртв либо маршрут оборван раньше этого узла`, "", { path: n.path })
     }
   }
 
-  // Rule 11 — A FAILURE BRANCH MAY NOT END IN SUCCESS. If a node with a `delta` answers a failure it
-  // received with the SAME value it answers an ordinary input with, then the two branches are one
-  // branch: `expand` writes a unit per DISTINGUISHABLE pair, and two antecedents sharing a consequent
-  // is a unit that proves nothing (standards/code.md — 1 happy + Σ branches with a distinguishable
-  // consequent).
-  //
-  // BUG_FIX_CONTEXT: live run 09d11a84 (sandbox/runbox/quarkus-rest-json-app-v2-t2), round 3.
-  //   Previous: nothing compared what a node answers a failure with against what it answers anything
-  //             else with.
-  //   Problem:  the dictionary had no value for the page's not-found ending, so rule 10's demand
-  //             («deliver the 404 to the page») could only be met by writing «404 → the card WITH THE
-  //             FRUIT'S DATA is shown». The role wrote it twice. One of the two forms — the one that
-  //             RETURNS to the page rather than starting at the resource — is green under all ten
-  //             rules: rule 9 sees no forward leg in a return, rule 4 is satisfied because the page
-  //             does accept the 404, and the lie ships into `data-flow.md` and into the ticket's units.
-  //             Measured: that set minus the other route gives checkRoutes → [].
-  //   Fix:      this rule. Measured against every artifact under sandbox/runbox — eddi (15+ routes,
-  //             four worded failure codes, chains of delegates), t3 and two slice snapshots — zero
-  //             false positives: a delegate answers a failure WITH a failure, which this rule allows.
-  const codes = ((frd && frd.failures) || []).map((f) => String((f && f.code) || "").trim()).filter(Boolean)
-  const carriesFailure = (id) => codes.length > 0 && codes.some((c) => String(values.get(id) || "").includes(c))
-  for (const n of nodes.values()) {
-    if (!n.delta || !used.has(n.path)) continue
-    const mine = answers.get(n.path)
-    if (!mine) continue
-    const ordinary = new Set()
-    for (const [id, outs] of mine) if (!carriesFailure(id)) for (const o of outs) ordinary.add(o)
-    for (const [id, outs] of mine) {
-      if (!carriesFailure(id)) continue
-      for (const o of outs) {
-        if (!ordinary.has(o)) continue
-        tail.push(`11 узел ${n.path}: на отказ ${named(id)} маршрут отвечает тем же значением ${named(o)}, каким узел отвечает и на обычный вход — ветка отказа кончается успехом, и юнит у неё будет неотличим. Ответь значением, которым КОНЧАЕТСЯ это ветвление FRD; если такого значения нет — его нет в СЛОВАРЕ, и чинить надо там`)
-      }
-    }
-  }
+  return tail.records()
+}
 
-  // Rule 9 — THE ORDER OF THE WORK MUST EXIST, and it is judged HERE because here there is a role to
-  // repair it. Step 10 sorts the tickets topologically over the map's directed edges plus the FORWARD
-  // legs of these very routes (steps/plan/plan.mjs); a cycle there is `err("cycle")` on a step with no
-  // role, no operator and no repair rail — the band dies with a diagnosis nobody can act on.
-  //
-  // BUG_FIX_CONTEXT: live run f7bf154a (sandbox/runbox/quarkus-rest-json-app-v2-t2), backlog D17.
-  //   Previous: nothing judged direction at step 9 at all — rule 3 walks a `<dep>` BOTH ways on
-  //             purpose, so the design graph cannot say who calls whom.
-  //   Problem:  rule 7 demanded a route through an `out` branch that predates the change (the
-  //             resource's existing list call). No FRD scenario exercises it, and pass C took the
-  //             branch by handing it to the page — a leg the map already declares in the opposite
-  //             direction. Step 9 went green, step 10 died: `неразрешимый порядок среди узлов плана`.
-  //   Fix:      this rule, plus the way OUT that makes it satisfiable — a route may simply END on the
-  //             node that produced the value (router.md). Rule 7 is unchanged: weakening it would need
-  //             a provenance per alternative, whose price docs/triggers.md rows 8 and 20 already
-  //             refused, and the shortened route satisfies BOTH rules at once.
-  //
-  // Only a leg some ROUTE asserts is reported. A cycle the map carries on its own is the repository's,
-  // not this artifact's — step 5 declares it (`<cycle>`) and step 10 refuses on it by its own rule; a
-  // blocker here would order pass C to repair something it did not write and cannot reach.
-  const legs = forwardLegs(routes)
-
-  // WHO ASSERTS WHICH DIRECTION: from -> (to -> the artifact that says so). A Map of Maps, not a Map
-  // keyed by a joined string: a path may legally contain any character a filesystem allows, so every
-  // separator is a path that breaks the key, and the first draft of this rule proved it — the writer
-  // joined on one character and the reader split on another, and rule 9 was silent on its own fixture.
-  const dir = new Map()
-  const claim = (from, to, why) => {
-    if (from === to || !nodes.has(from) || !nodes.has(to)) return
-    if (!dir.has(from)) dir.set(from, new Map())
-    if (!dir.get(from).has(to)) dir.get(from).set(to, why)
-  }
-  const out = (p) => dir.get(p) || new Map()
-  for (const e of edges || []) claim(e.from, e.to, "ребро карты")
-  for (const l of legs) claim(l.from, l.to, `маршрут ${l.scenario}`)
-
-  // A leg is guilty when the graph can walk BACK from where it points to where it started: that, and
-  // only that, is a leg lying on a cycle. Kahn's leftovers will not do — everything standing BEHIND a
-  // cycle stays unsorted too, and blaming those legs hands pass C nodes that are perfectly ordered.
-  // Measured on this slice's own fixture while writing D17: three lines for one defect.
-  const reaches = (from, to) => {
-    const seen = new Set([from]), q = [from]
-    while (q.length) {
-      for (const y of out(q.pop()).keys()) {
-        if (y === to) return true
-        if (!seen.has(y)) { seen.add(y); q.push(y) }
-      }
-    }
-    return false
-  }
-
-  // ONE LINE PER FACT (docs/design-step-by-step.md §8.1), and the fact is the PAIR, not the leg: when
-  // two nodes call each other, both legs are the same defect and one of the two has to go. Keyed by
-  // the pair, so the report says it once and names who asserts each direction — a route the role can
-  // rewrite, or an edge of the map it cannot.
-  const cycle = facts()
-  for (const l of legs) {
-    if (!nodes.has(l.from) || !nodes.has(l.to) || !reaches(l.to, l.from)) continue
-    if (!out(l.to).has(l.from)) {
-      cycle.add(`9:${l.from}:${l.to}`, `9 маршрут ведёт ${l.from} → ${l.to}, а обратный путь через другие узлы возвращается в ${l.from} — порядок работ шага 10 на этом круге не строится`, l.scenario)
-      continue
-    }
-    const [a, b] = [l.from, l.to].sort()
-    cycle.add(`9:${a}:${b}`, `9 ${a} и ${b} зовут друг друга: ${a} → ${b} (${out(a).get(b)}), ${b} → ${a} (${out(b).get(a)}) — порядок работ на этой паре не строится. Маршрут, которому дальше идти не к кому, ОБРЫВАЕТСЯ на узле, отдавшем значение: шаг из одного узла законен и ветку закрывает`, l.scenario)
-  }
-  tail.push(...cycle.lines())
-
-  return [...step.lines(), ...[...joints.values()].flatMap((f) => f.lines()), ...tail]
+// FUNCTION_CONTRACT: checkRoutes — the guardrail of pass C: the joint of the two projections
+//   Input:        { routes, nodes, values, frd, edges }
+//                 routes — parseRoutes' parse
+//                 nodes  — the graph of pass B AS steps/design/nodes.mjs::parseNodes returns it:
+//                          Map<path, Node> whose contracts carry IDS. Parsing it belongs to that
+//                          pass; here it is a DEPENDENCY, and it is NOT re-judged (§7)
+//                 values — the dictionary of pass A AS steps/design/values.mjs::parseValues returns
+//                          it: Map<id, text>. Used for the TEXT beside an id in a blocker — the
+//                          role's card speaks both, and a bare id is not a diagnosis
+//                 frd    — the parse of `.agent/frd.xml` AS steps/intake/frd.mjs::parseFrd returns
+//                          it: `scenarios` are the ELEMENTS (an id lives in `.id`), `touched` are
+//                          paths. Parsing that file belongs to the intake slice
+//                 edges  — the map's DIRECTED `<edge from to/>` AS steps/intake/map.mjs::parseMap
+//                          returns them (`.agent/appgraph.xml`), or [] when the caller has none. They
+//                          are rule 9's second operand and nothing else reads them here: `<dep>` of
+//                          the design graph is deliberately UNDIRECTED (rule 3 walks it both ways),
+//                          so the direction a repository already has can only come from the map
+//   Dependencies: checkSteps, checkCoverage, blockerLine
+//   Antecedent:   routes — parseRoutes' array; nodes — parseNodes' Map; values — parseValues' Map (a
+//                 missing one only costs the blockers their texts); frd — an object with two arrays,
+//                 missing fields read as empty; edges — an array of {from, to}, missing read as empty,
+//                 and then rule 9 judges the routes against each other alone
+//   Consequent:   success: string[] of blockers, empty = green. Rules 1, 2, 3, 4, 5, 7, 9, 10 and 11
+//                          keep the numbers they have in docs/data-flow.md §6. ONE LINE PER FACT: the
+//                          line names what to repair and ends with the scenarios that met it. Rules 3
+//                          and 4 are emitted grouped by the RECEIVING node — the place of the repair
+//                 failure: none — total, "the routes are bad" is DATA, not a function failure
+//   Purity:       pure
+//   BUG_FIX_CONTEXT: this slice was written BEFORE steps 6 and 8 existed, and its fixture was
+//                 invented rather than parsed. `frd.scenarios` was compared as a list of STRINGS
+//                 while parseFrd returns elements, so rule 5 reddened on every real FRD, with the
+//                 text «у сценария FRD [object Object] нет маршрута» — a blocker no role can repair,
+//                 burning every redelegation down to `escalate` (docs/design.md §3, discrepancy A).
+//
+// THE ORDER OF THE LINES IS THE CONTRACT, not an accident of two calls: rule 1, then the joints (3 and
+// 4) grouped by the node that must be repaired, then the covering rules 2, 5, 7 and 10, then 11, then
+// the cycles of rule 9. It is the order this report had before the decomposition, which is why
+// steps/design/routes.test.mjs judges D26 without an edit — and why the partition below is by the
+// `rule` FIELD of a record and never by a regular expression over the line's prose (standards/code.md
+// §1: a rule read by matching another module's Russian is that rule written twice).
+export function checkRoutes(input = {}) {
+  const steps = checkSteps(input)
+  const cover = checkCoverage(input)
+  const of = (list, ...rules) => list.filter((f) => rules.includes(f.rule)).map(blockerLine)
+  return [
+    ...of(steps, 1),
+    ...of(steps, 3, 4),
+    ...of(cover, 2),
+    ...of(cover, 5),
+    ...of(cover, 7),
+    ...of(cover, 10),
+    ...of(steps, 11),
+    ...of(steps, 9),
+  ]
 }

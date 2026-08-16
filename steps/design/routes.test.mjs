@@ -539,10 +539,14 @@ test("the role's example is a green set of routes — parseRoutes + checkRoutes,
   assert.deepEqual(checkRoutes({ routes: exRoutes, nodes: exNodes, values: exValues, frd: exFrd }), [])
 
   // …and the guardrail really ran on it: compose the first route's id the way live run 0bbf7054 did
-  // and exactly one blocker comes back — the scenario the FRD declared has no route at all. The
-  // example is judged, not merely parsed, and the rule it exists to teach is the one that reddens.
+  // and the report names BOTH facts the artifact carries — an id no scenario of the FRD owns, and a
+  // scenario left with no route. The example is judged, not merely parsed.
+  //
+  // D26 narrowed the id test (steps/design/routes.mjs::scenarioOf): `startsWith` accepted `S1_ok` —
+  // and, on an FRD with eleven scenarios, `S10` as a route of `S1`. Only rule 5 spoke here until then.
   const invented = parseRoutes(xml[1].replace('scenario="S1"', 'scenario="S1_ok"'))
   assert.deepEqual(checkRoutes({ routes: invented, nodes: exNodes, values: exValues, frd: exFrd }), [
+    "1 маршрут S1_ok: такого сценария в FRD нет — id маршрута это id сценария FRD дословно либо он же с суффиксом (S1)",
     "5 у сценария FRD S1 нет маршрута",
   ])
 })
