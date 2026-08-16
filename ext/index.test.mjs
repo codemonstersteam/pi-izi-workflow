@@ -1022,6 +1022,22 @@ test("наряд прохода A несёт скелет, число пусты
   assert.match(IZI, /\(none — first attempt\)/)
 })
 
+// BUG_FIX_CONTEXT: живой прогон 4cfdbf54 (форма eddi). Наряд прохода A нёс в CONSTRAINTS пример
+// формы значения — `POST /loans/{id}/renew`, — и `prompt()` прочитал `{id}` как ПОДСТАНОВКУ: он
+// требует двустороннего совпадения ключей и бросил `Missing prompt value "id"`. Крах пришёл ПОСЛЕ
+// гейта, ряби и посчитанного скелета, то есть за миллисекунду до вызова роли и без единого артефакта.
+// Проверка стоит миллисекунду и держит обе стороны сразу: каждая фигурная скобка шаблона — ключ,
+// который воркфлоу передаёт, и каждый ключ — скобка в шаблоне.
+test("плейсхолдеры наряда прохода A и ключи, которые ему передают, — одно множество", () => {
+  const tpl = readFileSync(new URL("../steps/design/order-values.tpl", import.meta.url), "utf8")
+  const inTpl = [...new Set([...tpl.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]))].sort()
+  const call = IZI.slice(IZI.indexOf('const o = sized("design/values"'), IZI.indexOf("if (o.over)"))
+  // Ключ — то, что стоит ПОСЛЕ разделителя объекта: иначе `STAGING: VALUES_STAGING` читается как два.
+  // Хвостовой разделитель — заглядыванием: иначе съеденная запятая крадёт следующий ключ.
+  const inCall = [...new Set([...call.matchAll(/[{,]\s*([A-Z][A-Z_]*)\s*(?=[,:])/g)].map((m) => m[1]))].sort()
+  assert.deepEqual(inTpl, inCall)
+})
+
 test("the valuer returns a count, so the envelope carries it — additionalProperties is false", () => {
   assert.match(IZI, /values: \{ type: "number" \}/)
 })
