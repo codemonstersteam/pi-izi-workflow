@@ -17,10 +17,12 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { parseRoutes, checkRoutes, checkSteps, checkCoverage, blockerLine, scenarioOf } from "./routes.mjs"
-import { routeParts, mergeParts, blameByScenario } from "./parts.mjs"
+import { routeParts, mergeParts, blameByScenario, nodeParts, nodeOwner, mergeNodes, blameNodes } from "./parts.mjs"
 import { parseValues } from "./values.mjs"
-import { parseNodes } from "./nodes.mjs"
+import { parseNodes, checkNodes, checkGraph, graphFacts } from "./nodes.mjs"
 import { parseFrd } from "../intake/frd.mjs"
+import { parseMap } from "../intake/map.mjs"
+import { attrs, elem } from "../../core/xml.mjs"
 
 export const FRD_XML = `<frd grammar="1" goal="В E.D.D.I появляется новый тип конфигурации Глоссарий с CRUD, версионированием, подстановкой Терминов в промпты и экспортом/импортом/слиянием">
   <usecase id="UC1" actor="api-client" goal="создать Глоссарий">
@@ -381,6 +383,7 @@ test("вина: 1, 9, 11 — по маршрутам из where; 2, 7, 10 — п
 // `prompt()` требует ТОЧНОГО двустороннего совпадения: лишний ключ или лишний плейсхолдер роняет
 // запуск — после гейта, словаря и графа, то есть после всех токенов проходов A и B.
 const ORDER_PART = readFileSync(new URL("order-routes-part.tpl", import.meta.url), "utf8")
+const ORDER_NODES_WHOLE = readFileSync(new URL("order-nodes.tpl", import.meta.url), "utf8")
 const IZI = readFileSync(new URL("../../workflows/izi.js", import.meta.url), "utf8")
 
 test("наряд части: плейсхолдеры шаблона — ровно те ключи, что подставляет полоса", () => {
@@ -400,4 +403,390 @@ test("тотальность: без FRD, без словаря и без гра
   assert.deepEqual(routeParts(), [])
   assert.deepEqual(routeParts({ frd: {}, values: new Map(), nodes: new Map(), text: "" }), [])
   assert.deepEqual(blameByScenario(), [])
+})
+
+// --- D28: ПРОХОД B СОБИРАЕТСЯ ТЕМ ЖЕ РОЕМ ---------------------------------------------------------
+//
+// ФИКСТУРА — ДОСЛОВНАЯ ВЫПИСКА живых артефактов прогона `35972d1c` (`sandbox/runbox/eddi/.agent/`):
+// три сценария FRD из шести (S3, S5, S6 — S5 и S6 закрывают ОДИН use case UC5 и делят четыре узла),
+// их use case и код сбоя, дельты их узлов, `<touched>`, словарь тех значений, что называют контракты,
+// граф этих десяти узлов из `staging/design-nodes.xml` — файл, на котором прогон и умер, — и четыре
+// модуля ряби. Прогон: 3 вызова роли `designer`, 23 536 / 27 547 / 1 889 токенов входа, 14 157 /
+// 20 260 / 98 304 выхода, $0.5437 из $0.9093 всего прогона, ноль артефактов.
+export const FRD_B = `<frd grammar="1" goal="в E.D.D.I появляется новый тип конфигурации Глоссарий с CRUD, версионированием, подстановкой в промпты и экспортом/импортом вместе с агентом">
+<usecase id="UC3" actor="prompt-renderer" goal="подставить значения Терминов в промпт по шаблону {{glossary.&lt;key&gt;}}">
+    <pre>промпт содержит выражение {{glossary.&lt;key&gt;}} и соответствующий Термин с данным key существует</pre>
+    <post>все выражения {{glossary.&lt;key&gt;}} заменены на значения Терминов, промпт рендерен без ошибок</post>
+    <step n="1">LlmTask или OutputTemplateTask вызывает ITemplatingEngine.processTemplate с промптом</step>
+    <step n="2">Qute Engine встречает выражение с namespace \`glossary\`</step>
+    <step n="3">GlossaryNamespaceResolver получает key из выражения</step>
+    <step n="4">GlossaryService ищет Термин по key среди всех Глоссариев (из кэша или MongoDB)</step>
+    <step n="5">значение Термина подставляется в шаблон на место {{glossary.&lt;key&gt;}}</step>
+    <ext id="3a" error="GLOSSARY_TERM_KEY_MISSING" outcome="промпт не рендерен, система вернула ошибку: ключ Термина не найден ни в одном Глоссарии"/>
+  </usecase>
+<usecase id="UC5" actor="import-client" goal="восстановить Глоссарий при импорте агента со слиянием по URI">
+    <pre>ZIP-архив содержит директорию glossaries/ с JSON-файлами Глоссариев</pre>
+    <post>Глоссарии доступны в системе; при наличии существующих — Термины слиты по resource URI, импортированная версия приоритетнее</post>
+    <step n="1">клиент вызывает POST /backup/import</step>
+    <step n="2">ZipResourceSource.readGlossaries читает JSON-файлы из директории glossaries/ распакованного ZIP</step>
+    <step n="3">UpgradeExecutor.dispatchGlossaries для каждого Глоссария применяет стратегию merge по resource URI</step>
+    <step n="4">если Глоссарий существует — Термины слиты, новая версия побеждает; если нет — создан новый</step>
+    <step n="5">система инвалидирует кэш GlossaryService</step>
+  </usecase>
+<failure code="GLOSSARY_TERM_KEY_MISSING" status="500"
+           client="—"
+           operator="промпт не рендерен, система вернула ошибку"
+           from="UC3/3a"/>
+<delta op="resolve glossary namespace" form="Added" node="src/main/java/ai/labs/eddi/modules/templating/impl/GlossaryNamespaceResolver.java" new="yes"
+         from="—" to="Qute namespace resolver \`glossary\` для подстановки {{glossary.&lt;key&gt;}}"/>
+<delta op="getAll()" form="Added" node="src/main/java/ai/labs/eddi/modules/llm/impl/GlossaryService.java" new="yes"
+         from="—" to="сервис загрузки Глоссариев с кэшированием, аналог PromptSnippetService"/>
+<delta op="POST /backup/import" form="Changed" node="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"
+         from="импорт агента без Глоссариев" to="импорт агента восстанавливает Глоссарии со слиянием по URI"/>
+<delta op="readGlossaries()" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"
+         from="чтение agent/workflows/snippets из ZIP" to="чтение agent/workflows/snippets/glossaries из ZIP"/>
+<delta op="dispatchGlossaries" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"
+         from="upgrade agent/workflows/snippets/extensions" to="upgrade agent/workflows/snippets/glossaries/extensions"/>
+<delta op="buildGlossaryDiff" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"
+         from="matching agent/workflows/snippets/extensions" to="matching agent/workflows/snippets/glossaries/extensions"/>
+<delta op="readGlossaries()" form="Added" node="src/main/java/ai/labs/eddi/backup/IResourceSource.java"
+         from="interface с readAgent/readWorkflows/readSnippets" to="interface с readAgent/readWorkflows/readSnippets/readGlossaries"/>
+<delta op="GlossaryStore" form="Added" node="src/main/java/ai/labs/eddi/configs/glossary/mongo/GlossaryStore.java" new="yes"
+         from="—" to="MongoDB-реализация хранилища, коллекция glossaries"/>
+<delta op="readGlossaries()" form="Added" node="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"
+         from="чтение agent/workflows/snippets/dictionaries/rulesets/apicalls/llms/propertysetters/outputsets/mcpcalls/rags с удалённого EDDI" to="чтение agent/workflows/snippets/glossaries/dictionaries/rulesets/apicalls/llms/propertysetters/outputsets/mcpcalls/rags с удалённого EDDI"/>
+<scenario id="S3" uc="UC3"
+            before="{{glossary.&lt;key&gt;}} не распознаётся Qute Engine, шаблон остаётся без изменений или падает"
+            after="{{glossary.&lt;key&gt;}} заменён на value Термина; при отсутствии key → ошибка рендеринга GLOSSARY_TERM_KEY_MISSING"
+            nodes="src/main/java/ai/labs/eddi/modules/templating/impl/GlossaryNamespaceResolver.java
+                   src/main/java/ai/labs/eddi/modules/llm/impl/GlossaryService.java
+                   src/main/java/ai/labs/eddi/modules/templating/impl/extensions/EddiTemplateExtensions.java"/>
+<scenario id="S5" uc="UC5"
+            before="импорт агента не восстанавливает Глоссарии, glossaries/ в ZIP игнорируется"
+            after="POST /backup/import восстанавливает Глоссарии; при наличии существующих — merge по resource URI, новая версия приоритетнее"
+            nodes="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java
+                   src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java
+                   src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java
+                   src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java
+                   src/main/java/ai/labs/eddi/backup/IResourceSource.java
+                   src/main/java/ai/labs/eddi/configs/glossary/mongo/GlossaryStore.java"/>
+<scenario id="S6" uc="UC5"
+            before="синхронизация с удалённым EDDI не переносит Глоссарии"
+            after="POST /backup/import/sync переносит Глоссарии с удалённого EDDI через /glossarystore/glossaries/"
+            nodes="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java
+                   src/main/java/ai/labs/eddi/backup/impl/RestImportService.java
+                   src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java
+                   src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+<touched path="src/main/java/ai/labs/eddi/modules/templating/impl/extensions/EddiTemplateExtensions.java"
+           why="регистрация GlossaryNamespaceResolver как нового Qute namespace CDI bean"/>
+</frd>`
+
+export const VALUES_B = `<values>
+  <value id="v9" text="GlossaryTermKeyMissing(key)"/>
+  <value id="v10" text="500 GLOSSARY_TERM_KEY_MISSING" closes="UC3/3a"/>
+  <value id="v11" text="Glossary(resourceURI, version)"/>
+  <value id="v12" text="Term(key, value)"/>
+  <value id="v14" text="getAll()"/>
+  <value id="v15" text="resolve glossary namespace" closes="UC3/in"/>
+  <value id="v17" text="POST /backup/import" closes="UC5/in"/>
+  <value id="v18" text="readGlossaries()"/>
+  <value id="v19" text="dispatchGlossaries"/>
+  <value id="v20" text="buildGlossaryDiff"/>
+  <value id="v54" text="ResolvedTermValue(key, value)" closes="UC3/post"/>
+  <value id="v56" text="200 {merged}" closes="UC5/post"/>
+</values>`
+
+export const NODES_B = `<design mode="major" base=".agent/appgraph.xml">
+  <module path="src/main/java/ai/labs/eddi/modules/templating/impl/GlossaryNamespaceResolver.java" delta="Added">
+    <role>Qute namespace resolver glossary для подстановки {{glossary.&lt;key&gt;}}</role>
+    <contract in="v14 | v15" out="v9 | v54"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/GlossaryService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/GlossaryService.java" delta="Added">
+    <role>сервис загрузки Глоссариев с кэшированием, аналог PromptSnippetService</role>
+    <contract in="v11 | v12" out="v11 | v12 | v14"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossary/mongo/GlossaryStore.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/modules/templating/impl/extensions/EddiTemplateExtensions.java">
+    <role>регистрация GlossaryNamespaceResolver как нового Qute namespace CDI bean</role>
+    <contract in="" out=""/>
+    <dep path="src/main/java/ai/labs/eddi/modules/templating/impl/GlossaryNamespaceResolver.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" delta="Changed">
+    <role>импорт агента восстанавливает Глоссарии со слиянием по URI</role>
+    <contract in="v17" out="v19 | v56"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java" delta="Changed">
+    <role>чтение agent/workflows/snippets/glossaries из ZIP</role>
+    <contract in="v18" out="v11 | v12"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java" delta="Changed">
+    <role>upgrade agent/workflows/snippets/glossaries/extensions</role>
+    <contract in="v11 | v12 | v18 | v19" out="v11 | v12 | v19"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossary/mongo/GlossaryStore.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java" delta="Changed">
+    <role>matching agent/workflows/snippets/glossaries/extensions</role>
+    <contract in="v11 | v12 | v18" out="v11 | v12 | v20"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" delta="Changed">
+    <role>interface с readAgent/readWorkflows/readSnippets/readGlossaries</role>
+    <contract in="" out="v18"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/glossary/mongo/GlossaryStore.java" delta="Added">
+    <role>MongoDB-реализация хранилища, коллекция glossaries</role>
+    <contract in="v11 | v12" out="v11 | v12"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossary/model/Glossary.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/glossary/model/Term.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java" delta="Changed">
+    <role>чтение agent/workflows/snippets/glossaries/dictionaries/rulesets/apicalls/llms/propertysetters/outputsets/mcpcalls/rags с удалённого EDDI</role>
+    <contract in="v18" out="v11 | v12"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+  </module>
+</design>`
+
+export const RIPPLE_B = `<ripple grammar="1" mode="major" seeds="8" nodes="17">
+  <module path="src/main/java/ai/labs/eddi/modules/templating/impl/extensions/EddiTemplateExtensions.java" seed="yes" pkg="ai.labs.eddi.modules.templating.impl.extensions" component="c2" level="2">
+    <role>Qute template extension registrations for uuidUtils, json (serialize/deserialize), and encoder (base64) namespaces</role>
+    <decl kind="class" name="EddiTemplateExtensions" sig="public class EddiTemplateExtensions"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" seed="yes" pkg="ai.labs.eddi.backup" component="c1" level="5">
+    <role>Interface and record types for reading agent, workflow, and snippet source data from a backup source</role>
+    <decl kind="interface" name="IResourceSource" sig="public interface IResourceSource"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java" seed="yes" pkg="ai.labs.eddi.backup.impl" component="c1" level="3">
+    <role>Application-scoped service that executes upgrade/sync operations by creating or updating agent resources, workflows, extensions, and snippets from source data</role>
+    <decl kind="class" name="UpgradeExecutor" sig="public class UpgradeExecutor"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java" seed="yes" pkg="ai.labs.eddi.backup.impl" component="c1" level="4">
+    <role>Application-scoped service that structurally matches imported agent resources against existing local agents for sync preview with content diffs</role>
+    <decl kind="class" name="StructuralMatcher" sig="public class StructuralMatcher"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+  </module>
+</ripple>`
+
+const FRD_D28 = parseFrd(FRD_B)
+const VALUES_D28 = parseValues(VALUES_B)
+const NODES_D28 = parseNodes(NODES_B)
+const KNOWN_D28 = parseMap(RIPPLE_B).nodes
+const OWNER_D28 = nodeOwner(FRD_D28)
+const NODE_PARTS = nodeParts({ frd: FRD_D28, ripple: RIPPLE_B, text: FRD_B })
+
+// Файл, который часть <id> записала бы в `.agent/staging/nodes-parts/<id>.xml`: её узлы графа и
+// только они. Разрез делает ВЛАДЕНИЕ, ровно как в ext/index.mjs::design.
+const nodeXml = (id, text = NODES_B) =>
+  `<design mode="major" base=".agent/appgraph.xml">\n${[...text.matchAll(elem("module"))]
+    .filter((m) => OWNER_D28.get(String(attrs(m[1]).path || "").trim()) === id)
+    .map((m) => `  ${m[0]}`).join("\n")}\n</design>\n`
+const graphOf = (xml, values = VALUES_D28) => ({ nodes: parseNodes(xml), values, frd: FRD_D28, known: KNOWN_D28 })
+const textsOfB = (facts) => new Set(facts.map((f) => f.text))
+
+// --- единица роя ----------------------------------------------------------------------------------
+//
+// Замер на всех шести сценариях живого FRD: 16 узлов, 6 из них названы двумя-четырьмя сценариями,
+// частей выходит пять (S2 не владеет ничем — все её узлы уже названы S1), наряд части 4 281-10 874
+// символа против 47 246 у наряда, который прогон 35972d1c не осилил.
+test("часть прохода B = один сценарий: узлы по ПЕРВОМУ называющему, соседи — чужие пути без карточек", () => {
+  assert.deepEqual(NODE_PARTS.map((p) => p.id), ["S3", "S5", "S6"])
+  const [s3, s5, s6] = NODE_PARTS
+
+  // S5 и S6 делят четыре узла, и все четыре достались S5 — она названа раньше. У S6 остаётся один.
+  assert.deepEqual(s6.paths, ["src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"])
+  assert.equal(s5.paths.length, 6)
+  assert.equal(s3.paths.length, 3)
+  // …и объединение путей частей не пересекается: файлы частей дизъюнктны по построению.
+  const all = NODE_PARTS.flatMap((p) => p.paths)
+  assert.equal(new Set(all).size, all.length, "один узел — одна часть")
+
+  // Соседи — пути ДРУГИХ частей, и ни одной их карточки: S6 видит путь UpgradeExecutor, но не его
+  // контракт. Ребро туда провести можно, написать <module> — нельзя.
+  assert.ok(s6.neighbours.includes("src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"))
+  assert.deepEqual(s6.neighbours.filter((p) => s6.paths.includes(p)), [])
+  assert.match(s6.nodes, /На них можно только сослаться <dep path/)
+  assert.doesNotMatch(s6.nodes, /<contract/)
+
+  // Проекция FRD — дословные байты артефакта, и ничего чужого: свой сценарий, свой use case, дельты
+  // СВОИХ узлов, коды сбоев своего use case.
+  assert.match(s3.frd, /<scenario id="S3"/)
+  assert.match(s3.frd, /<usecase id="UC3"[\s\S]*<\/usecase>/)
+  assert.match(s3.frd, /<failure code="GLOSSARY_TERM_KEY_MISSING"/)
+  assert.match(s3.frd, /<delta op="resolve glossary namespace"/)
+  assert.doesNotMatch(s3.frd, /<scenario id="S5"/)
+  assert.doesNotMatch(s3.frd, /<delta op="dispatchGlossaries"/)
+  // Рябь — тоже проекция: свои узлы и только они.
+  assert.match(s3.ripple, /EddiTemplateExtensions\.java/)
+  assert.doesNotMatch(s3.ripple, /IResourceSource\.java" seed/)
+  // Транзитный узел назван транзитным, узел с дельтой несёт слово шага 6 дословно.
+  assert.match(s3.nodes, /EddiTemplateExtensions\.java — транзит/)
+  assert.match(s3.nodes, /delta="Added", дельта FRD: getAll\(\)/)
+  assert.ok(s5.chars < 12000, s5.chars)
+})
+
+// --- ШОВ РАЗЛОЖЕНИЯ: объединение частных вердиктов ≡ вердикту целого по частным правилам ----------
+//
+// Дефекты внесены в живой артефакт нарочно — по одному на каждое частное правило: слово `delta` не из
+// словаря шага 6, id вне словаря, пустой `out` у узла с дельтой. Убери любое из трёх правил из
+// `local`, и объединение перестанет сходиться с целым.
+const BROKEN_B = NODES_B
+  .replace('path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java" delta="Changed"',
+           'path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java" delta="changed"')
+  .replace('<contract in="v14 | v15" out="v9 | v54"/>', '<contract in="v14 | v99" out="v9 | v54"/>')
+  .replace('<contract in="v11 | v12 | v18" out="v11 | v12 | v20"/>', '<contract in="v11 | v12 | v18" out=""/>')
+
+test("шов: объединение checkNodes частей равно вердикту целого по частным правилам", () => {
+  const whole = textsOfB(checkNodes(graphOf(BROKEN_B)))
+  const union = new Set()
+  for (const p of NODE_PARTS) for (const f of checkNodes(graphOf(nodeXml(p.id, BROKEN_B)))) union.add(f.text)
+  assert.equal(whole.size, 3, [...whole].join("\n"))
+  assert.deepEqual([...whole].filter((t) => !union.has(t)), [], "промахи: целое видит, части нет")
+  assert.deepEqual([...union].filter((t) => !whole.has(t)), [], "ложные: части видят, целое нет")
+  // …и это ровно три правила, а не три строки одного: 6, словарь, 14.
+  const rules = checkNodes(graphOf(BROKEN_B)).map((f) => f.rule).sort((a, b) => a - b)
+  assert.deepEqual(rules, [0, 6, 14])
+})
+
+// --- ШОВ: правила ЦЕЛОГО на части — фантомы -------------------------------------------------------
+//
+// Замер на живом прогоне 35972d1c: пять частей отвечают правилами целого 103 строками там, где целое
+// отвечает тремя. Здесь, на трёх частях — 22 против 5. И это не шум: у узла с четырьмя
+// совладельцами правило 13 видит отсутствующего соседа как ПЕРМАНЕНТНЫЙ дефект, и часть не позеленеет.
+test("шов: checkNodes части не выдаёт ни одной строки правил целого — а те на части фантомны", () => {
+  let phantom = 0
+  for (const p of NODE_PARTS) {
+    const input = graphOf(nodeXml(p.id))
+    assert.deepEqual(checkNodes(input), [], p.id)
+    const all = graphFacts(input)
+    assert.deepEqual(all.filter((f) => f.local), [], p.id)
+    phantom += all.length
+  }
+  assert.equal(phantom, 22, "правила целого на трёх частях")
+  assert.equal(checkGraph(graphOf(NODES_B)).length, 5, "целое на том же графе")
+  // Фантом именно ложный: rule 13 краснеет на части S5, потому что второй сценарий UC5 — в части S6.
+  const s5 = graphFacts(graphOf(nodeXml("S5"))).filter((f) => f.rule === 13)
+  assert.ok(s5.length > 0, "UC5 закрывают два сценария, и часть видит только свою половину")
+  assert.deepEqual(checkGraph(graphOf(NODES_B)).filter((l) => l.startsWith("13 значение v56")), [])
+})
+
+// --- ШОВ: слияние ничего не теряет и ничего не удваивает ------------------------------------------
+test("круг: части → mergeNodes → parseNodes — тот же граф, ни одного пути дважды", () => {
+  const files = NODE_PARTS.map((p) => ({ id: p.id, xml: nodeXml(p.id) }))
+  const { xml, owner } = mergeNodes(files, { mode: "major" })
+  const back = parseNodes(xml)
+  assert.equal(back.size, NODES_D28.size, "десять узлов трёх частей")
+  assert.deepEqual([...back.keys()].sort(), [...NODES_D28.keys()].sort())
+  for (const [path, n] of back) assert.deepEqual(n, NODES_D28.get(path), path)
+  assert.equal(new Set([...xml.matchAll(elem("module"))].map((m) => attrs(m[1]).path)).size, back.size, "путь дважды")
+  // owner — это адрес починки: какая ЧАСТЬ написала этот узел. Читать путь для этого нельзя.
+  assert.equal(owner.get("src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"), "S5")
+  assert.equal(owner.get("src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"), "S6")
+  // Корень несёт вес шага 7 и базу — форма §4 не меняется от того, что файл собрал скрипт.
+  assert.match(xml, /^<design mode="major" base="\.agent\/appgraph\.xml">/)
+
+  // Один путь в ДВУХ файлах — победа за первым, и в слиянии он ровно один раз. Так выглядит часть,
+  // написанная против прежнего FRD и оставшаяся в каталоге: без дедупликации граф понёс бы узел дважды,
+  // а parseNodes прочёл бы ПОСЛЕДНИЙ — тихую подмену контракта.
+  const stale = { id: "S9", xml: nodeXml("S5").replace(/delta="Changed"/g, 'delta="Added"') }
+  const twice = mergeNodes([{ id: "S5", xml: nodeXml("S5") }, stale], { mode: "major" })
+  const upgrade = "src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"
+  assert.equal([...twice.xml.matchAll(elem("module"))].length, 6, "шесть узлов S5, ни одного дважды")
+  assert.equal(parseNodes(twice.xml).get(upgrade).delta, "Changed", "победа за ПЕРВЫМ файлом")
+  assert.equal(twice.owner.get(upgrade), "S5")
+
+  // Формат, который репозиторий и пишет, и читает, на самом трудном законном значении: кириллица,
+  // `@` в пути, `<` и `>` внутри значения атрибута, многострочный <role>.
+  const hard = `<design mode="minor" base=".agent/appgraph.xml">
+  <module path="src/Файл@Тест.java" delta="Changed">
+    <role>роль с &lt;угловыми&gt; скобками
+и переводом строки</role>
+    <contract in="v1 | v2" out="v3"/>
+    <dep path="src/Б.java"/>
+  </module>
+</design>`
+  assert.deepEqual(parseNodes(mergeNodes([{ id: "S1", xml: hard }], { mode: "minor" }).xml), parseNodes(hard))
+  assert.deepEqual(mergeNodes(), { xml: `<design mode="" base=".agent/appgraph.xml">\n\n</design>\n`, owner: new Map() })
+})
+
+// --- ВИНА ПОСЛЕ СЛИЯНИЯ ---------------------------------------------------------------------------
+//
+// Живой вердикт прогона 35972d1c по его же `staging/design-nodes.xml`: три блокера, все три про UC3.
+// До D28 они возвращались роли на ВЕСЬ граф, и роль переписывала все шестнадцать модулей ради трёх
+// строк — вторая попытка заплатила за ремонт регрессией на узле, который был зелен.
+test("вина: три живых блокера про UC3 уезжают в ОДНУ часть, сирот ноль", () => {
+  const facts = graphFacts(graphOf(NODES_B))
+  const merged = mergeNodes(NODE_PARTS.map((p) => ({ id: p.id, xml: nodeXml(p.id) })), { mode: "major" })
+  const blame = blameNodes({ facts, frd: FRD_D28, owner: merged.owner })
+  const to = new Map(blame.map((b) => [b.scenario, b.lines]))
+
+  const uc3 = facts.filter((f) => /UC3|GLOSSARY_TERM_KEY_MISSING|EddiTemplateExtensions/.test(f.text))
+  assert.equal(uc3.length, 3, uc3.map((f) => f.text).join("\n"))
+  for (const f of uc3) assert.ok((to.get("S3") || []).includes(f.text), f.text)
+  // Ни одна из трёх не уехала никому ещё — иначе просыпается часть, которой чинить нечего.
+  for (const [id, lines] of to) if (id !== "S3") for (const f of uc3) assert.ok(!lines.includes(f.text), `${id}: ${f.text}`)
+  // Сирот нет: у ребра наружу графа адресат — часть, которая это ребро написала.
+  const addressed = new Set(blame.flatMap((b) => b.lines))
+  assert.deepEqual(facts.map((f) => f.text).filter((t) => !addressed.has(t)), [])
+
+  // …а адрес — ПОЛЕ, не регулярка: сотри `path` у факта, и он остаётся без адресата.
+  const blind = blameNodes({ facts: facts.map((f) => ({ ...f, path: "", uc: "" })), frd: FRD_D28, owner: merged.owner })
+  assert.deepEqual(blind, [])
+})
+
+// --- ШОВ: возврат из прохода C будит ОДНУ часть прохода B ------------------------------------------
+//
+// Без этого возврат из прохода C отдаёт свой отчёт всем частям сразу: шесть ролей переписывают шесть
+// файлов ради трёх строк про один узел — то есть повторная плата за 35972d1c, умноженная на рой.
+test("вина: факты прохода C, чинимые проходом B, адресуются по УЗЛУ той части, что его написала", () => {
+  const facts = [
+    { rule: 3, text: "3 A недостижим из B — нет ребра <dep> между ними", path: "src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java", where: ["S5"] },
+    { rule: 4, text: "4 X не принимает v18 от Y", path: "src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java", where: ["S6", "S5"] },
+  ]
+  const blame = blameNodes({ facts, frd: FRD_D28, owner: nodeOwner(FRD_D28) })
+  assert.deepEqual(blame.map((b) => [b.scenario, b.lines.length]), [["S5", 1], ["S6", 1]])
+  // Строка правила 4 несёт хвост со сценариями-свидетелями — тот же blockerLine, что печатает отчёт.
+  assert.equal(blame.find((b) => b.scenario === "S6").lines[0], "4 X не принимает v18 от Y (S6, S5)")
+})
+
+// --- ШОВ: ключи наряда части ≡ плейсхолдеры шаблона ------------------------------------------------
+const ORDER_NODE_PART = readFileSync(new URL("order-nodes-part.tpl", import.meta.url), "utf8")
+
+test("наряд части прохода B: плейсхолдеры шаблона — ровно те ключи, что подставляет полоса", () => {
+  const keys = [...ORDER_NODE_PART.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
+  assert.deepEqual([...new Set(keys)].sort(), ["ANSWERS", "CHECK", "DELTA_FORMS", "FEEDBACK", "FRD", "MODE", "NODES", "PREVIOUS", "RIPPLE", "STAGING", "VALUES"])
+  const call = IZI.slice(IZI.indexOf("await agent(prompt(tplNodePart, {"), IZI.indexOf("}), { role: \"designer\""))
+  const passed = [...call.matchAll(/^\s{4}([A-Z_]+)[,:]/gm)].map((m) => m[1])
+  assert.deepEqual([...new Set(passed)].sort(), [...new Set(keys)].sort())
+  // Часть не отвечает за полноту графа — и её наряд этого не требует. Наряд ЦЕЛОГО прохода не тронут.
+  assert.match(ORDER_NODE_PART, /За полноту всего графа ты не отвечаешь/)
+  assert.doesNotMatch(ORDER_NODE_PART, /каждый узел, который изменение затрагивает/)
+  assert.match(ORDER_NODES_WHOLE, /каждый узел, который изменение затрагивает/)
+})
+
+test("тотальность: без FRD, без ряби и без графа частей прохода B просто нет", () => {
+  assert.deepEqual(nodeParts(), [])
+  assert.deepEqual(nodeParts({ frd: {}, ripple: "", text: "" }), [])
+  assert.deepEqual(nodeOwner(), new Map())
+  assert.deepEqual(blameNodes(), [])
+  // Вырождение: у формы `t2` сценариев два, частей выходит две, и порог SWARM_MIN (ext/index.test.mjs)
+  // превращает их в сегодняшний единственный наряд — рой там был бы чистыми накладными.
+  const two = parseFrd(FRD_B.replace(/<scenario id="S6"[\s\S]*?\/>/, ""))
+  assert.equal(nodeParts({ frd: two, ripple: RIPPLE_B, text: FRD_B }).length, 2)
 })

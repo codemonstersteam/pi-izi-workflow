@@ -23,12 +23,24 @@
 // Invariants: parseNodes is total — any input, including undefined, yields an empty graph and never
 //             throws (a guardrail that crashes on a malformed artifact turns "the role wrote
 //             nonsense" — data, a red check, a redelegation — into "the run crashed", code 2, no
-//             diagnosis); checkGraph is total and returns EVERY blocker, not the first one; the rule
+//             diagnosis); graphFacts is total and returns EVERY finding, not the first one; the rule
 //             lives in exactly one place — rule 6's NUMBER is the one of docs/data-flow.md §6 and is
 //             not restated here in prose
 // Interface:  parseNodes(xml) -> Map<path, Node>
+//             graphFacts({ nodes, values, frd, known }) -> Fact[]  — every finding, in the report's order
+//             checkNodes({ nodes, values, frd, known }) -> Fact[]  — the facts a PART can be judged by
 //             checkGraph({ nodes, values, frd, known }) -> string[]  — blockers, empty = green
 //             cards(values, nodes) -> string  — the data block of pass C's order
+//
+// FIVE RULES, TWO OPERANDS, AND THE FIELD THAT DECIDES WHICH IS WHICH (D28). Pass B is written by a
+// SWARM — one agent per FRD scenario — and a part holds the nodes that scenario OWNS and nothing else.
+// A finding whose operands all live inside one node is judged ON the part (`local: true` — the delta
+// vocabulary, the transit node outside the ripple, an id outside the dictionary, rule 14 for a node
+// with a delta); a finding whose operand is the SET of nodes cannot be asked of a part at all (an edge
+// leaving the graph, rule 14 for a `touched` path, rule 13, rule 15, a failure nobody hands out).
+// Let the whole's rules loose on the five parts of `eddi` and they report 103 lines where the whole
+// reports three. `checkGraph` is the same records rendered in TODAY'S order, which is why
+// steps/design/nodes.test.mjs judges this decomposition without one edit — that file is the seam.
 //
 // BUG_FIX_CONTEXT: live run 0bbf7054-3b8c-400f-b46f-83625777e097 (sandbox/runbox/eddi).
 //   Previous: one generation wrote the dictionary, the nodes and the routes into one 23,5 KB artifact.
@@ -158,7 +170,21 @@ export function parseNodes(xml) {
   return nodes
 }
 
-// FUNCTION_CONTRACT: checkGraph — the guardrail of pass B
+// A finding of pass B, and the ONE place its shape is written. Four fields nothing renders:
+//   · `rule`  — the NUMBER of docs/data-flow.md §6, or 0 for the three checks that carry none. It is
+//               what a caller filters by, because reading a rule out of another module's Russian prose
+//               with a regular expression is that rule written twice (standards/code.md §1);
+//   · `path`  — the node to repair, and the swarm's ADDRESS: a node belongs to the first FRD scenario
+//               that names it (steps/design/parts.mjs::blameNodes);
+//   · `uc`    — the use cases (space-separated), for the two findings that name no single node: rule 13
+//               names the use case whose end is unseated, and the failure nobody hands out names the
+//               ones its `<failure from>` does. Both are addressed to every scenario of those use cases;
+//   · `local` — TRUE when every operand of the finding lies inside one node, i.e. when a PART can be
+//               judged by it alone. See the module contract: this field IS the decomposition.
+const fact = (rule, text, { path = "", uc = "", local = false } = {}) =>
+  Object.freeze({ rule, text, path, uc, local })
+
+// FUNCTION_CONTRACT: graphFacts — every finding of pass B, in the order the report prints them
 //   Input:        { nodes, values, frd, known }
 //                 nodes  — parseNodes' parse
 //                 values — the dictionary of pass A AS steps/design/values.mjs::parseValues returns
@@ -168,18 +194,17 @@ export function parseNodes(xml) {
 //                 known  — Set<path> of the ripple subgraph's nodes (steps/intake/map.mjs::parseMap
 //                          over `.agent/ripple.xml`), or null when no subgraph was supplied — then
 //                          rule 6's transit half stays silent, the discipline F5 keeps without sources
-//   Dependencies: FRD_FORM
+//   Dependencies: FRD_FORM, fact, offer, outCandidates
 //   Antecedent:   nodes — parseNodes' Map; values — parseValues' Map (a missing one is read as an
 //                 empty dictionary, and then every id a contract names is unknown, which is true);
 //                 frd — an object, a missing `failures` read as empty; known — a Set or null
-//   Consequent:   success: string[] of blockers, empty = green. Rules 6, 13, 14 and 15 keep the numbers
-//                          they have in docs/data-flow.md §6; the three checks the graph owns beside
-//                          them (an id outside the dictionary, an edge out of the file, rule 8's
-//                          other half) carry no number, because §6's table is the single declaration
-//                          of the numbers and they are not in it
+//   Consequent:   success: Fact[] in the report's own order — per node first (rule 6's two halves, the
+//                          ids outside the dictionary, the edges leaving the graph), then rule 14 for
+//                          the nodes with a delta, then rule 14 for the `touched` paths, then rule 13,
+//                          then rule 15, then the failures nobody hands out
 //                 failure: none — total, "the graph is bad" is DATA, not a function failure
 //   Purity:       pure
-export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, known = null } = {}) {
+export function graphFacts({ nodes = new Map(), values = new Map(), frd = {}, known = null } = {}) {
   const B = []
 
   for (const n of nodes.values()) {
@@ -187,14 +212,14 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
     // is DECIDED at step 6 and weighed at step 7, so a design that renames it makes the two artifacts
     // unjoinable by anything but a translation table.
     if (n.delta && !FRD_FORM.deltaForms.includes(n.delta)) {
-      B.push(`6 узел ${n.path}: delta="${n.delta}" — допустимо ${FRD_FORM.deltaForms.join(" | ")}`)
+      B.push(fact(6, `6 узел ${n.path}: delta="${n.delta}" — допустимо ${FRD_FORM.deltaForms.join(" | ")}`, { path: n.path, local: true }))
     }
     // Rule 6, second half — a transit node cannot be invented. A node WITH a delta may legitimately
     // be absent from the subgraph: that is a NEW module, and inventing one is exactly the designer's
     // judgement. A node WITHOUT a delta is a claim about what already exists, and the only place it
     // may come from is the subgraph the order carried.
     if (!n.delta && known && !known.has(n.path)) {
-      B.push(`6 узел без delta вне подграфа ряби — ${n.path}: транзитный узел копируется из .agent/ripple.xml, выдумать его нельзя`)
+      B.push(fact(6, `6 узел без delta вне подграфа ряби — ${n.path}: транзитный узел копируется из .agent/ripple.xml, выдумать его нельзя`, { path: n.path, local: true }))
     }
 
     // A contract speaks NAMES, and a name that was never declared resolves to nothing: assembly would
@@ -203,7 +228,7 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
     // pass would happily accept a graph whose ids are private to itself.
     for (const [side, ids] of [["in", n.in], ["out", n.out]]) {
       for (const id of ids) {
-        if (!values.has(id)) B.push(`узел ${n.path}: в ${side} стоит ${id}, которого нет в словаре — контракт называет значение по имени, выдумать имя нельзя`)
+        if (!values.has(id)) B.push(fact(0, `узел ${n.path}: в ${side} стоит ${id}, которого нет в словаре — контракт называет значение по имени, выдумать имя нельзя`, { path: n.path, local: true }))
       }
     }
 
@@ -211,8 +236,13 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
     // route k→k+1 along `<dep>`, and a dep pointing outside gives it nothing to walk on; the ripple
     // subgraph is not a substitute, because a transit node must be COPIED here to carry its contract
     // (docs/data-flow.md §4) — `expand` has no other source for the values of a step.
+    //
+    // THE WHOLE'S FINDING, NOT THE PART'S (D28): a part carries the nodes ITS scenario owns and the
+    // PATHS of their neighbours, so every edge crossing into another part leaves the part's own file.
+    // Measured on the graph of run 35972d1c: 5 of its 17 edges cross a part boundary, and asked of a
+    // part they are a defect no part could ever repair.
     for (const d of n.deps) {
-      if (!nodes.has(d)) B.push(`узел ${n.path}: <dep path="${d}"> — такого узла в этом файле нет; ребро ведёт наружу графа, и шагнуть по нему маршруту будет некуда`)
+      if (!nodes.has(d)) B.push(fact(0, `узел ${n.path}: <dep path="${d}"> — такого узла в этом файле нет; ребро ведёт наружу графа, и шагнуть по нему маршруту будет некуда`, { path: n.path }))
     }
   }
 
@@ -241,17 +271,22 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
   // 088fb3ee is the price of the other shape — see outCandidates' BUG_FIX_CONTEXT. Where the FRD left
   // nothing to offer, the blocker says whose deficit that is and which rail leads out of it, because
   // a role told only the law invents a repair (steps/intake/frd.mjs::provenance, run e132f0a1).
+  //
+  // ITS TWO HALVES SPLIT ON THE OPERAND (D28). A node WITH a delta is judged inside the part that owns
+  // it — the delta, the `out` and the candidates all live on that one node. A `touched` PATH is judged
+  // on the whole: "the path is absent from the graph" is a statement about the union of every part's
+  // file, and a part that does not own that path would report it missing every single round.
   for (const n of nodes.values()) {
     if (n.delta && !n.out.length) {
-      B.push(`14 узел ${n.path} с delta="${n.delta}": out пуст — маршрут обязан пройти через него (правило 2), а шаг пишется значением из out${offer(outCandidates(n, frd, values))}`)
+      B.push(fact(14, `14 узел ${n.path} с delta="${n.delta}": out пуст — маршрут обязан пройти через него (правило 2), а шаг пишется значением из out${offer(outCandidates(n, frd, values))}`, { path: n.path, local: true }))
     }
   }
   for (const t of frd.touched || []) {
     const path = String(t || "").trim()
     if (!path) continue
     const n = nodes.get(path)
-    if (!n) B.push(`14 touched-путь FRD ${path} отсутствует в графе — маршрут обязан пройти через него (правило 5), а узла нет`)
-    else if (!n.out.length) B.push(`14 touched-путь FRD ${path}: out пуст — маршрут обязан пройти через него (правило 5), а шаг пишется значением из out${offer(outCandidates(n, frd, values))}`)
+    if (!n) B.push(fact(14, `14 touched-путь FRD ${path} отсутствует в графе — маршрут обязан пройти через него (правило 5), а узла нет`, { path }))
+    else if (!n.out.length) B.push(fact(14, `14 touched-путь FRD ${path}: out пуст — маршрут обязан пройти через него (правило 5), а шаг пишется значением из out${offer(outCandidates(n, frd, values))}`, { path }))
   }
 
   // Rule 13. The end of a use case is not only NAMED (rule 12, one artifact earlier) — it is SEATED:
@@ -260,6 +295,10 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
   // — and it is what gives pass B a concrete repair instead of "the page needs something".
   // A use case whose scenarios name no node is not judged: there is no candidate to point at, and a
   // blocker with no address costs a redelegation and buys nothing.
+  //
+  // NEVER ASKED OF A PART (D28): the seats of one use case are the nodes of ALL its scenarios, and on
+  // `eddi` UC5 has two of them. A part holding S5 cannot see whether S6's node seated the value, so on
+  // its own file the rule is red on a graph that is right — the phantom no repair can silence.
   const seats = new Map()   // uc -> Set<path> of the nodes its scenarios name
   for (const s of frd.scenarios || []) {
     const uc = String((s && s.uc) || "").trim()
@@ -276,7 +315,7 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
       const side = tail === "in" ? "in" : "out"
       const seated = [...where].some((p) => (nodes.get(p) || { in: [], out: [] })[side].includes(id))
       if (!seated) {
-        B.push(`13 значение ${id} закрывает ${token}, но не стоит в ${side} ни одного узла сценария этого use case — ${[...where].join(", ")}`)
+        B.push(fact(13, `13 значение ${id} закрывает ${token}, но не стоит в ${side} ни одного узла сценария этого use case — ${[...where].join(", ")}`, { uc }))
       }
     }
   }
@@ -306,7 +345,7 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
     for (const id of n.in) {
       // An id outside the dictionary is the unnumbered check's finding above — one defect, one blocker.
       if (!values.has(id) || entries.has(id) || produced.has(id)) continue
-      B.push(`15 значение ${id} «${values.get(id)}» стоит в in узла ${n.path}, но не стоит в out ни одного узла: отдавать его некому. Назови узел, который его производит, либо убери из in.`)
+      B.push(fact(15, `15 значение ${id} «${values.get(id)}» стоит в in узла ${n.path}, но не стоит в out ни одного узла: отдавать его некому. Назови узел, который его производит, либо убери из in.`, { path: n.path }))
     }
   }
 
@@ -315,11 +354,53 @@ export function checkGraph({ nodes = new Map(), values = new Map(), frd = {}, kn
     if (!code) continue
     const named = [...values].filter(([, text]) => String(text).includes(code)).map(([id]) => id)
     if (named.length && !named.some((id) => produced.has(id))) {
-      B.push(`отказ ${code} назван значением ${named.join(", ")}, но ни один узел не отдаёт его в out — отдавать отказ некому, маршрута у него не будет, значит не будет и юнита`)
+      // THE ADDRESS IS THE FRD'S OWN `from`: a failure declares which ends of which use cases it comes
+      // out of, so the parts that own those use cases' nodes are exactly who must hand it out. Without
+      // this field the line has no addressee at all, and the swarm answers a repairable defect with an
+      // escalation — measured on run 35972d1c, where it was one of the three live blockers.
+      const ucs = [...new Set(String((f && f.from) || "").split(/\s+/).map((t) => t.split("/")[0].trim()).filter(Boolean))]
+      B.push(fact(0, `отказ ${code} назван значением ${named.join(", ")}, но ни один узел не отдаёт его в out — отдавать отказ некому, маршрута у него не будет, значит не будет и юнита`, { uc: ucs.join(" ") }))
     }
   }
 
   return B
+}
+
+// FUNCTION_CONTRACT: checkNodes — the findings a PART of pass B can be judged by, alone
+//   Input:        { nodes, values, frd, known } — as graphFacts takes them, `nodes` being ONE part's
+//                 nodes or the whole graph
+//   Dependencies: graphFacts
+//   Antecedent:   the same as graphFacts'
+//   Consequent:   success: Fact[] — the subset whose operands lie inside one node: rule 6 (both
+//                          halves), an id outside the dictionary, rule 14 for a node with a delta.
+//                          Every one of them is MONOTONE in the graph — red on a part is red on the
+//                          whole — so the merge can only add findings, never remove one
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    checkNodes({ nodes, values, frd, known }) -> Fact[]
+//
+// The whole is judged by `checkGraph` after the merge and by nothing else (ext/index.mjs::design): no
+// rule is relaxed here, four of them are simply unanswerable by one part.
+export const checkNodes = (input) => graphFacts(input).filter((f) => f.local)
+
+// FUNCTION_CONTRACT: checkGraph — the guardrail of pass B: the WHOLE graph, all its rules
+//   Input:        { nodes, values, frd, known } — as graphFacts takes them
+//   Dependencies: graphFacts
+//   Antecedent:   the same as graphFacts'
+//   Consequent:   success: string[] of blockers, empty = green. Rules 6, 13, 14 and 15 keep the numbers
+//                          they have in docs/data-flow.md §6; the three checks the graph owns beside
+//                          them (an id outside the dictionary, an edge out of the file, rule 8's
+//                          other half) carry no number, because §6's table is the single declaration
+//                          of the numbers and they are not in it
+//                 failure: none — total, "the graph is bad" is DATA, not a function failure
+//   Purity:       pure
+//   Interface:    checkGraph({ nodes, values, frd, known }) -> string[]
+//
+// THE ORDER OF THE LINES IS THE CONTRACT, and it is the order this report had before the decomposition
+// — which is why steps/design/nodes.test.mjs judges D28 without an edit. It is kept by CONSTRUCTION:
+// one loop produces the records, and this function only renders them.
+export function checkGraph(input = {}) {
+  return graphFacts(input).map((f) => f.text)
 }
 
 // The card is read by a ROLE, so it speaks the language of the order — Russian (standards/code.md,

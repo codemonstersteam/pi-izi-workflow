@@ -18,7 +18,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, routeUnits, plan, review, reviewForm, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, nodeUnits, routeUnits, plan, review, reviewForm, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
 // D23: the gate of step 6 — its question is a constant of the ripple slice, and the answer travels in
 // the format core/answers.mjs owns.
@@ -1923,6 +1923,172 @@ test("D26: перемотка на шаг 6 роняет ВЕСЬ каталог
   // …и слияние после этого судит ровно то, что записала роль, как до D26.
   const alone = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root))
   assert.deepEqual(alone, { ok: true, nodes: 2, routes: 1, units: 2 })
+})
+
+// --- D28: проход B собирается ТЕМ ЖЕ РОЕМ ---------------------------------------------------------
+//
+// Те же три рельсы io и то же решение полосы, что у D26, одним проходом ниже. Прогон 35972d1c: роль
+// прохода B звалась трижды, третий вызов — 98 304 токена выхода (3 × 32 768), ноль вызовов
+// инструментов, `crashed`; 60 % цены прогона за ноль артефактов. Она же на одном сценарии написала
+// свою часть за три хода и 7 361 токен (исследование И3).
+//
+// FRD этой фикстуры называет ОБА узла в `<scenario nodes>`: узел, которого не называет ни один
+// сценарий, не достаётся никакой части, и владение — это ровно то, что делает файлы частей
+// непересекающимися.
+const FRD_B28 = FRD_D.replace(
+  '<scenario id="S1" uc="UC1" before="весь реестр" after="только совпавшие" nodes="src/ParcelResource.java"/>',
+  '<scenario id="S1" uc="UC1" before="весь реестр" after="только совпавшие" nodes="src/ParcelResource.java"/>\n  <scenario id="S2" uc="UC1" before="весь реестр" after="хранилище фильтрует" nodes="src/ParcelRepo.java"/>')
+const nodeSwarmRoot = (parts = {}) => {
+  const root = designRoot()
+  writeFileSync(join(root, ".agent", "frd.xml"), FRD_B28)
+  design.run({}, ctx(root))
+  design.run({ pass: "values", path: stage(root, "values.xml", W_VALUES) }, ctx(root))
+  mkdirSync(join(root, ".agent", "staging", "nodes-parts"), { recursive: true })
+  for (const [id, xml] of Object.entries(parts)) writeFileSync(join(root, ".agent", "staging", "nodes-parts", `${id}.xml`), xml)
+  return root
+}
+// Файлы двух частей: у каждой ОДИН узел, и ребро между ними пересекает границу частей — ровно тот
+// стык, на котором правила целого фантомны, а частные работают.
+const PART_R = `<design mode="minor" base=".agent/appgraph.xml">
+  <module path="src/ParcelResource.java" delta="Changed">
+    <role>REST-точка поиска</role>
+    <contract in="v1 | v3" out="v2 | v4"/>
+    <dep path="src/ParcelRepo.java"/>
+  </module>
+</design>`
+const PART_P = `<design mode="minor" base=".agent/appgraph.xml">
+  <module path="src/ParcelRepo.java">
+    <role>хранилище посылок</role>
+    <contract in="v2" out="v3"/>
+  </module>
+</design>`
+
+test("D28: единица роя прохода B — сценарий FRD: свои узлы, дельты своих узлов, пути соседей", () => {
+  const root = nodeSwarmRoot()
+  const u = nodeUnits.run({}, ctx(root))
+  assert.equal(u.ok, true, u.why)
+  assert.deepEqual(u.units.map((x) => [x.id, x.paths]), [["S1", 1], ["S2", 1]], "узел — первому назвавшему")
+  const [one] = u.units
+  assert.match(one.frd, /<scenario id="S1"/)
+  assert.match(one.frd, /<usecase id="UC1"/)
+  assert.match(one.frd, /<delta op="GET \/parcels"/)
+  assert.doesNotMatch(one.frd, /<scenario id="S2"/)
+  assert.match(one.nodes, /src\/ParcelResource\.java — delta="Added"/)
+  // Сосед — путь без карточки: ребро туда провести можно, <module> написать нельзя.
+  assert.match(one.nodes, /Соседи[\s\S]*src\/ParcelRepo\.java/)
+  assert.doesNotMatch(one.nodes, /<contract/)
+  // Рябь — проекция на свои узлы, а не весь подграф.
+  assert.match(one.ripple, /src\/ParcelResource\.java/)
+  assert.doesNotMatch(one.ripple, /src\/ParcelRepo\.java" /)
+  // Проход A не зелен — частей нет: словарь и есть то, чем контракт называет значения.
+  const noValues = designRoot()
+  writeFileSync(join(noValues, ".agent", "frd.xml"), FRD_B28)
+  assert.equal(nodeUnits.run({}, ctx(noValues)).ok, false)
+})
+
+test("D28: часть прохода B судится ЧАСТНЫМИ правилами — ребро в чужую часть её не краснит", () => {
+  const root = nodeSwarmRoot({ S1: PART_R, S2: PART_P })
+  const ok = design.run({ pass: "nodes", path: ".agent/staging/nodes-parts/S1.xml", scenario: "S1" }, ctx(root))
+  assert.deepEqual(ok, { ok: true, nodes: 1 })
+  // Именно здесь разложение и стоит: у этой части ребро ведёт наружу её файла, а `v3` в её `in` не
+  // отдаёт ни один её узел. Спроси у части правила ЦЕЛОГО — и она красна навсегда.
+  const whole = design.run({ pass: "nodes", path: ".agent/staging/design-nodes.xml" }, ctx(nodeSwarmRoot({ S1: PART_R, S2: PART_P })))
+  assert.equal(whole.ok, true, whole.blockers)
+  // Ни сборки, ни промоута: часть — вход слияния, а не артефакт шага.
+  assert.equal(existsSync(join(root, ".agent", "design-nodes.xml")), false)
+  assert.equal(existsSync(join(root, ".agent", "staging", "nodes-parts", "S1.xml")), true)
+
+  // Частное правило на части — полное: id вне словаря красит её саму.
+  const red = nodeSwarmRoot({ S1: PART_R.replace('out="v2 | v4"', 'out="v2 | v44"') })
+  const bad = design.run({ pass: "nodes", path: ".agent/staging/nodes-parts/S1.xml", scenario: "S1" }, ctx(red))
+  assert.equal(bad.ok, false)
+  assert.match(bad.blockers, /в out стоит v44, которого нет в словаре/)
+
+  // Чужой узел в файле части — блокер: пути дизъюнктны, и на этом стоит слияние без разрешения
+  // конфликтов. Свой узел, которого в файле нет, — тоже блокер: часть отвечает за каждый свой путь.
+  const alien = nodeSwarmRoot({ S1: PART_R.replace("</design>", `${PART_P.split("\n").slice(1, -1).join("\n")}\n</design>`) })
+  const stolen = design.run({ pass: "nodes", path: ".agent/staging/nodes-parts/S1.xml", scenario: "S1" }, ctx(alien))
+  assert.equal(stolen.ok, false)
+  assert.match(stolen.blockers, /узел src\/ParcelRepo\.java — не твой/)
+  const empty = nodeSwarmRoot({ S1: "<design/>" })
+  const lost = design.run({ pass: "nodes", path: ".agent/staging/nodes-parts/S1.xml", scenario: "S1" }, ctx(empty))
+  assert.match(lost.blockers, /узел src\/ParcelResource\.java назван твоим, а <module> для него в файле нет/)
+})
+
+test("D28: слияние прохода B — скрипт: части в порядке сценариев FRD, вердикт целого, промоут", () => {
+  const root = nodeSwarmRoot({ S1: PART_R, S2: PART_P })
+  assert.equal(existsSync(join(root, ".agent", "staging", "design-nodes.xml")), false, "файла прохода нет — его пишет слияние")
+  const merged = design.run({ pass: "nodes", path: ".agent/staging/design-nodes.xml" }, ctx(root))
+  assert.deepEqual(merged, { ok: true, nodes: 2, parts: 2 })
+  const promoted = readFileSync(join(root, ".agent", "design-nodes.xml"), "utf8")
+  assert.equal(promoted.indexOf("src/ParcelResource.java") < promoted.indexOf("src/ParcelRepo.java"), true, "порядок сценариев FRD")
+  assert.match(promoted, /^<design mode="minor" base="\.agent\/appgraph\.xml">/)
+  assert.equal(existsSync(join(root, ".agent", "staging", "nodes-parts", "S1.xml")), true, "части переживают зелёное слияние")
+  assert.equal(existsSync(join(root, ".agent", "staging", "design-nodes.xml")), false, "файл прохода убран как всегда")
+})
+
+test("D28: красное слияние прохода B адресует каждую строку части, которая её чинит", () => {
+  // У ресурса пустой out — правило 14 целого; чинит его та часть, что написала этот узел.
+  const root = nodeSwarmRoot({ S1: PART_R.replace('out="v2 | v4"', 'out=""'), S2: PART_P })
+  const red = design.run({ pass: "nodes", path: ".agent/staging/design-nodes.xml" }, ctx(root))
+  assert.equal(red.ok, false)
+  assert.equal(red.parts, 2)
+  assert.match(red.blockers, /^14 узел src\/ParcelResource\.java/m)
+  const to = new Map(red.blame.map((b) => [b.scenario, b.lines]))
+  // Строка про УЗЕЛ уезжает ровно одной части — той, что его написала.
+  assert.equal(to.get("S1").filter((l) => l.startsWith("14 ")).length, 2, "узел с дельтой и touched-путь — оба про её узел")
+  assert.deepEqual((to.get("S2") || []).filter((l) => l.startsWith("14 ")), [])
+  // …а строка про USE CASE (правило 13: конец UC1 больше не поселён) — всем сценариям этого use case,
+  // потому что узел, который должен его посадить, может лежать в любой из их частей.
+  for (const id of ["S1", "S2"]) assert.equal(to.get(id).some((l) => l.startsWith("13 ")), true, id)
+  assert.equal(existsSync(join(root, ".agent", "staging", "design-nodes.xml")), true, "красное слияние остаётся уликой")
+})
+
+test("D28: красный проход C адресует части ПРОХОДА B ровно те строки, что чинит проход B", () => {
+  // Ребра нет: правило 3 — вина прохода B (workflows/izi.js::blameOf), и оно называет узел.
+  const root = nodeSwarmRoot({ S1: PART_R.replace('    <dep path="src/ParcelRepo.java"/>\n', ""), S2: PART_P })
+  design.run({ pass: "nodes", path: ".agent/staging/design-nodes.xml" }, ctx(root))
+  const red = design.run({ pass: "routes", path: stage(root, "routes.xml", W_ROUTES) }, ctx(root))
+  assert.equal(red.ok, false)
+  assert.match(red.blockers, /^3 src\/ParcelRepo\.java недостижим/m)
+  // Адрес прохода B — по УЗЛУ, и это та часть, которая узел написала.
+  // Строку правила 3 получает часть ТОГО узла, который стал недостижим, и никто больше: ребро
+  // ненаправленно, и `<dep>` к соседу дописывает у себя именно она. Маршрут ходит туда и обратно, так
+  // что недостижимы обе стороны — и каждая часть получает ровно свою строку, а не обе.
+  const three = new Map(red.nodeBlame.map((b) => [b.scenario, b.lines.filter((l) => l.startsWith("3 "))]))
+  assert.deepEqual(three.get("S2"), ["3 src/ParcelRepo.java недостижим из src/ParcelResource.java — нет ребра <dep> между ними (S1)"])
+  assert.deepEqual(three.get("S1"), ["3 src/ParcelResource.java недостижим из src/ParcelRepo.java — нет ребра <dep> между ними (S1)"])
+  // …и полоса читает именно этот канал: подставь сюда `check.blame` (адреса прохода C), и части
+  // прохода B получат чужой отчёт — либо не получат никакого, и рой проснётся целиком.
+  assert.match(IZI, /addressToParts\(parts\.nodes \|\| \[\], p\.id === "nodes" \? check\.blame : check\.nodeBlame, wasRedNode\)/)
+})
+
+test("D28: перемотка на шаг 6 роняет ВЕСЬ каталог частей прохода B — и роняет его ОДИН раз за фазу", () => {
+  const root = nodeSwarmRoot({ S1: PART_R, S9: "<design/>" })
+  assert.equal(nodeUnits.run({}, ctx(root)).dropped, 0)
+  const dropped = nodeUnits.run({ drop: true }, ctx(root))
+  assert.equal(dropped.dropped, 2)
+  assert.equal(existsSync(join(root, ".agent", "staging", "nodes-parts")), false)
+  assert.match(IZI, /let dropNodeParts = from <= 6;/)
+  assert.match(IZI, /await nodeUnits\(\{ drop: dropNodeParts \}\);[\s\S]{0,200}dropNodeParts = false;/)
+  // …и слияние после этого судит ровно то, что записала роль, как до D28.
+  const alone = design.run({ pass: "nodes", path: stage(root, "design-nodes.xml", W_NODES) }, ctx(root))
+  assert.deepEqual(alone, { ok: true, nodes: 2 })
+})
+
+test("D28: рой прохода B — литеральный слот, вырождение общее с проходом C", () => {
+  // Порог один на оба прохода: SWARM_MIN уже проверен выше, здесь — что проход B читает именно его.
+  assert.match(IZI, /swarmingNodes\s*\n?\s*\? await swarmNodes\(units, tplNodePart/)
+  assert.match(IZI, /const units = swarmParts\(u\.units\);[\s\S]{0,200}swarmingNodes = units\.length > 0;/)
+  // Слот роя — литеральная запись с ЛИТЕРАЛЬНЫМ именем: хост валидирует parallel() по исходнику.
+  assert.match(IZI, /await parallel\("nodes-batch", \{[\s\S]*?n8: \(\) => nodeSlot\(batch, 7,/)
+  // Внутри parallel нет ни exit, ни рельсы вопроса: отказ части — ЗНАЧЕНИЕ.
+  const swarmFn = IZI.slice(IZI.indexOf("async function nodePart"), IZI.indexOf("// FUNCTION_CONTRACT: routePart"))
+  assert.doesNotMatch(swarmFn, /exit\(/)
+  assert.doesNotMatch(swarmFn, /checkpoint\(|askOperator\(/)
+  // Наряд ЦЕЛОГО прохода B не тронут: у части свой файл, и полоса читает оба.
+  assert.match(IZI, /steps\/design\/order-nodes\.tpl/)
+  assert.match(IZI, /steps\/design\/order-nodes-part\.tpl/)
 })
 
 // $START_SWARM — то же устройство, что $START_BLAME и $START_REENTRY: блок ВЫРЕЗАН из workflows/izi.js
