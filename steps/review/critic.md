@@ -33,7 +33,11 @@ These hold on every run, whatever the order says.
    A row left open is a red FORM, not a verdict: «in general, yes» cannot be written down here. Rows
    come in two kinds and both are yours:
    1. what the requirement ASKS FOR — a `<post>` of a use case, an `after` of a scenario, an `<ext>`
-      branch, an `<nfr>`. Nothing in the plan produces it ⇒ `goal-not-delivered`;
+      branch, an `<nfr>`. Nothing in the plan produces it ⇒ `goal-not-delivered`.
+      **A scenario is delivered by its NODES, never by a node bearing its name.** Put `node` = any
+      path from `<scenario nodes>` that does that work. A `scenario:<id>` node appears in the plan
+      ONLY when the scenario spans more than one node, or when its single node cannot close itself
+      with a command of its own; its absence means nothing and is not a blocker;
    2. what the plan CARRIES ANYWAY — a node the FRD names nowhere. Some of the plan's nodes are
       synthesised by the planning step out of the repository's own answers, not out of the
       requirement, so such a node CAN occur and you are the only one who looks. Ask of it: does the
