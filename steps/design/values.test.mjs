@@ -68,9 +68,25 @@ test("состав — функция входов: два вычисления 
   assert.equal(skeleton().xml, valuesSkeleton({ frd: parseFrd(FRD_XML), ripple: RIPPLE }).xml)
 })
 
-test("скелет тотален: без требования строк нет, без ряби остаются одни концы", () => {
+test("скелет тотален: без требования строк нет, без ряби остаются концы и операции", () => {
   assert.equal(valuesSkeleton().rows, 0)
-  assert.equal(valuesSkeleton({ frd: FRD }).rows, 3)
+  // Операция изменения приходит из FRD, а не из ряби: её узла в репозитории может ещё не быть.
+  assert.equal(valuesSkeleton({ frd: FRD }).rows, 4)
+})
+
+// D33. Рябь — срез НАПИСАННОГО кода, поэтому операции, которые изменение ЗАВОДИТ, в ней отсутствуют:
+// на `eddi` из 12 объявленных `op` в словаре не было ВОСЬМИ, включая `readGlossaries()` — ту самую,
+// ради которой изменение и делается (4 раза в frd.xml, 0 в ripple.xml, 0 в values.xml). Следующему
+// проходу нечем называть стыки: покрытие узлов ширины значениями было 4 из 13.
+test("операция изменения — строка словаря, и её место сказано дельтой, а не рябью", () => {
+  const s = skeleton()
+  const v = parseValues(s.xml)
+  assert.equal([...v.values()].includes("POST /bookings"), true)
+  // Дельта названа РАНЬШЕ ряби: место значения — заявка требования о будущем, а не факт репозитория.
+  assert.match(s.xml, /text="POST \/bookings" src="delta src\/BookingResource.java"/)
+  // Создаваемый узел ряби не имеет вовсе — и это единственная строка, которая всё равно его называет.
+  const created = parseFrd(FRD_XML.replace('form="Changed"', 'form="Added" new="yes"').replace('node="src/BookingResource.java"', 'node="src/BookingLock.java"'))
+  assert.match(valuesSkeleton({ frd: created, ripple: RIPPLE }).xml, /src="delta src\/BookingLock.java"/)
 })
 
 test("ветка с кодом отказа заполнена скриптом: «статус код» — и роль её не пишет", () => {

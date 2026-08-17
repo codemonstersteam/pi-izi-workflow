@@ -677,7 +677,9 @@ test("скрипт составляет словарь, роль называе�
   assert.deepEqual(s, { ok: true, rows: 3, filled: 1, blank: 2 })
   const skel = readFileSync(join(root, ".agent", "staging", "values-skeleton.xml"), "utf8")
   assert.match(skel, /<value id="v1" closes="UC1\/in" side="in" text="" end="клиент отправляет GET/)
-  assert.match(skel, /<value id="v3" text="GET \/parcels" src="api src\/ParcelResource.java"\/>/)
+  // Операция изменения названа дельтой: она заявка требования о будущем, а не факт репозитория,
+  // и её узла в ряби может не быть вовсе (D33).
+  assert.match(skel, /<value id="v3" text="GET \/parcels" src="delta src\/ParcelResource.java"\/>/)
   // Объявление СОСЕДА по ряби значением не является: изменение его не меняет.
   assert.doesNotMatch(skel, /all\(\)/)
 

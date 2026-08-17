@@ -112,9 +112,10 @@ const failureText = (status, code) => `${String(status || "").trim()} ${String(c
 //                 requirement should see; no ripple yields the ends alone
 //   Consequent:   success: { xml, rows, blank, filled } — `xml` is the artifact in grammar 2 with
 //                          `form="skeleton"`, one `<value>` per row, ids `v1…vN` in this order:
-//                          every end of every use case in the FRD's order, then every call of every
-//                          node of the change in the ripple's order. `rows` is their count, `filled`
-//                          how many texts the script wrote, `blank` how many it left for the role
+//                          every end of every use case in the FRD's order, then every operation the
+//                          change introduces (`<delta op>`), then every call of every node of the
+//                          change in the ripple's order. `rows` is their count, `filled` how many
+//                          texts the script wrote, `blank` how many it left for the role
 //                 failure: none — total
 //   Purity:       pure
 //   Interface:    valuesSkeleton({ frd, ripple }) -> { xml, rows, blank, filled }
@@ -125,7 +126,8 @@ const failureText = (status, code) => `${String(status || "").trim()} ${String(c
 //   · `end`   — the requirement's OWN sentence about this end, verbatim. Without it the role would
 //               have to find the sentence in the FRD by the token, which is the search a weak model
 //               gets wrong; with it the row is a fill-in-the-blank
-//   · `src`   — where a prefilled call text was copied FROM (`api <path>` / `decl <path>`). It is
+//   · `src`   — where a prefilled text was copied FROM (`failure <код>`, `delta <path>`,
+//               `api <path>`, `decl <path>`). It is
 //               the evidence that the text is a copy and not an invention, and it is what a human
 //               diagnoses from when a value turns out to name nothing
 // They are stripped on promote (`normalize`) — a later pass reads `<value id text closes/>` and
@@ -148,13 +150,33 @@ export function valuesSkeleton({ frd = {}, ripple = "" } = {}) {
     rows.push({ closes: e.token, side: e.side, end: String(e.text || "").trim(), text, src: text ? `failure ${code}` : "" })
   }
 
+  const width = changeWidth({ frd, tests: new Set() })
+  const seen = new Set(rows.map((r) => r.text).filter(Boolean))
+
+  // THEN THE OPERATIONS THE CHANGE INTRODUCES — `<delta op>`, verbatim, one row each (D33).
+  //
+  // Without them the dictionary knows only what the repository ALREADY has: the ripple is a cut of
+  // written code, so an operation this change is about exists nowhere in it. Measured on `eddi`: of
+  // the 12 distinct `op` the FRD declares, EIGHT are absent from the dictionary — among them
+  // `readGlossaries()`, the operation the whole change is for (4 occurrences in frd.xml, 0 in
+  // ripple.xml, 0 in values.xml). The next pass then has no name for the joints between nodes: value
+  // coverage of the change's own nodes was 4 of 13.
+  //
+  // `src` says `delta <node>` and not `api`/`decl` for a reason: this is the one row that names a
+  // node which may not exist yet (`<delta new="yes">` — 7 of eddi's 13), so the seat is the FRD's
+  // claim about the future, not the ripple's fact about the present.
+  for (const d of (frd && frd.deltas) || []) {
+    const op = String((d && d.op) || "").trim()
+    if (!op || seen.has(op)) continue
+    seen.add(op)
+    rows.push({ closes: "", side: "", end: "", text: op, src: `delta ${String((d && d.node) || "").trim()}`.trim() })
+  }
+
   // THEN THE CALLS OF THE CHANGE'S OWN NODES, copied verbatim out of the ripple. `<api>` is what a
   // node offers the outside and `<decl kind="method">` what it offers its neighbours; a field or a
   // class declaration is not something two nodes exchange, so it is not a value. The width is step
   // 8's (changeWidth) — a neighbour the change only reads through declares nothing this dictionary
   // needs, and 68 % of the subgraph's bytes are exactly those neighbours (D29a).
-  const width = changeWidth({ frd, tests: new Set() })
-  const seen = new Set(rows.map((r) => r.text).filter(Boolean))
   for (const m of String(ripple || "").matchAll(elem("module"))) {
     const path = String(attrs(m[1]).path || "").trim()
     if (!width.has(path)) continue
