@@ -14,6 +14,7 @@
 //             that will is pass C's, and the rule lives in exactly one place
 // Interface:  parseDesign(xml) -> Map<path, Node>
 //             parseRoutes(xml) -> Route[]
+//             expand(nodes, routes) -> string   — the text of .agent/data-flow.md
 //             unitsByPath(nodes, routes) -> Map<path, string[]>
 
 import { attrs, ATTRS, tag, alts } from "../../core/xml.mjs"
@@ -128,6 +129,41 @@ function walk(nodes, routes) {
 }
 
 
+// FUNCTION_CONTRACT: expand — the deliverable's flow: `.agent/data-flow.md`
+//   Input:        nodes — parseDesign's parse; routes — parseRoutes' parse
+//   Dependencies: walk, unitsByPath
+//   Antecedent:   a GREEN pass B: every step resolves to a node and to an existing alternative.
+//                 Calling this on unchecked routes is a defect of the caller, not of this function
+//   Consequent:   success: text of `.agent/data-flow.md` — TWO kinds of section:
+//                          `$START_FLOW id="<chain>"` … `$END_FLOW`, lines `<n>. <path> : <in> -> <out>`
+//                            — the change played out in time, one block per chain;
+//                          `$START_TESTS path="<node>"` … `$END_TESTS`, lines `<n>. <in> -> <out>`
+//                            — the node's units, one per DISTINGUISHABLE pair, deduplicated, in
+//                            first-appearance order. The count is the LENGTH of the list and is not
+//                            written beside it: a tally next to the list it counts is two places for
+//                            one fact (docs/ripple.md §4, why fanin is not copied into the subgraph)
+//                 failure: none, given the antecedent holds
+//   Purity:       pure
+// The machine substitutes the values, not the role: a copy is the one thing a weak tier survives (it
+// paraphrases), and the one thing the script does for free.
+export function expand(nodes, routes) {
+  const steps = walk(nodes, routes)
+  const out = []
+  for (const r of routes) {
+    out.push(`$START_FLOW id="${r.scenario}"`)
+    steps.filter((s) => s.scenario === r.scenario).forEach((s, k) => out.push(`${k + 1}. ${s.path} : ${s.in} -> ${s.out}`))
+    out.push("$END_FLOW")
+  }
+  // The section is named exactly as the TICKET's section (docs/workflow.md §3.14): step 14 CUTS it by
+  // `path` into the ticket, it does not retell it — the same device by which it cuts $START_FLOW.
+  for (const [path, units] of unitsByPath(nodes, routes)) {
+    out.push(`$START_TESTS path="${path}"`)
+    units.forEach((u, k) => out.push(`${k + 1}. ${u}`))
+    out.push("$END_TESTS")
+  }
+  return out.join("\n")
+}
+
 // FUNCTION_CONTRACT: unitsByPath — the DoD of every node: its units, one per distinguishable pair
 //   Input:        nodes — parseDesign's parse; routes — parseRoutes' parse (of the promoted form)
 //   Dependencies: walk
@@ -163,6 +199,7 @@ export function unitsByPath(nodes, routes) {
   return byPath
 }
 
-// checkDesign, newDesign и assemble удалены вместе с проходами B и C шага 9: их писала
-// роль, которой больше нет. Читателей у них не осталось — а код, до которого доходит только тест,
-// это тест, который не краснеет ни от одной правки (standards/code.md §2).
+// `checkDesign` и `newDesign` удалены вместе с однопроходным шагом 9, а `assemble` переехал в
+// steps/design/routes.mjs: собирать поставку из ЦЕПОЧЕК — работа того прохода, который их судит, и
+// эта форма больше не знает про рабочие артефакты. Здесь остался ЧИТАТЕЛЬ поставки — то, что нужно
+// шагу 10, — и `expand`, который эту же поставку разворачивает в поток.

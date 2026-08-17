@@ -94,6 +94,7 @@ const ENVELOPE = {
     artifact: { type: "string" },
     requirements: { type: "number" },
     values: { type: "number" },
+    routes: { type: "number" },
     modules: { type: "number" },
     gaps: { type: "number" },
     deltas: { type: "number" },
@@ -864,35 +865,54 @@ async function rippling() {
   log(`ripple: design=${r.design} узлов ${r.nodes} из ${r.total} (затравок ${r.seeds}, mode=${r.mode})`);
 }
 
-// FUNCTION_CONTRACT: designing — step 9, pass A: the dictionary of the change
+// FUNCTION_CONTRACT: designing — step 9: the change's dictionary, then the change played out
 //   Input:        from — the step the BAND started at (workflows/izi.js::bandStart). `from <= 6`
 //                 means the FRD was rewritten, and then nothing extracted from the old one is reused
-//   Dependencies: EXTERNAL — design (the gate, the skeleton, the guardrail), readText,
-//                 agent(role "valuer"); askOperator, charge, sized
-//   Antecedent:   step 8 left .agent/design and .agent/ripple.xml; LOOPS ≥ 1
-//   Consequent:   success: RETURNS ".agent/values.xml" with the dictionary promoted, or
-//                          ".agent/design" when step 8 said `skip` and no role was called at all
-//                 failure: exits — err("escalate") when the pass spent its LOOPS
+//   Dependencies: EXTERNAL — design (the gate, the two skeletons, the two guardrails), readText,
+//                 promote, agent(roles "valuer" | "router"); askOperator, charge, sized
+//   Antecedent:   step 8 left .agent/design and .agent/ripple.xml; step 7 left .agent/mode; LOOPS ≥ 1
+//   Consequent:   success: RETURNS ".agent/data-flow.md" with the pair assembled, or ".agent/design"
+//                          when step 8 said `skip` and no role was called at all
+//                 failure: exits — err("escalate") when one pass spent its LOOPS
 //   Purity:       io (host functions, roles)
 //
-// THE PASS IS A FILL-IN-THE-BLANK, AND THAT IS THE WHOLE DESIGN OF IT.
+// EVERY PASS IS A FILL-IN-THE-BLANK, AND THAT IS THE WHOLE DESIGN OF THE STEP.
 //
 // Step 9 used to be three passes, three roles and three swarms, and every one of them wrote its
 // artifact whole. Measured on the two live dictionaries, the defects were defects of COMPOSITION —
 // `eddi`'s role wrote 38 rows carrying a `closes` where the FRD has 35 ends, six groups of duplicate
-// texts and seven holes in the numbering; `t2`'s was exact but tiny. Composition is computable, so it
-// is computed: `design({skeleton})` writes the artifact with every row, every id and every `closes`
-// already in place, and with every text a script can honestly write already written (a failure
-// branch is «статус код», a call of a node of the change is the ripple's own `<api>`/`<decl>` byte
-// for byte). The role is handed that file and names what is left blank — 24 rows on `eddi`, 6 on
-// `t2` — and the guardrail asks exactly one question of the answer: is this the skeleton with the
-// blanks filled, or is it something else.
+// texts and seven holes in the numbering. Composition is computable, so it is computed, twice: a
+// script writes the artifact with every row and every id already in place, the role fills what a
+// script honestly cannot, and the guardrail recomputes the composition and asks exactly one question
+// of the answer — is this the skeleton with the blanks filled, or is it something else.
 //
-// PASSES B AND C DO NOT EXIST IN THIS VERSION. They were deleted with their swarms, together with
-// the artifacts they wrote (`.agent/design-nodes.xml`, `.agent/design-graph.xml`,
-// `.agent/data-flow.md`). The band stops right after this pass and says so — see band().
-const VALUES_STAGING = ".agent/staging/values.xml";
-const VALUES_SKELETON = ".agent/staging/values-skeleton.xml";
+// WHAT THE SECOND PASS DOES NOT ASK. Not the contract of a node: on the single finished deliverable
+// this pipeline ever produced (`t3`), all five `in` alternatives are recoverable — three are verbatim
+// another node's `out`, two are the entries of their scenarios. `in`, `<dep>` and the flow are
+// assembled, so the rule «consequent of step N ⊆ antecedent of step N+1» — 33 and 49 blocker lines in
+// run 0bbf7054 — is not a rule any more, it is a property of the derivation.
+// THE TWO PASSES OF STEP 9, AND WHAT EACH OF THEM ASKS. Both have the same shape — a script composes
+// the artifact, the role fills the blanks, the guardrail recomputes the composition and judges only
+// the filling — and the shape is why the loop below is written once:
+//   values — NAME the end of every use case. 24 blanks on `eddi`, 6 on `t2`
+//   chains — WALK each end: through which nodes, carrying which value. 23 chains on `eddi`, 4 on `t2`,
+//            every one of them ≤ 4 nodes long, with its start and its finish already given
+const PASSES = {
+  values: {
+    role: "valuer",
+    tpl: "steps/design/order-values.tpl",
+    skeleton: ".agent/staging/values-skeleton.xml",
+    staging: ".agent/staging/values.xml",
+    made: ".agent/values.xml",
+  },
+  chains: {
+    role: "router",
+    tpl: "steps/design/order-chains.tpl",
+    skeleton: ".agent/staging/chains-skeleton.xml",
+    staging: ".agent/staging/chains.xml",
+    made: ".agent/design-graph.xml + .agent/data-flow.md",
+  },
+};
 
 async function designing(from = 6) {
   const gate = await design({});
@@ -901,37 +921,56 @@ async function designing(from = 6) {
     log("design: skip — шаг 8 решил, что синхронизировать нечего (patch на одном узле); роли не зовутся, 0 токенов");
     return ".agent/design"; // the flag file IS the receipt of the skip — there is no second artifact
   }
+
+  const FRD = await readText({ path: ".agent/frd.xml" });
+
   // A rewind to step 6 rewrote the FRD, so a dictionary extracted from the old one is structurally
   // green and about another change. Otherwise the gate's own verdict stands: green NOW, not green once.
   if (from > 6 && (gate.reused || []).includes("values")) {
-    log("design/values: .agent/values.xml зелен сейчас — проход закрыт без роли, 0 токенов");
-    return ".agent/values.xml";
+    log("design/values: .agent/values.xml зелен сейчас — проход A закрыт без роли, 0 токенов");
+  } else {
+    await onePass("values", () => ({ FRD }));
   }
 
-  // THE SKELETON IS RECOMPUTED EVERY ROUND, and it is written to its OWN path. The role's file and
-  // the composition it must follow are two documents on purpose: a repair round hands the role the
-  // authoritative skeleton next to the blockers about the file it wrote, so «строки v41 нет в файле»
-  // is a line the role can act on without reconstructing anything from memory.
-  const s = await design({ skeleton: VALUES_SKELETON });
-  if (!s.ok) exit(err("blocked", { subject: s.blockers, evidence: "скелет словаря не посчитан — шаг 9 звать роль не на что" }));
-  log(`design/values: скелет — строк ${s.rows}, из них заполнено скриптом ${s.filled}, роли назвать ${s.blank}`);
+  // Pass B is never reused: its own working file is not promoted (the deliverable is), so reaching
+  // this line means the pair has to be built again — the gate erased yesterday's.
+  const VALUES = await readText({ path: ".agent/values.xml" });
+  await onePass("chains", () => ({ FRD, VALUES }));
+  return ".agent/data-flow.md";
+}
 
-  const SKELETON = await readText({ path: VALUES_SKELETON });
-  // A CHANGE WHOSE EVERY ROW THE SCRIPT COULD WRITE COSTS NO ROLE AT ALL. It is not a hypothetical:
-  // a change with no use cases and only calls of its own nodes has no blank left, and calling a model
+// FUNCTION_CONTRACT: onePass — one pass of step 9: compose, delegate, judge, promote
+//   Input:        id — "values" | "chains"; extra — the keys of THIS pass's order, as a thunk
+//   Dependencies: EXTERNAL — design, readText, promote, agent, sized; askOperator, charge
+//   Antecedent:   the gate said `needed`; LOOPS ≥ 1
+//   Consequent:   success: returns when the pass is green and promoted
+//                 failure: exits — err("escalate") when the pass spent its LOOPS
+//   Purity:       io (host functions, roles)
+//
+// THE SKELETON IS RECOMPUTED EVERY ROUND, and it is written to its OWN path. The role's file and the
+// composition it must follow are two documents on purpose: a repair round hands the role the
+// authoritative skeleton next to the blockers about the file it wrote, so «строки v41 нет в файле» is
+// a line the role can act on without reconstructing anything from memory.
+async function onePass(id, extra) {
+  const p = PASSES[id];
+  const s = await design({ pass: id, skeleton: p.skeleton });
+  if (!s.ok) exit(err("blocked", { subject: s.blockers, evidence: `скелет прохода ${id} не посчитан — звать роль не на что` }));
+  log(id === "values"
+    ? `design/values: скелет — строк ${s.rows}, из них заполнено скриптом ${s.filled}, роли назвать ${s.blank}`
+    : `design/chains: скелет — цепочек ${s.chains}, у каждой известны начало, конец и узлы`);
+
+  const SKELETON = await readText({ path: p.skeleton });
+  // A CHANGE WHOSE EVERY BLANK THE SCRIPT COULD FILL COSTS NO ROLE AT ALL. It is not a hypothetical:
+  // a change with no use cases has no value left to name and no end left to walk, and calling a model
   // to hand back a file it was given is a call that can only make it worse.
   if (!s.blank) {
-    await promote({ from: VALUES_SKELETON, to: VALUES_STAGING });
-    const check = await design({ path: VALUES_STAGING });
-    if (check.ok) {
-      log(`design/values: зелен без роли — все ${s.filled} значений вычислены, 0 токенов → .agent/values.xml`);
-      return ".agent/values.xml";
-    }
-    exit(err("blocked", { subject: check.blockers, evidence: "скелет не проходит собственный гардрейл — дефект скрипта, не роли" }));
+    await promote({ from: p.skeleton, to: p.staging });
+    const check = await design({ pass: id, path: p.staging });
+    if (check.ok) { log(`design/${id}: зелен без роли — заполнять было нечего, 0 токенов → ${p.made}`); return; }
+    exit(err("blocked", { subject: check.blockers, evidence: `скелет прохода ${id} не проходит собственный гардрейл — дефект скрипта, не роли` }));
   }
 
-  const tpl = await readText({ path: "steps/design/order-values.tpl" });
-  const FRD = await readText({ path: ".agent/frd.xml" });
+  const tpl = await readText({ path: p.tpl });
   let feedback = "(none — first attempt)";
   // TWO COUNTERS, TWO MEANINGS. `attempt` is the repair budget: a red artifact was written and must be
   // rewritten. `silent` bounds the case where the role returns track:"ok" and writes no file at all —
@@ -939,37 +978,45 @@ async function designing(from = 6) {
   // end (live run a900de7b).
   let attempt = 0, silent = 0;
   for (;;) {
-    if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `проход A шага 9: цикл исчерпан за ${LOOPS} попыток` }));
-    if (silent > LOOPS) exit(err("escalate", { subject: `роль ${silent} раз вернула track:"ok", не записав ${VALUES_STAGING}`, evidence: "проход A шага 9: артефакта нет" }));
+    if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `проход ${id} шага 9: цикл исчерпан за ${LOOPS} попыток` }));
+    if (silent > LOOPS) exit(err("escalate", { subject: `роль ${silent} раз вернула track:"ok", не записав ${p.staging}`, evidence: `проход ${id} шага 9: артефакта нет` }));
 
     // The role's own file from the previous round, when there was one: the blockers name its rows, and
     // a report about an artifact the role cannot see is a word for «напиши всё заново» (D13).
-    const PREVIOUS = (await readText({ path: VALUES_STAGING })).trim() || "(none — first attempt)";
-    const o = sized("design/values", tpl, {
-      FRD, SKELETON, PREVIOUS, BLANK: String(s.blank), FEEDBACK: feedback, STAGING: VALUES_STAGING,
-      CHECK: 'design({path}) — steps/design/values.mjs::checkValues по staging',
+    const PREVIOUS = (await readText({ path: p.staging })).trim() || "(none — first attempt)";
+    const o = sized(`design/${id}`, tpl, {
+      ...extra(), SKELETON, PREVIOUS, BLANK: String(s.blank), FEEDBACK: feedback, STAGING: p.staging,
+      CHECK: `design({pass:"${id}", path}) — гардрейл прохода по staging`,
     });
-    if (o.over) exit(err("blocked", { subject: o.why, evidence: "наряд прохода A шага 9 не помещается в окно модели — роль не запускалась" }));
-    const env = await agent(o.text, { role: "valuer", outputSchema: ENVELOPE });
+    if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд прохода ${id} шага 9 не помещается в окно модели — роль не запускалась` }));
+    const env = await agent(o.text, { role: p.role, outputSchema: ENVELOPE });
 
     if (env.track === "err" && env.kind === "question") {
       const q = charge(env);
-      if (q.spent) exit(noRoundsLeft(env, "design/values"));
-      log(`design/values: вопрос ${q.n} — «${env.subject}»`);
-      await askOperator(env, q.n, "design-values", "valuer");
+      if (q.spent) exit(noRoundsLeft(env, `design/${id}`));
+      log(`design/${id}: вопрос ${q.n} — «${env.subject}»`);
+      await askOperator(env, q.n, `design-${id}`, p.role);
       continue; // a question does not spend the redelegation budget
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
 
-    const check = await design({ path: VALUES_STAGING }); // the check runs ON STAGING, before promote
+    const check = await design({ pass: id, path: p.staging }); // the check runs ON STAGING, before promote
     if (check.ok) {
-      log(`design/values: зелен — значений ${check.values} (роль назвала ${s.blank}) → .agent/values.xml`);
-      return ".agent/values.xml";
+      if (id === "values") log(`design/values: зелен — значений ${check.values} (роль назвала ${s.blank}) → ${p.made}`);
+      else {
+        log(`design/chains: зелен — узлов ${check.nodes}, юнитов ${check.units} → ${p.made}`);
+        // A node of the change no chain walks through has an EMPTY unit list, so its ticket arrives
+        // with no definition of done and its check command is green before a line is written (live run
+        // d8ef8c60). No rule refuses it yet — the number is printed so the next run's measurement, not
+        // a guess, decides whether one is needed.
+        if ((check.unstepped || []).length) log(`design/chains: узлов изменения без единой цепочки — ${check.unstepped.length}: ${check.unstepped.join(", ")}`);
+      }
+      return;
     }
     feedback = check.blockers;
-    if (check.missing) { silent++; log(`design/values: роль не записала ${VALUES_STAGING} — попытка ${silent}, бюджет починки не тратится`); continue; }
+    if (check.missing) { silent++; log(`design/${id}: роль не записала ${p.staging} — попытка ${silent}, бюджет починки не тратится`); continue; }
     attempt++;
-    log(`design/values: красный — попытка ${attempt} из ${LOOPS}`);
+    log(`design/${id}: красный — попытка ${attempt} из ${LOOPS}`);
   }
 }
 
@@ -1118,16 +1165,15 @@ async function bandStart() {
   const frd = await checkFrd({ path: ".agent/frd.xml" });
   if (!frd.ok) return 6;
 
+  const graph = await readText({ path: ".agent/design-graph.xml" });
+  const flow = await readText({ path: ".agent/data-flow.md" });
   const skipped = (await readText({ path: ".agent/design" })).trim() === "skip";
-  // STEP 9 HAS NO RECEIPT THIS FUNCTION CAN READ, so it is always re-entered. It used to be the pair
-  // `design-graph.xml` + `data-flow.md`, and while passes B and C are being rewritten nothing writes
-  // that pair — a resume would land here forever. The dictionary cannot stand in for it by its mere
-  // EXISTENCE either: a `values.xml` left by an older version of this pipeline is a file in another
-  // grammar, and reading it as a receipt would skip the step that was supposed to replace it. Whether
-  // it is green is a question only the guardrail answers, and asking it from here would consume the
-  // answer (design({path}) promotes and erases). So the band goes into step 9, where the GATE asks
-  // that question properly and a dictionary still green closes the pass for zero tokens.
-  if (!skipped) { log(`resume: шаг 6 закрыт — .agent/frd.xml зелен сейчас (дельт ${frd.deltas})`); return 9; }
+  // Step 9's receipt is the PAIR, or step 8's decision that there is nothing to synchronise. Judging
+  // it by its own guardrail is not possible from here: the chains that produced it are not promoted
+  // (a green pass B assembles the pair in the same breath), so there is nothing left to re-judge —
+  // and the gate of the step erases the pair on every entry for exactly that reason. Its EXISTENCE is
+  // therefore the whole signal, and a run resumed at step 11 keeps the design its plan was built from.
+  if (!skipped && !(graph && flow)) { log(`resume: шаг 6 закрыт — .agent/frd.xml зелен сейчас (дельт ${frd.deltas})`); return 9; }
 
   const verdict = await readText({ path: ".agent/review.xml" });
   if (!/verdict="Pass"/.test(verdict)) { log("resume: шаги 6 и 9 закрыты — их артефакты зелены сейчас"); return 11; }
@@ -1146,24 +1192,7 @@ async function band(from0) {
     if (from <= 6) { phase("intake"); await intake(fromCritic); }
     if (from <= 7) { phase("weight"); await weigh(); }
     if (from <= 8) { phase("ripple"); await rippling(); }
-    if (from <= 9) {
-      phase("design");
-      const made = await designing(from);
-      // THE BAND STOPS HERE WHILE STEP 9 IS BEING REWRITTEN, and it stops LOUDLY. Passes B and C —
-      // the node graph and the routes — were deleted, so `.agent/design-graph.xml` and
-      // `.agent/data-flow.md` are written by nothing. Walking on is the one thing that must not
-      // happen: step 10 accepts a missing design as a legal input (steps/plan/plan.mjs), and would
-      // silently cut tickets with an empty `dod` on every node and without the edges the routes
-      // assert — live run c6bc2e54 shows what that plan looks like, a page ordered before the module
-      // it links to. A skip of step 8 is a different case and keeps walking: there the change is one
-      // node and there is genuinely no design to build the plan on.
-      if (made !== ".agent/design") {
-        exit(err("blocked", {
-          subject: `шаг 9 переписывается: проход A закрыт — словарь собран и зелен (${made}). Проходы B (граф узлов) и C (маршруты) в этой версии не реализованы, поэтому .agent/design-graph.xml и .agent/data-flow.md не пишутся, и шаги 10-11 идти не на чем`,
-          evidence: made,
-        }));
-      }
-    }
+    if (from <= 9) { phase("design"); await designing(from); }
     if (from <= 10) { phase("plan"); planned = await planning(edges); }
     if (from >= 12) return planned;
     phase("review"); const verdict = await reviewing();

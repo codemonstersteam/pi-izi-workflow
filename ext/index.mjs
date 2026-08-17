@@ -75,8 +75,9 @@ import { newGraph, graphXml } from "../steps/graph/graph.mjs"
 import { newFrd, parseFrd, FRD_FORM } from "../steps/intake/frd.mjs"
 import { newMode } from "../steps/weight/weight.mjs"
 import { newRipple, blindNodes, waiverFor } from "../steps/ripple/ripple.mjs"
-import { parseDesign, parseRoutes, unitsByPath } from "../steps/design/design.mjs"
+import { parseDesign, parseRoutes, expand, unitsByPath } from "../steps/design/design.mjs"
 import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/design/values.mjs"
+import { routesSkeleton, parseChains, checkChains, assemble } from "../steps/design/routes.mjs"
 import { newPlanIndex } from "../steps/plan/plan.mjs"
 import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
@@ -1389,10 +1390,10 @@ const greenValues = (root) => {
 }
 
 export const design = {
-  description: "Step 9, pass A: the dictionary of everything the nodes of the change exchange. Without arguments: the GATE — read .agent/design (needed|skip) and erase every artifact of the step that is not green NOW, so no previous run's dictionary can survive. With `skeleton`: COMPOSE the artifact and write it to that staging path — one row per end of every use case (its `closes` token already filled in, and the text of a failure branch already written as «status code»), then one row per `<api>` and `<decl kind=method>` of every node of the change, copied verbatim out of .agent/ripple.xml. Costs no tokens and decides the whole composition: how many rows there are, what each closes, in what order, under what id. With `path`: the CHECK — recompute that skeleton and judge what the role staged against it (a row lost or added, an end re-attributed, a text the script prefilled edited, a text left blank), and on green strip the scaffolding and promote to .agent/values.xml.",
+  description: "Step 9 in two passes: A the dictionary, B the chains. Without arguments: the GATE — read .agent/design (needed|skip) and erase every artifact of the step that is not green NOW, so no previous run's dictionary can survive. With `skeleton`: COMPOSE the artifact and write it to that staging path — one row per end of every use case (its `closes` token already filled in, and the text of a failure branch already written as «status code»), then one row per `<api>` and `<decl kind=method>` of every node of the change, copied verbatim out of .agent/ripple.xml. Costs no tokens and decides the whole composition: how many rows there are, what each closes, in what order, under what id. With `path`: the CHECK — recompute that skeleton and judge what the role staged against it (a row lost or added, an end re-attributed, a text the script prefilled edited, a text left blank), and on green strip the scaffolding and promote to .agent/values.xml.",
   input: {
     type: "object",
-    properties: { path: { type: "string" }, skeleton: { type: "string" } },
+    properties: { pass: { type: "string", enum: ["values", "chains"] }, path: { type: "string" }, skeleton: { type: "string" } },
     additionalProperties: false,
   },
   output: {
@@ -1409,6 +1410,14 @@ export const design = {
       rows: { type: "number" },
       filled: { type: "number" },
       blank: { type: "number" },
+      chains: { type: "number" },
+      nodes: { type: "number" },
+      units: { type: "number" },
+      // `unstepped` — узлы изменения, через которые не прошла ни одна цепочка. Их `dod` пуст, а
+      // тикет без определения готовности исполнителю закрыть нечем (живой прогон d8ef8c60). Это
+      // ЧИСЛО, которое печатает воркфлоу, а не вердикт: правило на него заводится по замеру, а не
+      // по догадке.
+      unstepped: { type: "array", items: { type: "string" } },
       blockers: { type: "string" },
       // `missing` — the role wrote NOTHING to the staging path. It is told apart from every other
       // refusal because the caller spends a different budget on it: there is no artifact to repair,
@@ -1420,7 +1429,7 @@ export const design = {
     required: ["ok"],
     additionalProperties: false,
   },
-  run({ path, skeleton } = {}, context) {
+  run({ pass = "values", path, skeleton } = {}, context) {
     const root = runRoot(context)
     const read = (p) => readFileSync(at(root, p), "utf8")
     const drop = (...ps) => { for (const p of ps) if (existsSync(at(root, p))) rmSync(at(root, p)) }
@@ -1433,10 +1442,13 @@ export const design = {
       if (flag !== "needed" && flag !== "skip") {
         return { ok: false, why: `${DESIGN_PATH} содержит «${flag}» — допустимо needed | skip; артефакт из другой версии грамматики` }
       }
-      // THE ARTIFACTS OF THE DELETED PASSES NEVER SURVIVE THE GATE, and this is not the same rule as
-      // the dictionary's. `.agent/design-nodes.xml`, `.agent/design-graph.xml` and `.agent/data-flow.md`
-      // are written by no code in this repository any more; a copy left by an older run would be
-      // planned on by step 10 as if this run had produced it.
+      // THE DELIVERABLE NEVER SURVIVES THE GATE, and this is not the same rule as the dictionary's.
+      // It is the artifact of pass B, whose own input — the staged chains — is deliberately not
+      // promoted: a green B assembles the pair in the same breath, so there is nothing for the chains
+      // to survive INTO. Reaching the gate at all therefore means pass B has to run again, and
+      // yesterday's pair would otherwise be planned on by step 10. `.agent/design-nodes.xml` goes with
+      // them: no code writes it any more, and a copy left by an older version of this pipeline would
+      // be read as this run's answer.
       drop(NODES_PATH, DESIGN_GRAPH_PATH, DATA_FLOW_PATH)
       if (flag === "skip") { drop(VALUES_PATH); return { ok: true, design: flag } }
 
@@ -1448,7 +1460,10 @@ export const design = {
       return { ok: true, design: flag, reused: values ? ["values"] : [] }
     }
 
-    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"]]) {
+    // MODE_PATH is demanded here and not only where it is read: the assembled graph types itself with
+    // the weight of step 7, and a deliverable that says mode="" is not a smaller deliverable — it is
+    // one whose weight step 11 and the operator cannot read at all.
+    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"], [MODE_PATH, "шаг 7 weight не отработал"]]) {
       if (!existsSync(at(root, p))) return { ok: false, blockers: `${p} не существует — ${why}, судить дизайн не по чему` }
     }
 
@@ -1458,6 +1473,14 @@ export const design = {
     // файл по этому пути» the whole instruction — the role edits a file it can read, and the check
     // below compares it with a skeleton recomputed from the same two inputs.
     if (skeleton) {
+      if (pass === "chains") {
+        const values = greenValues(root)
+        if (!values) return { ok: false, blockers: `${VALUES_PATH} не зелен — проход A не закрыт, а цепочка говорит id словаря` }
+        const s = routesSkeleton({ frd: frdOf(root), values })
+        mkdirSync(dirname(at(root, skeleton)), { recursive: true })
+        writeFileSync(at(root, skeleton), `${s.xml}\n`)
+        return { ok: true, chains: s.chains, blank: s.blank }
+      }
       const s = valuesSkeleton({ frd: frdOf(root), ripple: read(RIPPLE_PATH) })
       mkdirSync(dirname(at(root, skeleton)), { recursive: true })
       writeFileSync(at(root, skeleton), `${s.xml}\n`)
@@ -1472,6 +1495,32 @@ export const design = {
     // staging file where it is — that file is the evidence the operator diagnoses from, and it is
     // also what the next round's order carries back to the role.
     const staged = read(path)
+
+    // PASS B: the chains are judged, and a green set is ASSEMBLED in the same breath. The working
+    // artifact is never promoted — the deliverable IS the promotion, exactly as it was before the
+    // three-pass construction: there is nothing for the chains to survive into.
+    if (pass === "chains") {
+      const values = greenValues(root)
+      if (!values) return { ok: false, blockers: `${VALUES_PATH} не зелен — проход A не закрыт, а цепочка говорит id словаря` }
+      const frd = frdOf(root)
+      // The map's DIRECTED edges: the ripple projects every edge BOTH ways on purpose
+      // (steps/ripple/ripple.mjs), so the only place the repository's own direction survives is the
+      // map. A missing map is read as no edges — this file is not the place that refuses on a missing
+      // step 5 (checkFrd is), and a guardrail that crashes on it turns data into code 2.
+      const edges = parseMap(readIfExists(root, GRAPH_PATH)).edges
+      const bad = checkChains({ staged, frd, values, edges })
+      if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
+
+      const built = assemble({ chains: parseChains(staged), values, frd, ripple: read(RIPPLE_PATH), mode: read(MODE_PATH).trim() })
+      writeFileSync(at(root, DESIGN_GRAPH_PATH), `${built.xml}\n`)
+      // The flow is expanded out of the ASSEMBLED graph, never out of the chains: one reader, the same
+      // one steps 10 and 14 use, so the deliverable cannot disagree with itself.
+      const flow = expand(parseDesign(built.xml), parseRoutes(built.xml))
+      writeFileSync(at(root, DATA_FLOW_PATH), `${flow}\n`)
+      rmSync(at(root, path))
+      return { ok: true, nodes: built.nodes, units: built.units, unstepped: [...built.unstepped] }
+    }
+
     const blockers = checkValues({ staged, frd: frdOf(root), ripple: read(RIPPLE_PATH) })
     if (blockers.length) return { ok: false, blockers: blockers.join("\n  ") }
 

@@ -711,6 +711,38 @@ test("роль переписала состав: строка добавлен�
   assert.equal(existsSync(join(root, p)), true, "красный staging остаётся уликой")
 })
 
+// Проход B, io-шов: скелет цепочек считается из СЛОВАРЯ и FRD, а зелёная проверка СОБИРАЕТ поставку
+// в том же вызове — рабочий файл цепочек не промоутится никогда, потому что промоут это и есть пара.
+test("проход B: скелет цепочек, чек и сборка пары в одном зелёном вызове", () => {
+  const root = designRoot()
+  design.run({}, ctx(root))
+  design.run({ path: stage(root, "values.xml", named(root)) }, ctx(root))   // проход A закрыт
+
+  const s = design.run({ pass: "chains", skeleton: ".agent/staging/chains-skeleton.xml" }, ctx(root))
+  assert.deepEqual(s, { ok: true, chains: 1, blank: 1 })
+  const skel = readFileSync(join(root, ".agent", "staging", "chains-skeleton.xml"), "utf8")
+  // Начало и конец берутся из словаря: v1 закрывает UC1/in, v2 — UC1/post.
+  assert.match(skel, /entry="v1" exit="v2" nodes="src\/ParcelResource.java" steps=""/)
+
+  // Незаполненный скелет красный, и блокер говорит откуда и куда вести.
+  const red = design.run({ pass: "chains", path: stage(root, "chains.xml", skel) }, ctx(root))
+  assert.equal(red.ok, false)
+  assert.match(red.blockers, /от entry="v1" до exit="v2"/)
+  assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false)
+
+  const green = design.run({ pass: "chains", path: stage(root, "chains.xml", skel.replace('steps=""', 'steps="src/ParcelResource.java@v2"')) }, ctx(root))
+  assert.deepEqual(green, { ok: true, nodes: 1, units: 1, unstepped: [] })
+  // Поставка собрана скриптом: контракт несёт ТЕКСТЫ, шаг маршрута — номер альтернативы.
+  const graph = readFileSync(join(root, ".agent", "design-graph.xml"), "utf8")
+  assert.match(graph, /^<design mode="minor"/)
+  assert.match(graph, /<contract in="GET \/parcels\?track=T" out="Parcels\(совпавшие\)"\/>/)
+  assert.match(graph, /<route scenario="S1" entry="1" steps="src\/ParcelResource.java#1"\/>/)
+  const flow = readFileSync(join(root, ".agent", "data-flow.md"), "utf8")
+  assert.match(flow, /^1\. src\/ParcelResource\.java : GET \/parcels\?track=T -> Parcels\(совпавшие\)$/m)
+  assert.match(flow, /\$START_TESTS path="src\/ParcelResource\.java"/)
+  assert.equal(existsSync(join(root, ".agent", "staging", "chains.xml")), false)   // промоут это МOVE
+})
+
 test("nothing written to the staging path is MISSING, not merely red", () => {
   const root = designRoot()
   design.run({}, ctx(root))
@@ -997,30 +1029,33 @@ test("the band hands the design phase where it STARTED, and the phase re-runs pa
   assert.match(IZI, /if \(from > 6 && \(gate\.reused \|\| \[\]\)\.includes\("values"\)\)/)
 })
 
-test("проход A — одна роль, один наряд, и имя роли то, которое pi резолвит по ФАЙЛУ", () => {
-  assert.match(IZI, /role: "valuer"/)
-  assert.equal(existsSync(new URL("../steps/design/valuer.md", import.meta.url).pathname), true)
-  assert.equal(existsSync(new URL("../steps/design/order-values.tpl", import.meta.url).pathname), true)
-  // Роли и наряды снесённых проходов не лежат там, где их найдёт pi: они уехали в архив.
-  for (const gone of ["designer.md", "router.md", "order-nodes.tpl", "order-routes.tpl", "order.tpl"]) {
+test("два прохода — две роли, два наряда, и имена ролей те, которые pi резолвит по ФАЙЛУ", () => {
+  for (const [id, role, tpl] of [["values", "valuer", "order-values.tpl"], ["chains", "router", "order-chains.tpl"]]) {
+    assert.match(IZI, new RegExp(`role: "${role}",\\s+tpl: "steps/design/${tpl}"`), id)
+    assert.equal(existsSync(new URL(`../steps/design/${role}.md`, import.meta.url).pathname), true, role)
+    assert.equal(existsSync(new URL(`../steps/design/${tpl}`, import.meta.url).pathname), true, tpl)
+  }
+  // Наряды снесённой трёхпроходной конструкции не лежат там, где их найдёт хост.
+  for (const gone of ["designer.md", "order-nodes.tpl", "order-routes.tpl", "order.tpl"]) {
     assert.equal(existsSync(new URL(`../steps/design/${gone}`, import.meta.url).pathname), false, gone)
   }
 })
 
-test("полоса ОСТАНАВЛИВАЕТСЯ после прохода A, а не идёт в шаг 10 без дизайна", () => {
-  // Шаг 10 принимает отсутствующий дизайн как законный вход (steps/plan/plan.mjs) — значит молча
-  // построит план с пустым dod на каждом узле. Остановка объявлена здесь и нигде больше.
-  assert.match(IZI, /const made = await designing\(from\);/)
-  assert.match(IZI, /if \(made !== "\.agent\/design"\) \{\n\s+exit\(err\("blocked"/)
-  // …и `skip` шага 8 — другой случай: там дизайна нет по решению, и полоса идёт дальше.
+test("шаг 9 — ДВА прохода одной формы, и второй собирает поставку", () => {
+  // Один цикл на оба прохода: composing → role → guardrail → promote. Разные у них только ключи
+  // наряда, и это ровно то, что отличает «назови конец» от «проведи маршрут».
+  assert.match(IZI, /await onePass\("values", \(\) => \(\{ FRD \}\)\)/)
+  assert.match(IZI, /await onePass\("chains", \(\) => \(\{ FRD, VALUES \}\)\)/)
+  assert.match(IZI, /return "\.agent\/data-flow\.md"/)
+  // …и `skip` шага 8 — по-прежнему отдельный случай: дизайна нет по решению.
   assert.match(IZI, /return "\.agent\/design"; \/\/ the flag file IS the receipt of the skip/)
 })
 
 // Наряд прохода A несёт СКЕЛЕТ и файл прошлой попытки. `prompt()` требует точного двустороннего
 // совпадения ключей, поэтому `{SKELETON}` в шаблоне без ключа здесь бросает НА ЗАПУСКЕ — после
 // гейта и после расчёта скелета. Шов — grep, и стоит он миллисекунду.
-test("наряд прохода A несёт скелет, число пустых строк и файл прошлой попытки", () => {
-  assert.match(IZI, /FRD, SKELETON, PREVIOUS, BLANK: String\(s\.blank\), FEEDBACK: feedback/)
+test("наряд прохода несёт скелет, число пустых строк и файл прошлой попытки", () => {
+  assert.match(IZI, /\.\.\.extra\(\), SKELETON, PREVIOUS, BLANK: String\(s\.blank\), FEEDBACK: feedback/)
   assert.match(IZI, /\(none — first attempt\)/)
 })
 
@@ -1030,14 +1065,17 @@ test("наряд прохода A несёт скелет, число пусты
 // гейта, ряби и посчитанного скелета, то есть за миллисекунду до вызова роли и без единого артефакта.
 // Проверка стоит миллисекунду и держит обе стороны сразу: каждая фигурная скобка шаблона — ключ,
 // который воркфлоу передаёт, и каждый ключ — скобка в шаблоне.
-test("плейсхолдеры наряда прохода A и ключи, которые ему передают, — одно множество", () => {
-  const tpl = readFileSync(new URL("../steps/design/order-values.tpl", import.meta.url), "utf8")
-  const inTpl = [...new Set([...tpl.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]))].sort()
-  const call = IZI.slice(IZI.indexOf('const o = sized("design/values"'), IZI.indexOf("if (o.over)"))
-  // Ключ — то, что стоит ПОСЛЕ разделителя объекта: иначе `STAGING: VALUES_STAGING` читается как два.
-  // Хвостовой разделитель — заглядыванием: иначе съеденная запятая крадёт следующий ключ.
-  const inCall = [...new Set([...call.matchAll(/[{,]\s*([A-Z][A-Z_]*)\s*(?=[,:])/g)].map((m) => m[1]))].sort()
-  assert.deepEqual(inTpl, inCall)
+test("плейсхолдеры нарядов обоих проходов и ключи, которые им передают, — одно множество", () => {
+  // Ключ — то, что стоит ПОСЛЕ разделителя объекта; хвостовой разделитель ловится заглядыванием,
+  // иначе съеденная запятая крадёт следующий ключ.
+  const call = IZI.slice(IZI.indexOf("const o = sized(`design/${id}`"), IZI.indexOf("if (o.over)"))
+  const common = [...new Set([...call.matchAll(/[{,]\s*([A-Z][A-Z_]*)\s*(?=[,:])/g)].map((m) => m[1]))]
+  for (const [tplName, own] of [["order-values.tpl", "FRD"], ["order-chains.tpl", "FRD, VALUES"]]) {
+    const tpl = readFileSync(new URL(`../steps/design/${tplName}`, import.meta.url), "utf8")
+    const inTpl = [...new Set([...tpl.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]))].sort()
+    const inCall = [...new Set([...common, ...own.split(", ")])].sort()
+    assert.deepEqual(inTpl, inCall, tplName)
+  }
 })
 
 test("the valuer returns a count, so the envelope carries it — additionalProperties is false", () => {
@@ -1580,6 +1618,7 @@ const ROLE_FILES = [
   ["scope/scout.md", /REVERSE ENGINEER/],
   ["intake/intake.md", /requirements analyst/],
   ["design/valuer.md", /INTERFACE ANALYST/],
+  ["design/router.md", /SYSTEMS ANALYST/],
   ["review/critic.md", /DESIGN REVIEWER/],
 ]
 const roleText = (f) => readFileSync(new URL(`../steps/${f}`, import.meta.url), "utf8")
@@ -1641,7 +1680,7 @@ test("D29b: пять прямых сборок наряда идут через 
   assert.match(IZI, /const order = sized\("brd", orderTpl, \{/)
   assert.match(IZI, /const order = sized\(`scope\/\$\{cell\.id\}`, orderTpl, \{/)
   assert.match(IZI, /const order = sized\("intake", orderTpl, \{/)
-  assert.match(IZI, /const o = sized\("design\/values", tpl, \{/)
+  assert.match(IZI, /const o = sized\(`design\/\$\{id\}`, tpl, \{/)
   assert.match(IZI, /const order = sized\("review", orderTpl, \{/)
 
   // Ни одного `prompt(` мимо sized: наряд, собранный в обход меры, — это наряд, размер которого
