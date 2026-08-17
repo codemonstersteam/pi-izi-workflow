@@ -78,8 +78,11 @@ import { newRipple, blindNodes, waiverFor } from "../steps/ripple/ripple.mjs"
 import { parseDesign, parseRoutes, expand, unitsByPath } from "../steps/design/design.mjs"
 import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/design/values.mjs"
 import { routesSkeleton, parseChains, checkChains, assemble } from "../steps/design/routes.mjs"
-import { splitOf, cardOf, coreCardOf, checkCore } from "../steps/design/card.mjs"
-import { newPlanIndex } from "../steps/plan/plan.mjs"
+// `checkPart` шага 4 (часть графа) уже занимает это имя в файле — ядро шага 9 приезжает под
+// псевдонимом. Одно имя на два разных вопроса было бы дефектом чтения, а не удобством.
+import { partsOf, partCardOf, sectionsOf, checkPart as judgePartPlan } from "../steps/design/card.mjs"
+import { coverageOf, orderOf, planDoc } from "../steps/design/plandoc.mjs"
+import { newPlanIndex, KEY_QUESTION, TASK_KEY } from "../steps/plan/plan.mjs"
 import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
@@ -146,7 +149,7 @@ export const checkTask = {
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
-    properties: { ok: { type: "boolean" }, why: { type: "string" }, lines: { type: "number" } },
+    properties: { ok: { type: "boolean" }, why: { type: "string" }, lines: { type: "number" }, key: { type: "string" }, question: { type: "string" } },
     required: ["ok"],
     additionalProperties: false,
   },
@@ -156,7 +159,12 @@ export const checkTask = {
       return { ok: false, why: `${TASK_PATH} не существует — вход конвейера кладёт оператор` }
     }
     const r = checkTaskText(readFileSync(at(root, TASK_PATH), "utf8"))
-    return r.ok ? { ok: true, lines: r.value.lines } : { ok: false, why: r.error.detail }
+    if (!r.ok) return { ok: false, why: r.error.detail }
+    // The task key rides out of the FIRST step that reads the task, because it names things the band
+    // creates much later — the branch, the ticket, and `task/<КЛЮЧ>/` where step 9 puts the plan.
+    // Asking for it here costs the operator one question at the start instead of an interruption in
+    // the middle; `question` is carried verbatim so the caller never rebuilds it.
+    return { ok: true, lines: r.value.lines, key: taskKey(root), question: KEY_QUESTION }
   },
 }
 
@@ -1504,12 +1512,10 @@ export const design = {
       const values = greenValues(root)
       if (!values) return { ok: false, blockers: `${VALUES_PATH} не зелен — проход A не закрыт, а цепочка говорит id словаря` }
       const frd = frdOf(root)
-      // The map's DIRECTED edges: the ripple projects every edge BOTH ways on purpose
-      // (steps/ripple/ripple.mjs), so the only place the repository's own direction survives is the
-      // map. A missing map is read as no edges — this file is not the place that refuses on a missing
-      // step 5 (checkFrd is), and a guardrail that crashes on it turns data into code 2.
-      const edges = parseMap(readIfExists(root, GRAPH_PATH)).edges
-      const bad = checkChains({ staged, frd, values, edges })
+      // The map's edges are NOT read here any more: the only rule that wanted them judged the ORDER
+      // OF WORK, and a chain does not decide the order (D42). The guardrail is three structural rules
+      // over the skeleton and the dictionary, and both of them are already in hand.
+      const bad = checkChains({ staged, frd, values })
       if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
 
       const built = assemble({ chains: parseChains(staged), values, frd, ripple: read(RIPPLE_PATH), mode: read(MODE_PATH).trim() })
@@ -1536,45 +1542,77 @@ export const design = {
   },
 }
 
-// --- split: which files are COMMON to several use cases -------------------------------------------
-// Step 9's first cut, and the cheapest one: it reads the FRD and nothing else, costs no tokens, and
-// decides whether a use case can be designed alone. Its artifact is STAGING and not a deliverable —
-// it is the input of the two swarms that follow, and it is recomputed whenever the FRD moves.
-const SPLIT_PATH = ".agent/staging/split.json"
-const CARDS_DIR = ".agent/staging/cards"
-const CORE_DIR = ".agent/staging/core"
-const CORE_OUT = "docs/design/core"
+// --- parts: the change as a tree of modules, cut into partitions ----------------------------------
+// Phases ①②③ of step 9 (steps/design-data-flow.md), and all three cost no tokens. The partition is
+// the unit of ONE role call, and its invariant — every module in exactly one partition — is what
+// makes a duplicate impossible: no two calls can decide one file. The card of each partition is
+// written here so the workflow only reads it.
+const PARTS_DIR = ".agent/staging/parts"
 
-export const split = {
-  description: "Step 9, the split: read .agent/frd.xml and name the files that TWO OR MORE use cases touch, then group them into connected components over the relation «a common use case reaches both». A file only one use case touches can be designed by that use case's designer alone; a shared one cannot — N designers would write N versions of it. Writes .agent/staging/split.json and returns the counts. Costs no tokens. Measured: eddi 8 shared of 13 nodes → 2 groups, t3 1 → 1, t2 0 → 0.",
+// WHERE THE STEP'S DELIVERABLE LIVES, and why it is not `.agent/`. The plan outlives the run: it is
+// read by a human at the gate, committed, and cut into tickets. `.agent/` is run STATE — rotated by
+// newRun, erased by the gates, and gitignored in every form.
+//
+// The directory is keyed by the TASK KEY, the same one the branch is named after, for a reason a
+// second task would have found the hard way: two changes in one repository share the partition slugs
+// (`configs-glossary` is `configs-glossary` in both), and a flat `docs/design/` would let the second
+// change silently overwrite the first one's decisions.
+//
+// The key is asked ONCE, by the SAME verbatim question step 10 asks (steps/plan/plan.mjs::KEY_QUESTION),
+// so the answer written to .agent/answers.md serves both and the operator is never asked twice.
+// TWO SOURCES, ONE ORDER. The operator's answer comes first — it can correct what the task says;
+// then TASK.md itself, because a key already written there is a key nobody should be asked for. Both
+// are READ, never written: fabricating an answer nobody gave would make .agent/answers.md lie about
+// who decided what.
+const taskKey = (root) => {
+  const said = parsedAnswers(readIfExists(root, ANSWERS_PATH))
+  const hit = (said.ok ? said.value : []).find((a) => String(a.question || "").trim() === KEY_QUESTION.trim())
+  const answered = String((hit && hit.text) || "").trim()
+  if (TASK_KEY.test(answered)) return answered
+
+  // In TASK.md the key is DECLARED, not hunted for: a line `task: DOS-535`. Scanning the whole text
+  // for anything shaped like a key was the first version and it is wrong — a task that mentions a
+  // neighbouring ticket («как в DOS-100») would name the branch and the plan's directory after it,
+  // silently. A declaration has an author; a match has none.
+  const line = String(readIfExists(root, TASK_PATH)).match(/^[ \t]*task[ \t]*:[ \t]*(\S+)[ \t]*$/im)
+  const declared = String((line && line[1]) || "").trim()
+  return TASK_KEY.test(declared) ? declared : ""
+}
+
+const taskDir = (root) => {
+  const key = taskKey(root)
+  return key ? `task/${key}` : ""
+}
+
+// Everything this repository can resolve a path to: the map's own modules. Rule 5 of the guardrail
+// asks whether a declared call is an ADDRESS, and this is the address book.
+const knownPaths = (map) => [...String(map || "").matchAll(/<module\b[^>]*\bpath="([^"]+)"/g)].map((m) => m[1])
+
+export const parts = {
+  description: "Step 9, phases ①②③: read .agent/frd.xml for the COMPOSITION of the change (the modules its scenarios name), enrich it from .agent/ripple.xml with what the repository knows (deps, level, whether the file exists at all), then cut the modules into PARTITIONS — the connected components of «some use case reaches both». Every module lands in exactly one partition, which is what makes two decisions of one file impossible. Writes one card per partition to .agent/staging/parts/<slug>.txt: the partition's modules, every use case that touches them verbatim, what those modules call today, a SAMPLE by path, the check command and the draft contract of pass 9B. Costs no tokens. Measured: eddi 13 modules (7 created) → 3 partitions, cards 8,9-15,3 KB against the 126 KB the map and the FRD weigh together.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
     properties: {
       ok: { type: "boolean" },
       why: { type: "string" },
-      shared: { type: "number" },
-      own: { type: "number" },
-      // The cards: one per use case, and their size. Printed by the workflow because it is the one
-      // place a run can see what a designer is actually handed — 10 KB against the 126 KB the map and
-      // the FRD weigh together.
-      cards: { type: "number" },
+      ask: { type: "boolean" },
+      subject: { type: "string" },
+      at: { type: "string" },
+      modules: { type: "number" },
+      created: { type: "number" },
       chars: { type: "number" },
-      samples: {
-        type: "object",
-        properties: { self: { type: "number" }, twin: { type: "number" }, neighbour: { type: "number" }, none: { type: "number" } },
-        additionalProperties: false,
-      },
-      groups: {
+      parts: {
         type: "array",
         items: {
           type: "object",
-          // `slug` rides out with the group because it is the NAME of its artifacts — the caller
-          // asks for `core({group: slug})` and reads `docs/design/core/<slug>.md`. Without it the
-          // workflow called the host with `undefined` and the group could not be found (live run,
-          // 17 Aug): a derived id that stays inside the module is an id the caller cannot use.
-          properties: { id: { type: "string" }, slug: { type: "string" }, paths: { type: "number" }, ucs: { type: "number" } },
-          required: ["id", "slug", "paths", "ucs"],
+          properties: {
+            slug: { type: "string" },
+            modules: { type: "number" },
+            ucs: { type: "number" },
+            neighbours: { type: "number" },
+          },
+          required: ["slug", "modules", "ucs", "neighbours"],
           additionalProperties: false,
         },
       },
@@ -1585,36 +1623,49 @@ export const split = {
   run(_ = {}, context) {
     const root = runRoot(context)
     if (!existsSync(at(root, FRD_PATH))) {
-      return { ok: false, why: `${FRD_PATH} не существует — шаг 6 intake не отработал, делить нечего` }
+      return { ok: false, why: `${FRD_PATH} не существует — шаг 6 intake не отработал, планировать нечего` }
     }
+    // The map is DEMANDED: without it a card has no facts, no sample and no check command, and a role
+    // handed that would invent the repository instead of reading it.
+    if (!existsSync(at(root, GRAPH_PATH))) {
+      return { ok: false, why: `${GRAPH_PATH} не существует — шаг 5 graph не отработал, карточке нечего показать про репозиторий` }
+    }
+    // The key is asked BEFORE the first role call, because every deliverable of this step lands under
+    // it: a plan written to a directory nobody named is a plan nobody finds.
+    const dir = taskDir(root)
+    if (!dir) return { ok: false, ask: true, subject: KEY_QUESTION }
+
     const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
-    const s = splitOf({ frd })
-    mkdirSync(dirname(at(root, SPLIT_PATH)), { recursive: true })
-    writeFileSync(at(root, SPLIT_PATH), `${JSON.stringify({
-      shared: [...s.shared],
-      own: [...s.own],
-      groups: s.groups.map((g) => ({ id: g.id, paths: [...g.paths], ucs: [...g.ucs] })),
-      ucOf: Object.fromEntries([...s.ucOf].map(([p, u]) => [p, [...u]])),
-    }, null, 2)}\n`)
+    const map = readFileSync(at(root, GRAPH_PATH), "utf8")
+    const tree = partsOf({ frd, ripple: readIfExists(root, RIPPLE_PATH) })
+    if (!tree.parts.length) return { ok: false, why: "ни один сценарий FRD не называет узлов — состав изменения пуст" }
+
+    mkdirSync(at(root, PARTS_DIR), { recursive: true })
+    let chars = 0
+    for (const one of tree.parts) {
+      const c = partCardOf({ part: one, frd, map, graph: readIfExists(root, DESIGN_GRAPH_PATH) })
+      writeFileSync(at(root, `${PARTS_DIR}/${one.slug}.txt`), c.text)
+      chars = Math.max(chars, c.chars)
+    }
     return {
       ok: true,
-      shared: s.shared.length,
-      own: s.own.length,
-      groups: s.groups.map((g) => ({ id: g.id, slug: g.slug, paths: g.paths.length, ucs: g.ucs.length })),
+      at: dir,
+      modules: tree.modules.size,
+      created: [...tree.modules.values()].filter((m) => m.new).length,
+      chars,
+      parts: tree.parts.map((x) => ({ slug: x.slug, modules: x.modules.length, ucs: x.ucs.length, neighbours: x.neighbours.length })),
     }
   },
 }
 
-// --- core: the shared files of one group, decided ONCE --------------------------------------------
-// Two calls, told apart by their arguments, the same shape the design pass uses: `core({ group })`
-// COMPOSES the order's data out of the FRD, the map and the draft; `core({ path, group })` JUDGES
-// what the role staged and, on green, promotes it to `docs/design/core/<slug>.md`, where the card of
-// every use case of that group will read it as `$START_COMMON`.
-export const core = {
-  description: "Step 9, the COMMON design of one group of shared files. With `group`: compose the order's data — the group's files, every use case that touches them verbatim, what the repository knows about those files, a SAMPLE by path, the external systems, the check command and the DRAFT contract accumulated by pass 9B. With `path` and `group`: judge what the role staged by three structural rules (a section per file of the group, no file outside it, every use case mentioned) and on green promote it to docs/design/core/<slug>.md. Costs no tokens itself.",
+// --- part: the plan of ONE partition, judged and promoted -----------------------------------------
+// Phase ⑤. The partition is RECOMPUTED here rather than carried: it is a pure function of artifacts
+// already on disk, so the judgement cannot drift from the card the role was actually given.
+export const part = {
+  description: "Step 9, phase ⑤: judge the plan a role staged for ONE partition and, on green, promote it to docs/design/<slug>.md. Five structural rules — a section per module of the partition, not one module of another partition, every use case shown as closed by step («закрывает: UC1 шаг 1»), every section carrying «проверка» and «зовёт» (paths or the word «нет»), and every declared call resolving to a module of the change or a file of the map. What the plan MEANS is read by a human at the gate. Costs no tokens.",
   input: {
     type: "object",
-    properties: { group: { type: "string" }, path: { type: "string" } },
+    properties: { slug: { type: "string" }, path: { type: "string" } },
     additionalProperties: false,
   },
   output: {
@@ -1624,109 +1675,134 @@ export const core = {
       why: { type: "string" },
       blockers: { type: "string" },
       missing: { type: "boolean" },
-      chars: { type: "number" },
-      paths: { type: "number" },
+      modules: { type: "number" },
       ucs: { type: "number" },
+      calls: { type: "number" },
       at: { type: "string" },
     },
     required: ["ok"],
     additionalProperties: false,
   },
-  run({ group = "", path = "" } = {}, context) {
+  run({ slug = "", path = "" } = {}, context) {
     const root = runRoot(context)
     if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, GRAPH_PATH))) {
-      return { ok: false, why: `${FRD_PATH} или ${GRAPH_PATH} не существует — общий дизайн собирать не из чего` }
+      return { ok: false, why: `${FRD_PATH} или ${GRAPH_PATH} не существует — план партии судить не по чему` }
     }
     const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
-    const one = splitOf({ frd }).groups.find((g) => g.slug === group || g.id === group)
-    if (!one) return { ok: false, why: `группы «${group}» нет в разбиении — общих файлов у неё не осталось` }
-
-    if (!path) {
-      const c = coreCardOf({ group: one, frd, map: readFileSync(at(root, GRAPH_PATH), "utf8"), graph: readIfExists(root, DESIGN_GRAPH_PATH) })
-      mkdirSync(at(root, CORE_DIR), { recursive: true })
-      writeFileSync(at(root, `${CORE_DIR}/${one.slug}.txt`), c.text)
-      return { ok: true, chars: c.chars, paths: one.paths.length, ucs: one.ucs.length }
-    }
+    const map = readFileSync(at(root, GRAPH_PATH), "utf8")
+    const one = partsOf({ frd, ripple: readIfExists(root, RIPPLE_PATH) }).parts.find((x) => x.slug === slug)
+    if (!one) return { ok: false, why: `партии «${slug}» нет в разбиении — её модулей в изменении не осталось` }
 
     if (!existsSync(at(root, path))) {
       return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
     }
     const staged = readFileSync(at(root, path), "utf8")
-    const bad = checkCore({ text: staged, group: one })
+    const bad = judgePartPlan({ text: staged, part: one, known: knownPaths(map) })
     if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
 
-    // Promoted OUT of `.agent/`: a group contract is read by a human at the gate and by the card of
-    // every use case of the group, and it outlives the run's state the way a design document does.
-    mkdirSync(at(root, CORE_OUT), { recursive: true })
-    const out = `${CORE_OUT}/${one.slug}.md`
+    // Promoted OUT of `.agent/`, under the task's own directory (see taskDir).
+    const dir = taskDir(root)
+    if (!dir) return { ok: false, why: "ключ задачи не отвечен — класть решение партии некуда" }
+    mkdirSync(at(root, `${dir}/design`), { recursive: true })
+    const out = `${dir}/design/${slug}.md`
     writeFileSync(at(root, out), staged.endsWith("\n") ? staged : `${staged}\n`)
     rmSync(at(root, path))
-    return { ok: true, at: out, paths: one.paths.length, ucs: one.ucs.length }
+    const sections = sectionsOf(staged)
+    return { ok: true, at: out, modules: sections.length, ucs: one.ucs.length, calls: sections.reduce((n, x) => n + x.calls.length, 0) }
   },
 }
 
-// --- cards: what ONE designer of ONE use case sees ------------------------------------------------
-// A SEPARATE call from the split, and the reason is the ORDER: the card carries the flow of its own
-// scenarios, and that flow is written by pass 9B — which runs after the split. Building the cards in
-// the same breath as the split left every flow section empty on a fresh run (measured live on `eddi`,
-// 17 Aug). The split decides the shape of the work and must come first; the card is assembled once
-// everything it projects exists.
-export const cards = {
-  description: "Step 9: assemble ONE CARD per use case — everything a single designer sees and nothing else. Each section is a projection: the use case verbatim from .agent/frd.xml, the `<module>` bytes of the nodes ITS scenarios walk, the external systems those nodes and their samples touch, the suite command, the flow of its own scenarios out of .agent/data-flow.md, the contracts already decided for shared files, and a SAMPLE by PATH — how a file of that kind is already written in this repository (the node itself if it exists, else a twin for another entity, else a neighbour of the same kind, else a declared absence). Writes .agent/staging/cards/<UC>.txt. Costs no tokens. Measured on eddi: 12 cards of 5-10 KB against the 126 KB the map and the FRD weigh together.",
+
+// --- planbook: phases ⑥⑦⑧ — is the requirement covered, in what order, and the one document ------
+// The last three phases of step 9, and none of them costs a token. Coverage is a comparison of two
+// sets of numbers (the FRD numbers its steps, the role names them); the order is the topological sort
+// of what the plans DECLARE; the document is the sections copied verbatim, in that order.
+//
+// A REFUSAL HERE REMOVES PLAN.md, for the same reason step 10's refusal removes its index: yesterday's
+// plan surviving today's hole is a gate approving work that no longer matches the requirement.
+
+
+export const planbook = {
+  description: "Step 9, phases ⑥⑦⑧: read every docs/design/<slug>.md a partition promoted, check that the requirement is covered whole (every module planned, every use case named, every step and failure branch closed), order the modules by what the plans DECLARE in «зовёт:» plus the map's static edges between existing files, and assemble PLAN.md — the header of counts and every section verbatim in the order of work. Refuses with the holes named, or with the circle's modules named, and REMOVES PLAN.md on any refusal. Costs no tokens.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
     properties: {
       ok: { type: "boolean" },
       why: { type: "string" },
-      cards: { type: "number" },
-      chars: { type: "number" },
-      samples: {
-        type: "object",
-        properties: { self: { type: "number" }, twin: { type: "number" }, neighbour: { type: "number" }, none: { type: "number" } },
-        additionalProperties: false,
-      },
+      blockers: { type: "string" },
+      cycle: { type: "string" },
+      // The partitions a refusal implicates: the rail re-delegates THEM, with the blocker as
+      // feedback. Without it a hole in the coverage is an escalation, though the role that wrote the
+      // section is the one who can name what closes the step.
+      guilty: { type: "array", items: { type: "string" } },
+      modules: { type: "number" },
+      sections: { type: "number" },
+      ucs: { type: "number" },
+      at: { type: "string" },
     },
     required: ["ok"],
     additionalProperties: false,
   },
   run(_ = {}, context) {
     const root = runRoot(context)
-    if (!existsSync(at(root, FRD_PATH))) {
-      return { ok: false, why: `${FRD_PATH} не существует — шаг 6 intake не отработал, карточки собирать не из чего` }
+    const dir = taskDir(root)
+    if (!dir) return { ok: false, why: "ключ задачи не отвечен — план класть некуда" }
+    const PLAN_DOC = `${dir}/PLAN.md`
+    const drop = () => { if (existsSync(at(root, PLAN_DOC))) rmSync(at(root, PLAN_DOC)) }
+    if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, GRAPH_PATH))) {
+      drop()
+      return { ok: false, why: `${FRD_PATH} или ${GRAPH_PATH} не существует — план собирать не из чего` }
     }
     const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
-    // The map is DEMANDED: without it a card has no nodes, no systems and no sample, and a designer
-    // handed that would invent the repository instead of reading it.
-    if (!existsSync(at(root, GRAPH_PATH))) {
-      return { ok: false, why: `${GRAPH_PATH} не существует — шаг 5 graph не отработал, карточке нечего показать про репозиторий` }
-    }
     const map = readFileSync(at(root, GRAPH_PATH), "utf8")
-    const flow = readIfExists(root, DATA_FLOW_PATH)
-    // The contracts already decided for the shared files: a use case reads the ones of the groups it
-    // actually touches, and nothing else. A group it never walks through is not its business.
-    const split = splitOf({ frd })
-    const commonOf = (nodes) => split.groups
-      .filter((g) => g.paths.some((p) => nodes.includes(p)))
-      .map((g) => readIfExists(root, `${CORE_OUT}/${g.slug}.md`))
-      .filter(Boolean).join("\n\n")
+    const { modules, parts: cut } = partsOf({ frd, ripple: readIfExists(root, RIPPLE_PATH) })
 
-    mkdirSync(at(root, CARDS_DIR), { recursive: true })
-    const samples = { self: 0, twin: 0, neighbour: 0, none: 0 }
-    let chars = 0, n = 0
-    for (const u of frd.usecases || []) {
-      const id = String((u && u.id) || "").trim()
-      if (!id) continue
-      // The nodes of this use case come from the split's own map — one parse of `<scenario nodes>`
-      // for the whole step, never a second cut of the same attribute.
-      const mine = [...split.ucOf].filter(([, u]) => u.includes(id)).map(([p]) => p)
-      const c = cardOf({ uc: id, frd, map, flow, common: commonOf(mine) })
-      writeFileSync(at(root, `${CARDS_DIR}/${id}.txt`), c.text)
-      chars = Math.max(chars, c.chars)
-      n++
-      for (const x of c.samples) samples[x.kind] = (samples[x.kind] || 0) + 1
+    // The plans are read from the DELIVERABLES, not from staging: what a partition promoted is what
+    // the gate reads, and assembling anything else would document work nobody approved.
+    const sections = []
+    const lost = []
+    for (const one of cut) {
+      const doc = readIfExists(root, `${dir}/design/${one.slug}.md`)
+      if (!doc) { lost.push(one.slug); continue }
+      for (const x of sectionsOf(doc)) sections.push(x)
     }
-    return { ok: true, cards: n, chars, samples }
+    if (lost.length) {
+      drop()
+      return { ok: false, why: `нет плана партий: ${lost.join(", ")} — фаза ④ по ним не отработала` }
+    }
+
+    // Which partition answers for what: a module belongs to exactly one, and a use case to every
+    // partition its modules touch. This is the same invariant that makes a duplicate impossible,
+    // used the other way round — to address a refusal.
+    const ownerOf = new Map()
+    for (const one of cut) for (const m of one.modules) ownerOf.set(m, one.slug)
+    const blame = (text) => cut.filter((one) =>
+      one.modules.some((m) => text.includes(m)) || one.ucs.some((u) => new RegExp(`\\b${u}\\b`).test(text))).map((x) => x.slug)
+
+    const holes = coverageOf({ frd, modules, sections })
+    if (holes.length) { drop(); return { ok: false, blockers: holes.join("\n  "), guilty: [...new Set(holes.flatMap(blame))] } }
+
+    const { order, cycle } = orderOf({ sections, modules, edges: parseMap(map).edges })
+    if (cycle.length) {
+      drop()
+      return {
+        ok: false,
+        cycle: cycle.join(" → "),
+        guilty: [...new Set(cycle.map((m) => ownerOf.get(m)).filter(Boolean))],
+        blockers: `очередь работ не строится: ${cycle.map((m) => m.split("/").pop()).join(" → ")} замкнуты в круг строками «зовёт:». Разорви круг: у одного из них вызов другого — не зависимость сборки, а обратный вызов. Убери его из «зовёт» того модуля, который пишется ПЕРВЫМ, и опиши связь словами в «что это». Полные пути: ${cycle.join(" → ")}`,
+      }
+    }
+
+    mkdirSync(at(root, dir), { recursive: true })
+    writeFileSync(at(root, PLAN_DOC), `${planDoc({ frd, sections, order, modules })}\n`)
+    return {
+      ok: true,
+      at: PLAN_DOC,
+      modules: modules.size,
+      sections: sections.length,
+      ucs: (frd.usecases || []).length,
+    }
   },
 }
 
@@ -2088,10 +2164,10 @@ export const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.12.0",
+    version: "1.15.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
-    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, split, core, cards, plan, review },
+    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/parts/part/planbook/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, parts, part, planbook, plan, review },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

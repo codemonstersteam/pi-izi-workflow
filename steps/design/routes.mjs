@@ -11,18 +11,18 @@
 //             `parseFrd`'s deltas and scenarios are read as data, never re-parsed.
 // EXTERNAL_DEPENDENCY: steps/ripple/ripple.mjs::changeWidth — "which nodes does this change work on"
 //             is step 8's expression; steps 8, 9 and 10 must not be able to disagree about it.
-// EXTERNAL_DEPENDENCY: steps/plan/plan.mjs::forwardLegs + orderLegs — "which directed edge does a chain
-//             assert" and "which of them order the WORK" are ONE derivation each, and both live with
-//             their other consumer: step 10 orders by exactly these edges, so a cycle this guardrail
-//             misses is `err("cycle")` at step 10 with no repair rail at all (live run f7bf154a), and
-//             a cycle this guardrail INVENTS is three redelegations the role cannot repair.
+// NO DEPENDENCY ON steps/plan/plan.mjs, and that is the point of D42: this slice used to import the
+//             order's own derivation so that the two steps could not disagree about it. They cannot
+//             disagree now because a chain no longer says anything about the order — the joint it
+//             asserts is an edge of the GRAPH (`joints` below), and the order of the work is DECLARED
+//             by whoever decides a file and assembled at 9g.
 // Invariants: every function here is TOTAL — any input, including undefined, yields an empty result
 //             and never throws; the skeleton is a FUNCTION of the FRD and the dictionary, so two runs
 //             over one pair agree byte for byte; checkChains returns EVERY blocker, not the first.
 // Interface:  ROUTES_GRAMMAR — the version stamped on the working artifact
 //             routesSkeleton({ frd, values }) -> { xml, chains, blank }
 //             parseChains(xml) -> Chain[]
-//             checkChains({ staged, frd, values, edges }) -> string[]  — blockers, empty = green
+//             checkChains({ staged, frd, values }) -> string[]  — blockers, empty = green
 //             assemble({ chains, values, frd, ripple, mode }) -> { xml, nodes, units, unstepped }
 //
 // WHY A CHAIN AND NOT A CONTRACT — the measurement that chose this shape.
@@ -42,7 +42,29 @@
 import { attrs, tag, tokens, esc } from "../../core/xml.mjs"
 import { endsOf } from "../intake/frd.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
-import { forwardLegs, orderLegs } from "../plan/plan.mjs"
+
+// joints — the DIRECTED joints a set of chains asserts: one per FORWARD transition. A chain RETURNS
+// along the nodes it already walked, and a return is not a joint: `A -> B -> A` says A calls B and
+// nothing more, so a node already seen in THIS chain is where its return begins.
+//
+// IT LIVES HERE BECAUSE IT IS ABOUT THE GRAPH, NOT ABOUT THE ORDER OF WORK. It used to live in
+// steps/plan/plan.mjs, where step 10 turned every joint into "write the callee first" — the
+// derivation D42 deleted (see checkChains). What a joint still is, and the only thing it is, is an
+// edge of `.agent/design-graph.xml`: a call this change introduces that the repository does not have
+// yet, which no map can carry because 7 of eddi's 13 nodes do not exist.
+const joints = (chains) => {
+  const out = []
+  for (const c of chains || []) {
+    const steps = (c && c.steps) || []
+    const seen = new Set()
+    for (const [k, s] of steps.entries()) {
+      seen.add(s.path)
+      const next = steps[k + 1]
+      if (next && !seen.has(next.path)) out.push({ from: s.path, to: next.path })
+    }
+  }
+  return out
+}
 
 export const ROUTES_GRAMMAR = 1
 
@@ -130,15 +152,15 @@ export function parseChains(xml) {
 }
 
 // FUNCTION_CONTRACT: checkChains — did the role walk THESE chains, and only walk them
-//   Input:        { staged, frd, values, edges } — the text the role wrote, the two inputs the
-//                 skeleton is a function of, and the MAP's directed edges for the cycle rule
-//   Dependencies: routesSkeleton, parseChains, forwardLegs
+//   Input:        { staged, frd, values } — the text the role wrote and the two inputs the skeleton
+//                 is a function of
+//   Dependencies: routesSkeleton, parseChains
 //   Antecedent:   any values
 //   Consequent:   success: string[] — one blocker per defect, empty means green
 //                 failure: none — total
 //   Purity:       pure
 //
-// FOUR RULES, AND EVERY ONE OF THEM IS A THING THE ROLE CAN ACTUALLY DO WRONG. What the old pass C
+// THREE RULES, AND EVERY ONE OF THEM IS A THING THE ROLE CAN ACTUALLY DO WRONG. What the old pass C
 // judged with eleven rules is mostly gone, and gone by CONSTRUCTION rather than by decision:
 //   · «the composition of the routes» — the skeleton is the composition (rule 1 only asks that it was
 //     copied), so «a scenario with no route» and «a route of a scenario the FRD does not carry» are
@@ -148,7 +170,7 @@ export function parseChains(xml) {
 //     lines in run 0bbf7054;
 //   · «a value seated in two nodes» — a value sits where a chain hands it over, once per step;
 //   · «the entry is named» — the entry is the dictionary's, not the role's (live run ffe8cb7b).
-export function checkChains({ staged, frd = {}, values = new Map(), edges = [] } = {}) {
+export function checkChains({ staged, frd = {}, values = new Map() } = {}) {
   const B = []
   const want = parseChains(routesSkeleton({ frd, values }).xml)
   const mine = parseChains(staged)
@@ -187,38 +209,17 @@ export function checkChains({ staged, frd = {}, values = new Map(), edges = [] }
     }
   }
 
-  // 4 — THE ORDER OF THE WORK MUST EXIST. Step 10 sorts the nodes topologically by exactly these
-  // edges plus the map's, and a cycle there is `err("cycle")` with no role to repair it — live run
-  // f7bf154a. The rule is judged once, over ALL chains together, because a cycle is not a property of
-  // any one of them.
-  // …and the legs the MAP contradicts are not legs of the order at all: a call through an interface
-  // into its implementation runs one way and is WRITTEN the other (steps/plan/plan.mjs::orderLegs).
-  const legs = orderLegs(forwardLegs(mine.map((c) => ({ scenario: c.id, steps: c.steps }))), edges)
-  const cyc = cycleIn([...legs.map((l) => [l.from, l.to]), ...(edges || []).map((e) => [e.from, e.to])])
-  if (cyc.length) B.push(`порядок работ не строится: узлы ${cyc.join(" -> ")} замкнуты в круг — шаг 10 сортирует по этим же рёбрам и упадёт без рельсы починки`)
-
+  // THERE IS NO FOURTH RULE, and its absence is the decision of D42. It used to refuse a set of
+  // chains whose ORDER OF WORK could not be built, and that question is not a chain's to answer: a
+  // chain says a value moved from A to B, the order asks what must be WRITTEN first, and on a data
+  // class the two are opposite — `Glossary` is handed on by everyone and written before anyone. For
+  // an EXISTING pair the map arbitrated (its static edge contradicted the leg); for a CREATED pair
+  // there is no arbiter at all, and 7 of eddi's 13 nodes are created. Two truthful chains then closed
+  // a circle the role could not repair — three redelegations and an escalation, live run of
+  // 2026-08-17 on the pair `Glossary ↔ RestGlossaryStore`. The order is now DECLARED by whoever
+  // decides a file (`зовёт:` in the group's contract and in the use case's plan) and assembled at 9g,
+  // where a circle IS a contradiction of two declarations and the role that wrote them can repair it.
   return B
-}
-
-// cycleIn — the first cycle of a directed edge list, as the path that closes it, or []. Kahn's
-// algorithm would answer "there is one" and step 10 already does that; a blocker has to name WHICH
-// nodes, because that is what the role rewrites.
-function cycleIn(pairs) {
-  const next = new Map()
-  for (const [a, b] of pairs) { if (!next.has(a)) next.set(a, new Set()); next.get(a).add(b) }
-  const state = new Map()
-  const stack = []
-  const walk = (n) => {
-    state.set(n, 1); stack.push(n)
-    for (const m of next.get(n) || []) {
-      if (m === n) continue                       // a self-loop is a node calling itself, not an order
-      if (state.get(m) === 1) return [...stack.slice(stack.indexOf(m)), m]
-      if (!state.has(m)) { const c = walk(m); if (c.length) return c }
-    }
-    state.set(n, 2); stack.pop(); return []
-  }
-  for (const n of next.keys()) if (!state.has(n)) { const c = walk(n); if (c.length) return c }
-  return []
 }
 
 // FUNCTION_CONTRACT: assemble — the deliverable, computed out of the chains
@@ -278,9 +279,10 @@ export function assemble({ chains = [], values = new Map(), frd = {}, ripple = "
     if (w.in && !n.in.includes(w.in)) n.in.push(w.in)
     if (w.out && !n.out.includes(w.out)) n.out.push(w.out)
   }
-  // The joints the chains assert become edges of the deliverable — that IS the design's own direction,
-  // and it is the second operand of step 10's order (the first is the map's).
-  for (const l of forwardLegs(chains.map((c) => ({ scenario: c.id, steps: c.steps })))) {
+  // The joints the chains assert become edges of the deliverable — that IS the design's own direction.
+  // They are edges of the GRAPH and nothing else: the order of the work is declared at 9d/9e and
+  // assembled at 9g, never derived from here (D42).
+  for (const l of joints(chains)) {
     if (nodes.has(l.from)) nodes.get(l.from).deps.add(l.to)
   }
 

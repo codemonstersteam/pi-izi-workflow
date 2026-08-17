@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
 import { parseMap } from "../intake/map.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 import { parseDesign, parseRoutes } from "../design/design.mjs"
-import { newPlanIndex, TASK_KEY, KEY_QUESTION, GRAMMAR_VERSION, forwardLegs } from "./plan.mjs"
+import { newPlanIndex, TASK_KEY, KEY_QUESTION, GRAMMAR_VERSION } from "./plan.mjs"
 import { unitsByPath } from "../design/design.mjs"
 
 const RESOURCE = "src/main/java/org/acme/rest/json/FruitResource.java"
@@ -113,80 +113,27 @@ test("order follows the edge direction: a node comes after everything it uses", 
   assert.ok(order.indexOf(CARD) < order.indexOf("scenario:S1"), "the scenario greens last")
 })
 
-// S30-0. The map cannot carry an edge INTO a file the change creates — it was built before that file
-// existed — so the page ends up ordered before the page it links to. The routes can: they are
-// directed by construction. Drop the route pass and this goes red on the very ordering the live t3
-// run produced (docs/review.md §2.1).
-test("the route's forward leg orders a created module before the node that links to it", () => {
-  const withoutRoutes = idsOf(run().value)
-  assert.ok(withoutRoutes.indexOf(LIST) < withoutRoutes.indexOf(CARD), "the map alone puts the page first — the defect")
+// D42 — ШОВ, и он же названный долг. Маршрут отвечает на вопрос «кто кому передал значение», а этот
+// шаг спрашивает «что писать раньше». На обычном стыке ответы совпадают, на КЛАССЕ ДАННЫХ они
+// противоположны, и для СОЗДАВАЕМОЙ пары арбитра нет: живой прогон 17 августа на `eddi` дал
+// `Glossary ↔ RestGlossaryStore`, три круга починки и эскалацию на двух верных цепочках.
+// Вернёшь вывод порядка из маршрутов — этот тест покраснеет.
+test("маршруты порядок работ не строят: очередь объявляется, а не выводится из потока", () => {
+  const r = run({ design: ROUTED })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.deepEqual(r.value.nodes.find((n) => n.id === LIST).deps.filter((d) => d === CARD), [])
+  assert.deepEqual(r.value.nodes.find((n) => n.id === RESOURCE).deps.filter((d) => d === CARD), [])
+  // Порядок — карты и объявленных `<dep>` создаваемого узла, и он тот же, что без маршрутов вовсе.
+  assert.deepEqual(idsOf(r.value), idsOf(run().value))
+})
 
+// ЦЕНА, НАЗВАННАЯ ВСЛУХ. Прогон c6bc2e54: существующая `fruits.html` ссылается на СОЗДАВАЕМУЮ
+// `fruit-card.html`, карта такого ребра нести не может — она старше файла. До 9g, который соберёт
+// очередь из строк `зовёт:`, эта пара не упорядочена ничем. Тест держит факт видимым: когда 9g
+// приедет, он покраснеет и будет переписан вместе с ним.
+test("страница раньше создаваемой страницы — не построено до 9g", () => {
   const order = idsOf(run({ design: ROUTED }).value)
-  assert.ok(order.indexOf(CARD) < order.indexOf(LIST), "the card exists before the page links to it")
-  assert.ok(run({ design: ROUTED }).value.nodes.find((n) => n.id === LIST).deps.includes(CARD))
-})
-
-// The other half of the same rule: a route comes BACK. Taking every consecutive pair would make
-// CARD → RESOURCE → CARD a two-node cycle — exactly what disqualified <dep> as the source of order.
-test("the RETURN leg of a route is not an edge", () => {
-  const r = run({ design: ROUTED })
-  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
-  assert.deepEqual(r.value.nodes.find((n) => n.id === RESOURCE).deps.filter((d) => d === CARD), [], "the return does not order the callee after its caller")
-  assert.ok(idsOf(r.value).indexOf(RESOURCE) < idsOf(r.value).indexOf(CARD), "the callee still comes first")
-})
-
-// A ROUTE THAT CONTRADICTS THE MAP DOES NOT ORDER ANYTHING — orderLegs, and it is the fix of the
-// 2026-08-17 run on `eddi`. A route says who hands control to whom; this step asks what must be
-// WRITTEN first. On an ordinary joint the two agree. On an interface and its implementation they are
-// opposite: the call goes THROUGH the interface INTO the implementation, while the implementation
-// cannot be written without the interface. The map holds the repository's static edges, so it is the
-// arbiter — and the route's leg stays in `.agent/data-flow.md`, where it describes the call.
-//
-// This test used to assert the opposite (the `cycle` refusal of live run f7bf154a), and the change of
-// mind is measured, not aesthetic: on `eddi` every honest route through an interface produced that
-// cycle, three redelegations could not repair it, and the pass escalated. The refusal survives for a
-// cycle the map does NOT contradict — the test below it.
-const INVERTING = ROUTED.replace("</design>", `  <route scenario="S3" entry="1" steps="${RESOURCE}#1 -> ${LIST}#1"/>\n</design>`)
-const SHORTENED = ROUTED.replace("</design>", `  <route scenario="S3" entry="1" steps="${RESOURCE}#1"/>\n</design>`)
-
-test("маршрут против направления карты порядок не строит и не ломает — решает карта", () => {
-  const r = run({ design: INVERTING })
-  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
-  // Ребра «ресурс после страницы» не появилось: карта уже сказала обратное.
-  assert.deepEqual(r.value.nodes.find((n) => n.id === RESOURCE).deps.filter((d) => d === LIST), [])
-  assert.ok(idsOf(r.value).indexOf(RESOURCE) < idsOf(r.value).indexOf(LIST), "порядок карты сохранён")
-})
-
-// …и отказ на месте там, где карта молчит: два маршрута навстречу друг другу по узлам, между
-// которыми у репозитория ребра нет вовсе. Такой круг чинить некому и на шаге 10, и на шаге 9 —
-// поэтому он остаётся отказом.
-test("круг, которому карта не противоречит, по-прежнему отказ — чинить его на шаге 10 некому", () => {
-  const both = ROUTED
-    .replace("</design>", `  <route scenario="S4" entry="1" steps="${CARD}#1 -> ${FRUIT}#1"/>\n</design>`)
-    .replace("</design>", `  <route scenario="S5" entry="1" steps="${FRUIT}#1 -> ${CARD}#1"/>\n</design>`)
-  const r = run({ design: both })
-  assert.equal(r.ok, false)
-  assert.equal(r.error.cls, "cycle")
-})
-
-test("the way out of rule 9 reaches a plan: a route that ENDS on the node that produced the value", () => {
-  const r = run({ design: SHORTENED })
-  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
-  // …and it added no edge at all: a one-step route has no forward leg to assert.
-  assert.deepEqual(r.value.nodes.find((n) => n.id === RESOURCE).deps.filter((d) => d === LIST), [])
-})
-
-// The order this step builds comes from ONE derivation, and step 9's rule 9 promises "this will sort"
-// by calling the same function. Re-inline the loop in plan.mjs and the promise becomes a promise about
-// a different graph — this test is what notices.
-test("plan orders by forwardLegs itself — one derivation, two callers", () => {
-  const r = run({ design: ROUTED })
-  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
-  const legs = forwardLegs(parseRoutes(ROUTED))
-  assert.ok(legs.length, "фикстура обязана нести хотя бы один прямой участок")
-  for (const l of legs) {
-    assert.ok(r.value.nodes.find((n) => n.id === l.from).deps.includes(l.to), `${l.from} → ${l.to}`)
-  }
+  assert.ok(order.indexOf(LIST) < order.indexOf(CARD), "долг D42: ребро соберёт 9g из объявления")
 })
 
 // D18c. Run 53592269 shipped four false flows in `data-flow.md`, and NONE of them reached the plan —
@@ -406,7 +353,8 @@ test("узел ширины несёт why из <touched> — он не немо
 
 test("новые поля не породили новых узлов: состав и порядок прежние, grammar поднята", () => {
   const r = run({ design: ROUTED })
-  assert.deepEqual(idsOf(r.value), [FRUIT, RESOURCE, CARD, LIST, "scenario:S1", "scenario:S2"])
+  // Порядок — карты и `<dep>` создаваемого узла; маршруты в него не входят с D42.
+  assert.deepEqual(idsOf(r.value), [FRUIT, RESOURCE, LIST, CARD, "scenario:S1", "scenario:S2"])
   assert.equal(r.value.index.grammar, GRAMMAR_VERSION)
   assert.equal(GRAMMAR_VERSION, 2, "форма артефакта расширена — версия поднята в том же изменении")
 })

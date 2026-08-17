@@ -18,10 +18,9 @@
 //             same question of the same map, and a second copy is how a node this step called
 //             self-closing could be the node the gate calls blind.
 // EXTERNAL_DEPENDENCY: steps/design/design.mjs — parseDesign AND parseRoutes, both parsed by the
-//             CALLER (ext/index.mjs) and handed in. The routes carry the change's own direction and
-//             are absent whenever step 9 was skipped, which is a legal input, not a failure.
-//             `forwardLegs` below reads those routes; it used to live in steps/design/routes.mjs and
-//             came here when that slice was deleted — its contract explains why this is the right home.
+//             CALLER (ext/index.mjs) and handed in. The routes are read for the `dod` of a ticket and
+//             for nothing else: they do NOT order the work (D42, see the edges section below), and
+//             they are absent whenever step 9 was skipped, which is a legal input, not a failure.
 // EXTERNAL_DEPENDENCY: core/xml.mjs — tokens, the ONE cut of a list-of-tokens attribute. `nodes` of a
 //             scenario is read here, at step 6 and at step 9, and three copies of that split are how
 //             one artifact means three routes (live run 27b37fdb).
@@ -37,80 +36,12 @@
 // Interface:  GRAMMAR_VERSION — stamped on the artifact
 //             TASK_KEY — the shape of the operator's answer
 //             KEY_QUESTION — the question's text, verbatim and byte-stable across runs
-//             forwardLegs(routes) -> [{ from, to, scenario }]  — the edges a route asserts
-//             orderLegs(legs, edges) -> [{ from, to, scenario }]  — those of them that order the work
 //             newPlanIndex({ frd, map, mode, design, trunk, answers }) -> Result<Plan, ...>
 
 import { ok, err } from "../../core/result.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
 import { hasOwnCheck } from "../../core/suites.mjs"
 import { tokens } from "../../core/xml.mjs"
-
-// FUNCTION_CONTRACT: forwardLegs — the DIRECTED edges a set of routes asserts
-//   Input:        routes — parseRoutes' array, of EITHER form: the staging one (a step's value is an
-//                 id) or the promoted one (`path#n`). Only `steps[].path` is read, and that field is
-//                 the same in both
-//   Dependencies: —
-//   Antecedent:   any value; a missing/garbage input is an empty list
-//   Consequent:   success: [{ from, to, scenario }] in appearance order, one per FORWARD transition.
-//                          A route RETURNS along the nodes it already walked, and a return is not an
-//                          edge: `A -> B -> A` says A calls B, never that B calls A. A node already
-//                          seen in THIS route is where its return begins
-//                 failure: none — total
-//   Purity:       pure
-//   Interface:    forwardLegs(routes?: Route[]) -> [{ from, to, scenario }]
-//
-// WHY IT LIVES HERE. This step derives the ORDER of the work from exactly these edges, and it is the
-// only consumer left: the function was written inside step 9's route guardrail (D17, live run
-// f7bf154a) so that "a set of routes whose order cannot be built" and "the order step 10 builds"
-// could not be two different derivations. Step 9's passes B and C are being rewritten and will import
-// it from here — the rule stays one piece of code, it simply lives with its consumer now.
-export function forwardLegs(routes) {
-  const out = []
-  for (const r of routes || []) {
-    const steps = (r && r.steps) || []
-    const seen = new Set()
-    for (const [k, s] of steps.entries()) {
-      seen.add(s.path)
-      const next = steps[k + 1]
-      if (next && !seen.has(next.path)) out.push({ from: s.path, to: next.path, scenario: r.scenario })
-    }
-  }
-  return out
-}
-
-// FUNCTION_CONTRACT: orderLegs — the legs a route asserts that are also an ORDER OF WORK
-//   Input:        legs — forwardLegs' array; edges — the MAP's directed edges (`from` uses `to`)
-//   Dependencies: —
-//   Antecedent:   any values; a missing/garbage input is an empty list
-//   Consequent:   success: the legs whose REVERSE the map does not already carry, in order
-//                 failure: none — total
-//   Purity:       pure
-//   Interface:    orderLegs(legs?, edges?) -> [{ from, to, scenario }]
-//
-// A ROUTE SAYS WHO HANDS CONTROL TO WHOM; AN ORDER OF WORK ASKS WHAT MUST BE WRITTEN FIRST. For an
-// ordinary joint the two agree — the page cannot call an endpoint that does not exist — and for an
-// INTERFACE AND ITS IMPLEMENTATION they are opposite: at run time the call goes through the interface
-// INTO the implementation, while the work goes the other way, because an implementation cannot be
-// written without its interface and an interface can be written without any.
-//
-// The map is the arbiter, and it is the right one: it holds the repository's STATIC edges, and "what
-// must be written first" is a question about statics. So a leg whose reverse the map already carries
-// is a dispatch, not a dependency: it stays in the flow (`.agent/data-flow.md`, where it describes the
-// call) and does not become an edge of the order.
-//
-// BUG_FIX_CONTEXT: live run of 2026-08-17 on form `eddi`, step 9 pass B. The role wrote
-//   `RestImportService -> IResourceSource -> ZipResourceSource` — a correct route. Its leg
-//   `IResourceSource -> ZipResourceSource` met the map's `ZipResourceSource -> IResourceSource` and
-//   the two closed a cycle: three redelegations and an escalation, with nothing for the role to
-//   repair — every honest route through an interface produces the same pair. Without the rule the
-//   same cycle reaches step 10, which has no role at all and refuses with `err("cycle")` (run
-//   f7bf154a). ONE expression, two callers — step 9's guardrail and this step's order — because a
-//   promise of "step 10 will sort this" made by a second copy is a promise about a different graph.
-export function orderLegs(legs, edges) {
-  const known = new Set((edges || []).filter((e) => e && e.from && e.to).map((e) => `${e.from}>${e.to}`))
-  return (legs || []).filter((l) => l && !known.has(`${l.to}>${l.from}`))
-}
 
 // 2 — the node carries what a TICKET needs to be shippable: `dod` (its units, derived once at step 9
 //     by steps/design/design.mjs::unitsByPath) and `why` (the FRD's own words about why this node is
@@ -334,27 +265,26 @@ export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, e
   }
   for (const e of m.edges || []) if (byId.has(e.from) && byId.has(e.to)) addDep(e.from, e.to)
 
-  // The SECOND source of direction: the design's ROUTES. A route is directed by construction — it is
-  // the scenario played out in time — and it is the only artifact that knows an edge INTO a module
-  // the change creates, because the map was built before that file existed.
+  // THE ROUTES ARE NOT A SECOND SOURCE OF DIRECTION — D42, and this is the one place that has to say
+  // why, because the loop that used to stand here read so obviously right.
   //
-  // BUG_FIX_CONTEXT: the live artifacts of runbox/quarkus-rest-json-app-v2-t3 (run c6bc2e54).
-  //   Previous: the map's edges were the only source.
-  //   Problem:  `fruits.html` gets an anchor to `fruit-card.html` (FRD UC1 step 2), and `fruit-card`
-  //             is created by this very change. No map edge can carry that — the map predates the
-  //             file — so the plan ordered the page BEFORE the page it links to, and the implementer
-  //             of instruction 1 would have had no contract to link against.
-  //   Fix:      the forward leg of every route is an edge. Only the FORWARD leg: a route returns
-  //             along the same nodes (`fruit-card#2 -> FruitResource#1 -> fruit-card#3`), and taking
-  //             the return as an edge would reintroduce exactly the two-node cycle that disqualified
-  //             `<dep>`. A node already seen in this route is where the return begins.
+  // A route is directed: it is the scenario played out in time. But its direction answers «who handed
+  // the value on», and this step asks «what must be WRITTEN first». On an ordinary joint the two
+  // agree — a page cannot call an endpoint that does not exist. On a DATA CLASS they are opposite:
+  // `Glossary` is handed on by every node that touches it and has to be written before all of them.
+  // For an existing pair the map arbitrated (`orderLegs`: a leg whose reverse the map already carries
+  // is dispatch, not dependency). For a CREATED pair there is no arbiter, and 7 of eddi's 13 nodes are
+  // created: two truthful chains gave `Glossary ↔ RestGlossaryStore`, step 9's guardrail called it a
+  // circle, and the role could not repair what it had not decided — three redelegations, escalation,
+  // live run of 2026-08-17. Three green runs before it were luck over 23 chains, not proof.
   //
-  // D17: the derivation itself moved to steps/design/routes.mjs::forwardLegs and is CALLED from both
-  // sides. Its other caller is rule 9 of step 9's own guardrail, which refuses a set of routes whose
-  // order cannot be built — and a promise of "step 10 will sort this" made by a SECOND copy of this
-  // loop would be a promise about a different graph (live run f7bf154a, backlog D17).
-  // …and NOT the legs the map already contradicts: those are dispatch, not dependency — see orderLegs.
-  for (const l of orderLegs(forwardLegs(routes), m.edges)) addDep(l.from, l.to)   // caller waits for the callee
+  // The order now comes from DECLARATION: the `зовёт:` line the group's contract (9d) and the use
+  // case's plan (9e) carry, written by whoever decides that file, assembled into this graph at 9g.
+  // A circle among declared edges is a real contradiction and its author can repair it.
+  //
+  // What this loop bought and 9g owes back: run c6bc2e54, where existing `fruits.html` had to wait for
+  // the `fruit-card.html` this change creates. No map edge can carry that — the map predates the file.
+  // Until 9g lands, that ordering is not built by anything, and it is named here rather than lost.
 
   // A created module has no edge in the map — it is not there yet. Its neighbours are what the
   // designer wrote, and the undirectedness of `<dep>` is harmless here: a module that does not exist

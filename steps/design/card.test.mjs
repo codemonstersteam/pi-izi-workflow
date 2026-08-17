@@ -1,14 +1,14 @@
-// The split of step 9 — a PURE core; its io lives in ext/index.mjs (standards/code.md: an io pipe is
-// not unit-tested). Formula: 1 happy + Σ antecedent branches with a DISTINGUISHABLE consequent. The
-// branches are the three shapes a change can have (files shared by several use cases, files owned by
-// one, none shared at all) plus the two decisions the grouping itself makes (transitivity, the id).
+// Ядро шага 9 — ЧИСТОЕ; его io живёт в ext/index.mjs (standards/code.md: труба io не покрывается
+// юнитом). Формула: 1 happy + Σ ветвей антецедента с РАЗЛИЧИМЫМ следствием. Ветви здесь — три формы,
+// которые может принять изменение (модуль существует, модуль создаётся, партий несколько), плюс пять
+// правил гардрейла партии.
 //
 // The FRD fixture is PARSED, not typed: `frd` reaches this core exactly as steps/intake/frd.mjs hands
 // it over.
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { splitOf, sampleOf, cardOf, coreCardOf, checkCore } from "./card.mjs"
+import { partsOf, sampleOf, partCardOf, sectionsOf, checkPart } from "./card.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 
 // The shape measured on `eddi`, in miniature: a trio every use case runs through, a record shared by
@@ -36,79 +36,6 @@ const FRD_XML = `<frd grammar="1" goal="хранилище словарей и �
 const FRD = parseFrd(FRD_XML)
 const ids = (g) => g.map((x) => x.id)
 const paths = (g, k) => [...g[k].paths]
-
-test("happy: общее отделено от частного, и общее сложено в связные группы", () => {
-  const s = splitOf({ frd: FRD })
-
-  // Общее — в порядке FRD: трио, которое проходят три use case, и две записи по две.
-  assert.deepEqual([...s.shared], [
-    "src/rest/RestStore.java", "src/IStore.java", "src/mongo/Store.java",
-    "src/model/Doc.java", "src/export/RestExport.java", "src/export/Zip.java",
-  ])
-  // Частное — файл ровно одного use case: его дизайнер видит про него всю правду.
-  assert.deepEqual([...s.own], ["src/model/Term.java"])
-
-  // Две группы: хранилище и выгрузка. Ни одного общего use case между ними.
-  assert.equal(s.groups.length, 2)
-  assert.deepEqual(paths(s.groups, 0), ["src/rest/RestStore.java", "src/IStore.java", "src/mongo/Store.java", "src/model/Doc.java"])
-  assert.deepEqual(paths(s.groups, 1), ["src/export/RestExport.java", "src/export/Zip.java"])
-
-  // Группе едут ВСЕ use case, которые её контракт может сломать.
-  assert.deepEqual([...s.groups[0].ucs], ["UC1", "UC2", "UC3"])
-  assert.deepEqual([...s.groups[1].ucs], ["UC9", "UC10"])
-
-  // Каждый узел знает свои use case, в порядке FRD.
-  assert.deepEqual([...s.ucOf.get("src/rest/RestStore.java")], ["UC1", "UC2", "UC3"])
-  assert.deepEqual([...s.ucOf.get("src/model/Term.java")], ["UC3"])
-})
-
-// Транзитивность — не украшение: на `eddi` `Glossary` встречается с трио через UC1-UC5, а `Term`
-// через UC6-UC8, и между собой они не делят ни одного use case. Разорви связь — и пять файлов,
-// которые обязаны решаться вместе, разъедутся по трём группам.
-test("группа транзитивна: A и C без общего use case, но оба связаны через B", () => {
-  const s = splitOf({ frd: FRD })
-  const g = s.groups[0]
-  assert.equal(g.paths.includes("src/model/Doc.java"), true, "запись первых двух use case — в той же группе")
-  // Прямой связи между записью и REST-точкой нет ни по одному use case? Есть — через UC1. Проверяем
-  // настоящую транзитивность: убираем `Doc` из S2, и он остаётся в группе через один только UC1.
-  const thin = parseFrd(FRD_XML.replace('nodes="src/rest/RestStore.java src/IStore.java src/mongo/Store.java src/model/Doc.java"/>\n  <scenario id="S3"', 'nodes="src/rest/RestStore.java src/IStore.java src/mongo/Store.java"/>\n  <scenario id="S3"'))
-  const t = splitOf({ frd: thin })
-  assert.equal(t.groups.length, 2, "групп по-прежнему две")
-})
-
-test("id группы — общий каталог её файлов, а не выдуманный номер", () => {
-  const s = splitOf({ frd: FRD })
-  assert.deepEqual(ids(s.groups), ["src", "src/export"])
-})
-
-test("общих узлов нет — групп нет, и фаза вырождается бесплатно", () => {
-  const one = parseFrd(`<frd grammar="1" goal="один">
-    <usecase id="UC1" actor="api" goal="g"><post>p</post><step n="1">s</step></usecase>
-    <delta op="GET /x" form="Added" node="src/A.java"/>
-    <scenario id="S1" uc="UC1" before="нет" after="есть" nodes="src/A.java src/B.java"/>
-  </frd>`)
-  const s = splitOf({ frd: one })
-  assert.deepEqual([...s.shared], [])
-  assert.deepEqual([...s.own], ["src/A.java", "src/B.java"])
-  assert.equal(s.groups.length, 0)
-})
-
-test("тотальность: без требования — пустое разбиение, и ничего не брошено", () => {
-  const s = splitOf()
-  assert.deepEqual([...s.shared], [])
-  assert.deepEqual([...s.own], [])
-  assert.equal(s.groups.length, 0)
-  assert.equal(s.ucOf.size, 0)
-  assert.equal(splitOf({ frd: { scenarios: null } }).groups.length, 0)
-})
-
-test("разбиение — функция требования: два вычисления одного FRD совпадают", () => {
-  const a = splitOf({ frd: FRD }), b = splitOf({ frd: parseFrd(FRD_XML) })
-  assert.deepEqual([...a.shared], [...b.shared])
-  assert.deepEqual(ids(a.groups), ids(b.groups))
-})
-
-// --- D37: карточка одного дизайнера и лестница образца ---------------------------------------------
 
 const MAP = `<appgraph grammar="3" modules="7">
   <suite id="unit" kind="unit" cmd="./mvnw test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
@@ -198,129 +125,148 @@ test("лестница образца: сам себе · близнец тог�
   assert.deepEqual(sampleOf("", MAP), { kind: "none", path: "" })
 })
 
-test("карточка: каждый раздел — проекция на ОДИН use case, а не файл целиком", () => {
-  const c = card()
-
-  // Свой use case дословно, со своими ветками и отказом; чужого в карточке нет.
-  assert.match(c.text, /<usecase id="UC1"/)
-  assert.match(c.text, /<ext id="2a" error="NOT_FOUND"/)
-  assert.match(c.text, /<failure code="NOT_FOUND" status="404"/)
-  assert.doesNotMatch(c.text, /UC2/)
-
-  // Узлы этого use case — байтами карты; существующий пришёл со своим `<api>`.
-  assert.deepEqual([...c.nodes], [
-    "src/configs/glossary/mongo/GlossaryStore.java",
-    "src/modules/impl/GlossaryNamespaceResolver.java",
-    "src/rest/RestExisting.java",
-  ])
-  assert.match(c.text, /<api name="GET \/existing"/)
-
-  // Системы — свои узлы И их образцы: все узлы этого use case создаются, `<io>` у них ещё нет, а
-  // образец говорит «хранилище такого рода пишет в mongodb». Очередь, которой не касается никто,
-  // в карточку не едет.
-  assert.match(c.text, /system name="mongodb"/)
-  assert.doesNotMatch(c.text, /system name="nats"/)
-
-  // Поток — только своих сценариев: S2 остался за бортом.
-  assert.match(c.text, /\$START_FLOW id="S1"/)
-  assert.match(c.text, /\$START_FLOW id="S1b"/)
-  assert.doesNotMatch(c.text, /\$START_FLOW id="S2"/)
-
-  // Команда проверки и общий дизайн, которого пока нет, — объявлены, а не пропущены.
-  assert.match(c.text, /cmd="\.\/mvnw test"/)
-  assert.match(c.text, /\(общего дизайна для этого use case нет\)/)
-})
-
-test("карточка несёт образец ПУТЁМ и его объявления — тело роль дочитает сама", () => {
-  const c = card()
-  assert.match(c.text, /GlossaryStore.java — близнец: src\/configs\/snippets\/mongo\/SnippetStore.java/)
-  assert.match(c.text, /GlossaryNamespaceResolver.java — сосед того же вида: src\/modules\/impl\/CallerNamespaceResolver.java/)
-  assert.match(c.text, /RestExisting.java — узел существует, образец не нужен/)
-  // Объявления образца в карточке есть — по ним видно, что копировать.
-  assert.match(c.text, /name="create\(Snippet s\)"/)
-})
-
-test("общий дизайн подставляется как ГОТОВОЕ, и роль его не переопределяет", () => {
-  const c = card("UC1", { common: "# GlossaryStore.java\nполя: id, name" })
-  assert.match(c.text, /\$START_COMMON[\s\S]*поля: id, name[\s\S]*\$END_COMMON/)
-})
-
-test("тотальность: неизвестный use case и пустые входы не роняют сборку", () => {
-  const empty = cardOf()
-  assert.equal(empty.nodes.length, 0)
-  assert.match(empty.text, /\(use case не найден\)/)
-  const ghost = card("UC99")
-  assert.equal(ghost.nodes.length, 0)
-  assert.match(ghost.text, /\(ни одного из них в репозитории ещё нет — все создаются\)/)
-})
-
-// --- D38: карточка общего дизайна группы и её гардрейл ---------------------------------------------
-
-const GROUP = { id: "src/configs/glossary", slug: "configs-glossary", paths: ["src/configs/glossary/mongo/GlossaryStore.java", "src/modules/impl/GlossaryNamespaceResolver.java"], ucs: ["UC1", "UC2"] }
-const GRAPH = `<design mode="minor" base=".agent/appgraph.xml">
-  <module path="src/configs/glossary/mongo/GlossaryStore.java" delta="Added">
-    <contract in="GET /glossaries/{id}" out="read() | 404 NOT_FOUND"/>
-    <dep path="src/rest/RestExisting.java"/>
+// --- D44: дерево модулей и партии ------------------------------------------------------------------
+// Рябь той же формы, что живая: модуль ЕСТЬ в ней только если файл существует. На `eddi` рябь знает
+// 6 модулей из 13 — остальные создаются, и состав изменения приходится брать из FRD.
+const RIPPLE_TREE = `<ripple>
+  <module path="src/rest/RestStore.java" level="2">
+    <role>REST-точка хранилища</role>
+    <dep path="src/IStore.java"/>
+    <dep path="src/common/Base.java"/>
   </module>
-  <module path="src/rest/RestExisting.java" delta="Changed">
-    <contract in="GET /existing" out="ok"/>
+  <module path="src/export/RestExport.java" level="1">
+    <role>выгрузка</role>
+    <dep path="src/common/Base.java"/>
   </module>
-</design>`
+</ripple>`
 
-test("карточка группы: все её use case дословно, файлы, образцы и ЧЕРНОВИК контракта", () => {
-  const c = coreCardOf({ group: GROUP, frd: FRD_CARD, map: MAP, graph: GRAPH })
+test("дерево: состав из FRD, факты из ряби — создаваемый модуль не теряется", () => {
+  const { modules } = partsOf({ frd: FRD, ripple: RIPPLE_TREE })
 
-  // Группа названа числом файлов и числом use case, которые её контракт может сломать.
-  assert.match(c.text, /\$START_GROUP — 2 файлов, которые трогают 2 use case: UC1 UC2/)
-  // ОБА use case дословно — в этом вся разница с карточкой одного дизайнера.
-  assert.match(c.text, /<usecase id="UC1"/)
-  assert.match(c.text, /<usecase id="UC2"/)
-  // Образец — по пути, как в карточке use case.
-  assert.match(c.text, /GlossaryStore.java — близнец: src\/configs\/snippets\/mongo\/SnippetStore.java/)
-  assert.match(c.text, /GlossaryNamespaceResolver.java — сосед того же вида: src\/modules\/impl\/CallerNamespaceResolver.java/)
-  // Черновик — ТОЛЬКО про файлы группы: чужой модуль графа в наряд не едет.
-  assert.match(c.text, /\$START_DRAFT[\s\S]*GlossaryStore.java[\s\S]*\$END_DRAFT/)
-  // …именно МОДУЛЯМИ: чужой `<module>` в наряд не едет, а вот ребро группы наружу — едет, это её
-  // собственный факт и он дизайнеру нужен.
-  const draft = c.text.slice(c.text.indexOf("$START_DRAFT"), c.text.indexOf("$END_DRAFT"))
-  assert.equal((draft.match(/<module /g) || []).length, 1)
-  assert.match(draft, /<dep path="src\/rest\/RestExisting.java"\/>/)
-  // Система пришла от образца: сам файл создаётся и своего io ещё не имеет.
-  assert.match(c.text, /system name="mongodb"/)
+  // Все семь модулей изменения на месте, хотя рябь знает только два.
+  assert.equal(modules.size, 7)
+  const rest = modules.get("src/rest/RestStore.java")
+  assert.equal(rest.new, false, "рябь его знает — файл существует")
+  assert.deepEqual(rest.deps, ["src/IStore.java", "src/common/Base.java"])
+  assert.deepEqual(rest.ucs, ["UC1", "UC2", "UC3"])
+
+  const doc = modules.get("src/model/Doc.java")
+  assert.equal(doc.new, true, "ряби неизвестен — создаётся")
+  assert.deepEqual(doc.deps, [], "у создаваемого файла зависимостей быть не может")
+
+  // Возьми состав из РЯБИ — и потеряешь пять модулей из семи. Ради этого правила тест и стоит.
+  assert.equal([...modules.values()].filter((m) => m.new).length, 5)
 })
 
-test("карточка группы тотальна: без графа — объявленное отсутствие черновика", () => {
-  const c = coreCardOf({ group: GROUP, frd: FRD_CARD, map: MAP })
-  assert.match(c.text, /\(черновика нет — проход 9B не отработал\)/)
-  assert.equal(coreCardOf().chars > 0, true)
+test("партии: модуль ровно в одной — это и есть невозможность дубля", () => {
+  const { modules, parts } = partsOf({ frd: FRD, ripple: RIPPLE_TREE })
+
+  // Две партии: хранилище (UC1-UC3) и выгрузка (UC9, UC10).
+  assert.equal(parts.length, 2)
+  assert.deepEqual([...parts[0].ucs], ["UC1", "UC2", "UC3"])
+  assert.deepEqual([...parts[1].ucs], ["UC9", "UC10"])
+
+  // ИНВАРИАНТ: сумма модулей партий равна числу модулей, пересечений нет.
+  const all = parts.flatMap((p) => [...p.modules])
+  assert.equal(all.length, modules.size)
+  assert.equal(new Set(all).size, all.length, "модуль не может попасть в две партии")
+
+  // Соседи — то, что партия зовёт, но НЕ решает: чужой файл в список модулей не попадает.
+  assert.deepEqual([...parts[0].neighbours], ["src/common/Base.java"])
+  assert.equal(parts[0].modules.includes("src/common/Base.java"), false)
+
+  // Slug именует артефакты партии и выводится из путей, а не выдумывается.
+  assert.equal(parts[1].slug, "src-export")
 })
 
-const CORE_OK = `# src/configs/glossary
-## src/configs/glossary/mongo/GlossaryStore.java (новый)
-поля: нет собственных
-сигнатуры: read(String id) : Glossary
-use case: UC1 — читает; UC2 — тоже читает
-## src/modules/impl/GlossaryNamespaceResolver.java (новый)
-сигнатуры: resolve(String key) : String
-use case: UC1, UC2`
+test("партия несёт СВОИХ соседей в карточку, и раздела по ним нет", () => {
+  const { parts } = partsOf({ frd: FRD, ripple: RIPPLE_TREE })
+  const c = partCardOf({ part: parts[0], frd: FRD, map: MAP })
+  assert.match(c.text, /\$START_NEIGHBOURS/)
+  assert.match(c.text, /src\/common\/Base\.java/)
+  // Партия, все модули которой создаются, соседей иметь не может — и объявляет это словами.
+  const { parts: noRipple } = partsOf({ frd: FRD })
+  const alone = partCardOf({ part: noRipple[0], frd: FRD, map: MAP })
+  assert.match(alone.text, /рябь зависимостей не знает/)
+})
 
-test("гардрейл группы: решён каждый её файл, чужих нет, ни один use case не забыт", () => {
-  assert.deepEqual(checkCore({ text: CORE_OK, group: GROUP }), [])
+test("тотальность дерева: без FRD и без ряби — пусто, и ничего не брошено", () => {
+  const t = partsOf()
+  assert.equal(t.modules.size, 0)
+  assert.equal(t.parts.length, 0)
+  assert.equal(partsOf({ frd: FRD }).parts.length, 2, "без ряби партии те же — состав даёт FRD")
+})
 
-  // Файл группы без раздела — блокер называет его.
-  const lost = checkCore({ text: CORE_OK.replace(/## src\/modules[\s\S]*$/, ""), group: GROUP })
-  assert.equal(lost.length, 1)
-  assert.match(lost[0], /GlossaryNamespaceResolver.java/)
+// --- D45: гардрейл партии — пять правил ------------------------------------------------------------
+const PART = {
+  id: "src", slug: "src-rest",
+  modules: ["src/rest/RestStore.java", "src/model/Doc.java"],
+  ucs: ["UC1", "UC2"],
+  // Номера шагов приезжают в партию из FRD — по ним правило 3 судит, что «закрывает» ссылается
+  // на существующий шаг, а не на выдуманный и не на тот же номер другой буквой.
+  steps: ["UC1/1", "UC1/2a", "UC2/1"],
+  neighbours: ["src/common/Base.java"],
+}
+const KNOWN = ["src/common/Base.java", "src/model/Doc.java", "src/rest/RestSnippets.java"]
 
-  // Чужой файл решён — это работа его use case, не общая.
-  const extra = checkCore({ text: `${CORE_OK}\n## src/rest/RestExisting.java (правится)\n…`, group: GROUP })
-  assert.match(extra.join("\n"), /решены файлы не из этой группы: src\/rest\/RestExisting.java/)
+const GREEN_PART = `# src — хранилище
 
-  // Use case не упомянут — контракт ломает и его, значит надо показать, чем он закрыт.
-  const missed = checkCore({ text: CORE_OK.replace(/UC2/g, ""), group: GROUP })
-  assert.match(missed.join("\n"), /use case UC2 не упомянут/)
+## src/rest/RestStore.java  (новый)
+что это: REST-точка хранилища
+сигнатуры: create(Doc doc) : IResourceId
+зовёт: src/model/Doc.java — принимает и отдаёт запись
+по образцу: src/rest/RestSnippets.java — @Path, @ApplicationScoped
+закрывает: UC1 шаг 1 · UC2 шаг 1
+проверка: ./mvnw test -Dtest=RestStoreTest · RestStoreTest
 
-  // Раздел, который не путь, — проза роли, а не решение о файле. Живой прогон 17 авг: роль закрыла
-  // контракт заголовком «## Сводка:», и правило отвергло артефакт за сводку.
-  assert.deepEqual(checkCore({ text: `${CORE_OK}\n\n## Сводка:\nвсе пять файлов решены`, group: GROUP }), [])
+## src/model/Doc.java  (новый)
+что это: запись хранилища
+поля: name: String — имя записи
+зовёт: нет
+закрывает: UC1 шаг 1
+проверка: ./mvnw test -Dtest=DocTest · DocTest
+`
+const part = (text) => checkPart({ text, part: PART, known: KNOWN })
+
+test("гардрейл партии: решён каждый модуль, чужих нет, use case закрыты, есть чем проверить и что звать", () => {
+  assert.deepEqual(part(GREEN_PART), [])
+
+  // 1 — модуль партии без раздела: работа потеряна.
+  assert.match(part(GREEN_PART.replace(/## src\/model[\s\S]*$/, "")).join("\n"),
+    /нет решения по модулям: src\/model\/Doc.java/)
+
+  // 2 — чужой модуль: его решает свой вызов, и раздел по СОСЕДУ тоже чужой.
+  assert.match(part(`${GREEN_PART}\n## src/common/Base.java (правится)\nзовёт: нет\nзакрывает: UC1 шаг 1\nпроверка: x · Y\n`).join("\n"),
+    /решены модули не из этой партии: src\/common\/Base.java/)
+
+  // 3 — use case, который ничем не закрыт: требование потеряно молча.
+  assert.match(part(GREEN_PART.replace(" · UC2 шаг 1", "")).join("\n"),
+    /use case UC2 не закрыт ни одним разделом/)
+
+  // 4а — раздел без «проверки»: тикет нечем закрыть (прогон d8ef8c60).
+  assert.match(part(GREEN_PART.replace("проверка: ./mvnw test -Dtest=DocTest · DocTest", "")).join("\n"),
+    /у разделов src\/model\/Doc.java нет строки «проверка/)
+
+  // 4б — раздел без «зовёт»: порядок работ строить не из чего. Замер на живых контрактах: 8 разделов
+  // дали 2 ребра, потому что строка была необязательной.
+  assert.match(part(GREEN_PART.replace("зовёт: нет\n", "")).join("\n"),
+    /у разделов src\/model\/Doc.java нет строки «зовёт/)
+
+  // 5 — «зовёт» на файл, которого нет нигде: адрес, который никуда не ведёт.
+  assert.match(part(GREEN_PART.replace("зовёт: src/model/Doc.java — принимает и отдаёт запись", "зовёт: src/ghost/Nope.java — выдумка")).join("\n"),
+    /ссылается на src\/ghost\/Nope.java/)
+
+  // Проза разделом не считается — то же правило, что у контракта группы (прогон 17 авг, «## Сводка:»).
+  assert.deepEqual(part(`${GREEN_PART}\n## Итог:\nдва модуля`), [])
+})
+
+test("разбор партии один на двоих: гардрейл и сборка PLAN.md читают одно и то же", () => {
+  const s = sectionsOf(GREEN_PART)
+  assert.deepEqual(s.map((x) => x.path), PART.modules)
+  // Рёбра порядка работ — из строки «зовёт», и «нет» даёт пустой список, а не отсутствие строки.
+  assert.deepEqual([...s[0].calls], ["src/model/Doc.java"])
+  assert.deepEqual([...s[1].calls], [])
+  assert.equal(s[1].says, true, "«нет» — это ответ")
+  // Закрытые шаги — с номерами: по ним фаза ⑥ считает полноту.
+  assert.deepEqual([...s[0].closes], ["UC1/1", "UC2/1"])
 })

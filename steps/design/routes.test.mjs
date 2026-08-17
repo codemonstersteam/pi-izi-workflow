@@ -50,7 +50,7 @@ const VALUES = parseValues(valuesSkeleton({ frd: FRD, ripple: RIPPLE }).xml
 
 const skeleton = () => routesSkeleton({ frd: FRD, values: VALUES })
 const chainsOf = (xml) => parseChains(xml)
-const blockersOf = (staged, edges = []) => checkChains({ staged, frd: FRD, values: VALUES, edges })
+const blockersOf = (staged) => checkChains({ staged, frd: FRD, values: VALUES })
 
 // The ids the dictionary gave: v1 = вход UC1, v2 = карточка (UC1/post), v3 = 404 (UC1/2a),
 // v4/v5 = операции дельт, v6 = вызов из ряби.
@@ -117,25 +117,24 @@ test("пустой steps: роли сказано, откуда и куда ве
   assert.match(b[0], new RegExp(`от entry="${IN}" до exit="${CARD}"`))
 })
 
-// Живой прогон f7bf154a: шаг 10 упал `err("cycle")` — у шага плана роли нет, чинить круг некому.
-// Рёбра карты входят в тот же счёт: круг может замкнуться цепочкой ПОВЕРХ уже существующего вызова.
-test("круг: порядок работ не строится — судится здесь, потому что на шаге 10 чинить его некому", () => {
-  // ВОЗВРАТ КРУГОМ НЕ БЫВАЕТ, и это свойство деривации, а не милость: маршрут разматывается по уже
-  // пройденным узлам, `A -> B -> A` говорит «A зовёт B» и ничего больше (forwardLegs). Зелёная
-  // цепочка выше именно такая, и она законна.
-  assert.deepEqual(blockersOf(GREEN), [])
-
-  // Участок, которому карта ПРОТИВОРЕЧИТ, ребром порядка не становится вовсе (orderLegs): вызов через
-  // интерфейс в реализацию идёт в одну сторону, а пишется в другую. Круга здесь нет — и правильно:
-  // на `eddi` каждый честный маршрут через интерфейс давал этот круг, три круга починки его не
-  // чинили, потому что чинить было нечего.
-  assert.deepEqual(blockersOf(GREEN, [{ from: "src/FruitResource.java", to: "src/fruits.html" }]), [])
-
-  // …а круг, которому карта не противоречит, отказ: две цепочки навстречу друг другу.
+// D42, и это ШОВ: верни правило круга — и тест покраснеет ровно на том, ради чего его сняли.
+// Живой прогон 17 августа на `eddi`: пара `Glossary ↔ RestGlossaryStore`, обе цепочки верны, три
+// круга починки, эскалация. Чинить было нечего — очередь работ выводилась из потока, а на классе
+// данных эти стрелки противоположны, и арбитра для СОЗДАВАЕМОЙ пары не существует.
+test("две цепочки навстречу друг другу — зелено: очередь работ цепочки не строят", () => {
   const both = GREEN.replace(/(id="S1b"[^>]*?)steps="[^"]*"/, `$1steps="src/FruitResource.java@${NF} -> src/fruits.html@${NF}"`)
-  const cyc = blockersOf(both)
-  assert.equal(cyc.length, 1)
-  assert.match(cyc[0], /замкнуты в круг/)
+  assert.deepEqual(blockersOf(both), [])
+
+  // Гардрейл остался о том, что роль может сделать не так: состав, разрешимость шага, конец сценария.
+  assert.deepEqual(blockersOf(GREEN), [])
+})
+
+// ВОЗВРАТ РЕБРОМ ГРАФА НЕ БЫВАЕТ, и это свойство деривации, а не милость: цепочка разматывается по
+// уже пройденным узлам, `A -> B -> A` говорит «A зовёт B» и ничего больше (`joints`). Правило пережило
+// снятие очереди работ, потому что оно про ГРАФ: обратное ребро — это вызов, которого нет.
+test("возврат цепочки ребром графа не становится", () => {
+  const back = parseDesign(assemble({ chains: chainsOf(GREEN), values: VALUES, frd: FRD, ripple: RIPPLE, mode: "minor" }).xml)
+  assert.deepEqual(back.get("src/FruitResource.java").deps.filter((d) => d === "src/fruits.html"), [])
 })
 
 test("сборка: контракты, рёбра и поток выводятся из цепочек — роль их не писала", () => {

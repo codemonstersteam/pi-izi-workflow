@@ -18,7 +18,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, split, plan, review, reviewForm, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, parts, part, plan, review, reviewForm, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
 // D23: the gate of step 6 — its question is a constant of the ripple slice, and the answer travels in
 // the format core/answers.mjs owns.
@@ -636,14 +636,28 @@ const named = (root) => {
 
 // Живой прогон 17 авг: воркфлоу звал core({group: undefined}) и получал «группы «» нет в разбиении».
 // Причина — производный id, оставшийся внутри модуля: схема хоста его не выпускала. Имя артефакта
-// группы обязано выходить наружу, иначе позвать её нельзя.
-test("разбиение отдаёт slug группы — им её и зовут, и им названы её артефакты", () => {
+// партии обязано выходить наружу, иначе позвать её нельзя.
+test("разбиение отдаёт slug партии — им её и зовут, и им названы её артефакты", () => {
   const root = designRoot()
-  const r = split.run({}, ctx(root))
+  // Карта ТРЕБУЕТСЯ фазой ③: без неё у карточки нет ни фактов, ни образца, ни команды проверки.
+  writeFileSync(join(root, ".agent", "appgraph.xml"), `<appgraph grammar="3" modules="1">
+  <suite id="unit" kind="unit" cmd="./mvnw test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <module path="src/ParcelResource.java" level="1"><role>REST-точка посылок</role></module>
+</appgraph>`);
+  // Ключ задачи спрашивается ДО первого вызова роли: под него кладётся вся поставка шага.
+  const asked = parts.run({}, ctx(root))
+  assert.equal(asked.ok, false)
+  assert.equal(asked.ask, true, "без ключа — вопрос оператору, а не запись мимо")
+  writeFileSync(join(root, ".agent", "answers.md"), newExchange([{ n: 1, question: KEY_QUESTION, text: "DOS-42" }]).value)
+
+  const r = parts.run({}, ctx(root))
+  assert.equal(r.ok, true, r.why)
+  assert.equal(r.at, "task/DOS-42", "поставка шага живёт рядом с веткой, под ключом задачи")
   assert.equal(r.ok, true)
-  for (const g of r.groups || []) {
-    assert.equal(typeof g.slug, "string")
-    assert.equal(g.slug.includes("/"), false, "slug — имя файла, а не путь")
+  assert.ok(r.parts.length, "хотя бы одна партия")
+  for (const x of r.parts) {
+    assert.equal(typeof x.slug, "string")
+    assert.equal(x.slug.includes("/"), false, "slug — имя файла, а не путь")
   }
 })
 
@@ -1097,13 +1111,13 @@ test("плейсхолдеры нарядов обоих проходов и к�
     assert.deepEqual(inTpl, inCall, tplName)
   }
 
-  // …и наряд общего дизайна, который собирается своим циклом: у него другой набор ключей.
-  const groupAt = IZI.indexOf("const o = sized(`design/core/${g.slug}`")
-  const groupCall = IZI.slice(groupAt, IZI.indexOf("if (o.over)", groupAt))
-  const inGroupCall = [...new Set([...groupCall.matchAll(/[{,]\s*([A-Z][A-Z_]*)\s*(?=[,:])/g)].map((m) => m[1]))].sort()
-  const groupTpl = readFileSync(new URL("../steps/design/order-core.tpl", import.meta.url), "utf8")
-  const inGroupTpl = [...new Set([...groupTpl.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]))].sort()
-  assert.deepEqual(inGroupTpl, inGroupCall, "order-core.tpl")
+  // …и наряд партии, который собирается своим циклом: у него другой набор ключей.
+  const partAt = IZI.indexOf("const o = sized(`design/part/${one.slug}`")
+  const partCall = IZI.slice(partAt, IZI.indexOf("if (o.over)", partAt))
+  const inPartCall = [...new Set([...partCall.matchAll(/[{,]\s*([A-Z][A-Z_]*)\s*(?=[,:])/g)].map((m) => m[1]))].sort()
+  const partTpl = readFileSync(new URL("../steps/design/order-part.tpl", import.meta.url), "utf8")
+  const inPartTpl = [...new Set([...partTpl.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]))].sort()
+  assert.deepEqual(inPartTpl, inPartCall, "order-part.tpl")
 })
 
 test("the valuer returns a count, so the envelope carries it — additionalProperties is false", () => {
@@ -1702,8 +1716,8 @@ test("D29b: наряд выше потолка — отказ, и он НАЗЫ�
 })
 
 test("D29b: пять прямых сборок наряда идут через sized, и каждая отказывает по-своему", () => {
-  // ШЕСТЬ мест — шаги 2, 4, 6, 11 и ДВА на шаге 9: проход (словарь либо цепочки) и общий дизайн
-  // группы. Каждый идёт через одну и ту же меру против окна модели.
+  // ШЕСТЬ мест — шаги 2, 4, 6, 11 и ДВА на шаге 9: проход (словарь либо цепочки) и план партии.
+  // Каждый идёт через одну и ту же меру против окна модели.
   assert.equal([...IZI.matchAll(/= sized\(/g)].length, 6, "шесть прямых сборок наряда")
   assert.match(IZI, /const order = sized\("brd", orderTpl, \{/)
   assert.match(IZI, /const order = sized\(`scope\/\$\{cell\.id\}`, orderTpl, \{/)
@@ -1715,17 +1729,52 @@ test("D29b: пять прямых сборок наряда идут через 
   // впервые узнают из HTTP 400 (прогон 162e8b02).
   const raw = [...IZI.matchAll(/prompt\(([A-Za-z.[\]"]+)/g)].map((m) => m[1])
   assert.deepEqual(raw.sort(), ["tpl"], "prompt() вызывается только внутри sized")
-  // Обе сборки шага 9 — и проход, и группа — идут через sized.
-  assert.match(IZI, /const o = sized\(`design\/core\/\$\{g\.slug\}`, tpl, \{/)
+  // Обе сборки шага 9 — проход и план партии — идут через sized.
+  assert.match(IZI, /const o = sized\(`design\/part\/\$\{one\.slug\}`, tpl, \{/)
 
   // Отказ шага 4 — ЗНАЧЕНИЕ, а не exit: parallel() глотает бросок и перебрасывает свой.
   const scoutFn = IZI.slice(IZI.indexOf("async function scout("), IZI.indexOf("// FUNCTION_CONTRACT: scope"))
   assert.match(scoutFn, /if \(order\.over\) return \{ ok: false, why: order\.why \};/)
   assert.doesNotMatch(scoutFn, /exit\(/)
-  // …а остальные четыре — blocked с диагнозом гардрейла.
+  // …а остальные пять — blocked с диагнозом гардрейла.
   assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 5)
 
   // Потолок не переписан в этом файле: он приходит из core/budgets.mjs через budgets().
   assert.match(IZI, /ORDER_CAP = b\.orderCap;/)
   assert.doesNotMatch(IZI, new RegExp(`= ${ORDER_CAP_CHARS}`))
+})
+
+// --- ключ задачи: объявление в TASK.md против вопроса оператору --------------------------------------
+const keyRoot = (task) => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), task)
+  return root
+}
+
+test("ключ берётся из строки «task: КЛЮЧ» — и вопроса оператору тогда нет", () => {
+  const r = checkTask.run({}, ctx(keyRoot("task: DOS-535\n\nНужен новый эндпоинт по имени фрукта.\n")))
+  assert.equal(r.ok, true)
+  assert.equal(r.key, "DOS-535")
+  // Вопрос едет наружу ДОСЛОВНО тем же текстом, каким его задаёт шаг 10: один вопрос на полосу.
+  assert.equal(r.question, KEY_QUESTION)
+})
+
+// Первая версия искала ключ ЛЮБЫМ словом задачи, и это дефект: задача, упоминающая соседний тикет,
+// назвала бы его именем и ветку, и каталог плана — молча. У объявления есть автор, у совпадения нет.
+test("ключ, ПОМЯНУТЫЙ в тексте, ключом задачи не становится", () => {
+  const r = checkTask.run({}, ctx(keyRoot("Сделать поиск по имени, как уже сделано в DOS-100.\n")))
+  assert.equal(r.ok, true)
+  assert.equal(r.key, "", "упоминание — не объявление, полоса спросит оператора")
+})
+
+test("ответ оператора старше задачи: он мог поправить то, что в ней написано", () => {
+  const root = keyRoot("task: DOS-535\nПоиск по имени.\n")
+  writeFileSync(join(root, ".agent", "answers.md"), newExchange([{ n: 1, question: KEY_QUESTION, text: "DOS-777" }]).value)
+  assert.equal(checkTask.run({}, ctx(root)).key, "DOS-777")
+})
+
+test("мусор вместо ключа ключом не считается — форма та же, что проверяет шаг 10", () => {
+  assert.equal(checkTask.run({}, ctx(keyRoot("task: dos-535\nПоиск.\n"))).key, "")
+  assert.equal(checkTask.run({}, ctx(keyRoot("task: DOS535\nПоиск.\n"))).key, "")
 })

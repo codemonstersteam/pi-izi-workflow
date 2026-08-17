@@ -11,7 +11,7 @@
 //               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
-//               split · core · cards · plan · review · reviewForm. They are not
+//               parts · part · planbook · plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -24,17 +24,14 @@
 //               order this script assembles is measured against it — see sized().
 // EXTERNAL_DEPENDENCY: roles `gilb` (steps/brd/gilb.md), `scout` (steps/scope/scout.md), `intake`
 //               (steps/intake/intake.md), the THREE roles of step 9 — `valuer`
-//               (steps/design/valuer.md), `designer` (steps/design/designer.md) and `router`
-//               (steps/design/router.md) — and `critic` (steps/review/critic.md) resolved by pi
+//               (steps/design/valuer.md), `router` (steps/design/router.md) and `core-designer`
+//               (steps/design/core-designer.md) — and `critic` (steps/review/critic.md) resolved by pi
 //               from the extension's roleDirectories BY FILENAME (validation.js scanRoleFiles).
 //               Renaming a role file breaks agent({role}) with no other symptom.
 // EXTERNAL_DEPENDENCY: order templates read from disk at run time — steps/brd/order.tpl,
 //               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl, steps/intake/order.tpl,
-//               steps/design/order-values.tpl, steps/design/order-nodes.tpl,
-//               steps/design/order-routes.tpl (three passes, one order each),
-//               steps/design/order-values-part.tpl, steps/design/order-nodes-part.tpl and
-//               steps/design/order-routes-part.tpl (ONE part of the swarm of pass A, of pass B and of
-//               pass C — the same role, a different document),
+//               steps/design/order-values.tpl and steps/design/order-chains.tpl (one per pass of the
+//               dictionary and the chains) and steps/design/order-part.tpl (ONE partition),
 //               steps/review/order.tpl.
 //               prompt() demands an
 //               EXACT bidirectional match between a template's placeholders and the values passed
@@ -134,8 +131,21 @@ const ENVELOPE = {
 //                          check is terminal by construction: a human fixes it and re-runs
 //   Purity:       io (through the host)
 async function task() {
-  const t = await checkTask({}); // registered functions require exactly one JSON object argument
+  let t = await checkTask({}); // registered functions require exactly one JSON object argument
   if (!t.ok) exit(err("blocked", { subject: t.why }));
+
+  // THE TASK KEY IS ASKED HERE, AT THE FIRST STEP, or not asked at all. It names the branch, every
+  // ticket and `task/<КЛЮЧ>/`, where step 9 puts the plan — so the band needs it long before step 10,
+  // and an operator who has already written it into TASK.md should never be asked. One question at
+  // the start beats an interruption in the middle of a run nobody is watching.
+  for (let round = 1; !t.key && round <= QUESTION_ROUNDS + 1; round++) {
+    const q = charge({ subject: t.question });
+    if (q.spent) exit(noRoundsLeft({ subject: t.question, evidence: "" }, "task"));
+    await askOperator({ subject: t.question, evidence: "" }, q.n, "task-key", "task");
+    t = await checkTask({});
+  }
+  if (!t.key) exit(err("blocked", { subject: t.question, evidence: "ключ задачи не назван — поставке некуда лечь" }));
+  log(`task: ok, строк ${t.lines}, ключ ${t.key} — поставка ляжет в task/${t.key}/`);
 }
 
 // byteLen — UTF-8 byte length without Buffer.
@@ -924,16 +934,6 @@ async function designing(from = 6) {
 
   const FRD = await readText({ path: ".agent/frd.xml" });
 
-  // THE SPLIT FIRST, and it costs nothing: which files two or more use cases touch. Everything after
-  // step 9 is cut by USE CASE, and a file several use cases touch cannot be designed by any one of
-  // them alone — N designers would write N versions of it. The number is printed because it decides
-  // the shape of the work: on `eddi` 8 of 13 nodes are shared and fall into 2 groups, on `t2` none.
-  const cut = await split({});
-  if (!cut.ok) exit(err("blocked", { subject: cut.why, evidence: "разбиение шага 9 не посчитано" }));
-  log(cut.groups.length
-    ? `design/split: общих узлов ${cut.shared}, своих ${cut.own} — групп ${cut.groups.length}: ${cut.groups.map((g) => `${g.id} (файлов ${g.paths}, use case ${g.ucs})`).join(" · ")}`
-    : `design/split: общих узлов нет — все ${cut.own} проектируются своим use case, общий дизайн не нужен`);
-
   // A rewind to step 6 rewrote the FRD, so a dictionary extracted from the old one is structurally
   // green and about another change. Otherwise the gate's own verdict stands: green NOW, not green once.
   if (from > 6 && (gate.reused || []).includes("values")) {
@@ -947,78 +947,111 @@ async function designing(from = 6) {
   const VALUES = await readText({ path: ".agent/values.xml" });
   await onePass("chains", () => ({ FRD, VALUES }));
 
-  // THE SHARED FILES ARE DECIDED BEFORE THE SWARM, one call per group. A file several use cases touch
-  // cannot be designed by any one of them: handed out by use case, `eddi`'s eight shared files would
-  // get two to eight independent designs, and a live run already produced one of those collisions —
-  // `terms` as a nested class in the plan of UC2 against the separate `model/Term.java` of UC6-UC8.
-  // Deciding them once, with every use case that touches them in view, prevents the duplicate instead
-  // of reconciling it afterwards. With no shared files (form `t2`) not a single call is made.
-  for (const g of cut.groups) await oneGroup(g);
+  // PHASES ①②③, and they cost nothing: the tree of modules the change works on, cut into partitions,
+  // and one card per partition. It runs AFTER pass B because a card carries the draft contract that
+  // pass assembles. The numbers are printed because they decide the shape of the work — and because
+  // the invariant behind them is what makes a duplicate impossible: every module sits in exactly ONE
+  // partition, so no two calls can decide one file (steps/design-data-flow.md ②).
+  // The task key is asked HERE, before the first role call, because every deliverable of this step
+  // lands under `task/<КЛЮЧ>/` — the same key the branch is named after. It is the SAME verbatim
+  // question step 10 asks, so the answer serves both and the operator is never asked twice.
+  let cut = await parts({});
+  for (let round = 1; !cut.ok && cut.ask && round <= QUESTION_ROUNDS + 1; round++) {
+    const q = charge({ subject: cut.subject });
+    if (q.spent) exit(noRoundsLeft({ subject: cut.subject, evidence: "" }, "design/parts"));
+    await askOperator({ subject: cut.subject, evidence: "" }, q.n, "design-key", "design");
+    cut = await parts({});
+  }
+  if (!cut.ok) exit(err("blocked", { subject: cut.why || cut.subject, evidence: "дерево модулей шага 9 не посчитано" }));
+  log(`design/parts: ${cut.at} — модулей ${cut.modules} (создаётся ${cut.created}) — партий ${cut.parts.length}: ${cut.parts.map((x) => `${x.slug} (модулей ${x.modules}, use case ${x.ucs}, соседей ${x.neighbours})`).join(" · ")}; крупнейшая карточка ${cut.chars} симв`);
 
-  // THE CARDS ARE ASSEMBLED LAST OF THE SCRIPT WORK, because a card carries the flow of its own
-  // scenarios and that flow is written by the pass just above. The size is the whole point of the
-  // phase: the map and the FRD weigh 126 KB together, one card 5-10. The sample tally says how many
-  // nodes the repository could show an example for — a `нет` is not a failure but a node its designer
-  // must invent from the use case alone, and it has to be visible.
-  const made = await cards({});
-  if (!made.ok) exit(err("blocked", { subject: made.why, evidence: "карточки use case не собраны" }));
-  const S = made.samples || {};
-  log(`design/cards: карточек ${made.cards}, крупнейшая ${made.chars} симв — образцы: сам ${S.self || 0}, близнец ${S.twin || 0}, сосед ${S.neighbour || 0}, нет ${S.none || 0}`);
+  // PHASE ④, the ONLY place a role is called on this step: how does each module of this partition
+  // change. Everything it needs was decided by the script above — what to touch, which use cases can
+  // break, where the sample is — so the role answers one question and nothing else.
+  const done = [];
+  for (const one of cut.parts) done.push(await onePart(one));
+  log(`design/parts: планов ${done.length}, разделов ${done.reduce((n, x) => n + x.modules, 0)}, объявленных вызовов ${done.reduce((n, x) => n + x.calls, 0)}`);
+
+  // PHASES ⑥⑦⑧, and none of them costs a token: is the requirement covered whole, in what order is
+  // the work done, and the ONE document a human reads at the gate. A hole here is a REFUSAL and not a
+  // warning — a plan missing a step of a use case is a requirement that quietly did not ship, and the
+  // role that wrote the section is the one who can name what closes it.
+  // The assembly REFUSES on a hole or a circle, and both are repaired where they were written: the
+  // guardrail of a partition cannot see the whole (a step closed by another partition's section is
+  // not its business), so the check is here — but the repair is still the role's, with the blocker as
+  // feedback and the same LOOPS budget. Live measurement: the first assembly of `eddi` found six use
+  // cases whose failure branches nobody closed and one circle `RestImportService ↔ UpgradeExecutor`.
+  let book = await planbook({});
+  for (let round = 0; !book.ok && round < LOOPS; round++) {
+    const guilty = (book.guilty || []).map((slug) => cut.parts.find((x) => x.slug === slug)).filter(Boolean);
+    if (!guilty.length) break;
+    log(`design/plan: круг ${round + 1} из ${LOOPS} — ${book.cycle ? "очередь работ замкнута" : "план неполон"}; переписывают партии: ${guilty.map((x) => x.slug).join(" ")}`);
+    for (const one of guilty) await onePart(one, book.blockers);
+    book = await planbook({});
+  }
+  if (!book.ok) exit(err("escalate", { subject: book.blockers || book.why, evidence: book.cycle ? `очередь работ: ${book.cycle}` : "полнота плана шага 9" }));
+  log(`design/plan: PLAN.md собран — модулей ${book.modules}, разделов ${book.sections}, use case ${book.ucs}`);
+
+  return "PLAN.md";
 
   return ".agent/data-flow.md";
 }
 
-// FUNCTION_CONTRACT: oneGroup — the shared files of ONE group, decided once for every use case
-//   Input:        g — one element of split's `groups`: { id, slug, paths, ucs }
-//   Dependencies: EXTERNAL — core, readText, agent(role "core-designer"); sized, charge, askOperator
-//   Antecedent:   the split found this group; LOOPS ≥ 1
-//   Consequent:   success: returns when `docs/design/core/<slug>.md` is written
-//                 failure: exits — err("escalate") when the group spent its LOOPS
+// FUNCTION_CONTRACT: onePart — how every module of ONE partition changes, decided in one call
+//   Input:        one — an element of parts' `parts`: { slug, modules, ucs, neighbours };
+//                 since — blockers of the ASSEMBLY (phases ⑥⑦) this partition answers for, or the
+//                 first-attempt marker. A hole in the coverage is repaired where the section was
+//                 written, not escalated to a human
+//   Dependencies: EXTERNAL — readText, agent(role "core-designer"), part; sized, charge, askOperator
+//   Antecedent:   parts({}) wrote `.agent/staging/parts/<slug>.txt`; LOOPS ≥ 1
+//   Consequent:   success: returns { slug, modules, calls } when `docs/design/<slug>.md` is written
+//                 failure: exits — err("escalate") when this partition spent its LOOPS
 //   Purity:       io (host functions, roles)
 //
-// The same four beats as a pass of the dictionary: a script composes the order's DATA, the role
-// decides, a guardrail judges by three structural rules, and a green answer is promoted. The order
-// carries the group's files, every use case that touches them VERBATIM, the sample by path and the
-// draft contract of pass 9B — and nothing else: the map and the other use cases are deliberately
-// absent (10 KB against 126).
-async function oneGroup(g) {
-  const made = await core({ group: g.slug });
-  if (!made.ok) exit(err("blocked", { subject: made.why, evidence: `наряд общего дизайна группы ${g.slug} не собран` }));
-  log(`design/core ${g.slug}: файлов ${made.paths}, use case ${made.ucs}, наряд ${made.chars} симв`);
+// THE PARTITION IS THE UNIT OF THE CALL, and that is the whole answer to the duplicate: a module
+// belongs to exactly one partition, so the file it names cannot be decided twice. The card was
+// composed by phase ③ and is only READ here — the four beats are the same as any pass of this step:
+// a script composes, the role decides, a guardrail judges by five structural rules, green is promoted.
+async function onePart(one, since = "(none — first attempt)") {
+  const CARD = await readText({ path: `.agent/staging/parts/${one.slug}.txt` });
+  if (!CARD) exit(err("blocked", { subject: `карточки партии ${one.slug} нет на диске`, evidence: `.agent/staging/parts/${one.slug}.txt` }));
 
-  const CARD = await readText({ path: `.agent/staging/core/${g.slug}.txt` });
-  const staging = `.agent/staging/core/${g.slug}.md`;
-  const tpl = await readText({ path: "steps/design/order-core.tpl" });
-  let feedback = "(none — first attempt)";
+  const staging = `.agent/staging/parts/${one.slug}.md`;
+  const tpl = await readText({ path: "steps/design/order-part.tpl" });
+  let feedback = since;
   let attempt = 0, silent = 0;
   for (;;) {
-    if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `общий дизайн группы ${g.slug}: цикл исчерпан за ${LOOPS} попыток` }));
-    if (silent > LOOPS) exit(err("escalate", { subject: `роль ${silent} раз вернула track:"ok", не записав ${staging}`, evidence: `общий дизайн группы ${g.slug}: артефакта нет` }));
+    if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `план партии ${one.slug}: цикл исчерпан за ${LOOPS} попыток` }));
+    if (silent > LOOPS) exit(err("escalate", { subject: `роль ${silent} раз вернула track:"ok", не записав ${staging}`, evidence: `план партии ${one.slug}: артефакта нет` }));
 
-    const o = sized(`design/core/${g.slug}`, tpl, {
+    const o = sized(`design/part/${one.slug}`, tpl, {
       CARD, FEEDBACK: feedback, STAGING: staging,
-      CHECK: 'core({group, path}) — раздел на каждый файл группы, ни одного чужого, ни одного забытого use case',
+      CHECK: 'part({slug, path}) — раздел на каждый модуль партии, чужих нет, use case закрыты, у каждого «проверка» и «зовёт»',
     });
-    if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд общего дизайна ${g.slug} не помещается в окно модели — роль не запускалась` }));
+    if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд партии ${one.slug} не помещается в окно модели — роль не запускалась` }));
     const env = await agent(o.text, { role: "core-designer", outputSchema: ENVELOPE });
 
     if (env.track === "err" && env.kind === "question") {
       const q = charge(env);
-      if (q.spent) exit(noRoundsLeft(env, `design/core/${g.slug}`));
-      log(`design/core/${g.slug}: вопрос ${q.n} — «${env.subject}»`);
-      await askOperator(env, q.n, `design-core-${g.slug}`, "core-designer");
+      if (q.spent) exit(noRoundsLeft(env, `design/part/${one.slug}`));
+      log(`design/part/${one.slug}: вопрос ${q.n} — «${env.subject}»`);
+      await askOperator(env, q.n, `design-part-${one.slug}`, "core-designer");
       continue;
     }
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
 
-    const check = await core({ group: g.slug, path: staging });
-    if (check.ok) { log(`design/core ${g.slug}: зелен — решено файлов ${check.paths} для ${check.ucs} use case → ${check.at}`); return; }
+    const check = await part({ slug: one.slug, path: staging });
+    if (check.ok) {
+      log(`design/part ${one.slug}: зелен — разделов ${check.modules} для ${check.ucs} use case, объявленных вызовов ${check.calls} → ${check.at}`);
+      return { slug: one.slug, modules: check.modules, calls: check.calls };
+    }
     feedback = check.blockers;
-    if (check.missing) { silent++; log(`design/core/${g.slug}: роль не записала ${staging} — попытка ${silent}, бюджет починки не тратится`); continue; }
+    if (check.missing) { silent++; log(`design/part/${one.slug}: роль не записала ${staging} — попытка ${silent}, бюджет починки не тратится`); continue; }
     attempt++;
-    log(`design/core/${g.slug}: красный — попытка ${attempt} из ${LOOPS}`);
+    log(`design/part/${one.slug}: красный — попытка ${attempt} из ${LOOPS}`);
   }
 }
+
 
 // FUNCTION_CONTRACT: onePass — one pass of step 9: compose, delegate, judge, promote
 //   Input:        id — "values" | "chains"; extra — the keys of THIS pass's order, as a thunk
@@ -1343,7 +1376,7 @@ const STOP_AFTER_DESIGN = true;
 
 function bandEnds(artifact) {
   log(STOP_AFTER_DESIGN
-    ? `izi: полоса кончилась на шаге 9 — шаги 10 и 11 отложены до наряда D35. Поставка — ${artifact} и .agent/design-graph.xml`
+    ? `izi: полоса кончилась на шаге 9 — шаги 10 и 11 отложены до наряда D35. Поставка — ${artifact}: план доработки по модулям, из которого режутся тикеты`
     : "izi: полоса кончилась на шаге 11. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
   exit(ok({
     artifact,
