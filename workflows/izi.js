@@ -1192,7 +1192,18 @@ async function band(from0) {
     if (from <= 6) { phase("intake"); await intake(fromCritic); }
     if (from <= 7) { phase("weight"); await weigh(); }
     if (from <= 8) { phase("ripple"); await rippling(); }
-    if (from <= 9) { phase("design"); await designing(from); }
+    if (from <= 9) { phase("design"); planned = await designing(from); }
+
+    // THE BAND ENDS AT STEP 9 WHILE STEP 9 IS BEING FINISHED, and it says so instead of walking on.
+    // Steps 10 and 11 are not broken and are not deleted — they are DEFERRED: their input is the
+    // deliverable of step 9, and until the FRD names an operation per scenario (backlog D35) that
+    // deliverable is knowingly incomplete on a big form. Judging a plan built on it costs a role call
+    // and produces a verdict about the wrong thing — live run 6a41e94d spent two intake orders on a
+    // rewind ordered by a false blocker of the critic.
+    //
+    // ONE LINE, and it is the only thing that has to move back when D35 closes.
+    if (STOP_AFTER_DESIGN) return from <= 9 ? planned : ".agent/data-flow.md";
+
     if (from <= 10) { phase("plan"); planned = await planning(edges); }
     if (from >= 12) return planned;
     phase("review"); const verdict = await reviewing();
@@ -1245,8 +1256,14 @@ async function band(from0) {
   }
 }
 
+// STOP_AFTER_DESIGN — шаги 10 и 11 отложены, пока не закрыт наряд D35 (операция на сценарий в FRD).
+// Одна константа и одна строка в лестнице: вернуть их обратно — снять `true`.
+const STOP_AFTER_DESIGN = true;
+
 function bandEnds(artifact) {
-  log("izi: полоса кончилась на шаге 11. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
+  log(STOP_AFTER_DESIGN
+    ? `izi: полоса кончилась на шаге 9 — шаги 10 и 11 отложены до наряда D35. Поставка — ${artifact} и .agent/design-graph.xml`
+    : "izi: полоса кончилась на шаге 11. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
   exit(ok({
     artifact,
     next: "Полоса кончается здесь. Напечатай результат и остановись: не пиши код, не гоняй тесты, не меняй файлы проекта — реализация это шаг 15, которого ещё нет.",

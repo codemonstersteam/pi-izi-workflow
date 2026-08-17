@@ -1047,6 +1047,10 @@ test("шаг 9 — ДВА прохода одной формы, и второй 
   assert.match(IZI, /await onePass\("values", \(\) => \(\{ FRD \}\)\)/)
   assert.match(IZI, /await onePass\("chains", \(\) => \(\{ FRD, VALUES \}\)\)/)
   assert.match(IZI, /return "\.agent\/data-flow\.md"/)
+  // Шаги 10 и 11 ОТЛОЖЕНЫ до наряда D35 — одной константой и одной строкой лестницы, чтобы
+  // возврат стоил снятия `true`, а не разбора того, что и куда переехало.
+  assert.match(IZI, /const STOP_AFTER_DESIGN = true;/)
+  assert.match(IZI, /if \(STOP_AFTER_DESIGN\) return from <= 9/)
   // …и `skip` шага 8 — по-прежнему отдельный случай: дизайна нет по решению.
   assert.match(IZI, /return "\.agent\/design"; \/\/ the flag file IS the receipt of the skip/)
 })
