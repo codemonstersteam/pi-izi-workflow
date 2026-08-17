@@ -1590,32 +1590,67 @@ export const split = {
       groups: s.groups.map((g) => ({ id: g.id, paths: [...g.paths], ucs: [...g.ucs] })),
       ucOf: Object.fromEntries([...s.ucOf].map(([p, u]) => [p, [...u]])),
     }, null, 2)}\n`)
-    // THE CARDS ARE WRITTEN IN THE SAME BREATH as the split, because they are a function of the same
-    // two artifacts and cost the same nothing. A card is STAGING: it is the input of a role, not a
-    // deliverable, and it is recomputed whenever the FRD or the map moves.
-    const map = existsSync(at(root, GRAPH_PATH)) ? readFileSync(at(root, GRAPH_PATH), "utf8") : ""
+    return {
+      ok: true,
+      shared: s.shared.length,
+      own: s.own.length,
+      groups: s.groups.map((g) => ({ id: g.id, paths: g.paths.length, ucs: g.ucs.length })),
+    }
+  },
+}
+
+// --- cards: what ONE designer of ONE use case sees ------------------------------------------------
+// A SEPARATE call from the split, and the reason is the ORDER: the card carries the flow of its own
+// scenarios, and that flow is written by pass 9B — which runs after the split. Building the cards in
+// the same breath as the split left every flow section empty on a fresh run (measured live on `eddi`,
+// 17 Aug). The split decides the shape of the work and must come first; the card is assembled once
+// everything it projects exists.
+export const cards = {
+  description: "Step 9: assemble ONE CARD per use case — everything a single designer sees and nothing else. Each section is a projection: the use case verbatim from .agent/frd.xml, the `<module>` bytes of the nodes ITS scenarios walk, the external systems those nodes and their samples touch, the suite command, the flow of its own scenarios out of .agent/data-flow.md, the contracts already decided for shared files, and a SAMPLE by PATH — how a file of that kind is already written in this repository (the node itself if it exists, else a twin for another entity, else a neighbour of the same kind, else a declared absence). Writes .agent/staging/cards/<UC>.txt. Costs no tokens. Measured on eddi: 12 cards of 5-10 KB against the 126 KB the map and the FRD weigh together.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      cards: { type: "number" },
+      chars: { type: "number" },
+      samples: {
+        type: "object",
+        properties: { self: { type: "number" }, twin: { type: "number" }, neighbour: { type: "number" }, none: { type: "number" } },
+        additionalProperties: false,
+      },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_ = {}, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, FRD_PATH))) {
+      return { ok: false, why: `${FRD_PATH} не существует — шаг 6 intake не отработал, карточки собирать не из чего` }
+    }
+    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+    // The map is DEMANDED: without it a card has no nodes, no systems and no sample, and a designer
+    // handed that would invent the repository instead of reading it.
+    if (!existsSync(at(root, GRAPH_PATH))) {
+      return { ok: false, why: `${GRAPH_PATH} не существует — шаг 5 graph не отработал, карточке нечего показать про репозиторий` }
+    }
+    const map = readFileSync(at(root, GRAPH_PATH), "utf8")
     const flow = readIfExists(root, DATA_FLOW_PATH)
+
     mkdirSync(at(root, CARDS_DIR), { recursive: true })
     const samples = { self: 0, twin: 0, neighbour: 0, none: 0 }
-    let chars = 0
+    let chars = 0, n = 0
     for (const u of frd.usecases || []) {
       const id = String((u && u.id) || "").trim()
       if (!id) continue
       const c = cardOf({ uc: id, frd, map, flow })
       writeFileSync(at(root, `${CARDS_DIR}/${id}.txt`), c.text)
       chars = Math.max(chars, c.chars)
+      n++
       for (const x of c.samples) samples[x.kind] = (samples[x.kind] || 0) + 1
     }
-
-    return {
-      ok: true,
-      shared: s.shared.length,
-      own: s.own.length,
-      groups: s.groups.map((g) => ({ id: g.id, paths: g.paths.length, ucs: g.ucs.length })),
-      cards: (frd.usecases || []).length,
-      chars,
-      samples,
-    }
+    return { ok: true, cards: n, chars, samples }
   },
 }
 
@@ -1980,7 +2015,7 @@ export default function extension(pi) {
     version: "1.12.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
     description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, split, plan, review },
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, split, cards, plan, review },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

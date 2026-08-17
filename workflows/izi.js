@@ -11,7 +11,7 @@
 //               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
-//               split · plan · review · reviewForm. They are not
+//               split · cards · plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -933,12 +933,6 @@ async function designing(from = 6) {
   log(cut.groups.length
     ? `design/split: общих узлов ${cut.shared}, своих ${cut.own} — групп ${cut.groups.length}: ${cut.groups.map((g) => `${g.id} (файлов ${g.paths}, use case ${g.ucs})`).join(" · ")}`
     : `design/split: общих узлов нет — все ${cut.own} проектируются своим use case, общий дизайн не нужен`);
-  // The card is what ONE designer sees, and its size is the whole point of the phase: the map and the
-  // FRD weigh 126 KB together, a card 10. The sample tally says how many nodes the repository could
-  // show an example for — a `none` is not a failure, it is a node the designer must invent from the
-  // use case alone, and it must be visible.
-  const S = cut.samples || {};
-  log(`design/cards: карточек ${cut.cards}, крупнейшая ${cut.chars} симв — образцы: сам ${S.self || 0}, близнец ${S.twin || 0}, сосед ${S.neighbour || 0}, нет ${S.none || 0}`);
 
   // A rewind to step 6 rewrote the FRD, so a dictionary extracted from the old one is structurally
   // green and about another change. Otherwise the gate's own verdict stands: green NOW, not green once.
@@ -952,6 +946,17 @@ async function designing(from = 6) {
   // this line means the pair has to be built again — the gate erased yesterday's.
   const VALUES = await readText({ path: ".agent/values.xml" });
   await onePass("chains", () => ({ FRD, VALUES }));
+
+  // THE CARDS ARE ASSEMBLED LAST OF THE SCRIPT WORK, because a card carries the flow of its own
+  // scenarios and that flow is written by the pass just above. The size is the whole point of the
+  // phase: the map and the FRD weigh 126 KB together, one card 5-10. The sample tally says how many
+  // nodes the repository could show an example for — a `нет` is not a failure but a node its designer
+  // must invent from the use case alone, and it has to be visible.
+  const made = await cards({});
+  if (!made.ok) exit(err("blocked", { subject: made.why, evidence: "карточки use case не собраны" }));
+  const S = made.samples || {};
+  log(`design/cards: карточек ${made.cards}, крупнейшая ${made.chars} симв — образцы: сам ${S.self || 0}, близнец ${S.twin || 0}, сосед ${S.neighbour || 0}, нет ${S.none || 0}`);
+
   return ".agent/data-flow.md";
 }
 
