@@ -16,6 +16,8 @@
 // Interface:  splitOf({ frd }) -> { ucOf, shared, own, groups }
 //             sampleOf(path, map) -> { kind, path }   — the ladder: self · twin · neighbour · none
 //             cardOf({ uc, frd, map, flow, common }) -> { text, nodes, samples, chars }
+//             coreCardOf({ group, frd, map, graph }) -> { text, chars }   — what the COMMON designer sees
+//             checkCore({ text, group }) -> string[]  — blockers of a group contract, empty = green
 //
 // THE MEASUREMENT THAT MAKES THIS STEP NECESSARY. On form `eddi`: 13 nodes of the change, and **8 of
 // them are touched by two or more use cases** — `RestGlossaryStore`, `IGlossaryStore` and
@@ -105,6 +107,10 @@ export function splitOf({ frd = {} } = {}) {
   }
   const groups = [...byRoot.values()].map((paths) => Object.freeze({
     id: commonDir(paths) || paths[0],
+    // The id is a PATH, and a path is not a file name. The slug is what the group's artifacts are
+    // named by — `.agent/staging/core/<slug>.txt`, `docs/design/core/<slug>.md` — and it is derived,
+    // never invented, so a human reading the directory sees which package a contract belongs to.
+    slug: (commonDir(paths) || paths[0]).split("/").filter(Boolean).slice(-2).join("-") || "core",
     paths: Object.freeze(paths),
     // The use cases of a group, in the FRD's order: this is what the common designer is handed, and
     // it must be every use case that can be broken by the group's contract.
@@ -298,4 +304,125 @@ export function cardOf({ uc = "", frd = {}, map = "", flow = "", common = "" } =
   ].filter((x) => x !== null).join("\n")
 
   return Object.freeze({ text, nodes: Object.freeze(nodes), samples: Object.freeze(samples), chars: text.length })
+}
+
+// FUNCTION_CONTRACT: coreCardOf — everything the designer of ONE GROUP of shared files is given
+//   Input:        { group, frd, map, graph }
+//                 group — one element of splitOf's `groups`; frd — parseFrd's object
+//                 map   — text of appgraph.xml; graph — text of design-graph.xml, or ""
+//   Dependencies: sampleOf, moduleXml, core/xml.mjs
+//   Antecedent:   any values; a missing group yields a card with no files
+//   Consequent:   success: { text, chars }
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    coreCardOf({ group, frd, map, graph }) -> { text, chars }
+//
+// WHY THE GROUP IS DESIGNED BEFORE THE SWARM. On `eddi` eight files of thirteen are touched by two or
+// more use cases, three of them by eight each. Handed out by use case, those eight files get two to
+// eight independent designs — and that is not a hypothesis: a live run produced `terms` as a nested
+// class in the plan of UC2 while UC6-UC8 create a separate `model/Term.java`. Deciding the shared
+// files ONCE, with every use case that touches them in view, prevents the duplicate instead of
+// reconciling it afterwards.
+//
+// The draft from `design-graph.xml` rides along as a DRAFT and as a visible hole: for this group it
+// carries the contract accumulated across all use cases — on `configs/glossary` that is 9 in / 19 out
+// for `RestGlossaryStore` and EMPTY for `Glossary.java`. Half of its values are labels
+// (`IGlossaryStore CRUD` stands as the input of eleven rows), so the role replaces them with
+// signatures read off the sample; what the draft is good for is the edges between files the map
+// cannot know, because 7 of eddi's 13 nodes do not exist yet.
+export function coreCardOf({ group = {}, frd = {}, map = "", graph = "" } = {}) {
+  const paths = [...((group && group.paths) || [])]
+  const ucs = [...((group && group.ucs) || [])]
+
+  const line = (o, keys) => keys.filter((k) => o && o[k]).map((k) => `${k}="${o[k]}"`).join(" ")
+  const ucBlocks = ucs.map((id) => {
+    const u = ((frd && frd.usecases) || []).find((x) => String((x && x.id) || "").trim() === id)
+    if (!u) return ""
+    return [
+      `<usecase id="${id}" actor="${u.actor || ""}" goal="${u.goal || ""}">`,
+      u.pre ? `  <pre>${u.pre}</pre>` : "",
+      `  <post>${u.post || ""}</post>`,
+      ...(u.steps || []).map((t, k) => `  <step n="${k + 1}">${t}</step>`),
+      ...(u.exts || []).map((e) => `  <ext ${line(e, ["id", "error", "outcome"])}/>`),
+      "</usecase>",
+    ].filter(Boolean).join("\n")
+  }).filter(Boolean)
+
+  const deltas = ((frd && frd.deltas) || []).filter((d) => paths.includes(d.node))
+    .map((d) => `<delta ${line(d, ["op", "form", "node", "new", "from", "to"])}/>`)
+  const fails = ((frd && frd.failures) || []).filter((f) => ucs.some((id) => {
+    const u = ((frd && frd.usecases) || []).find((x) => String((x && x.id) || "").trim() === id)
+    return ((u && u.exts) || []).some((e) => e.error === f.code)
+  })).map((f) => `<failure ${line(f, ["code", "status", "client", "operator", "from"])}/>`)
+  const fields = ((frd && frd.fields) || []).map((f) => `<field ${line(f, ["name", "in", "type", "domain", "required", "error"])}/>`)
+
+  const mods = moduleXml(map, paths)
+  const samples = paths.map((p) => ({ node: p, ...sampleOf(p, map) }))
+  const sampleXml = moduleXml(map, samples.filter((x) => x.kind === "twin" || x.kind === "neighbour").map((x) => x.path))
+  const sampleHead = samples.map((x) => x.kind === "self"
+    ? `${x.node} — файл существует, образец не нужен`
+    : x.kind === "none"
+      ? `${x.node} — образца в репозитории нет, проектируй от use case`
+      : `${x.node} — ${x.kind === "twin" ? "близнец" : "сосед того же вида"}: ${x.path}`)
+
+  const used = new Set([...mods, ...sampleXml].flatMap((m) => [...m.matchAll(tag("io"))].map((io) => attrs(io[1]).system).filter(Boolean)))
+  const systems = [...String(map || "").matchAll(elem("system"))].map((m) => m[0])
+    .filter((x) => [...used].some((u) => x.includes(`name="${u}"`)))
+  const suites = [...String(map || "").matchAll(elem("suite"))].map((m) => m[0])
+  const draft = moduleXml(graph, paths)
+
+  const text = [
+    `$START_GROUP — ${paths.length} файлов, которые трогают ${ucs.length} use case: ${ucs.join(" ")}`,
+    paths.join("\n"),
+    "$END_GROUP", "",
+    "$START_USECASES — все use case, чей контракт зависит от этих файлов",
+    ucBlocks.join("\n"), deltas.join("\n"), fails.join("\n"), fields.join("\n"),
+    "$END_USECASES", "",
+    "$START_NODES — что репозиторий знает об этих файлах",
+    mods.join("\n") || "(ни одного из них ещё нет — все создаются)",
+    "$END_NODES", "",
+    "$START_SAMPLE — как файл такого рода уже написан ЗДЕСЬ; читай его по пути сам",
+    sampleHead.join("\n"), sampleXml.length ? "" : null, sampleXml.join("\n"),
+    "$END_SAMPLE", "",
+    "$START_SYSTEMS — внешние системы, которых эти файлы касаются",
+    systems.join("\n") || "(нет)",
+    "$END_SYSTEMS", "",
+    "$START_CHECK — чем проверяется",
+    suites.join("\n") || "(в карте нет ни одного сьюта)",
+    "$END_CHECK", "",
+    "$START_DRAFT — накопленный по всем use case контракт этих файлов, ЧЕРНОВИК",
+    draft.join("\n") || "(черновика нет — проход 9B не отработал)",
+    "$END_DRAFT", "",
+  ].filter((x) => x !== null).join("\n")
+
+  return Object.freeze({ text, chars: text.length })
+}
+
+// FUNCTION_CONTRACT: checkCore — did the role decide THIS group, all of it and nothing else
+//   Input:        { text, group } — what the role wrote, and the group it was given
+//   Dependencies: —
+//   Antecedent:   any values
+//   Consequent:   success: string[] — one blocker per defect, empty means green
+//   Purity:       pure
+//   Interface:    checkCore({ text, group }) -> string[]
+//
+// THREE RULES, ALL STRUCTURAL. What a contract MEANS is read by a human at the gate; what a script
+// can tell is whether every file of the group got a decision, whether a file outside it was decided
+// by mistake, and whether every use case whose contract depends on the group was looked at. Judging
+// the meaning is what cost this pipeline forty rules on one step and a week of runs.
+export function checkCore({ text = "", group = {} } = {}) {
+  const B = []
+  const paths = [...((group && group.paths) || [])]
+  const ucs = [...((group && group.ucs) || [])]
+  const said = [...String(text || "").matchAll(/^##\s+(\S+)/gm)].map((m) => m[1].trim())
+
+  const lost = paths.filter((p) => !said.includes(p))
+  const extra = said.filter((p) => !paths.includes(p))
+  if (lost.length) B.push(`нет решения по файлам: ${lost.join(", ")} — у каждого файла группы должен быть свой раздел «## <путь>»`)
+  if (extra.length) B.push(`решены файлы не из этой группы: ${extra.join(", ")} — их проектирует свой use case, не ты`)
+
+  const missed = ucs.filter((id) => !new RegExp(`\\b${id}\\b`).test(String(text || "")))
+  if (missed.length) B.push(`use case ${missed.join(", ")} не упомянут ни в одном разделе — контракт этих файлов ломает и их тоже, покажи, чем именно они закрыты`)
+
+  return B
 }

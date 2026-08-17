@@ -1072,7 +1072,10 @@ test("наряд прохода несёт скелет, число пустых
 test("плейсхолдеры нарядов обоих проходов и ключи, которые им передают, — одно множество", () => {
   // Ключ — то, что стоит ПОСЛЕ разделителя объекта; хвостовой разделитель ловится заглядыванием,
   // иначе съеденная запятая крадёт следующий ключ.
-  const call = IZI.slice(IZI.indexOf("const o = sized(`design/${id}`"), IZI.indexOf("if (o.over)"))
+  // Конец среза ищется ПОСЛЕ его начала: в файле два вызова sized на шаге 9, и общий поиск
+  // «if (o.over)» находил чужой.
+  const passAt = IZI.indexOf("const o = sized(`design/${id}`")
+  const call = IZI.slice(passAt, IZI.indexOf("if (o.over)", passAt))
   const common = [...new Set([...call.matchAll(/[{,]\s*([A-Z][A-Z_]*)\s*(?=[,:])/g)].map((m) => m[1]))]
   for (const [tplName, own] of [["order-values.tpl", "FRD"], ["order-chains.tpl", "FRD, VALUES"]]) {
     const tpl = readFileSync(new URL(`../steps/design/${tplName}`, import.meta.url), "utf8")
@@ -1080,6 +1083,14 @@ test("плейсхолдеры нарядов обоих проходов и к�
     const inCall = [...new Set([...common, ...own.split(", ")])].sort()
     assert.deepEqual(inTpl, inCall, tplName)
   }
+
+  // …и наряд общего дизайна, который собирается своим циклом: у него другой набор ключей.
+  const groupAt = IZI.indexOf("const o = sized(`design/core/${g.slug}`")
+  const groupCall = IZI.slice(groupAt, IZI.indexOf("if (o.over)", groupAt))
+  const inGroupCall = [...new Set([...groupCall.matchAll(/[{,]\s*([A-Z][A-Z_]*)\s*(?=[,:])/g)].map((m) => m[1]))].sort()
+  const groupTpl = readFileSync(new URL("../steps/design/order-core.tpl", import.meta.url), "utf8")
+  const inGroupTpl = [...new Set([...groupTpl.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]))].sort()
+  assert.deepEqual(inGroupTpl, inGroupCall, "order-core.tpl")
 })
 
 test("the valuer returns a count, so the envelope carries it — additionalProperties is false", () => {
@@ -1678,9 +1689,9 @@ test("D29b: наряд выше потолка — отказ, и он НАЗЫ�
 })
 
 test("D29b: пять прямых сборок наряда идут через sized, и каждая отказывает по-своему", () => {
-  // ПЯТЬ мест — шаги 2, 4, 6, 9 и 11. Роёв больше нет: проход A шага 9 собирает ОДИН наряд, и он
-  // идёт через ту же меру, что остальные четыре.
-  assert.equal([...IZI.matchAll(/= sized\(/g)].length, 5, "пять прямых сборок наряда")
+  // ШЕСТЬ мест — шаги 2, 4, 6, 11 и ДВА на шаге 9: проход (словарь либо цепочки) и общий дизайн
+  // группы. Каждый идёт через одну и ту же меру против окна модели.
+  assert.equal([...IZI.matchAll(/= sized\(/g)].length, 6, "шесть прямых сборок наряда")
   assert.match(IZI, /const order = sized\("brd", orderTpl, \{/)
   assert.match(IZI, /const order = sized\(`scope\/\$\{cell\.id\}`, orderTpl, \{/)
   assert.match(IZI, /const order = sized\("intake", orderTpl, \{/)
@@ -1691,13 +1702,15 @@ test("D29b: пять прямых сборок наряда идут через 
   // впервые узнают из HTTP 400 (прогон 162e8b02).
   const raw = [...IZI.matchAll(/prompt\(([A-Za-z.[\]"]+)/g)].map((m) => m[1])
   assert.deepEqual(raw.sort(), ["tpl"], "prompt() вызывается только внутри sized")
+  // Обе сборки шага 9 — и проход, и группа — идут через sized.
+  assert.match(IZI, /const o = sized\(`design\/core\/\$\{g\.slug\}`, tpl, \{/)
 
   // Отказ шага 4 — ЗНАЧЕНИЕ, а не exit: parallel() глотает бросок и перебрасывает свой.
   const scoutFn = IZI.slice(IZI.indexOf("async function scout("), IZI.indexOf("// FUNCTION_CONTRACT: scope"))
   assert.match(scoutFn, /if \(order\.over\) return \{ ok: false, why: order\.why \};/)
   assert.doesNotMatch(scoutFn, /exit\(/)
   // …а остальные четыре — blocked с диагнозом гардрейла.
-  assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 4)
+  assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 5)
 
   // Потолок не переписан в этом файле: он приходит из core/budgets.mjs через budgets().
   assert.match(IZI, /ORDER_CAP = b\.orderCap;/)

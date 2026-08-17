@@ -78,7 +78,7 @@ import { newRipple, blindNodes, waiverFor } from "../steps/ripple/ripple.mjs"
 import { parseDesign, parseRoutes, expand, unitsByPath } from "../steps/design/design.mjs"
 import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/design/values.mjs"
 import { routesSkeleton, parseChains, checkChains, assemble } from "../steps/design/routes.mjs"
-import { splitOf, cardOf } from "../steps/design/card.mjs"
+import { splitOf, cardOf, coreCardOf, checkCore } from "../steps/design/card.mjs"
 import { newPlanIndex } from "../steps/plan/plan.mjs"
 import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
@@ -1542,6 +1542,8 @@ export const design = {
 // it is the input of the two swarms that follow, and it is recomputed whenever the FRD moves.
 const SPLIT_PATH = ".agent/staging/split.json"
 const CARDS_DIR = ".agent/staging/cards"
+const CORE_DIR = ".agent/staging/core"
+const CORE_OUT = "docs/design/core"
 
 export const split = {
   description: "Step 9, the split: read .agent/frd.xml and name the files that TWO OR MORE use cases touch, then group them into connected components over the relation «a common use case reaches both». A file only one use case touches can be designed by that use case's designer alone; a shared one cannot — N designers would write N versions of it. Writes .agent/staging/split.json and returns the counts. Costs no tokens. Measured: eddi 8 shared of 13 nodes → 2 groups, t3 1 → 1, t2 0 → 0.",
@@ -1599,6 +1601,66 @@ export const split = {
   },
 }
 
+// --- core: the shared files of one group, decided ONCE --------------------------------------------
+// Two calls, told apart by their arguments, the same shape the design pass uses: `core({ group })`
+// COMPOSES the order's data out of the FRD, the map and the draft; `core({ path, group })` JUDGES
+// what the role staged and, on green, promotes it to `docs/design/core/<slug>.md`, where the card of
+// every use case of that group will read it as `$START_COMMON`.
+export const core = {
+  description: "Step 9, the COMMON design of one group of shared files. With `group`: compose the order's data — the group's files, every use case that touches them verbatim, what the repository knows about those files, a SAMPLE by path, the external systems, the check command and the DRAFT contract accumulated by pass 9B. With `path` and `group`: judge what the role staged by three structural rules (a section per file of the group, no file outside it, every use case mentioned) and on green promote it to docs/design/core/<slug>.md. Costs no tokens itself.",
+  input: {
+    type: "object",
+    properties: { group: { type: "string" }, path: { type: "string" } },
+    additionalProperties: false,
+  },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      blockers: { type: "string" },
+      missing: { type: "boolean" },
+      chars: { type: "number" },
+      paths: { type: "number" },
+      ucs: { type: "number" },
+      at: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ group = "", path = "" } = {}, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, GRAPH_PATH))) {
+      return { ok: false, why: `${FRD_PATH} или ${GRAPH_PATH} не существует — общий дизайн собирать не из чего` }
+    }
+    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+    const one = splitOf({ frd }).groups.find((g) => g.slug === group || g.id === group)
+    if (!one) return { ok: false, why: `группы «${group}» нет в разбиении — общих файлов у неё не осталось` }
+
+    if (!path) {
+      const c = coreCardOf({ group: one, frd, map: readFileSync(at(root, GRAPH_PATH), "utf8"), graph: readIfExists(root, DESIGN_GRAPH_PATH) })
+      mkdirSync(at(root, CORE_DIR), { recursive: true })
+      writeFileSync(at(root, `${CORE_DIR}/${one.slug}.txt`), c.text)
+      return { ok: true, chars: c.chars, paths: one.paths.length, ucs: one.ucs.length }
+    }
+
+    if (!existsSync(at(root, path))) {
+      return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
+    }
+    const staged = readFileSync(at(root, path), "utf8")
+    const bad = checkCore({ text: staged, group: one })
+    if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
+
+    // Promoted OUT of `.agent/`: a group contract is read by a human at the gate and by the card of
+    // every use case of the group, and it outlives the run's state the way a design document does.
+    mkdirSync(at(root, CORE_OUT), { recursive: true })
+    const out = `${CORE_OUT}/${one.slug}.md`
+    writeFileSync(at(root, out), staged.endsWith("\n") ? staged : `${staged}\n`)
+    rmSync(at(root, path))
+    return { ok: true, at: out, paths: one.paths.length, ucs: one.ucs.length }
+  },
+}
+
 // --- cards: what ONE designer of ONE use case sees ------------------------------------------------
 // A SEPARATE call from the split, and the reason is the ORDER: the card carries the flow of its own
 // scenarios, and that flow is written by pass 9B — which runs after the split. Building the cards in
@@ -1637,6 +1699,13 @@ export const cards = {
     }
     const map = readFileSync(at(root, GRAPH_PATH), "utf8")
     const flow = readIfExists(root, DATA_FLOW_PATH)
+    // The contracts already decided for the shared files: a use case reads the ones of the groups it
+    // actually touches, and nothing else. A group it never walks through is not its business.
+    const split = splitOf({ frd })
+    const commonOf = (nodes) => split.groups
+      .filter((g) => g.paths.some((p) => nodes.includes(p)))
+      .map((g) => readIfExists(root, `${CORE_OUT}/${g.slug}.md`))
+      .filter(Boolean).join("\n\n")
 
     mkdirSync(at(root, CARDS_DIR), { recursive: true })
     const samples = { self: 0, twin: 0, neighbour: 0, none: 0 }
@@ -1644,7 +1713,10 @@ export const cards = {
     for (const u of frd.usecases || []) {
       const id = String((u && u.id) || "").trim()
       if (!id) continue
-      const c = cardOf({ uc: id, frd, map, flow })
+      // The nodes of this use case come from the split's own map — one parse of `<scenario nodes>`
+      // for the whole step, never a second cut of the same attribute.
+      const mine = [...split.ucOf].filter(([, u]) => u.includes(id)).map(([p]) => p)
+      const c = cardOf({ uc: id, frd, map, flow, common: commonOf(mine) })
       writeFileSync(at(root, `${CARDS_DIR}/${id}.txt`), c.text)
       chars = Math.max(chars, c.chars)
       n++
@@ -2015,7 +2087,7 @@ export default function extension(pi) {
     version: "1.12.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
     description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, split, cards, plan, review },
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, split, core, cards, plan, review },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

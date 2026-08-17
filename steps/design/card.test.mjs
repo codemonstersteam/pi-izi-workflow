@@ -8,7 +8,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { splitOf, sampleOf, cardOf } from "./card.mjs"
+import { splitOf, sampleOf, cardOf, coreCardOf, checkCore } from "./card.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 
 // The shape measured on `eddi`, in miniature: a trio every use case runs through, a record shared by
@@ -252,4 +252,71 @@ test("тотальность: неизвестный use case и пустые в
   const ghost = card("UC99")
   assert.equal(ghost.nodes.length, 0)
   assert.match(ghost.text, /\(ни одного из них в репозитории ещё нет — все создаются\)/)
+})
+
+// --- D38: карточка общего дизайна группы и её гардрейл ---------------------------------------------
+
+const GROUP = { id: "src/configs/glossary", slug: "configs-glossary", paths: ["src/configs/glossary/mongo/GlossaryStore.java", "src/modules/impl/GlossaryNamespaceResolver.java"], ucs: ["UC1", "UC2"] }
+const GRAPH = `<design mode="minor" base=".agent/appgraph.xml">
+  <module path="src/configs/glossary/mongo/GlossaryStore.java" delta="Added">
+    <contract in="GET /glossaries/{id}" out="read() | 404 NOT_FOUND"/>
+    <dep path="src/rest/RestExisting.java"/>
+  </module>
+  <module path="src/rest/RestExisting.java" delta="Changed">
+    <contract in="GET /existing" out="ok"/>
+  </module>
+</design>`
+
+test("карточка группы: все её use case дословно, файлы, образцы и ЧЕРНОВИК контракта", () => {
+  const c = coreCardOf({ group: GROUP, frd: FRD_CARD, map: MAP, graph: GRAPH })
+
+  // Группа названа числом файлов и числом use case, которые её контракт может сломать.
+  assert.match(c.text, /\$START_GROUP — 2 файлов, которые трогают 2 use case: UC1 UC2/)
+  // ОБА use case дословно — в этом вся разница с карточкой одного дизайнера.
+  assert.match(c.text, /<usecase id="UC1"/)
+  assert.match(c.text, /<usecase id="UC2"/)
+  // Образец — по пути, как в карточке use case.
+  assert.match(c.text, /GlossaryStore.java — близнец: src\/configs\/snippets\/mongo\/SnippetStore.java/)
+  assert.match(c.text, /GlossaryNamespaceResolver.java — сосед того же вида: src\/modules\/impl\/CallerNamespaceResolver.java/)
+  // Черновик — ТОЛЬКО про файлы группы: чужой модуль графа в наряд не едет.
+  assert.match(c.text, /\$START_DRAFT[\s\S]*GlossaryStore.java[\s\S]*\$END_DRAFT/)
+  // …именно МОДУЛЯМИ: чужой `<module>` в наряд не едет, а вот ребро группы наружу — едет, это её
+  // собственный факт и он дизайнеру нужен.
+  const draft = c.text.slice(c.text.indexOf("$START_DRAFT"), c.text.indexOf("$END_DRAFT"))
+  assert.equal((draft.match(/<module /g) || []).length, 1)
+  assert.match(draft, /<dep path="src\/rest\/RestExisting.java"\/>/)
+  // Система пришла от образца: сам файл создаётся и своего io ещё не имеет.
+  assert.match(c.text, /system name="mongodb"/)
+})
+
+test("карточка группы тотальна: без графа — объявленное отсутствие черновика", () => {
+  const c = coreCardOf({ group: GROUP, frd: FRD_CARD, map: MAP })
+  assert.match(c.text, /\(черновика нет — проход 9B не отработал\)/)
+  assert.equal(coreCardOf().chars > 0, true)
+})
+
+const CORE_OK = `# src/configs/glossary
+## src/configs/glossary/mongo/GlossaryStore.java (новый)
+поля: нет собственных
+сигнатуры: read(String id) : Glossary
+use case: UC1 — читает; UC2 — тоже читает
+## src/modules/impl/GlossaryNamespaceResolver.java (новый)
+сигнатуры: resolve(String key) : String
+use case: UC1, UC2`
+
+test("гардрейл группы: решён каждый её файл, чужих нет, ни один use case не забыт", () => {
+  assert.deepEqual(checkCore({ text: CORE_OK, group: GROUP }), [])
+
+  // Файл группы без раздела — блокер называет его.
+  const lost = checkCore({ text: CORE_OK.replace(/## src\/modules[\s\S]*$/, ""), group: GROUP })
+  assert.equal(lost.length, 1)
+  assert.match(lost[0], /GlossaryNamespaceResolver.java/)
+
+  // Чужой файл решён — это работа его use case, не общая.
+  const extra = checkCore({ text: `${CORE_OK}\n## src/rest/RestExisting.java (правится)\n…`, group: GROUP })
+  assert.match(extra.join("\n"), /решены файлы не из этой группы: src\/rest\/RestExisting.java/)
+
+  // Use case не упомянут — контракт ломает и его, значит надо показать, чем он закрыт.
+  const missed = checkCore({ text: CORE_OK.replace(/UC2/g, ""), group: GROUP })
+  assert.match(missed.join("\n"), /use case UC2 не упомянут/)
 })

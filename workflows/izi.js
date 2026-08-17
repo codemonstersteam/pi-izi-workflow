@@ -11,7 +11,7 @@
 //               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
-//               split · cards · plan · review · reviewForm. They are not
+//               split · core · cards · plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -947,6 +947,14 @@ async function designing(from = 6) {
   const VALUES = await readText({ path: ".agent/values.xml" });
   await onePass("chains", () => ({ FRD, VALUES }));
 
+  // THE SHARED FILES ARE DECIDED BEFORE THE SWARM, one call per group. A file several use cases touch
+  // cannot be designed by any one of them: handed out by use case, `eddi`'s eight shared files would
+  // get two to eight independent designs, and a live run already produced one of those collisions —
+  // `terms` as a nested class in the plan of UC2 against the separate `model/Term.java` of UC6-UC8.
+  // Deciding them once, with every use case that touches them in view, prevents the duplicate instead
+  // of reconciling it afterwards. With no shared files (form `t2`) not a single call is made.
+  for (const g of cut.groups) await oneGroup(g);
+
   // THE CARDS ARE ASSEMBLED LAST OF THE SCRIPT WORK, because a card carries the flow of its own
   // scenarios and that flow is written by the pass just above. The size is the whole point of the
   // phase: the map and the FRD weigh 126 KB together, one card 5-10. The sample tally says how many
@@ -958,6 +966,58 @@ async function designing(from = 6) {
   log(`design/cards: карточек ${made.cards}, крупнейшая ${made.chars} симв — образцы: сам ${S.self || 0}, близнец ${S.twin || 0}, сосед ${S.neighbour || 0}, нет ${S.none || 0}`);
 
   return ".agent/data-flow.md";
+}
+
+// FUNCTION_CONTRACT: oneGroup — the shared files of ONE group, decided once for every use case
+//   Input:        g — one element of split's `groups`: { id, slug, paths, ucs }
+//   Dependencies: EXTERNAL — core, readText, agent(role "core-designer"); sized, charge, askOperator
+//   Antecedent:   the split found this group; LOOPS ≥ 1
+//   Consequent:   success: returns when `docs/design/core/<slug>.md` is written
+//                 failure: exits — err("escalate") when the group spent its LOOPS
+//   Purity:       io (host functions, roles)
+//
+// The same four beats as a pass of the dictionary: a script composes the order's DATA, the role
+// decides, a guardrail judges by three structural rules, and a green answer is promoted. The order
+// carries the group's files, every use case that touches them VERBATIM, the sample by path and the
+// draft contract of pass 9B — and nothing else: the map and the other use cases are deliberately
+// absent (10 KB against 126).
+async function oneGroup(g) {
+  const made = await core({ group: g.slug });
+  if (!made.ok) exit(err("blocked", { subject: made.why, evidence: `наряд общего дизайна группы ${g.slug} не собран` }));
+  log(`design/core ${g.slug}: файлов ${made.paths}, use case ${made.ucs}, наряд ${made.chars} симв`);
+
+  const CARD = await readText({ path: `.agent/staging/core/${g.slug}.txt` });
+  const staging = `.agent/staging/core/${g.slug}.md`;
+  const tpl = await readText({ path: "steps/design/order-core.tpl" });
+  let feedback = "(none — first attempt)";
+  let attempt = 0, silent = 0;
+  for (;;) {
+    if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `общий дизайн группы ${g.slug}: цикл исчерпан за ${LOOPS} попыток` }));
+    if (silent > LOOPS) exit(err("escalate", { subject: `роль ${silent} раз вернула track:"ok", не записав ${staging}`, evidence: `общий дизайн группы ${g.slug}: артефакта нет` }));
+
+    const o = sized(`design/core/${g.slug}`, tpl, {
+      CARD, FEEDBACK: feedback, STAGING: staging,
+      CHECK: 'core({group, path}) — раздел на каждый файл группы, ни одного чужого, ни одного забытого use case',
+    });
+    if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд общего дизайна ${g.slug} не помещается в окно модели — роль не запускалась` }));
+    const env = await agent(o.text, { role: "core-designer", outputSchema: ENVELOPE });
+
+    if (env.track === "err" && env.kind === "question") {
+      const q = charge(env);
+      if (q.spent) exit(noRoundsLeft(env, `design/core/${g.slug}`));
+      log(`design/core/${g.slug}: вопрос ${q.n} — «${env.subject}»`);
+      await askOperator(env, q.n, `design-core-${g.slug}`, "core-designer");
+      continue;
+    }
+    if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
+
+    const check = await core({ group: g.slug, path: staging });
+    if (check.ok) { log(`design/core ${g.slug}: зелен — решено файлов ${check.paths} для ${check.ucs} use case → ${check.at}`); return; }
+    feedback = check.blockers;
+    if (check.missing) { silent++; log(`design/core/${g.slug}: роль не записала ${staging} — попытка ${silent}, бюджет починки не тратится`); continue; }
+    attempt++;
+    log(`design/core/${g.slug}: красный — попытка ${attempt} из ${LOOPS}`);
+  }
 }
 
 // FUNCTION_CONTRACT: onePass — one pass of step 9: compose, delegate, judge, promote
