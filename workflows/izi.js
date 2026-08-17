@@ -11,7 +11,7 @@
 //               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
-//               plan · review · reviewForm. They are not
+//               split · plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -923,6 +923,16 @@ async function designing(from = 6) {
   }
 
   const FRD = await readText({ path: ".agent/frd.xml" });
+
+  // THE SPLIT FIRST, and it costs nothing: which files two or more use cases touch. Everything after
+  // step 9 is cut by USE CASE, and a file several use cases touch cannot be designed by any one of
+  // them alone — N designers would write N versions of it. The number is printed because it decides
+  // the shape of the work: on `eddi` 8 of 13 nodes are shared and fall into 2 groups, on `t2` none.
+  const cut = await split({});
+  if (!cut.ok) exit(err("blocked", { subject: cut.why, evidence: "разбиение шага 9 не посчитано" }));
+  log(cut.groups.length
+    ? `design/split: общих узлов ${cut.shared}, своих ${cut.own} — групп ${cut.groups.length}: ${cut.groups.map((g) => `${g.id} (файлов ${g.paths}, use case ${g.ucs})`).join(" · ")}`
+    : `design/split: общих узлов нет — все ${cut.own} проектируются своим use case, общий дизайн не нужен`);
 
   // A rewind to step 6 rewrote the FRD, so a dictionary extracted from the old one is structurally
   // green and about another change. Otherwise the gate's own verdict stands: green NOW, not green once.

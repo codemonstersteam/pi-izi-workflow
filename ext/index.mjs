@@ -78,6 +78,7 @@ import { newRipple, blindNodes, waiverFor } from "../steps/ripple/ripple.mjs"
 import { parseDesign, parseRoutes, expand, unitsByPath } from "../steps/design/design.mjs"
 import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/design/values.mjs"
 import { routesSkeleton, parseChains, checkChains, assemble } from "../steps/design/routes.mjs"
+import { splitOf } from "../steps/design/card.mjs"
 import { newPlanIndex } from "../steps/plan/plan.mjs"
 import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
@@ -1535,6 +1536,57 @@ export const design = {
   },
 }
 
+// --- split: which files are COMMON to several use cases -------------------------------------------
+// Step 9's first cut, and the cheapest one: it reads the FRD and nothing else, costs no tokens, and
+// decides whether a use case can be designed alone. Its artifact is STAGING and not a deliverable —
+// it is the input of the two swarms that follow, and it is recomputed whenever the FRD moves.
+const SPLIT_PATH = ".agent/staging/split.json"
+
+export const split = {
+  description: "Step 9, the split: read .agent/frd.xml and name the files that TWO OR MORE use cases touch, then group them into connected components over the relation «a common use case reaches both». A file only one use case touches can be designed by that use case's designer alone; a shared one cannot — N designers would write N versions of it. Writes .agent/staging/split.json and returns the counts. Costs no tokens. Measured: eddi 8 shared of 13 nodes → 2 groups, t3 1 → 1, t2 0 → 0.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      shared: { type: "number" },
+      own: { type: "number" },
+      groups: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { id: { type: "string" }, paths: { type: "number" }, ucs: { type: "number" } },
+          required: ["id", "paths", "ucs"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_ = {}, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, FRD_PATH))) {
+      return { ok: false, why: `${FRD_PATH} не существует — шаг 6 intake не отработал, делить нечего` }
+    }
+    const s = splitOf({ frd: parseFrd(readFileSync(at(root, FRD_PATH), "utf8")) })
+    mkdirSync(dirname(at(root, SPLIT_PATH)), { recursive: true })
+    writeFileSync(at(root, SPLIT_PATH), `${JSON.stringify({
+      shared: [...s.shared],
+      own: [...s.own],
+      groups: s.groups.map((g) => ({ id: g.id, paths: [...g.paths], ucs: [...g.ucs] })),
+      ucOf: Object.fromEntries([...s.ucOf].map(([p, u]) => [p, [...u]])),
+    }, null, 2)}\n`)
+    return {
+      ok: true,
+      shared: s.shared.length,
+      own: s.own.length,
+      groups: s.groups.map((g) => ({ id: g.id, paths: g.paths.length, ucs: g.ucs.length })),
+    }
+  },
+}
+
 // --- plan: the change as an ordered DAG of work ---------------------------------------------------
 // Step 10. One io function, and the ONLY one in the band that both asks the operator and applies the
 // answer itself: there is no role here to re-delegate to, so the value the operator typed is
@@ -1896,7 +1948,7 @@ export default function extension(pi) {
     version: "1.12.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
     description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, plan, review },
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, split, plan, review },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;
