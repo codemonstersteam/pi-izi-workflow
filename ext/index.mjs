@@ -78,7 +78,7 @@ import { newRipple, blindNodes, waiverFor } from "../steps/ripple/ripple.mjs"
 import { parseDesign, parseRoutes, expand, unitsByPath } from "../steps/design/design.mjs"
 import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/design/values.mjs"
 import { routesSkeleton, parseChains, checkChains, assemble } from "../steps/design/routes.mjs"
-import { splitOf } from "../steps/design/card.mjs"
+import { splitOf, cardOf } from "../steps/design/card.mjs"
 import { newPlanIndex } from "../steps/plan/plan.mjs"
 import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
@@ -1541,6 +1541,7 @@ export const design = {
 // decides whether a use case can be designed alone. Its artifact is STAGING and not a deliverable —
 // it is the input of the two swarms that follow, and it is recomputed whenever the FRD moves.
 const SPLIT_PATH = ".agent/staging/split.json"
+const CARDS_DIR = ".agent/staging/cards"
 
 export const split = {
   description: "Step 9, the split: read .agent/frd.xml and name the files that TWO OR MORE use cases touch, then group them into connected components over the relation «a common use case reaches both». A file only one use case touches can be designed by that use case's designer alone; a shared one cannot — N designers would write N versions of it. Writes .agent/staging/split.json and returns the counts. Costs no tokens. Measured: eddi 8 shared of 13 nodes → 2 groups, t3 1 → 1, t2 0 → 0.",
@@ -1552,6 +1553,16 @@ export const split = {
       why: { type: "string" },
       shared: { type: "number" },
       own: { type: "number" },
+      // The cards: one per use case, and their size. Printed by the workflow because it is the one
+      // place a run can see what a designer is actually handed — 10 KB against the 126 KB the map and
+      // the FRD weigh together.
+      cards: { type: "number" },
+      chars: { type: "number" },
+      samples: {
+        type: "object",
+        properties: { self: { type: "number" }, twin: { type: "number" }, neighbour: { type: "number" }, none: { type: "number" } },
+        additionalProperties: false,
+      },
       groups: {
         type: "array",
         items: {
@@ -1570,7 +1581,8 @@ export const split = {
     if (!existsSync(at(root, FRD_PATH))) {
       return { ok: false, why: `${FRD_PATH} не существует — шаг 6 intake не отработал, делить нечего` }
     }
-    const s = splitOf({ frd: parseFrd(readFileSync(at(root, FRD_PATH), "utf8")) })
+    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+    const s = splitOf({ frd })
     mkdirSync(dirname(at(root, SPLIT_PATH)), { recursive: true })
     writeFileSync(at(root, SPLIT_PATH), `${JSON.stringify({
       shared: [...s.shared],
@@ -1578,11 +1590,31 @@ export const split = {
       groups: s.groups.map((g) => ({ id: g.id, paths: [...g.paths], ucs: [...g.ucs] })),
       ucOf: Object.fromEntries([...s.ucOf].map(([p, u]) => [p, [...u]])),
     }, null, 2)}\n`)
+    // THE CARDS ARE WRITTEN IN THE SAME BREATH as the split, because they are a function of the same
+    // two artifacts and cost the same nothing. A card is STAGING: it is the input of a role, not a
+    // deliverable, and it is recomputed whenever the FRD or the map moves.
+    const map = existsSync(at(root, GRAPH_PATH)) ? readFileSync(at(root, GRAPH_PATH), "utf8") : ""
+    const flow = readIfExists(root, DATA_FLOW_PATH)
+    mkdirSync(at(root, CARDS_DIR), { recursive: true })
+    const samples = { self: 0, twin: 0, neighbour: 0, none: 0 }
+    let chars = 0
+    for (const u of frd.usecases || []) {
+      const id = String((u && u.id) || "").trim()
+      if (!id) continue
+      const c = cardOf({ uc: id, frd, map, flow })
+      writeFileSync(at(root, `${CARDS_DIR}/${id}.txt`), c.text)
+      chars = Math.max(chars, c.chars)
+      for (const x of c.samples) samples[x.kind] = (samples[x.kind] || 0) + 1
+    }
+
     return {
       ok: true,
       shared: s.shared.length,
       own: s.own.length,
       groups: s.groups.map((g) => ({ id: g.id, paths: g.paths.length, ucs: g.ucs.length })),
+      cards: (frd.usecases || []).length,
+      chars,
+      samples,
     }
   },
 }

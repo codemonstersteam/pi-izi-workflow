@@ -8,7 +8,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { splitOf } from "./card.mjs"
+import { splitOf, sampleOf, cardOf } from "./card.mjs"
 import { parseFrd } from "../intake/frd.mjs"
 
 // The shape measured on `eddi`, in miniature: a trio every use case runs through, a record shared by
@@ -106,4 +106,150 @@ test("разбиение — функция требования: два выч�
   const a = splitOf({ frd: FRD }), b = splitOf({ frd: parseFrd(FRD_XML) })
   assert.deepEqual([...a.shared], [...b.shared])
   assert.deepEqual(ids(a.groups), ids(b.groups))
+})
+
+// --- D37: карточка одного дизайнера и лестница образца ---------------------------------------------
+
+const MAP = `<appgraph grammar="3" modules="7">
+  <suite id="unit" kind="unit" cmd="./mvnw test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <systems>
+    <system name="mongodb" kind="db" config="mongo.url" value="mongodb://localhost" declared="yes" used="yes">
+    </system>
+    <system name="nats" kind="queue" config="nats.url" value="nats://localhost" declared="yes" used="no">
+    </system>
+  </systems>
+  <module path="src/configs/snippets/model/Snippet.java" level="6">
+    <role>запись сниппета</role>
+    <decl kind="class" name="Snippet" sig="public class Snippet"/>
+  </module>
+  <module path="src/configs/snippets/ISnippetStore.java" level="5">
+    <role>интерфейс хранилища сниппетов</role>
+    <decl kind="interface" name="ISnippetStore" sig="public interface ISnippetStore"/>
+  </module>
+  <module path="src/configs/snippets/mongo/SnippetStore.java" level="4">
+    <role>монго-хранилище сниппетов</role>
+    <decl kind="method" name="create(Snippet s)" sig="public IResourceId create(Snippet s)"/>
+    <io kind="db" dir="out" system="mongodb" target="snippets"/>
+  </module>
+  <module path="src/modules/impl/CallerNamespaceResolver.java" level="3">
+    <role>резолвер неймспейса вызывающего</role>
+    <decl kind="class" name="CallerNamespaceResolver" sig="public class CallerNamespaceResolver"/>
+  </module>
+  <module path="src/modules/impl/Engine.java" level="3"><role>движок</role></module>
+  <module path="src/rest/RestExisting.java" level="1">
+    <role>существующая точка</role>
+    <api name="GET /existing" kind="http" scope="public"/>
+  </module>
+</appgraph>`
+
+const FRD_CARD = parseFrd(`<frd grammar="1" goal="глоссарий">
+  <usecase id="UC1" actor="api" goal="прочитать глоссарий">
+    <pre>глоссарий есть</pre>
+    <post>глоссарий возвращён, HTTP 200</post>
+    <step n="1">GET /glossaries/{id}</step>
+    <step n="2">система читает хранилище</step>
+    <ext id="2a" error="NOT_FOUND" outcome="глоссарий не возвращён, ошибка отсутствия"/>
+  </usecase>
+  <usecase id="UC2" actor="api" goal="другое"><post>ok</post><step n="1">GET /other</step></usecase>
+  <delta op="GET /glossaries/{id}" form="Added" node="src/configs/glossary/mongo/GlossaryStore.java" new="yes"/>
+  <delta op="резолвит glossary:" form="Added" node="src/modules/impl/GlossaryNamespaceResolver.java" new="yes"/>
+  <delta op="GET /existing" form="Changed" node="src/rest/RestExisting.java" from="без глоссария" to="с глоссарием"/>
+  <scenario id="S1" uc="UC1" before="нет чтения" after="есть чтение" nodes="src/configs/glossary/mongo/GlossaryStore.java src/modules/impl/GlossaryNamespaceResolver.java src/rest/RestExisting.java"/>
+  <scenario id="S2" uc="UC2" before="нет" after="есть" nodes="src/rest/RestExisting.java"/>
+  <failure code="NOT_FOUND" status="404" client="показать отсутствие" operator="—" from="UC1/2a"/>
+</frd>`)
+
+const FLOW = `$START_FLOW id="S1"
+1. src/rest/RestExisting.java : GET /glossaries/{id} -> read()
+$END_FLOW
+$START_FLOW id="S1b"
+1. src/rest/RestExisting.java : GET /glossaries/{id} -> 404 NOT_FOUND
+$END_FLOW
+$START_FLOW id="S2"
+1. src/rest/RestExisting.java : GET /other -> ok
+$END_FLOW
+$START_TESTS path="src/rest/RestExisting.java"
+1. GET /glossaries/{id} -> read()
+$END_TESTS`
+
+const card = (uc = "UC1", over = {}) => cardOf({ uc, frd: FRD_CARD, map: MAP, flow: FLOW, ...over })
+
+test("лестница образца: сам себе · близнец того же вида · сосед того же вида · нет ничего", () => {
+  // Узел СУЩЕСТВУЕТ — образец не нужен, контекст это он сам.
+  assert.deepEqual(sampleOf("src/rest/RestExisting.java", MAP), { kind: "self", path: "src/rest/RestExisting.java" })
+
+  // БЛИЗНЕЦ: тот же путь для другой сущности. Различий два — и в каталоге, и в имени класса, —
+  // поэтому строгое «одно отличие» здесь не работает, а вид (`Store`) совпадает.
+  assert.deepEqual(sampleOf("src/configs/glossary/mongo/GlossaryStore.java", MAP),
+    { kind: "twin", path: "src/configs/snippets/mongo/SnippetStore.java" })
+  assert.deepEqual(sampleOf("src/configs/glossary/IGlossaryStore.java", MAP),
+    { kind: "twin", path: "src/configs/snippets/ISnippetStore.java" })
+  // Запись: вида общего нет (`Glossary` против `Snippet`), но зеркальный каталог `model` совпал.
+  assert.deepEqual(sampleOf("src/configs/glossary/model/Glossary.java", MAP),
+    { kind: "twin", path: "src/configs/snippets/model/Snippet.java" })
+
+  // СОСЕД ТОГО ЖЕ ВИДА: близнеца нет, но рядом лежит резолвер. Вид бьёт зеркало — иначе сюда
+  // приезжает `Engine.java` из того же каталога и учит не тому.
+  assert.deepEqual(sampleOf("src/modules/impl/GlossaryNamespaceResolver.java", MAP),
+    { kind: "neighbour", path: "src/modules/impl/CallerNamespaceResolver.java" })
+
+  // НЕТ НИЧЕГО — объявляется, а не замалчивается.
+  assert.deepEqual(sampleOf("src/brand/new/Thing.java", MAP), { kind: "none", path: "" })
+  assert.deepEqual(sampleOf("", MAP), { kind: "none", path: "" })
+})
+
+test("карточка: каждый раздел — проекция на ОДИН use case, а не файл целиком", () => {
+  const c = card()
+
+  // Свой use case дословно, со своими ветками и отказом; чужого в карточке нет.
+  assert.match(c.text, /<usecase id="UC1"/)
+  assert.match(c.text, /<ext id="2a" error="NOT_FOUND"/)
+  assert.match(c.text, /<failure code="NOT_FOUND" status="404"/)
+  assert.doesNotMatch(c.text, /UC2/)
+
+  // Узлы этого use case — байтами карты; существующий пришёл со своим `<api>`.
+  assert.deepEqual([...c.nodes], [
+    "src/configs/glossary/mongo/GlossaryStore.java",
+    "src/modules/impl/GlossaryNamespaceResolver.java",
+    "src/rest/RestExisting.java",
+  ])
+  assert.match(c.text, /<api name="GET \/existing"/)
+
+  // Системы — свои узлы И их образцы: все узлы этого use case создаются, `<io>` у них ещё нет, а
+  // образец говорит «хранилище такого рода пишет в mongodb». Очередь, которой не касается никто,
+  // в карточку не едет.
+  assert.match(c.text, /system name="mongodb"/)
+  assert.doesNotMatch(c.text, /system name="nats"/)
+
+  // Поток — только своих сценариев: S2 остался за бортом.
+  assert.match(c.text, /\$START_FLOW id="S1"/)
+  assert.match(c.text, /\$START_FLOW id="S1b"/)
+  assert.doesNotMatch(c.text, /\$START_FLOW id="S2"/)
+
+  // Команда проверки и общий дизайн, которого пока нет, — объявлены, а не пропущены.
+  assert.match(c.text, /cmd="\.\/mvnw test"/)
+  assert.match(c.text, /\(общего дизайна для этого use case нет\)/)
+})
+
+test("карточка несёт образец ПУТЁМ и его объявления — тело роль дочитает сама", () => {
+  const c = card()
+  assert.match(c.text, /GlossaryStore.java — близнец: src\/configs\/snippets\/mongo\/SnippetStore.java/)
+  assert.match(c.text, /GlossaryNamespaceResolver.java — сосед того же вида: src\/modules\/impl\/CallerNamespaceResolver.java/)
+  assert.match(c.text, /RestExisting.java — узел существует, образец не нужен/)
+  // Объявления образца в карточке есть — по ним видно, что копировать.
+  assert.match(c.text, /name="create\(Snippet s\)"/)
+})
+
+test("общий дизайн подставляется как ГОТОВОЕ, и роль его не переопределяет", () => {
+  const c = card("UC1", { common: "# GlossaryStore.java\nполя: id, name" })
+  assert.match(c.text, /\$START_COMMON[\s\S]*поля: id, name[\s\S]*\$END_COMMON/)
+})
+
+test("тотальность: неизвестный use case и пустые входы не роняют сборку", () => {
+  const empty = cardOf()
+  assert.equal(empty.nodes.length, 0)
+  assert.match(empty.text, /\(use case не найден\)/)
+  const ghost = card("UC99")
+  assert.equal(ghost.nodes.length, 0)
+  assert.match(ghost.text, /\(ни одного из них в репозитории ещё нет — все создаются\)/)
 })
