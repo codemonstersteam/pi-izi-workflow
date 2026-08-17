@@ -1569,8 +1569,12 @@ export const split = {
         type: "array",
         items: {
           type: "object",
-          properties: { id: { type: "string" }, paths: { type: "number" }, ucs: { type: "number" } },
-          required: ["id", "paths", "ucs"],
+          // `slug` rides out with the group because it is the NAME of its artifacts — the caller
+          // asks for `core({group: slug})` and reads `docs/design/core/<slug>.md`. Without it the
+          // workflow called the host with `undefined` and the group could not be found (live run,
+          // 17 Aug): a derived id that stays inside the module is an id the caller cannot use.
+          properties: { id: { type: "string" }, slug: { type: "string" }, paths: { type: "number" }, ucs: { type: "number" } },
+          required: ["id", "slug", "paths", "ucs"],
           additionalProperties: false,
         },
       },
@@ -1596,7 +1600,7 @@ export const split = {
       ok: true,
       shared: s.shared.length,
       own: s.own.length,
-      groups: s.groups.map((g) => ({ id: g.id, paths: g.paths.length, ucs: g.ucs.length })),
+      groups: s.groups.map((g) => ({ id: g.id, slug: g.slug, paths: g.paths.length, ucs: g.ucs.length })),
     }
   },
 }

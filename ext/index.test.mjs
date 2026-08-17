@@ -18,7 +18,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, plan, review, reviewForm, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, split, plan, review, reviewForm, iziAnswer } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
 // D23: the gate of step 6 — its question is a constant of the ripple slice, and the answer travels in
 // the format core/answers.mjs owns.
@@ -633,6 +633,19 @@ const named = (root) => {
     .replace('closes="UC1/in" side="in" text=""', 'closes="UC1/in" side="in" text="GET /parcels?track=T"')
     .replace('closes="UC1/post" side="out" text=""', 'closes="UC1/post" side="out" text="Parcels(совпавшие)"')
 }
+
+// Живой прогон 17 авг: воркфлоу звал core({group: undefined}) и получал «группы «» нет в разбиении».
+// Причина — производный id, оставшийся внутри модуля: схема хоста его не выпускала. Имя артефакта
+// группы обязано выходить наружу, иначе позвать её нельзя.
+test("разбиение отдаёт slug группы — им её и зовут, и им названы её артефакты", () => {
+  const root = designRoot()
+  const r = split.run({}, ctx(root))
+  assert.equal(r.ok, true)
+  for (const g of r.groups || []) {
+    assert.equal(typeof g.slug, "string")
+    assert.equal(g.slug.includes("/"), false, "slug — имя файла, а не путь")
+  }
+})
 
 test("гейт: артефакты снесённых проходов не переживают его НИКОГДА, а зелёный словарь переживает", () => {
   // skip — от шага 9 не остаётся ничего
