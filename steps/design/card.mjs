@@ -414,7 +414,15 @@ export function checkCore({ text = "", group = {} } = {}) {
   const B = []
   const paths = [...((group && group.paths) || [])]
   const ucs = [...((group && group.ucs) || [])]
-  const said = [...String(text || "").matchAll(/^##\s+(\S+)/gm)].map((m) => m[1].trim())
+  // A section is a FILE section when its heading is a path — it carries a `/` or a file extension.
+  // Everything else is prose the role added of its own accord, and prose is not a defect.
+  //
+  // BUG_FIX_CONTEXT: live run of 17 Aug on `eddi`, group `backup`. The role closed its contract with
+  // a `## Сводка:` heading, and this rule read it as a decision about a file named «Сводка:» —
+  // «решены файлы не из этой группы». A guardrail that refuses an artifact for a summary line is a
+  // guardrail that teaches the role to write worse documents.
+  const isPath = (x) => x.includes("/") || /\.[A-Za-z0-9]+$/.test(x)
+  const said = [...String(text || "").matchAll(/^##\s+(\S+)/gm)].map((m) => m[1].trim()).filter(isPath)
 
   const lost = paths.filter((p) => !said.includes(p))
   const extra = said.filter((p) => !paths.includes(p))
