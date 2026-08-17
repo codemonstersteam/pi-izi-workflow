@@ -135,24 +135,38 @@ test("the RETURN leg of a route is not an edge", () => {
   assert.ok(idsOf(r.value).indexOf(RESOURCE) < idsOf(r.value).indexOf(CARD), "the callee still comes first")
 })
 
-// D17. The defect live run f7bf154a died on, reproduced HERE — this is the step that names it, and
-// that is the whole problem: `cycle` is a refusal on a step with no role, no operator and no repair
-// rail, so the band ends holding a diagnosis nobody can act on. The route below is the live shape:
-// rule 7 of step 9 demanded a branch be walked, no FRD scenario exercised it, and pass C took it by
-// handing the value to the node that CALLS this one. The map already says `LIST -> RESOURCE`.
+// A ROUTE THAT CONTRADICTS THE MAP DOES NOT ORDER ANYTHING — orderLegs, and it is the fix of the
+// 2026-08-17 run on `eddi`. A route says who hands control to whom; this step asks what must be
+// WRITTEN first. On an ordinary joint the two agree. On an interface and its implementation they are
+// opposite: the call goes THROUGH the interface INTO the implementation, while the implementation
+// cannot be written without the interface. The map holds the repository's static edges, so it is the
+// arbiter — and the route's leg stays in `.agent/data-flow.md`, where it describes the call.
 //
-// Step 9's rule 9 now refuses that set of routes BEFORE it reaches here (steps/design/routes.mjs), and
-// it refuses it by `forwardLegs` — the very function this module orders by. These two tests are what
-// keep the two ends honest: the first proves this step still dies on the inverted route, the second
-// proves the way out step 9 offers the role actually reaches a plan.
+// This test used to assert the opposite (the `cycle` refusal of live run f7bf154a), and the change of
+// mind is measured, not aesthetic: on `eddi` every honest route through an interface produced that
+// cycle, three redelegations could not repair it, and the pass escalated. The refusal survives for a
+// cycle the map does NOT contradict — the test below it.
 const INVERTING = ROUTED.replace("</design>", `  <route scenario="S3" entry="1" steps="${RESOURCE}#1 -> ${LIST}#1"/>\n</design>`)
 const SHORTENED = ROUTED.replace("</design>", `  <route scenario="S3" entry="1" steps="${RESOURCE}#1"/>\n</design>`)
 
-test("a route asserting the direction the map already declares closes the order — the f7bf154a refusal", () => {
+test("маршрут против направления карты порядок не строит и не ломает — решает карта", () => {
   const r = run({ design: INVERTING })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  // Ребра «ресурс после страницы» не появилось: карта уже сказала обратное.
+  assert.deepEqual(r.value.nodes.find((n) => n.id === RESOURCE).deps.filter((d) => d === LIST), [])
+  assert.ok(idsOf(r.value).indexOf(RESOURCE) < idsOf(r.value).indexOf(LIST), "порядок карты сохранён")
+})
+
+// …и отказ на месте там, где карта молчит: два маршрута навстречу друг другу по узлам, между
+// которыми у репозитория ребра нет вовсе. Такой круг чинить некому и на шаге 10, и на шаге 9 —
+// поэтому он остаётся отказом.
+test("круг, которому карта не противоречит, по-прежнему отказ — чинить его на шаге 10 некому", () => {
+  const both = ROUTED
+    .replace("</design>", `  <route scenario="S4" entry="1" steps="${CARD}#1 -> ${FRUIT}#1"/>\n</design>`)
+    .replace("</design>", `  <route scenario="S5" entry="1" steps="${FRUIT}#1 -> ${CARD}#1"/>\n</design>`)
+  const r = run({ design: both })
   assert.equal(r.ok, false)
   assert.equal(r.error.cls, "cycle")
-  assert.match(r.error.detail, new RegExp(`${RESOURCE}|${LIST}`))
 })
 
 test("the way out of rule 9 reaches a plan: a route that ENDS on the node that produced the value", () => {

@@ -38,6 +38,7 @@
 //             TASK_KEY — the shape of the operator's answer
 //             KEY_QUESTION — the question's text, verbatim and byte-stable across runs
 //             forwardLegs(routes) -> [{ from, to, scenario }]  — the edges a route asserts
+//             orderLegs(legs, edges) -> [{ from, to, scenario }]  — those of them that order the work
 //             newPlanIndex({ frd, map, mode, design, trunk, answers }) -> Result<Plan, ...>
 
 import { ok, err } from "../../core/result.mjs"
@@ -76,6 +77,39 @@ export function forwardLegs(routes) {
     }
   }
   return out
+}
+
+// FUNCTION_CONTRACT: orderLegs — the legs a route asserts that are also an ORDER OF WORK
+//   Input:        legs — forwardLegs' array; edges — the MAP's directed edges (`from` uses `to`)
+//   Dependencies: —
+//   Antecedent:   any values; a missing/garbage input is an empty list
+//   Consequent:   success: the legs whose REVERSE the map does not already carry, in order
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    orderLegs(legs?, edges?) -> [{ from, to, scenario }]
+//
+// A ROUTE SAYS WHO HANDS CONTROL TO WHOM; AN ORDER OF WORK ASKS WHAT MUST BE WRITTEN FIRST. For an
+// ordinary joint the two agree — the page cannot call an endpoint that does not exist — and for an
+// INTERFACE AND ITS IMPLEMENTATION they are opposite: at run time the call goes through the interface
+// INTO the implementation, while the work goes the other way, because an implementation cannot be
+// written without its interface and an interface can be written without any.
+//
+// The map is the arbiter, and it is the right one: it holds the repository's STATIC edges, and "what
+// must be written first" is a question about statics. So a leg whose reverse the map already carries
+// is a dispatch, not a dependency: it stays in the flow (`.agent/data-flow.md`, where it describes the
+// call) and does not become an edge of the order.
+//
+// BUG_FIX_CONTEXT: live run of 2026-08-17 on form `eddi`, step 9 pass B. The role wrote
+//   `RestImportService -> IResourceSource -> ZipResourceSource` — a correct route. Its leg
+//   `IResourceSource -> ZipResourceSource` met the map's `ZipResourceSource -> IResourceSource` and
+//   the two closed a cycle: three redelegations and an escalation, with nothing for the role to
+//   repair — every honest route through an interface produces the same pair. Without the rule the
+//   same cycle reaches step 10, which has no role at all and refuses with `err("cycle")` (run
+//   f7bf154a). ONE expression, two callers — step 9's guardrail and this step's order — because a
+//   promise of "step 10 will sort this" made by a second copy is a promise about a different graph.
+export function orderLegs(legs, edges) {
+  const known = new Set((edges || []).filter((e) => e && e.from && e.to).map((e) => `${e.from}>${e.to}`))
+  return (legs || []).filter((l) => l && !known.has(`${l.to}>${l.from}`))
 }
 
 // 2 — the node carries what a TICKET needs to be shippable: `dod` (its units, derived once at step 9
@@ -319,7 +353,8 @@ export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, e
   // sides. Its other caller is rule 9 of step 9's own guardrail, which refuses a set of routes whose
   // order cannot be built — and a promise of "step 10 will sort this" made by a SECOND copy of this
   // loop would be a promise about a different graph (live run f7bf154a, backlog D17).
-  for (const l of forwardLegs(routes)) addDep(l.from, l.to)          // caller waits for the callee
+  // …and NOT the legs the map already contradicts: those are dispatch, not dependency — see orderLegs.
+  for (const l of orderLegs(forwardLegs(routes), m.edges)) addDep(l.from, l.to)   // caller waits for the callee
 
   // A created module has no edge in the map — it is not there yet. Its neighbours are what the
   // designer wrote, and the undirectedness of `<dep>` is harmless here: a module that does not exist

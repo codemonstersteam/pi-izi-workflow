@@ -124,10 +124,18 @@ test("круг: порядок работ не строится — судитс
   // пройденным узлам, `A -> B -> A` говорит «A зовёт B» и ничего больше (forwardLegs). Зелёная
   // цепочка выше именно такая, и она законна.
   assert.deepEqual(blockersOf(GREEN), [])
-  // Круг замыкается ребром КАРТЫ: репозиторий уже зовёт в обратную сторону, и порядок работ исчезает.
-  const viaMap = blockersOf(GREEN, [{ from: "src/FruitResource.java", to: "src/fruits.html" }])
-  assert.equal(viaMap.length, 1)
-  assert.match(viaMap[0], /замкнуты в круг/)
+
+  // Участок, которому карта ПРОТИВОРЕЧИТ, ребром порядка не становится вовсе (orderLegs): вызов через
+  // интерфейс в реализацию идёт в одну сторону, а пишется в другую. Круга здесь нет — и правильно:
+  // на `eddi` каждый честный маршрут через интерфейс давал этот круг, три круга починки его не
+  // чинили, потому что чинить было нечего.
+  assert.deepEqual(blockersOf(GREEN, [{ from: "src/FruitResource.java", to: "src/fruits.html" }]), [])
+
+  // …а круг, которому карта не противоречит, отказ: две цепочки навстречу друг другу.
+  const both = GREEN.replace(/(id="S1b"[^>]*?)steps="[^"]*"/, `$1steps="src/FruitResource.java@${NF} -> src/fruits.html@${NF}"`)
+  const cyc = blockersOf(both)
+  assert.equal(cyc.length, 1)
+  assert.match(cyc[0], /замкнуты в круг/)
 })
 
 test("сборка: контракты, рёбра и поток выводятся из цепочек — роль их не писала", () => {

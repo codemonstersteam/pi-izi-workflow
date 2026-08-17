@@ -11,10 +11,11 @@
 //             `parseFrd`'s deltas and scenarios are read as data, never re-parsed.
 // EXTERNAL_DEPENDENCY: steps/ripple/ripple.mjs::changeWidth — "which nodes does this change work on"
 //             is step 8's expression; steps 8, 9 and 10 must not be able to disagree about it.
-// EXTERNAL_DEPENDENCY: steps/plan/plan.mjs::forwardLegs — "which directed edge does a chain assert" is
-//             ONE derivation, and it lives with its other consumer: step 10 orders the work by exactly
-//             these edges, so a cycle this guardrail misses is `err("cycle")` at step 10 with no repair
-//             rail at all (live run f7bf154a).
+// EXTERNAL_DEPENDENCY: steps/plan/plan.mjs::forwardLegs + orderLegs — "which directed edge does a chain
+//             assert" and "which of them order the WORK" are ONE derivation each, and both live with
+//             their other consumer: step 10 orders by exactly these edges, so a cycle this guardrail
+//             misses is `err("cycle")` at step 10 with no repair rail at all (live run f7bf154a), and
+//             a cycle this guardrail INVENTS is three redelegations the role cannot repair.
 // Invariants: every function here is TOTAL — any input, including undefined, yields an empty result
 //             and never throws; the skeleton is a FUNCTION of the FRD and the dictionary, so two runs
 //             over one pair agree byte for byte; checkChains returns EVERY blocker, not the first.
@@ -41,7 +42,7 @@
 import { attrs, tag, tokens, esc } from "../../core/xml.mjs"
 import { endsOf } from "../intake/frd.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
-import { forwardLegs } from "../plan/plan.mjs"
+import { forwardLegs, orderLegs } from "../plan/plan.mjs"
 
 export const ROUTES_GRAMMAR = 1
 
@@ -190,7 +191,9 @@ export function checkChains({ staged, frd = {}, values = new Map(), edges = [] }
   // edges plus the map's, and a cycle there is `err("cycle")` with no role to repair it — live run
   // f7bf154a. The rule is judged once, over ALL chains together, because a cycle is not a property of
   // any one of them.
-  const legs = forwardLegs(mine.map((c) => ({ scenario: c.id, steps: c.steps })))
+  // …and the legs the MAP contradicts are not legs of the order at all: a call through an interface
+  // into its implementation runs one way and is WRITTEN the other (steps/plan/plan.mjs::orderLegs).
+  const legs = orderLegs(forwardLegs(mine.map((c) => ({ scenario: c.id, steps: c.steps }))), edges)
   const cyc = cycleIn([...legs.map((l) => [l.from, l.to]), ...(edges || []).map((e) => [e.from, e.to])])
   if (cyc.length) B.push(`порядок работ не строится: узлы ${cyc.join(" -> ")} замкнуты в круг — шаг 10 сортирует по этим же рёбрам и упадёт без рельсы починки`)
 
