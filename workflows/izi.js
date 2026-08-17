@@ -11,7 +11,7 @@
 //               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
-//               parts · part · planbook · plan · review · reviewForm. They are not
+//               parts · part · planbook · gate1 · plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -1053,6 +1053,34 @@ async function onePart(one, since = "(none — first attempt)") {
 }
 
 
+// FUNCTION_CONTRACT: gating — step 12: the operator approves the plan, or sends it back
+//   Input:        —
+//   Dependencies: EXTERNAL — gate1 (the host function; the local name differs because a sandbox
+//                 global cannot be shadowed by its caller); charge, askOperator, noRoundsLeft
+//   Antecedent:   step 9 left task/<КЛЮЧ>/PLAN.md
+//   Consequent:   success: returns "" when the plan is approved and .agent/gate1.json is written,
+//                          or the operator's words when they sent it back — the caller rewinds to 6
+//                 failure: exits — err("stopped") on `stop`, err("blocked") on anything else
+//   Purity:       io (host functions, the operator)
+//
+// THE PRESENTATION IS THE QUESTION, and that is what binds the decision to the plan: an answer is
+// recognised by the question's TEXT (core/answers.mjs), so a plan that changed after the operator
+// looked at it asks anew instead of inheriting an approval it never got.
+async function gating() {
+  for (let round = 1; round <= QUESTION_ROUNDS + 1; round++) {
+    const g = await gate1({});
+    if (g.ok) { log(`gate1: план утверждён — модулей ${g.modules}, токен ${g.at}`); return ""; }
+    if (g.rework) { log(`gate1: оператор вернул план на доработку — «${g.rework}»`); return g.rework; }
+    if (g.stop) exit(err("stopped", { subject: g.why, evidence: "gate1" }));
+    if (!g.ask) exit(err("blocked", { subject: g.blockers || g.why, evidence: ".agent/gate1.json не написан" }));
+
+    const q = charge({ subject: g.subject });
+    if (q.spent) exit(noRoundsLeft({ subject: g.subject, evidence: "" }, "gate1"));
+    await askOperator({ subject: g.subject, evidence: "" }, q.n, "gate1", "gate1");
+  }
+  exit(err("blocked", { subject: "гейт 1 не получил разбираемого ответа", evidence: "approve · rework: <что не так> · stop" }));
+}
+
 // FUNCTION_CONTRACT: onePass — one pass of step 9: compose, delegate, judge, promote
 //   Input:        id — "values" | "chains"; extra — the keys of THIS pass's order, as a thunk
 //   Dependencies: EXTERNAL — design, readText, promote, agent, sized; askOperator, charge
@@ -1316,6 +1344,24 @@ async function band(from0) {
     // rewind ordered by a false blocker of the critic.
     //
     // ONE LINE, and it is the only thing that has to move back when D35 closes.
+    // GATE 1 — the operator approves the plan or sends it back to the requirement. `rework` rewinds to
+    // step 6 and carries the operator's own words into the intake order: a plan cannot be edited
+    // around the FRD, because the only thing that checks plan against requirement is phase ⑥, and it
+    // reads the FRD.
+    if (from <= 12) {
+      phase("gate1");
+      const back = await gating();
+      if (back) {
+        from = 6;
+        edges = [];
+        fromCritic = `оператор на гейте 1: ${back}`;
+        log("gate1: перемотка на шаг 6 — требование переписывается, план собирается заново");
+        continue;
+      }
+    }
+
+    // The band stops HERE for now: step 13 (branch) and step 14 (tickets) are not written yet.
+    if (STOP_AFTER_GATE1) return "PLAN.md";
     if (STOP_AFTER_DESIGN) return from <= 9 ? planned : ".agent/data-flow.md";
 
     if (from <= 10) { phase("plan"); planned = await planning(edges); }
@@ -1370,14 +1416,30 @@ async function band(from0) {
   }
 }
 
-// STOP_AFTER_DESIGN — шаги 10 и 11 отложены, пока не закрыт наряд D35 (операция на сценарий в FRD).
-// Одна константа и одна строка в лестнице: вернуть их обратно — снять `true`.
+// STOP_AFTER_DESIGN — полоса кончается после шага 9, и у шагов 10 и 11 причины РАЗНЫЕ.
+//
+//   шаг 10 `plan` — ждёт, потому что источник `dod` переезжает: сегодня он считается из юнитов
+//     design-graph.xml, а с шага 9 приходит строка «проверка» у каждого раздела плана. Включается
+//     после шага 14, который покажет, что тикеты режутся из разделов (docs/workflow.md §3.10).
+//   шаг 11 `review` — не ждёт, а ПЕРЕЕЗЖАЕТ: критик судит FRD против TASK.md, и место его после
+//     шага 6, а не здесь. План судить нечего — фаза ⑥ шага 9 сверяет его с FRD машиной
+//     (docs/workflow.md §3.11, TOBE).
+//
+// Одна константа и одна строка в лестнице: вернуть шаг 10 — снять `true`.
 const STOP_AFTER_DESIGN = true;
 
+// STOP_AFTER_GATE1 — полоса кончается сразу после гейта 1: шаг 13 (ветка) и шаг 14 (тикеты) ещё не
+// написаны. Снимается, когда появится шаг 13.
+const STOP_AFTER_GATE1 = true;
+
 function bandEnds(artifact) {
-  log(STOP_AFTER_DESIGN
-    ? `izi: полоса кончилась на шаге 9 — шаги 10 и 11 отложены до наряда D35. Поставка — ${artifact}: план доработки по модулям, из которого режутся тикеты`
-    : "izi: полоса кончилась на шаге 11. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
+  // Где полоса кончилась — вопрос ФЛАГА, а не памяти: строка врала ровно один прогон, объявляя гейт 1
+  // ненаписанным после того, как он отработал и положил токен (ffdc6844).
+  log(STOP_AFTER_GATE1
+    ? `izi: полоса кончилась на гейте 1 — шаги 13 и 14 ещё не написаны. Поставка — ${artifact}: план доработки по модулям и токен акцепта .agent/gate1.json`
+    : STOP_AFTER_DESIGN
+      ? `izi: полоса кончилась на шаге 9. Поставка — ${artifact}: план доработки по модулям, из которого режутся тикеты`
+      : "izi: полоса кончилась на шаге 11. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
   exit(ok({
     artifact,
     next: "Полоса кончается здесь. Напечатай результат и остановись: не пиши код, не гоняй тесты, не меняй файлы проекта — реализация это шаг 15, которого ещё нет.",
