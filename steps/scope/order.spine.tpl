@@ -1,8 +1,8 @@
 $START_TASK
 Answer seven questions about this repository from the spine files of cell {CELL}: WHAT it builds,
-how it is TESTED, how it is BUILT, how features are SWITCHED OFF, how branches and commits are
-NAMED, how its external contract is DESCRIBED and validated, and which EXTERNAL SYSTEMS its
-configuration declares. Each answer is what you read — or `found="no"`.
+how it is TESTED, how it is BUILT, how a RUNNING instance switches behaviour on and off, how
+branches and commits are NAMED, how its external contract is DESCRIBED and validated, and which
+EXTERNAL SYSTEMS its configuration declares. Each answer is what you read — or `found="no"`.
 $END_TASK
 
 $START_DATA
@@ -50,6 +50,14 @@ $START_CONSTRAINTS
   to this declaration by that key. `value` is what the file actually holds; if that is a placeholder
   or an environment variable, write the placeholder — a secret never travels into the graph. One
   system, one `<integration>`
+- `<toggles mechanism="…" config="…"/>` is how a RUNNING instance switches behaviour WITHOUT being
+  rebuilt or redeployed: a configuration property read at run time, a flag in a table, a feature-flag
+  library. `config` is that KEY — the property, flag or record the running application reads — and it
+  is required, exactly as it is for an `<integration>`
+- a build profile (`-P…`), a compiler or packaging flag, a variable that selects the deployment
+  environment and a branch are NOT toggles: none of them changes anything without a rebuild, and
+  none of them has a key the running application reads. Found no such key — `<toggles found="no"/>`,
+  and that is a complete answer, not a failure
 - list EVERY test suite you find, not the first one: unit tests next to the code, component and
   contract suites in their own folders — each with its own `cmd`, its own folder and its own
   one-file form
@@ -64,6 +72,12 @@ $START_CONSTRAINTS
   takes `*IT.java`; gradle and jest declare theirs in the build file. Without it step 5 has two
   candidates per test file and binds the integration test to the unit command, which then runs
   nothing and reports green. One suite over a folder needs no `match`
+- `match` is checked against the files you were given: a pattern that picks up none of them is
+  rejected. The file EXTENSION is part of the name a runner matches — leave it off and the pattern
+  catches nothing
+- `cmd` runs the runner THIS repository ships. `mvnw` or `gradlew` in the root is that runner:
+  write `./mvnw …`, `./gradlew …`. A bare `mvn`/`gradle` beside a wrapper is rejected — it is a
+  different runner and may not be installed at all
 - `one` is what has to be ADDED to THIS suite's own `cmd` to run ONE test file instead of the whole
   suite. Read it where this suite's runner is configured — the build manifest, the task or profile
   that defines the suite, that runner's own flag. Write `{{class}}` where the file or class name
@@ -89,7 +103,7 @@ schema:
     <artifact name="…" root="…"/>
     <suite id="…" kind="unit|component|contract|e2e" cmd="…" one="… or empty" path="…" match="… when two suites share a folder"/>
     <build cmd="…"/>
-    <toggles mechanism="…"/>
+    <toggles mechanism="…" config="…"/>
     <branching branches="…" commits="…"/>
     <contract spec="…" validator="…"/>
     <integration kind="db" system="…" config="…" value="…"/>

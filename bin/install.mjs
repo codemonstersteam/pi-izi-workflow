@@ -41,7 +41,11 @@ export function installTo(root) {
 
   const copied = []
   for (const part of PARTS) {
-    cpSync(join(HARNESS, part), join(dst, part), { recursive: true })   // overwrite our own, leave neighboring foreign files alone
+    // `-ru.md` NEVER ships. A Russian copy of a role or an order exists for a human to proofread the
+    // wording; the pipeline reads the original, and pi would register every stray `.md` of a role
+    // directory as a role of its own (pi-extensible-workflows validation.ts, scanRoleFiles). What the
+    // run executes goes into the project; what only a reader needs stays in the harness.
+    cpSync(join(HARNESS, part), join(dst, part), { recursive: true, filter: (src) => !/-ru\.md$/.test(src) })   // overwrite our own, leave neighboring foreign files alone
     copied.push(part)
   }
 

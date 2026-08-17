@@ -50,7 +50,7 @@
 // Interface:    default export — extension(pi): registers the izi_answer tool on pi AND calls
 //               registerWorkflowExtension (pi-extensible-workflows contract) for the sandbox
 //               functions and role directories. readText/answers/brdForm/checkTask/checkBrd/promote/
-//               setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph are ALSO named exports — pi-extensible-workflows never
+//               setPending/clearPending/survey/focus/cells/digest/reuse/remember/checkPart/buildGraph are ALSO named exports — pi-extensible-workflows never
 //               exercises run(input, context) itself (it is the caller, not test scaffolding), so
 //               ext/index.test.mjs imports these directly and calls run() with a fabricated
 //               { run: { cwd } } context to prove the anchor without a live pi/workflow harness.
@@ -62,9 +62,11 @@ import { dirname, join } from "node:path"
 import { Type } from "typebox"
 import { registerWorkflowExtension, herdrAvailable, herdrPaneId, loadSettings } from "pi-extensible-workflows"
 import { checkTaskText } from "../steps/task/task.mjs"
-import { newBrd, parseBrd } from "../steps/brd/brd.mjs"
+import { newBrd, parseBrd, analogueTerm } from "../steps/brd/brd.mjs"
 import { newPlan } from "../steps/survey-plan/plan.mjs"
 import { skipDir, skipFile } from "../steps/survey-plan/skip.mjs"
+import { newSlices } from "../steps/focus/slices.mjs"
+import { newFocus } from "../steps/focus/focus.mjs"
 import { newPart, GRAMMAR_VERSION } from "../steps/scope/part.mjs"
 import { readSource } from "../steps/scope/source.mjs"
 import { newComputed, computedXml, parseComputed } from "../steps/scope/computed.mjs"
@@ -72,15 +74,22 @@ import { newDigest } from "../steps/scope/digest.mjs"
 import { newGraph, graphXml } from "../steps/graph/graph.mjs"
 import { newFrd, parseFrd, FRD_FORM } from "../steps/intake/frd.mjs"
 import { newMode } from "../steps/weight/weight.mjs"
-import { newRipple } from "../steps/ripple/ripple.mjs"
-import { newDesign, parseDesign, parseRoutes } from "../steps/design/design.mjs"
-import { newPlanIndex } from "../steps/plan/plan.mjs"
-import { newReview, CODES } from "../steps/review/review.mjs"
-import { parseMap, mapMeasure, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
+import { newRipple, blindNodes, waiverFor } from "../steps/ripple/ripple.mjs"
+import { parseDesign, parseRoutes, expand, unitsByPath } from "../steps/design/design.mjs"
+import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/design/values.mjs"
+import { routesSkeleton, parseChains, checkChains, assemble } from "../steps/design/routes.mjs"
+// `checkPart` шага 4 (часть графа) уже занимает это имя в файле — ядро шага 9 приезжает под
+// псевдонимом. Одно имя на два разных вопроса было бы дефектом чтения, а не удобством.
+import { partsOf, partCardOf, sectionsOf, checkPart as judgePartPlan } from "../steps/design/card.mjs"
+import { coverageOf, orderOf, planDoc } from "../steps/design/plandoc.mjs"
+import { newPlanIndex, KEY_QUESTION, TASK_KEY } from "../steps/plan/plan.mjs"
+import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
+import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
 import { newAnswers, looksLikeTemplate, stripOrdinal } from "../core/answers.mjs"
-import { newBudgets, BUDGETS_PATH } from "../core/budgets.mjs"
+import { newBudgets, BUDGETS_PATH, ORDER_CAP_CHARS } from "../core/budgets.mjs"
 import { BRD_FORM, ABSENT_DOC } from "../core/form.mjs"
+import { carriedBlockers } from "../core/findings.mjs"
 import { writeAnswer } from "../bin/write-answer.mjs"
 
 // runRoot — the anchor itself: context.run.cwd for sandbox functions, process.cwd() for izi_answer
@@ -140,7 +149,7 @@ export const checkTask = {
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
-    properties: { ok: { type: "boolean" }, why: { type: "string" }, lines: { type: "number" } },
+    properties: { ok: { type: "boolean" }, why: { type: "string" }, lines: { type: "number" }, key: { type: "string" }, question: { type: "string" } },
     required: ["ok"],
     additionalProperties: false,
   },
@@ -150,7 +159,12 @@ export const checkTask = {
       return { ok: false, why: `${TASK_PATH} не существует — вход конвейера кладёт оператор` }
     }
     const r = checkTaskText(readFileSync(at(root, TASK_PATH), "utf8"))
-    return r.ok ? { ok: true, lines: r.value.lines } : { ok: false, why: r.error.detail }
+    if (!r.ok) return { ok: false, why: r.error.detail }
+    // The task key rides out of the FIRST step that reads the task, because it names things the band
+    // creates much later — the branch, the ticket, and `task/<КЛЮЧ>/` where step 9 puts the plan.
+    // Asking for it here costs the operator one question at the start instead of an interruption in
+    // the middle; `question` is carried verbatim so the caller never rebuilds it.
+    return { ok: true, lines: r.value.lines, key: taskKey(root), question: KEY_QUESTION }
   },
 }
 
@@ -192,7 +206,7 @@ export const checkBrd = {
 //   diagnosis in words its order never used. The sandbox has no import, so the only way the workflow
 //   can reach a constant of this repository is a host function: this one.
 export const brdForm = {
-  description: "The BRD's form as data (subjectsMin, subjectsMax, subjectRule, absentDoc) from core/form.mjs — the order SUBSTITUTES these, it does not restate them.",
+  description: "The BRD's form as data (subjectsMin, subjectsMax, subjectRule, analogueRule, absentDoc) from core/form.mjs — the order SUBSTITUTES these, it does not restate them.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -200,9 +214,10 @@ export const brdForm = {
       subjectsMin: { type: "number" },
       subjectsMax: { type: "number" },
       subjectRule: { type: "string" },
+      analogueRule: { type: "string" },
       absentDoc: { type: "string" },
     },
-    required: ["subjectsMin", "subjectsMax", "subjectRule", "absentDoc"],
+    required: ["subjectsMin", "subjectsMax", "subjectRule", "analogueRule", "absentDoc"],
     additionalProperties: false,
   },
   run() {
@@ -210,8 +225,32 @@ export const brdForm = {
       subjectsMin: BRD_FORM.subjectsMin,
       subjectsMax: BRD_FORM.subjectsMax,
       subjectRule: BRD_FORM.subjectRule,
+      analogueRule: BRD_FORM.analogueRule,
       absentDoc: ABSENT_DOC,
     }
+  },
+}
+
+// carried — the memory of a repair loop, computed OUTSIDE the sandbox because the rule is pure and
+// wants a test: the sandbox cannot import, and a rule written inline in workflows/izi.js would have no
+// seam at all (`workflows/` is covered by no test in this repository). The rule itself and the run
+// that paid for it live in core/findings.mjs.
+export const carried = {
+  description: "The feedback of a redelegation: the current red check plus the lines already red earlier in this run, which repairing the current one must not bring back (core/findings.mjs::carriedBlockers).",
+  input: {
+    type: "object",
+    properties: { blockers: { type: "string" }, seen: { type: "array", items: { type: "string" } }, outOfRounds: { type: "boolean" } },
+    required: ["blockers"],
+    additionalProperties: false,
+  },
+  output: {
+    type: "object",
+    properties: { text: { type: "string" }, seen: { type: "array", items: { type: "string" } } },
+    required: ["text", "seen"],
+    additionalProperties: false,
+  },
+  run({ blockers, seen, outOfRounds }) {
+    return carriedBlockers({ blockers, seen, outOfRounds })
   },
 }
 
@@ -237,7 +276,7 @@ export const frdForm = {
 }
 
 export const budgets = {
-  description: "Run budgets from the project's izi.config.json (loops, questions, questionRounds, checkpointRetries, maxParallel, reviewRounds). A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
+  description: "Run budgets from the project's izi.config.json (loops, intakeLoops, questionRounds, checkpointRetries, maxParallel, reviewRounds), plus orderCap — the ceiling on ONE assembled order in CHARACTERS (core/budgets.mjs::ORDER_CAP_CHARS), which izi.config.json cannot move: it is the model's window minus the output reserve and the request's own boilerplate. A missing file means the declared defaults; a broken one is a refusal (ok:false), never a silent default.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -245,16 +284,24 @@ export const budgets = {
       ok: { type: "boolean" },
       why: { type: "string" },
       loops: { type: "number" },
-      questions: { type: "number" },
+      intakeLoops: { type: "number" },
       questionRounds: { type: "number" },
       checkpointRetries: { type: "number" },
       // maxParallel is declared here as well as in core/budgets.mjs for a reason the host makes
       // unavoidable: it validates every function's OUTPUT against this schema, and
       // additionalProperties:false turns a budget missing from this list into
       // "Invalid output from budgets" — a crashed run with no hint about which key it disliked.
-      // Caught by the first live launch after maxParallel was added (run 657fcd98).
+      // Caught by the first live launch after maxParallel was added (run 657fcd98) — and again, the
+      // same crash on the same line, by the first launch after intakeLoops (run c8bd1294): a comment
+      // is not a seam. ext/index.test.mjs now asserts this list against DEFAULT_BUDGETS key by key,
+      // so the NEXT budget cannot be forgotten here at all.
       maxParallel: { type: "number" },
       reviewRounds: { type: "number" },
+      // orderCap is NOT a member of DEFAULT_BUDGETS and must not become one: newBudgets accepts any
+      // key it declares from izi.config.json, and a project lowering — or raising — the window of the
+      // model it does not choose would be a budget over somebody else's fact. It rides this channel
+      // because the workflow sandbox has no import and no other way to learn a constant.
+      orderCap: { type: "number" },
       source: { type: "string" },
     },
     required: ["ok"],
@@ -265,7 +312,7 @@ export const budgets = {
     const raw = readIfExists(root, BUDGETS_PATH)
     const r = newBudgets(raw)
     if (!r.ok) return { ok: false, why: r.error.detail }
-    return { ok: true, ...r.value, source: raw.trim() ? BUDGETS_PATH : "defaults" }
+    return { ok: true, ...r.value, orderCap: ORDER_CAP_CHARS, source: raw.trim() ? BUDGETS_PATH : "defaults" }
   },
 }
 
@@ -673,6 +720,111 @@ function readPlanCells(root) {
   return { ok: true, cells: plan.cells, plan }
 }
 
+// --- focus: step 3b — WHAT the swarm surveys, decided before the swarm runs ----------------------
+//
+// The whole of step 3b: no role, no token, one artifact. It reads what steps 2-3 already left on
+// disk and answers one question — does the map this run would build fit the reader's window, and if
+// not, which entry cones does the BRD point at. Today that answer arrives at step 6, after 306 scout
+// calls and ≈10M input tokens have been spent on a map nobody can read (docs/big-projects-problems.md
+// §2); here it costs zero.
+//
+// `.agent/brd.md` is deliberately NOT read: step 3 already resolved every anchor to the files that
+// carry it (`files[].subjects`), and a second resolution here would be a second copy of the anchor
+// rule plus a re-read of the whole tree — 37 MB on eddi — inside a step that promises no io.
+const FOCUS_PATH = ".agent/focus.json"
+
+// readFocus — the focus as data, or a refusal with a diagnosis. THREE functions read this file
+// (focus itself, cells, buildGraph), and in all three the difference between "there is no focus" and
+// "the focus is everything" decides whether a step may run at all (standards/code.md §2). Deciding
+// it once, here, is the same discipline readPlanCells above follows for the plan.
+function readFocus(root) {
+  const raw = readIfExists(root, FOCUS_PATH)
+  if (!raw.trim()) return { ok: false, why: `${FOCUS_PATH} не существует — шаг 3b focus не отработал` }
+  let f
+  try {
+    f = JSON.parse(raw)
+  } catch (e) {
+    return { ok: false, why: `${FOCUS_PATH} не разбирается как JSON — ${e.message}` }
+  }
+  if (!f || !Array.isArray(f.cells) || !f.cells.length) {
+    return { ok: false, why: `${FOCUS_PATH} не несёт ни одной клетки — разведывать нечего` }
+  }
+  return { ok: true, focus: f, cells: new Set(f.cells) }
+}
+
+export const focus = {
+  description: "Step 3b. Decide WHICH cells of .agent/survey-plan.json the swarm surveys, before it runs and for zero tokens: every cell while the plan's map fits the reading cap, otherwise the entry cones the BRD's anchors NAME (steps/focus/slices.mjs, steps/focus/focus.mjs). Writes .agent/focus.json — the cones, the choice, the cells and what the ceiling dropped. There is no operator rail: the choice is made here, its order is stated, and what did not fit is counted. Any refusal REMOVES the artifact, so step 4 can never survey yesterday's focus.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      slices: { type: "number" },
+      entries: { type: "number" },
+      chosen: { type: "number" },
+      cells: { type: "number" },
+      files: { type: "number" },
+      estBytes: { type: "number" },
+      droppedSlices: { type: "number" },
+      droppedCells: { type: "number" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_input, context) {
+    const root = runRoot(context)
+    const drop = () => { if (existsSync(at(root, FOCUS_PATH))) rmSync(at(root, FOCUS_PATH)) }
+
+    const p = readPlanCells(root)
+    if (!p.ok) { drop(); return { ok: false, why: p.why } }
+
+    const computed = parseComputed(readIfExists(root, COMPUTED_PATH))
+    const nodes = p.cells.flatMap((c) => (c.files || []).map((f) => f.path))
+
+    // The anchors reach the choice as NAMES and are matched against the file's PATH — step 3's rule
+    // (the anchor's text anywhere in the file, hitsFor below) stays where it belongs, MARKING. On
+    // run e90d9ce1 that rule named 83 of eddi's 84 entries on the anchor `import`
+    // (steps/focus/focus.mjs::names).
+    const { slices, orphans } = newSlices({ nodes, edges: computed.edges, routes: computed.api.map((a) => a.at) })
+    // The analogue comes from the BRD — one line, read with the ONE parser this repository has for
+    // that file (parseBrd, steps/brd). This is not the anchor rule read twice: anchors were already
+    // resolved to files by step 3 and arrive through the plan; `analogue` is a single term that
+    // exists nowhere else.
+    const brd = parseBrd(readIfExists(root, ".agent/brd.md"))
+    // The estimate prices what the map will carry, so it needs the counts the map will carry:
+    // declarations and api rows per path, both already parsed out of graph-computed.xml above.
+    const declsAt = {}
+    for (const d of computed.decls) declsAt[d.at] = (declsAt[d.at] || 0) + 1
+    const apisAt = {}
+    for (const a of computed.api) apisAt[a.at] = (apisAt[a.at] || 0) + 1
+    const r = newFocus({ slices, anchors: p.plan.subjects || [], analogue: analogueTerm(brd.analogue), cells: p.cells, edges: computed.edges, decls: declsAt, apis: apisAt })
+    if (!r.ok) {
+      drop()
+      return { ok: false, why: `${r.error.cls}: ${r.error.detail}`, slices: slices.length, entries: slices.length }
+    }
+
+    const v = r.value
+    // The artifact carries the cones as FACTS about the run, not as a graph: an entry, its kind and
+    // its size. The node lists themselves have no reader — the address of a node in the map is
+    // deferred with a trigger (docs/big-projects-solution.md §6.2) — and writing 84 of them would be
+    // bytes nobody parses.
+    const artifact = {
+      why: v.why,
+      chosen: v.chosen,
+      cells: v.cells,
+      files: v.files,
+      repoFiles: nodes.length,
+      estBytes: v.estBytes,
+      dropped: v.dropped,
+      slices: v.slices.map((s) => ({ id: s.id, entry: s.entry, kind: s.kind, nodes: s.nodes.length })),
+    }
+    mkdirSync(dirname(at(root, FOCUS_PATH)), { recursive: true })   // written AFTER the decision to accept
+    writeFileSync(at(root, FOCUS_PATH), JSON.stringify(artifact, null, 2))
+    return { ok: true, why: v.why, slices: v.slices.length, entries: v.entries, chosen: v.chosen.length, cells: v.cells.length, files: v.files, estBytes: v.estBytes, droppedSlices: v.dropped.slices, droppedCells: v.dropped.cells }
+  },
+}
+
 export const cells = {
   description: "Scout cells from .agent/survey-plan.json: id, kind, subjects and the file list of each cell. The workflow sandbox has no fs and does not parse JSON — this function is how step 4 sees the layout step 3 produced.",
   input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
@@ -711,9 +863,15 @@ export const cells = {
     const root = runRoot(context)
     const r = readPlanCells(root)
     if (!r.ok) return { ok: false, why: r.why }
+    // The swarm surveys the FOCUS, not the plan. A missing .agent/focus.json is terminal rather than
+    // a quiet fallback to every cell: "there is no focus" must never become "the focus is
+    // everything" — on a monolith that is the difference between 3-6 cells and 306
+    // (standards/code.md §2).
+    const f = readFocus(root)
+    if (!f.ok) return { ok: false, why: f.why }
     return {
       ok: true,
-      cells: r.cells.map((c) => ({
+      cells: r.cells.filter((c) => f.cells.has(c.id)).map((c) => ({
         id: c.id,
         kind: c.kind,
         subjects: [...(c.subjects || [])],
@@ -751,7 +909,12 @@ export const checkPart = {
     if (!existsSync(at(root, path))) {
       return { ok: false, blockers: `${path} does not exist — the role wrote nothing to the staging path` }
     }
-    const r = newPart({ xml: readFileSync(at(root, path), "utf8"), cell: target })
+    // The inventory is the WHOLE survey, not this cell's slice: the spine answers `<suite>` for the
+    // repository, and the files a suite claims (P8) and the wrapper it must run through (P9) live in
+    // other cells. Reading it here keeps the same discipline as the cell itself — neither the model
+    // nor the workflow hands the guardrail a list that suits the answer.
+    const inventory = plan.cells.flatMap((c) => (c.files || []).map((f) => f.path))
+    const r = newPart({ xml: readFileSync(at(root, path), "utf8"), cell: target, inventory })
     if (!r.ok) return { ok: false, blockers: r.error.detail }
     return { ok: true, modules: r.value.modules.length, gaps: r.value.gaps.length }
   },
@@ -860,6 +1023,10 @@ export const remember = {
 // missing is a lost subtree, and a directory listing would simply not contain it — the graph would
 // come out smaller and green. The plan is the authority on what the swarm owed.
 const GRAPH_PATH = ".agent/appgraph.xml"
+// Step 11's verdict — moved up from beside `review` itself, because checkFrd (below) now reads it too:
+// F9 (steps/intake/frd.mjs) judges a rewind against the review that ordered it, and one path constant
+// serves both readers instead of two literals drifting apart.
+const REVIEW_PATH = ".agent/review.xml"
 // Step 6's artifact and step 7's, named once each. `.agent/mode` holds ONE word and nothing else: its
 // readers are scripts (steps 8 and 10), and a word is the smallest thing that cannot be misparsed.
 const FRD_PATH = ".agent/frd.xml"
@@ -871,7 +1038,7 @@ const DESIGN_PATH = ".agent/design"
 const RIPPLE_PATH = ".agent/ripple.xml"
 
 export const buildGraph = {
-  description: "Merge every graph part and the script's computed facts into .agent/appgraph.xml — steps/graph/graph.mjs::newGraph wired to disk. Parts are read by the PLAN, so a missing one is named instead of silently shrinking the graph. Written only after a green merge.",
+  description: "Merge every graph part and the script's computed facts into .agent/appgraph.xml — steps/graph/graph.mjs::newGraph wired to disk. Parts are read by the FOCUS (.agent/focus.json), so a missing part of a focused cell is named instead of silently shrinking the graph, while a cell the focus left out is not expected to have one. A narrowed map declares its own boundary in a <focus> element. Written only after a green merge.",
   input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
   output: {
     type: "object",
@@ -898,17 +1065,22 @@ export const buildGraph = {
     const root = runRoot(context)
     const p = readPlanCells(root)
     if (!p.ok) return { ok: false, why: p.why }
+    // The FOCUS decides which cells must be closed, and it is a refusal when it is absent — the same
+    // rule step 4 follows. "There is no focus" and "the focus is everything" are different facts:
+    // falling back to the plan here would survey by one list and merge by another.
+    const f = readFocus(root)
+    if (!f.ok) return { ok: false, why: f.why }
 
     const parts = []
-    for (const c of p.cells) {
+    for (const c of p.cells.filter((c) => f.cells.has(c.id))) {
       const from = `.agent/graph-parts/${c.id}.xml`
       if (!existsSync(at(root, from))) {
-        return { ok: false, why: `${from} не существует — клетка ${c.id} плана не закрыта частью, поддерево потеряно` }
+        return { ok: false, why: `${from} не существует — клетка ${c.id} ФОКУСА не закрыта частью, поддерево потеряно` }
       }
       parts.push({ id: c.id, kind: c.kind, xml: readFileSync(at(root, from), "utf8") })
     }
 
-    const r = newGraph({ parts, computedXml: readIfExists(root, COMPUTED_PATH), plan: p.plan })
+    const r = newGraph({ parts, computedXml: readIfExists(root, COMPUTED_PATH), plan: p.plan, focus: f.focus })
     if (!r.ok) return { ok: false, why: r.error.detail }
 
     const g = r.value
@@ -938,7 +1110,7 @@ export const buildGraph = {
 // the number instead of degrading into a form whose price nobody has measured — the reasoning, and
 // what would bring the index form back, is docs/intake.md §3.
 export const graphMap = {
-  description: "Read .agent/appgraph.xml for step 6 and measure what it costs to hand it to a role (steps/intake/map.mjs). Above the reading ceiling the map is NOT trimmed — ok:false with the byte count, so the step refuses rather than silently degrading.",
+  description: "Read .agent/appgraph.xml for step 6 and measure what it costs to hand it to a role (steps/intake/map.mjs). Above the reading ceiling the map DEGRADES to its index form — nodes, their kind and their <api>, without declarations, prose or edges — and says so in the artifact it hands over (form=\"index\"). Only an index that is itself over the ceiling is a refusal.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -949,6 +1121,8 @@ export const graphMap = {
       bytes: { type: "number" },
       nodes: { type: "number" },
       cap: { type: "number" },
+      form: { type: "string" },
+      fullBytes: { type: "number" },
     },
     required: ["ok"],
     additionalProperties: false,
@@ -960,14 +1134,28 @@ export const graphMap = {
     }
     const text = readFileSync(at(root, GRAPH_PATH), "utf8")
     const m = mapMeasure(text)
-    if (m.overCap) {
-      return { ok: false, why: `карта ${m.bytes} Б на ${m.nodes} узлов — выше потолка чтения ${MAP_CAP_BYTES} Б: индексной формы этот срез не строит (docs/intake.md §3)`, bytes: m.bytes, nodes: m.nodes, cap: MAP_CAP_BYTES }
+    if (!m.overCap) return { ok: true, text, bytes: m.bytes, nodes: m.nodes, cap: MAP_CAP_BYTES }
+
+    // Above the ceiling the map DEGRADES instead of refusing — and it says so. The full file stays on
+    // disk for steps 8 and 10; what changes is only what step 6's role is handed.
+    //
+    // BUG_FIX_CONTEXT: runs fa8def32 and fb57f506 died here, 2-3% over, with the swarm already paid
+    //   for. Refusing was honest and final; degrading is honest and lets the run continue, which is
+    //   the whole point of measuring before the swarm instead of after it. The index declares
+    //   `form="index" without="decl role io edge"`, so the role can never mistake "no edges written"
+    //   for "no dependencies exist".
+    const index = mapIndex(text)
+    const mi = mapMeasure(index)
+    if (mi.overCap) {
+      return { ok: false, why: `карта ${m.bytes} Б и даже её индекс ${mi.bytes} Б выше потолка чтения ${MAP_CAP_BYTES} Б на ${mi.nodes} узлах — сузить фокус нечем, читать нечем`, bytes: m.bytes, nodes: m.nodes, cap: MAP_CAP_BYTES }
     }
-    return { ok: true, text, bytes: m.bytes, nodes: m.nodes, cap: MAP_CAP_BYTES }
+    return { ok: true, text: index, bytes: mi.bytes, nodes: mi.nodes, cap: MAP_CAP_BYTES, form: "index", fullBytes: m.bytes }
   },
 }
+// THE GATE OF STEP 6 lives at the END of this function, and only on a GREEN check — see the block
+// after `newFrd` succeeds.
 export const checkFrd = {
-  description: "Judge a staged FRD by steps/intake/frd.mjs::newFrd. Node keys come from .agent/appgraph.xml; a number in a field's domain or an NFR's fit must occur in TASK.md, in the VALUES of operator answers, in a BRD requirement's fit, or in the map itself.",
+  description: "Judge a staged FRD by steps/intake/frd.mjs::newFrd. Node keys come from .agent/appgraph.xml; a number in a field's domain or an NFR's fit must occur in TASK.md, in the VALUES of operator answers, in a BRD requirement's fit or verify, or in the map itself. When .agent/review.xml carries a Reject, its blockers travel in as `rewind` for F9: a `goal-not-delivered` whose evidence no longer resolves in the new FRD is refused — the subject of a rewind is not repaired by deleting it. AFTER a green check, and only then, the gate: a node of the change's width that no suite of the repository executes (steps/ripple/ripple.mjs::blindNodes) is asked about the OPERATOR — ok:false with ask:true carries the questions verbatim; an answer `suite` or `drop` comes back as ok:false with stop:true, `accept` as ok:true with waived:N.",
   input: { type: "object", properties: { path: { type: "string" } }, required: ["path"], additionalProperties: false },
   output: {
     type: "object",
@@ -979,6 +1167,16 @@ export const checkFrd = {
       questions: { type: "number" },
       touched: { type: "number" },
       blockers: { type: "string" },
+      // The gate's three answers, and they are three DIFFERENT rails for the caller: `ask` goes to the
+      // operator (no role is re-delegated — the artifact is green, the repository is not), `stop` ends
+      // the run (the repair is a human's: a suite is written or a requirement is withdrawn), `waived`
+      // is the count of nodes whose unverifiability the operator accepted on purpose.
+      ask: { type: "boolean" },
+      subject: { type: "string" },
+      items: { type: "array", items: { type: "string" } },
+      stop: { type: "boolean" },
+      why: { type: "string" },
+      waived: { type: "number" },
     },
     required: ["ok"],
     additionalProperties: false,
@@ -997,14 +1195,65 @@ export const checkFrd = {
     // The provenance of a number: the task, the VALUES of the operator's answers (never the wording
     // of a question — the alternatives an offer lists are the role's own words), the fit criteria of
     // the BRD, and the map. The BRD arrives through parseBrd — one parser, from steps/brd.
-    const fits = parseBrd(readIfExists(root, ".agent/brd.md")).requirements.map((r) => r.fit || "").join("\n")
+    // BOTH `fit` and `verify`. Live run e132f0a1: the BRD said `R1 verify: … возвращают 200`, the
+    // slice took `fit` alone, and F5 told the role the number 200 stood "nowhere in the BRD" — so the
+    // role deleted a correct number to satisfy a blocker that was wrong. A number in the criterion by
+    // which a requirement is CHECKED is that requirement's number just as much as one in its fit.
+    const fits = parseBrd(readIfExists(root, ".agent/brd.md")).requirements.map((r) => `${r.fit || ""}\n${r.verify || ""}`).join("\n")
     const sources = [readIfExists(root, TASK_PATH), ...(ans.ok ? ans.value.map((a) => a.text) : []), fits, mapText]
 
     const map = parseMap(mapText)
-    const r = newFrd({ xml: readFileSync(at(root, path), "utf8"), nodes: map.nodes, tests: map.tests, entries: map.entries, edges: map.edges, sources })
+    // F9's input: a rewind exists only when the LAST review Rejected — band() only rewinds to step 6
+    // after review() wrote that verdict (docs/review.md §6), and .agent/review.xml is what carries it.
+    // A Pass, or no verdict at all (first attempt, or a run that never reached step 11), means this is
+    // not a rewind: rewind stays [] and F9 (steps/intake/frd.mjs) is as silent as F5 with no sources.
+    const lastReview = parseReview(readIfExists(root, REVIEW_PATH))
+    const rewind = lastReview.verdict === "Reject" ? lastReview.blockers.map((b) => ({ code: b.code, node: b.node, evidence: b.evidence })) : []
+    const r = newFrd({ xml: readFileSync(at(root, path), "utf8"), nodes: map.nodes, tests: map.tests, entries: map.entries, edges: map.edges, sources, rewind })
     if (!r.ok) return { ok: false, blockers: r.error.detail }
     const v = r.value
-    return { ok: true, deltas: v.deltas.length, unknown: v.unknown, scenarios: v.scenarios.length, questions: v.questions.length, touched: v.touched.length }
+    const seen = { deltas: v.deltas.length, unknown: v.unknown, scenarios: v.scenarios.length, questions: v.questions.length, touched: v.touched.length }
+
+    // THE GATE, and it fires ONLY HERE — after the check came back green. On a red check the rail is
+    // the ROLE's (the FRD is re-delegated with the blockers), and asking the operator about an
+    // artifact the role is still rewriting would spend a trip on a change that no longer exists by the
+    // time the answer lands. The width itself is a function of that artifact.
+    //
+    // BUG_FIX_CONTEXT: live run 21dd9b34 (runbox/quarkus-rest-json-app-v2-t2). The band ran to step 11
+    //   and escalated on `unverifiable-node · …/fruits.html` — a page no suite of the repository
+    //   executes. Both operands of that fact existed the moment this check went green: the map (step 5)
+    //   and the width of the change (this artifact). Between the green check and the escalation stood
+    //   167 805 tokens and five role launches (valuer, designer, router, critic ×2), and none of them
+    //   could have repaired it — a suite is written by a human. The gate stands where the fact first
+    //   becomes relevant, and its rail is the operator's because the repair is the operator's.
+    const blind = blindNodes({ frd: v, map })
+    if (!blind.known || !blind.nodes.length) return { ok: true, ...seen }
+
+    const said = ans.ok ? ans.value : []
+    const decided = blind.nodes.map((node) => ({ node, ...waiverFor({ node, answers: said }) }))
+    const asking = decided.filter((d) => !d.word)
+    if (asking.length) {
+      // The suites and their commands are FACTS ABOUT THE REPOSITORY and travel in `evidence`, never
+      // in the question's text: the text is compared against the stored answer, and a question built
+      // out of values stops matching its own answer when a value changes (run 46edab60).
+      const cmds = (map.suites || []).map((s) => `${s.id}: ${s.cmd || "(без команды)"}`).join(" · ") || "сьютов в карте нет вовсе"
+      return {
+        ok: false,
+        ask: true,
+        subject: asking.map((d) => d.question).join("\n\n"),
+        items: asking.map((d) => d.question),
+        why: `узлов без сьюта: ${asking.map((d) => d.node).join(", ")}`,
+      }
+    }
+
+    const stop = decided.filter((d) => d.word !== "accept")
+    if (stop.length) {
+      const how = (d) => (d.word === "suite"
+        ? `заведи сьют, исполняющий ${d.node}, и перезапусти полосу`
+        : `сними требование правкой TASK.md/BRD (НЕ FRD) по узлу ${d.node} и перезапусти полосу`)
+      return { ok: false, stop: true, why: `оператор ответил на гейте шага 6: ${stop.map((d) => `${d.node} → ${d.word}`).join("; ")}. Что делать: ${stop.map(how).join("; ")}` }
+    }
+    return { ok: true, ...seen, waived: decided.length }
   },
 }
 
@@ -1107,79 +1356,452 @@ export const ripple = {
   },
 }
 
-// --- design: the two projections of the change, and the gate that decides they are needed ---------
+// --- design: the change's dictionary, composed by the script and named by the role ----------------
 //
-// ONE function, TWO calls, told apart by `path` — the same step, asked two different questions:
-//   design({})            the GATE: reads `.agent/design` (written by step 8) and ALWAYS erases both
-//                         of this step's artifacts. Yesterday's design must not survive into today's
-//                         run in any branch: on `skip` nobody will rewrite it, and on `needed` it is
-//                         rewritten only if the role and the guardrail both succeed. The argument is
-//                         the one `.agent/mode` and `.agent/ripple.xml` are erased by (docs/weight.md
-//                         §4, docs/ripple.md §5): newRun carries the run's STATE into .agent/prev and
-//                         leaves the ARTIFACTS.
-//   design({ path })      the CHECK: judges what the role staged, and on green promotes it and writes
-//                         `.agent/data-flow.md` — the flow AND the unit list of every node, both
-//                         expanded by the script out of the contracts (steps/design/design.mjs).
+// STEP 9 IS BEING REWRITTEN, AND TODAY IT ENDS AFTER PASS A. What survives of the old three-pass
+// construction is its DELIVERABLE grammar (steps/design/design.mjs, read by step 10); the two passes
+// that used to fill it — the node graph and the routes — were deleted with their swarms, and the
+// artifacts they produced (`.agent/design-graph.xml`, `.agent/data-flow.md`) are not written by any
+// code in this file any more. The band says so out loud instead of walking on (workflows/izi.js).
+//
+// ONE function, THREE calls, told apart by their arguments — the same step, asked three questions:
+//   design({})              the GATE: reads `.agent/design` (written by step 8) and erases every
+//                           artifact of the step that is not green NOW. Yesterday's design must not
+//                           survive into today's run in any branch. The argument is the one
+//                           `.agent/mode` and `.agent/ripple.xml` are erased by (docs/weight.md §4,
+//                           docs/ripple.md §5): newRun carries the run's STATE into .agent/prev and
+//                           leaves the ARTIFACTS.
+//   design({ skeleton: p }) COMPOSE: write the dictionary's skeleton to the staging path `p` — one
+//                           row per end of every use case with its `closes` already filled in, one
+//                           row per call of every node of the change copied verbatim out of the
+//                           ripple. This is the whole composition of the artifact, and it costs no
+//                           tokens (steps/design/values.mjs::valuesSkeleton).
+//   design({ path })        the CHECK: judge what the role staged against a freshly recomputed
+//                           skeleton, and on green NORMALIZE and promote it to `.agent/values.xml`.
 //
 // The FRD is read by THE frd parser and the subgraph by THE map reader — the same discipline the
 // ripple keeps: a second parser of either grammar is how two readers of one file start disagreeing.
 const DESIGN_GRAPH_PATH = ".agent/design-graph.xml"
+const VALUES_PATH = ".agent/values.xml"
+const NODES_PATH = ".agent/design-nodes.xml"
 const DATA_FLOW_PATH = ".agent/data-flow.md"
 
+// GREEN NOW, NOT GREEN ONCE — the same rule `bandStart` applies to the band (workflows/izi.js). A
+// promoted dictionary is reusable only while its own guardrail still accepts it: the FRD or the
+// ripple may have moved under it since, and the skeleton is a function of both.
+const frdOf = (root) => parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+const greenValues = (root) => {
+  if (!existsSync(at(root, VALUES_PATH)) || !existsSync(at(root, FRD_PATH)) || !existsSync(at(root, RIPPLE_PATH))) return null
+  const staged = readFileSync(at(root, VALUES_PATH), "utf8")
+  const frd = frdOf(root)
+  const ripple = readFileSync(at(root, RIPPLE_PATH), "utf8")
+  return checkValues({ staged, frd, ripple }).length ? null : parseValues(staged)
+}
+
 export const design = {
-  description: "Step 9. Without `path`: the gate — read .agent/design (needed|skip) and ERASE .agent/design-graph.xml and .agent/data-flow.md so no previous run's design can survive. With `path`: judge the staged design graph by steps/design/design.mjs::newDesign (nodes and routes against .agent/frd.xml and the ripple subgraph), and on green promote it to .agent/design-graph.xml and write .agent/data-flow.md — the scenario flows plus the unit list of each node, both substituted out of the contracts.",
-  input: { type: "object", properties: { path: { type: "string" } }, additionalProperties: false },
+  description: "Step 9 in two passes: A the dictionary, B the chains. Without arguments: the GATE — read .agent/design (needed|skip) and erase every artifact of the step that is not green NOW, so no previous run's dictionary can survive. With `skeleton`: COMPOSE the artifact and write it to that staging path — one row per end of every use case (its `closes` token already filled in, and the text of a failure branch already written as «status code»), then one row per `<api>` and `<decl kind=method>` of every node of the change, copied verbatim out of .agent/ripple.xml. Costs no tokens and decides the whole composition: how many rows there are, what each closes, in what order, under what id. With `path`: the CHECK — recompute that skeleton and judge what the role staged against it (a row lost or added, an end re-attributed, a text the script prefilled edited, a text left blank), and on green strip the scaffolding and promote to .agent/values.xml.",
+  input: {
+    type: "object",
+    properties: { pass: { type: "string", enum: ["values", "chains"] }, path: { type: "string" }, skeleton: { type: "string" } },
+    additionalProperties: false,
+  },
   output: {
     type: "object",
     properties: {
       ok: { type: "boolean" },
       why: { type: "string" },
       design: { type: "string" },
+      reused: { type: "array", items: { type: "string" } },
+      values: { type: "number" },
+      // What the composition cost the role: `rows` in the skeleton, `filled` of them written by the
+      // script, `blank` left to name. The three are printed by the workflow and are the only place a
+      // run can see how much of pass A a role was actually asked for.
+      rows: { type: "number" },
+      filled: { type: "number" },
+      blank: { type: "number" },
+      chains: { type: "number" },
       nodes: { type: "number" },
-      routes: { type: "number" },
       units: { type: "number" },
+      // `unstepped` — узлы изменения, через которые не прошла ни одна цепочка. Их `dod` пуст, а
+      // тикет без определения готовности исполнителю закрыть нечем (живой прогон d8ef8c60). Это
+      // ЧИСЛО, которое печатает воркфлоу, а не вердикт: правило на него заводится по замеру, а не
+      // по догадке.
+      unstepped: { type: "array", items: { type: "string" } },
       blockers: { type: "string" },
+      // `missing` — the role wrote NOTHING to the staging path. It is told apart from every other
+      // refusal because the caller spends a different budget on it: there is no artifact to repair,
+      // so no round of the repair budget is charged (workflows/izi.js::designing, live run a900de7b).
+      // A boolean, not a regex over the blocker's Russian sentence — a rule read by matching another
+      // module's prose is the same rule written twice (standards/code.md §1).
+      missing: { type: "boolean" },
     },
     required: ["ok"],
     additionalProperties: false,
   },
-  run({ path } = {}, context) {
+  run({ pass = "values", path, skeleton } = {}, context) {
     const root = runRoot(context)
+    const read = (p) => readFileSync(at(root, p), "utf8")
+    const drop = (...ps) => { for (const p of ps) if (existsSync(at(root, p))) rmSync(at(root, p)) }
 
-    if (!path) {
-      for (const p of [DESIGN_GRAPH_PATH, DATA_FLOW_PATH]) if (existsSync(at(root, p))) rmSync(at(root, p))
+    if (!path && !skeleton) {
       if (!existsSync(at(root, DESIGN_PATH))) {
         return { ok: false, why: `${DESIGN_PATH} не существует — шаг 8 ripple не отработал, решать про дизайн нечем` }
       }
-      const flag = readFileSync(at(root, DESIGN_PATH), "utf8").trim()
+      const flag = read(DESIGN_PATH).trim()
       if (flag !== "needed" && flag !== "skip") {
         return { ok: false, why: `${DESIGN_PATH} содержит «${flag}» — допустимо needed | skip; артефакт из другой версии грамматики` }
       }
-      return { ok: true, design: flag }
+      // THE DELIVERABLE NEVER SURVIVES THE GATE, and this is not the same rule as the dictionary's.
+      // It is the artifact of pass B, whose own input — the staged chains — is deliberately not
+      // promoted: a green B assembles the pair in the same breath, so there is nothing for the chains
+      // to survive INTO. Reaching the gate at all therefore means pass B has to run again, and
+      // yesterday's pair would otherwise be planned on by step 10. `.agent/design-nodes.xml` goes with
+      // them: no code writes it any more, and a copy left by an older version of this pipeline would
+      // be read as this run's answer.
+      drop(NODES_PATH, DESIGN_GRAPH_PATH, DATA_FLOW_PATH)
+      if (flag === "skip") { drop(VALUES_PATH); return { ok: true, design: flag } }
+
+      if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, RIPPLE_PATH))) {
+        return { ok: false, why: `${FRD_PATH} или ${RIPPLE_PATH} не существует — судить, что из дизайна ещё живо, не по чему` }
+      }
+      const values = greenValues(root)
+      if (!values) drop(VALUES_PATH)
+      return { ok: true, design: flag, reused: values ? ["values"] : [] }
     }
 
-    if (!existsSync(at(root, path))) {
-      return { ok: false, blockers: `${path} не существует — роль ничего не записала по staging-пути` }
-    }
-    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"]]) {
+    // MODE_PATH is demanded here and not only where it is read: the assembled graph types itself with
+    // the weight of step 7, and a deliverable that says mode="" is not a smaller deliverable — it is
+    // one whose weight step 11 and the operator cannot read at all.
+    for (const [p, why] of [[FRD_PATH, "шаг 6 intake не отработал"], [RIPPLE_PATH, "шаг 8 ripple не отработал"], [MODE_PATH, "шаг 7 weight не отработал"]]) {
       if (!existsSync(at(root, p))) return { ok: false, blockers: `${p} не существует — ${why}, судить дизайн не по чему` }
     }
 
-    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
-    const known = parseMap(readFileSync(at(root, RIPPLE_PATH), "utf8")).nodes
-    const r = newDesign({ xml: readFileSync(at(root, path), "utf8"), frd, known })
-    if (!r.ok) return { ok: false, blockers: r.error.detail }
+    // COMPOSE. The skeleton is written to STAGING and to nowhere else: it is not an artifact of the
+    // step, it is the form of the answer, and the role's job is to hand back this same file with the
+    // blank texts filled. Writing it here rather than embedding it in the order is what makes «верни
+    // файл по этому пути» the whole instruction — the role edits a file it can read, and the check
+    // below compares it with a skeleton recomputed from the same two inputs.
+    if (skeleton) {
+      if (pass === "chains") {
+        const values = greenValues(root)
+        if (!values) return { ok: false, blockers: `${VALUES_PATH} не зелен — проход A не закрыт, а цепочка говорит id словаря` }
+        const s = routesSkeleton({ frd: frdOf(root), values })
+        mkdirSync(dirname(at(root, skeleton)), { recursive: true })
+        writeFileSync(at(root, skeleton), `${s.xml}\n`)
+        return { ok: true, chains: s.chains, blank: s.blank }
+      }
+      const s = valuesSkeleton({ frd: frdOf(root), ripple: read(RIPPLE_PATH) })
+      mkdirSync(dirname(at(root, skeleton)), { recursive: true })
+      writeFileSync(at(root, skeleton), `${s.xml}\n`)
+      return { ok: true, rows: s.rows, filled: s.filled, blank: s.blank }
+    }
 
-    // Written only AFTER the decision to accept (standards/code.md, constraint 6): the promote moves
-    // the role's file, and the script's file is written beside it in the same breath.
-    copyFileSync(at(root, path), at(root, DESIGN_GRAPH_PATH))
+    if (!existsSync(at(root, path))) {
+      return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт прохода это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
+    }
+
+    // JUDGE ON STAGING, PROMOTE ONLY AFTER GREEN (standards/workflow.md). A red pass leaves its
+    // staging file where it is — that file is the evidence the operator diagnoses from, and it is
+    // also what the next round's order carries back to the role.
+    const staged = read(path)
+
+    // PASS B: the chains are judged, and a green set is ASSEMBLED in the same breath. The working
+    // artifact is never promoted — the deliverable IS the promotion, exactly as it was before the
+    // three-pass construction: there is nothing for the chains to survive into.
+    if (pass === "chains") {
+      const values = greenValues(root)
+      if (!values) return { ok: false, blockers: `${VALUES_PATH} не зелен — проход A не закрыт, а цепочка говорит id словаря` }
+      const frd = frdOf(root)
+      // The map's edges are NOT read here any more: the only rule that wanted them judged the ORDER
+      // OF WORK, and a chain does not decide the order (D42). The guardrail is three structural rules
+      // over the skeleton and the dictionary, and both of them are already in hand.
+      const bad = checkChains({ staged, frd, values })
+      if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
+
+      const built = assemble({ chains: parseChains(staged), values, frd, ripple: read(RIPPLE_PATH), mode: read(MODE_PATH).trim() })
+      writeFileSync(at(root, DESIGN_GRAPH_PATH), `${built.xml}\n`)
+      // The flow is expanded out of the ASSEMBLED graph, never out of the chains: one reader, the same
+      // one steps 10 and 14 use, so the deliverable cannot disagree with itself.
+      const flow = expand(parseDesign(built.xml), parseRoutes(built.xml))
+      writeFileSync(at(root, DATA_FLOW_PATH), `${flow}\n`)
+      rmSync(at(root, path))
+      return { ok: true, nodes: built.nodes, units: built.units, unstepped: [...built.unstepped] }
+    }
+
+    const blockers = checkValues({ staged, frd: frdOf(root), ripple: read(RIPPLE_PATH) })
+    if (blockers.length) return { ok: false, blockers: blockers.join("\n  ") }
+
+    // The scaffolding the role read (`side`, `end`, `src`, `form`) is stripped on the way out: a later
+    // pass reads `<value id text closes/>` and must never be able to judge by the requirement's prose
+    // instead of by the name (steps/design/values.mjs::normalize).
+    const values = parseValues(staged)
+    mkdirSync(dirname(at(root, VALUES_PATH)), { recursive: true })
+    writeFileSync(at(root, VALUES_PATH), `${normalize(staged)}\n`)
     rmSync(at(root, path))
-    writeFileSync(at(root, DATA_FLOW_PATH), `${r.value.flow}\n`)
+    return { ok: true, values: values.size }
+  },
+}
+
+// --- parts: the change as a tree of modules, cut into partitions ----------------------------------
+// Phases ①②③ of step 9 (steps/design-data-flow.md), and all three cost no tokens. The partition is
+// the unit of ONE role call, and its invariant — every module in exactly one partition — is what
+// makes a duplicate impossible: no two calls can decide one file. The card of each partition is
+// written here so the workflow only reads it.
+const PARTS_DIR = ".agent/staging/parts"
+
+// WHERE THE STEP'S DELIVERABLE LIVES, and why it is not `.agent/`. The plan outlives the run: it is
+// read by a human at the gate, committed, and cut into tickets. `.agent/` is run STATE — rotated by
+// newRun, erased by the gates, and gitignored in every form.
+//
+// The directory is keyed by the TASK KEY, the same one the branch is named after, for a reason a
+// second task would have found the hard way: two changes in one repository share the partition slugs
+// (`configs-glossary` is `configs-glossary` in both), and a flat `docs/design/` would let the second
+// change silently overwrite the first one's decisions.
+//
+// The key is asked ONCE, by the SAME verbatim question step 10 asks (steps/plan/plan.mjs::KEY_QUESTION),
+// so the answer written to .agent/answers.md serves both and the operator is never asked twice.
+// TWO SOURCES, ONE ORDER. The operator's answer comes first — it can correct what the task says;
+// then TASK.md itself, because a key already written there is a key nobody should be asked for. Both
+// are READ, never written: fabricating an answer nobody gave would make .agent/answers.md lie about
+// who decided what.
+const taskKey = (root) => {
+  const said = parsedAnswers(readIfExists(root, ANSWERS_PATH))
+  const hit = (said.ok ? said.value : []).find((a) => String(a.question || "").trim() === KEY_QUESTION.trim())
+  const answered = String((hit && hit.text) || "").trim()
+  if (TASK_KEY.test(answered)) return answered
+
+  // In TASK.md the key is DECLARED, not hunted for: a line `task: DOS-535`. Scanning the whole text
+  // for anything shaped like a key was the first version and it is wrong — a task that mentions a
+  // neighbouring ticket («как в DOS-100») would name the branch and the plan's directory after it,
+  // silently. A declaration has an author; a match has none.
+  const line = String(readIfExists(root, TASK_PATH)).match(/^[ \t]*task[ \t]*:[ \t]*(\S+)[ \t]*$/im)
+  const declared = String((line && line[1]) || "").trim()
+  return TASK_KEY.test(declared) ? declared : ""
+}
+
+const taskDir = (root) => {
+  const key = taskKey(root)
+  return key ? `task/${key}` : ""
+}
+
+// Everything this repository can resolve a path to: the map's own modules. Rule 5 of the guardrail
+// asks whether a declared call is an ADDRESS, and this is the address book.
+const knownPaths = (map) => [...String(map || "").matchAll(/<module\b[^>]*\bpath="([^"]+)"/g)].map((m) => m[1])
+
+export const parts = {
+  description: "Step 9, phases ①②③: read .agent/frd.xml for the COMPOSITION of the change (the modules its scenarios name), enrich it from .agent/ripple.xml with what the repository knows (deps, level, whether the file exists at all), then cut the modules into PARTITIONS — the connected components of «some use case reaches both». Every module lands in exactly one partition, which is what makes two decisions of one file impossible. Writes one card per partition to .agent/staging/parts/<slug>.txt: the partition's modules, every use case that touches them verbatim, what those modules call today, a SAMPLE by path, the check command and the draft contract of pass 9B. Costs no tokens. Measured: eddi 13 modules (7 created) → 3 partitions, cards 8,9-15,3 KB against the 126 KB the map and the FRD weigh together.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      ask: { type: "boolean" },
+      subject: { type: "string" },
+      at: { type: "string" },
+      modules: { type: "number" },
+      created: { type: "number" },
+      chars: { type: "number" },
+      parts: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            slug: { type: "string" },
+            modules: { type: "number" },
+            ucs: { type: "number" },
+            neighbours: { type: "number" },
+          },
+          required: ["slug", "modules", "ucs", "neighbours"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_ = {}, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, FRD_PATH))) {
+      return { ok: false, why: `${FRD_PATH} не существует — шаг 6 intake не отработал, планировать нечего` }
+    }
+    // The map is DEMANDED: without it a card has no facts, no sample and no check command, and a role
+    // handed that would invent the repository instead of reading it.
+    if (!existsSync(at(root, GRAPH_PATH))) {
+      return { ok: false, why: `${GRAPH_PATH} не существует — шаг 5 graph не отработал, карточке нечего показать про репозиторий` }
+    }
+    // The key is asked BEFORE the first role call, because every deliverable of this step lands under
+    // it: a plan written to a directory nobody named is a plan nobody finds.
+    const dir = taskDir(root)
+    if (!dir) return { ok: false, ask: true, subject: KEY_QUESTION }
+
+    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+    const map = readFileSync(at(root, GRAPH_PATH), "utf8")
+    const tree = partsOf({ frd, ripple: readIfExists(root, RIPPLE_PATH) })
+    if (!tree.parts.length) return { ok: false, why: "ни один сценарий FRD не называет узлов — состав изменения пуст" }
+
+    mkdirSync(at(root, PARTS_DIR), { recursive: true })
+    let chars = 0
+    for (const one of tree.parts) {
+      const c = partCardOf({ part: one, frd, map, graph: readIfExists(root, DESIGN_GRAPH_PATH) })
+      writeFileSync(at(root, `${PARTS_DIR}/${one.slug}.txt`), c.text)
+      chars = Math.max(chars, c.chars)
+    }
     return {
       ok: true,
-      nodes: r.value.nodes.size,
-      routes: r.value.routes.length,
-      units: (r.value.flow.match(/^\$START_TESTS /gm) || []).length,
+      at: dir,
+      modules: tree.modules.size,
+      created: [...tree.modules.values()].filter((m) => m.new).length,
+      chars,
+      parts: tree.parts.map((x) => ({ slug: x.slug, modules: x.modules.length, ucs: x.ucs.length, neighbours: x.neighbours.length })),
+    }
+  },
+}
+
+// --- part: the plan of ONE partition, judged and promoted -----------------------------------------
+// Phase ⑤. The partition is RECOMPUTED here rather than carried: it is a pure function of artifacts
+// already on disk, so the judgement cannot drift from the card the role was actually given.
+export const part = {
+  description: "Step 9, phase ⑤: judge the plan a role staged for ONE partition and, on green, promote it to docs/design/<slug>.md. Five structural rules — a section per module of the partition, not one module of another partition, every use case shown as closed by step («закрывает: UC1 шаг 1»), every section carrying «проверка» and «зовёт» (paths or the word «нет»), and every declared call resolving to a module of the change or a file of the map. What the plan MEANS is read by a human at the gate. Costs no tokens.",
+  input: {
+    type: "object",
+    properties: { slug: { type: "string" }, path: { type: "string" } },
+    additionalProperties: false,
+  },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      blockers: { type: "string" },
+      missing: { type: "boolean" },
+      modules: { type: "number" },
+      ucs: { type: "number" },
+      calls: { type: "number" },
+      at: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ slug = "", path = "" } = {}, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, GRAPH_PATH))) {
+      return { ok: false, why: `${FRD_PATH} или ${GRAPH_PATH} не существует — план партии судить не по чему` }
+    }
+    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+    const map = readFileSync(at(root, GRAPH_PATH), "utf8")
+    const one = partsOf({ frd, ripple: readIfExists(root, RIPPLE_PATH) }).parts.find((x) => x.slug === slug)
+    if (!one) return { ok: false, why: `партии «${slug}» нет в разбиении — её модулей в изменении не осталось` }
+
+    if (!existsSync(at(root, path))) {
+      return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
+    }
+    const staged = readFileSync(at(root, path), "utf8")
+    const bad = judgePartPlan({ text: staged, part: one, known: knownPaths(map) })
+    if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
+
+    // Promoted OUT of `.agent/`, under the task's own directory (see taskDir).
+    const dir = taskDir(root)
+    if (!dir) return { ok: false, why: "ключ задачи не отвечен — класть решение партии некуда" }
+    mkdirSync(at(root, `${dir}/design`), { recursive: true })
+    const out = `${dir}/design/${slug}.md`
+    writeFileSync(at(root, out), staged.endsWith("\n") ? staged : `${staged}\n`)
+    rmSync(at(root, path))
+    const sections = sectionsOf(staged)
+    return { ok: true, at: out, modules: sections.length, ucs: one.ucs.length, calls: sections.reduce((n, x) => n + x.calls.length, 0) }
+  },
+}
+
+
+// --- planbook: phases ⑥⑦⑧ — is the requirement covered, in what order, and the one document ------
+// The last three phases of step 9, and none of them costs a token. Coverage is a comparison of two
+// sets of numbers (the FRD numbers its steps, the role names them); the order is the topological sort
+// of what the plans DECLARE; the document is the sections copied verbatim, in that order.
+//
+// A REFUSAL HERE REMOVES PLAN.md, for the same reason step 10's refusal removes its index: yesterday's
+// plan surviving today's hole is a gate approving work that no longer matches the requirement.
+
+
+export const planbook = {
+  description: "Step 9, phases ⑥⑦⑧: read every docs/design/<slug>.md a partition promoted, check that the requirement is covered whole (every module planned, every use case named, every step and failure branch closed), order the modules by what the plans DECLARE in «зовёт:» plus the map's static edges between existing files, and assemble PLAN.md — the header of counts and every section verbatim in the order of work. Refuses with the holes named, or with the circle's modules named, and REMOVES PLAN.md on any refusal. Costs no tokens.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      blockers: { type: "string" },
+      cycle: { type: "string" },
+      // The partitions a refusal implicates: the rail re-delegates THEM, with the blocker as
+      // feedback. Without it a hole in the coverage is an escalation, though the role that wrote the
+      // section is the one who can name what closes the step.
+      guilty: { type: "array", items: { type: "string" } },
+      modules: { type: "number" },
+      sections: { type: "number" },
+      ucs: { type: "number" },
+      at: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_ = {}, context) {
+    const root = runRoot(context)
+    const dir = taskDir(root)
+    if (!dir) return { ok: false, why: "ключ задачи не отвечен — план класть некуда" }
+    const PLAN_DOC = `${dir}/PLAN.md`
+    const drop = () => { if (existsSync(at(root, PLAN_DOC))) rmSync(at(root, PLAN_DOC)) }
+    if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, GRAPH_PATH))) {
+      drop()
+      return { ok: false, why: `${FRD_PATH} или ${GRAPH_PATH} не существует — план собирать не из чего` }
+    }
+    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+    const map = readFileSync(at(root, GRAPH_PATH), "utf8")
+    const { modules, parts: cut } = partsOf({ frd, ripple: readIfExists(root, RIPPLE_PATH) })
+
+    // The plans are read from the DELIVERABLES, not from staging: what a partition promoted is what
+    // the gate reads, and assembling anything else would document work nobody approved.
+    const sections = []
+    const lost = []
+    for (const one of cut) {
+      const doc = readIfExists(root, `${dir}/design/${one.slug}.md`)
+      if (!doc) { lost.push(one.slug); continue }
+      for (const x of sectionsOf(doc)) sections.push(x)
+    }
+    if (lost.length) {
+      drop()
+      return { ok: false, why: `нет плана партий: ${lost.join(", ")} — фаза ④ по ним не отработала` }
+    }
+
+    // Which partition answers for what: a module belongs to exactly one, and a use case to every
+    // partition its modules touch. This is the same invariant that makes a duplicate impossible,
+    // used the other way round — to address a refusal.
+    const ownerOf = new Map()
+    for (const one of cut) for (const m of one.modules) ownerOf.set(m, one.slug)
+    const blame = (text) => cut.filter((one) =>
+      one.modules.some((m) => text.includes(m)) || one.ucs.some((u) => new RegExp(`\\b${u}\\b`).test(text))).map((x) => x.slug)
+
+    const holes = coverageOf({ frd, modules, sections })
+    if (holes.length) { drop(); return { ok: false, blockers: holes.join("\n  "), guilty: [...new Set(holes.flatMap(blame))] } }
+
+    const { order, cycle } = orderOf({ sections, modules, edges: parseMap(map).edges })
+    if (cycle.length) {
+      drop()
+      return {
+        ok: false,
+        cycle: cycle.join(" → "),
+        guilty: [...new Set(cycle.map((m) => ownerOf.get(m)).filter(Boolean))],
+        blockers: `очередь работ не строится: ${cycle.map((m) => m.split("/").pop()).join(" → ")} замкнуты в круг строками «зовёт:». Разорви круг: у одного из них вызов другого — не зависимость сборки, а обратный вызов. Убери его из «зовёт» того модуля, который пишется ПЕРВЫМ, и опиши связь словами в «что это». Полные пути: ${cycle.join(" → ")}`,
+      }
+    }
+
+    mkdirSync(at(root, dir), { recursive: true })
+    writeFileSync(at(root, PLAN_DOC), `${planDoc({ frd, sections, order, modules })}\n`)
+    return {
+      ok: true,
+      at: PLAN_DOC,
+      modules: modules.size,
+      sections: sections.length,
+      ucs: (frd.usecases || []).length,
     }
   },
 }
@@ -1271,6 +1893,9 @@ export const plan = {
       mode: readFileSync(at(root, MODE_PATH), "utf8"),
       design: designXml ? parseDesign(designXml) : null,
       routes: designXml ? parseRoutes(designXml) : [],
+      // The DoD of every node, derived ONCE at step 9 and carried here — not recomputed. A skipped
+      // step 9 gives an empty map, and every node's `dod` is then `[]`: declared, never guessed.
+      units: designXml ? unitsByPath(parseDesign(designXml), parseRoutes(designXml)) : new Map(),
       trunk: gitTrunk(root),
       answers: said.ok ? said.value : [],
       edges: (input && input.edges) || [],
@@ -1307,19 +1932,60 @@ export const plan = {
 // ERASING first, as for the mode, the ripple and the design (docs/weight.md §4): newRun carries the
 // run's STATE into .agent/prev and leaves the artifacts, so yesterday's Pass would sit on disk while
 // today's plan was never judged.
-const REVIEW_PATH = ".agent/review.xml"
+// (REVIEW_PATH is declared once, beside FRD_PATH — checkFrd's F9 io reads it too.)
 
 export const reviewForm = {
-  description: "The blocker vocabulary as data (codes) from steps/review/review.mjs — the order SUBSTITUTES it, it does not restate it.",
+  description: "The blocker vocabulary AND the checklist of step 11, as data. `codes` from steps/review/review.mjs; `owed` — one row per thing the plan owes the FRD, with a machine-generated id the role copies rather than composes (owedItems); `unchecked` — the nodes R6 asks about (steps/review/review.mjs::askedNodes, the SAME expression the rule counts by), each with the commands of the scenarios that close it, followed by one line per set the rule does NOT judge: the nodes this change creates (createdNodes) and the nodes whose unverifiability the operator accepted at step 6's gate. The order SUBSTITUTES all three; a role that had to recall the FRD's contents instead answered as a whole, and three defects passed unremarked (live run c64dbd32).",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
-    properties: { codes: { type: "string" } },
+    properties: { codes: { type: "string" }, owed: { type: "string" }, unchecked: { type: "string" } },
     required: ["codes"],
     additionalProperties: false,
   },
-  run() {
-    return { codes: CODES.join(" | ") }
+  run(_args, context) {
+    const root = runRoot(context)
+    const codes = CODES.join(" | ")
+    // The form is asked for BEFORE the two artifacts necessarily exist (a unit calls it bare), so
+    // absence is an empty checklist, never a throw: the refusal on a missing plan belongs to
+    // review({path}), which is the function that judges.
+    let plan = null
+    try { plan = JSON.parse(readFileSync(at(root, PLAN_INDEX_PATH), "utf8")) } catch { plan = null }
+    const frd = existsSync(at(root, FRD_PATH)) ? parseFrd(readFileSync(at(root, FRD_PATH), "utf8")) : null
+    if (!plan || !frd) return { codes, owed: "(нет плана или FRD — чек-лист пуст)", unchecked: "—" }
+
+    const owed = owedItems(frd, plan).map((r) => `${r.id} — ${r.what}`).join("\n")
+    const byId = new Map((plan.nodes || []).map((n) => [n.id, n]))
+    // WHAT THE ORDER ASKS IS WHAT THE RULE COUNTS — one expression, `askedNodes`, imported from the
+    // module that judges (steps/review/review.mjs). The two written separately is D23: the order
+    // stopped naming the node this change CREATES while R6 went on judging it, and a role that
+    // answered the order verbatim got `R6 узел …/fruit-card.html без своей команды`.
+    const said = parsedAnswers(readIfExists(root, ANSWERS_PATH))
+    const answers = said.ok ? said.value : []
+    const waived = (plan.nodes || [])
+      .filter((n) => waiverFor({ node: n.id, answers }).word === "accept")
+      .map((n) => n.id)
+    const unchecked = askedNodes({ plan, answers })
+      .map((n) => {
+        const cmds = (n.coveredBy || []).flatMap((s) => ((byId.get(s) || {}).check || []).map((c) => c.cmd))
+        // The node's OWN units travel beside the candidate commands. Without them the question reads
+        // «does one of these commands execute this id», and an id executes nothing — live run
+        // d8ef8c60 answered it with `<witness cmd="mvn verify -Pnative"/>` for an HTML page, a
+        // command that passes the machine check (it is the scenario's) and opens no page at all.
+        const dod = (n.dod || []).map((u, i) => `\n      ${i + 1}. ${u}`).join("")
+        return `${n.id} — своей команды нет; закрывают: ${cmds.length ? cmds.join(" · ") : "ничто"}${dod ? `\n    делает:${dod}` : ""}`
+      }).join("\n")
+    // Said out loud instead of silently missing: the operator's decision is part of what the critic is
+    // looking at, and a node that vanished from the list with no explanation reads as an oversight.
+    const note = waived.length ? `\nневерифицируемость этих узлов принята оператором на шаге 6: ${waived.join(" · ")}` : ""
+    // The second such line, and it exists for the same reason: a created node is absent from the list
+    // BY THE RULE (askedNodes), not by an oversight, and the role is told so in the words of the fact —
+    // step 16 measures a created node, not step 11.
+    const created = createdNodes({ plan }).map((n) => n.id)
+    const born = created.length
+      ? `\nэти узлы изменение СОЗДАЁТ — своей команды у них нет по построению (карта старше файла), и witness про них не спрашивают: наблюдаемость нового узла меряет шаг 16 фактом «команда была красной до и зелёной после». Блокер unverifiable-node на них не пишется: ${created.join(" · ")}`
+      : ""
+    return { codes, owed: owed || "(пусто)", unchecked: `${unchecked || "—"}${note}${born}` }
   },
 }
 
@@ -1341,10 +2007,14 @@ export const review = {
             node: { type: "string" },
             evidence: { type: "string" },
             culprit: { type: "string" },
-            owner: { type: "number" },
+            owner: { type: ["number", "string"] },
             text: { type: "string" },
+            // The words the OPERATOR reads when `owner` is "operator" — steps/review/review.mjs::
+            // OPERATOR_NOTE, a function OF the code exactly as culprit/owner are. "" for every other
+            // owner; band() (workflows/izi.js) is the one reader that cares, and only for those rows.
+            note: { type: "string" },
           },
-          required: ["code", "node", "evidence", "culprit", "owner", "text"],
+          required: ["code", "node", "evidence", "culprit", "owner", "text", "note"],
           additionalProperties: false,
         },
       },
@@ -1373,16 +2043,28 @@ export const review = {
       return { ok: false, blockers: `${PLAN_INDEX_PATH} не разбирается как JSON: ${String((e && e.message) || e)}` }
     }
 
-    const r = newReview({
-      xml: readFileSync(at(root, path), "utf8"),
-      plan,
-      frd: parseFrd(readFileSync(at(root, FRD_PATH), "utf8")),
-    })
+    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+    // The map is R6's reachability operand — which tests can observe a node. It is not demanded:
+    // a run whose map is missing loses that half of the rule and keeps the rest, the same way
+    // `checkRoutes` of step 9 reads a missing map as no edges rather than as a refusal.
+    const mapPath = at(root, GRAPH_PATH)
+    const map = existsSync(mapPath) ? parseMap(readFileSync(mapPath, "utf8")) : null
+    // The operator's waivers from step 6's gate, read by THE reader of that file — the same call
+    // `plan` makes for the task key. A node answered `accept` is not judged by R6 at all.
+    const said = parsedAnswers(readIfExists(root, ANSWERS_PATH))
+    const r = newReview({ xml: readFileSync(at(root, path), "utf8"), plan, frd, map, answers: said.ok ? said.value : [] })
     if (!r.ok) return { ok: false, blockers: r.error.detail }
+
+    // The findings that cost no role call at all, merged AFTER the form was judged: R1 keeps judging
+    // the role's own file (a Pass carrying a blocker is still a contradiction in it), and a script
+    // finding then turns the RESULT to Reject regardless. An open question that reached the plan is
+    // a fact, and a fact does not need a model to notice it (docs/concept.md, rule 3).
+    const auto = autoFindings({ frd }).map((b) => ({ ...b, culprit: CODE_CULPRIT[b.code], owner: CODE_OWNER[b.code], note: OPERATOR_NOTE[b.code] || "" }))
+    const findings = [...r.value.blockers.map((b) => ({ ...b })), ...auto]
 
     copyFileSync(at(root, path), at(root, REVIEW_PATH))   // promoted AFTER the decision to accept
     rmSync(at(root, path))
-    return { ok: true, verdict: r.value.verdict, findings: r.value.blockers.map((b) => ({ ...b })) }
+    return { ok: true, verdict: auto.length ? "Reject" : r.value.verdict, findings }
   },
 }
 
@@ -1482,10 +2164,10 @@ export const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.12.0",
+    version: "1.15.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
-    description: "readText/answers/brdForm/frdForm/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, plan, review },
+    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/parts/part/planbook/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, parts, part, planbook, plan, review },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

@@ -21,7 +21,20 @@ tools: [read, write]
 ```
 
 Supported keys: `description`, `model`, `thinking`, `tools`, `overrideSystemPrompt`, `contextFiles`,
-`disabledAgentResources`. **There is no per-path permission map in pi** — "writes only to staging" is
+`disabledAgentResources`.
+
+**`model` may name a provider id OR an ALIAS, and the difference decides who owns the choice.** A
+value with no slash is resolved against `modelAliases` of the workflow settings
+(`pi-extensible-workflows/packages/core/src/utils.ts::modelAliasName`), whose three names are
+`routing`, `execution`, `judgment`. A provider id — what every role here carries today — pins the
+repository to one vendor's one model, and the machine's settings then have no say at all.
+
+Which of the two this pipeline should use is an OPEN DECISION, deliberately not taken here. What is
+not open is the trap, and it cost two runs on 2026-08-13: with an id in the frontmatter, editing
+`modelAliases` changes NOTHING, silently — and the status line shows the CHAT model, so the screen
+does not contradict the assumption either. The same silence follows an alias pointing at a model the
+session does not have: execution falls back with no message. **The only honest check is the run's own
+`state.json`** (`"model":…`) against `snapshot.json`'s `models` — both are on disk after every run. **There is no per-path permission map in pi** — "writes only to staging" is
 discipline plus the guardrail, not a host-enforced boundary. Say so in the role; do not pretend.
 $END_CONTEXT
 
@@ -53,6 +66,17 @@ $START_CONSTRAINTS
    this out loud; a Russian request must yield a Russian artifact.
 6. **The role never self-certifies.** "Done" is the guardrail's exit code. A role that found a
    blocker succeeded — a negative verdict is data, not an error.
+7. **A line of a role is an INSTRUCTION, not an account.** What to do and in what form — nothing
+   else. No run ids, no cost, no history of why the rule appeared, no argument for it. Evidence
+   belongs in three other places, each of which the role never reads: `docs/` for the rule's reason,
+   a `BUG_FIX_CONTEXT` comment for the code that judges it, `tasks/` for the work that bought it.
+   A role is executed by a small model, and every line that is not an instruction competes with the
+   ones that are.
+8. **The form is shown by EXAMPLE, and the instruction is unambiguous.** `Renewed(loanId,dueOn)`
+   teaches more than a paragraph about naming. Two readings of one line is a defect of the line: if
+   a sentence can be obeyed in two ways, the model will pick the wrong one, and the guardrail will
+   pay for it a redelegation at a time. A sentence that says the same thing as the line above it is
+   deleted, not kept for emphasis.
 $END_CONSTRAINTS
 
 $START_OUTPUT_FORMAT

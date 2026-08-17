@@ -1,0 +1,106 @@
+{
+  "from": "sandbox/eddi",
+  "nodes": [
+    "docs/agent-configs/agent-father/aaa000000000000000000000.agent.json",
+    "docs/agent-configs/agent-father/aaa000000000000000000000.descriptor.json",
+    "src/main/java/ai/labs/eddi/backup/IRestExportService.java",
+    "src/main/java/ai/labs/eddi/backup/IZipArchive.java",
+    "src/main/java/ai/labs/eddi/backup/impl/RestExportService.java",
+    "src/main/java/ai/labs/eddi/configs/agents/CapabilityRegistryService.java",
+    "src/main/java/ai/labs/eddi/configs/agents/IRestCapabilityRegistry.java",
+    "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java",
+    "src/main/java/ai/labs/eddi/configs/dictionary/IRestAction.java",
+    "src/main/java/ai/labs/eddi/configs/hitl/HitlTimeoutPolicy.java",
+    "src/test/java/ai/labs/eddi/backup/impl/RemoteApiResourceSourceDeepCoverageTest.java",
+    "src/test/java/ai/labs/eddi/backup/impl/RemoteApiResourceSourceExtendedTest.java",
+    "src/test/java/ai/labs/eddi/backup/impl/RemoteApiResourceSourceMissedBranchTest.java",
+    "src/test/java/ai/labs/eddi/backup/impl/RemoteApiResourceSourceTest.java",
+    "src/test/java/ai/labs/eddi/backup/impl/RestExportServiceBranchTest.java",
+    "src/test/java/ai/labs/eddi/backup/impl/RestExportServiceCleanupTest.java",
+    "src/test/java/ai/labs/eddi/configs/ConfigStoreRoleGateTest.java"
+  ],
+  "edges": [
+    {
+      "from": "src/main/java/ai/labs/eddi/backup/impl/RestExportService.java",
+      "to": "src/main/java/ai/labs/eddi/backup/IRestExportService.java"
+    },
+    {
+      "from": "src/main/java/ai/labs/eddi/backup/impl/RestExportService.java",
+      "to": "src/main/java/ai/labs/eddi/backup/IZipArchive.java"
+    },
+    {
+      "from": "src/main/java/ai/labs/eddi/backup/impl/RestExportService.java",
+      "to": "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"
+    },
+    {
+      "from": "src/main/java/ai/labs/eddi/configs/agents/CapabilityRegistryService.java",
+      "to": "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"
+    },
+    {
+      "from": "src/main/java/ai/labs/eddi/configs/agents/IRestCapabilityRegistry.java",
+      "to": "src/main/java/ai/labs/eddi/configs/agents/CapabilityRegistryService.java"
+    },
+    {
+      "from": "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java",
+      "to": "src/main/java/ai/labs/eddi/configs/hitl/HitlTimeoutPolicy.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/backup/impl/RemoteApiResourceSourceDeepCoverageTest.java",
+      "to": "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/backup/impl/RemoteApiResourceSourceExtendedTest.java",
+      "to": "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/backup/impl/RemoteApiResourceSourceMissedBranchTest.java",
+      "to": "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/backup/impl/RemoteApiResourceSourceTest.java",
+      "to": "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/backup/impl/RestExportServiceBranchTest.java",
+      "to": "src/main/java/ai/labs/eddi/backup/IZipArchive.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/backup/impl/RestExportServiceBranchTest.java",
+      "to": "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/backup/impl/RestExportServiceBranchTest.java",
+      "to": "src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/backup/impl/RestExportServiceCleanupTest.java",
+      "to": "src/main/java/ai/labs/eddi/backup/IZipArchive.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/backup/impl/RestExportServiceCleanupTest.java",
+      "to": "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/backup/impl/RestExportServiceCleanupTest.java",
+      "to": "src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/configs/ConfigStoreRoleGateTest.java",
+      "to": "src/main/java/ai/labs/eddi/configs/agents/IRestCapabilityRegistry.java"
+    },
+    {
+      "from": "src/test/java/ai/labs/eddi/configs/ConfigStoreRoleGateTest.java",
+      "to": "src/main/java/ai/labs/eddi/configs/dictionary/IRestAction.java"
+    }
+  ],
+  "routes": [
+    "src/main/java/ai/labs/eddi/backup/IRestExportService.java",
+    "src/main/java/ai/labs/eddi/configs/agents/IRestCapabilityRegistry.java",
+    "src/main/java/ai/labs/eddi/configs/dictionary/IRestAction.java"
+  ],
+  "entry": "src/main/java/ai/labs/eddi/configs/agents/IRestCapabilityRegistry.java",
+  "entryNodes": 5,
+  "otherEntry": "src/main/java/ai/labs/eddi/configs/dictionary/IRestAction.java",
+  "implOnlyTests": "src/main/java/ai/labs/eddi/backup/impl/RestExportService.java",
+  "iface": "src/main/java/ai/labs/eddi/backup/IRestExportService.java"
+}

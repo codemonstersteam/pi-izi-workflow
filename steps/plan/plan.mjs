@@ -13,9 +13,17 @@
 // EXTERNAL_DEPENDENCY: steps/intake/map.mjs — parseMap's parse is the ONLY reader of appgraph.xml in
 //             this band; `nodeTests`, `suites`, `spine` and `cycles` were added there rather than
 //             re-scanned here for that reason.
+// EXTERNAL_DEPENDENCY: core/suites.mjs — hasOwnCheck, the ONE expression of "this node can be closed
+//             by a command of its own". Step 6's gate (steps/ripple/ripple.mjs::blindNodes) asks the
+//             same question of the same map, and a second copy is how a node this step called
+//             self-closing could be the node the gate calls blind.
 // EXTERNAL_DEPENDENCY: steps/design/design.mjs — parseDesign AND parseRoutes, both parsed by the
-//             CALLER (ext/index.mjs) and handed in. The routes carry the change's own direction and
-//             are absent whenever step 9 was skipped, which is a legal input, not a failure.
+//             CALLER (ext/index.mjs) and handed in. The routes are read for the `dod` of a ticket and
+//             for nothing else: they do NOT order the work (D42, see the edges section below), and
+//             they are absent whenever step 9 was skipped, which is a legal input, not a failure.
+// EXTERNAL_DEPENDENCY: core/xml.mjs — tokens, the ONE cut of a list-of-tokens attribute. `nodes` of a
+//             scenario is read here, at step 6 and at step 9, and three copies of that split are how
+//             one artifact means three routes (live run 27b37fdb).
 // EXTERNAL_DEPENDENCY: steps/plan/git-conventions.md — the branch convention this module encodes:
 //             `<prefix>/<KEY>`, prefix from the weight, base a fact of git. TASK_KEY below is the ONE
 //             copy of the key's shape, and plan.test.mjs asserts that the file and this constant
@@ -32,8 +40,15 @@
 
 import { ok, err } from "../../core/result.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
+import { hasOwnCheck } from "../../core/suites.mjs"
+import { tokens } from "../../core/xml.mjs"
 
-export const GRAMMAR_VERSION = 1
+// 2 — the node carries what a TICKET needs to be shippable: `dod` (its units, derived once at step 9
+//     by steps/design/design.mjs::unitsByPath) and `why` (the FRD's own words about why this node is
+//     touched). Live run d8ef8c60 shipped a plan whose page node read `delta: []` and whose resource
+//     node's check command was green before a line was written — both facts already existed on disk
+//     and the plan simply did not carry them.
+export const GRAMMAR_VERSION = 2
 
 // The key's shape, in ONE place — steps/plan/git-conventions.md carries the same regexp for the human
 // reader and plan.test.mjs fails when the two disagree.
@@ -84,7 +99,7 @@ const oneCmd = (suite, testPath) =>
     : suite.cmd
 
 // FUNCTION_CONTRACT: newPlanIndex — the change as an ordered DAG of work
-//   Input:        { frd, map, mode, design, routes, trunk, answers, edges }
+//   Input:        { frd, map, mode, design, routes, trunk, answers, edges, units }
 //                 frd    — parseFrd's parse (steps/intake/frd.mjs): deltas, touched, scenarios
 //                 map    — parseMap's parse (steps/intake/map.mjs): nodes, tests, edges, nodeTests,
 //                          suites, spine, cycles
@@ -115,7 +130,7 @@ const oneCmd = (suite, testPath) =>
 //                          "uncovered-node" — a `code` node with no check command and no scenario
 //                          "no-suite"       — a scenario node whose nodes declare no suite at all
 //   Purity:       pure
-export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, edges } = {}) {
+export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, edges, units = new Map() } = {}) {
   const weight = String(mode == null ? "" : mode).trim()
   if (!weight) return err("no-mode", ".agent/mode пуст или отсутствует — шаг 7 не отработал, вес не угадывается")
   if (!PREFIX[weight]) {
@@ -156,11 +171,27 @@ export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, e
     .filter((d) => d && d.node === path)
     .map((d) => `${d.op || "(без op)"} (${d.form || "?"})`)
 
+  // WHY a node is in the plan when no `<delta>` names it. A node reaches the width through
+  // `<touched path why>` too, and until now only the delta travelled: `fruits.html` arrived in the
+  // ticket with `delta: []` and nothing at all about the work — the implementer had to guess it back
+  // out of the code (live run d8ef8c60). The FRD already said it; the plan simply did not carry it.
+  const whyOf = (path) => {
+    const row = ((frd && frd.touchedRows) || []).find((t) => t && t.path === path)
+    return String((row && row.why) || "").trim()
+  }
+
   const nodes = ordered.map((path) => ({
     id: path,
     kind: DOC_EXT.test(path) ? "doc" : "code",
     new: created.has(path),
     delta: deltasOf(path),
+    why: whyOf(path),
+    // THE DEFINITION OF DONE, carried and not recomputed. Step 9 derived it
+    // (steps/design/design.mjs::unitsByPath) and wrote it into `.agent/data-flow.md`; the ticket is
+    // cut from the PLAN, so a plan without it hands the implementer a node whose check command is
+    // green before any work and says nothing about which tests are owed. `[]` when step 9 was skipped
+    // — declared, exactly as `deps: []` is for a created node, never guessed.
+    dod: [...(units.get(path) || [])],
     deps: [],
     check: [],
     coveredBy: [],
@@ -210,11 +241,13 @@ export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, e
   //             contradicted each other exactly where they met.
   //   Fix:      the "one node needs no scenario" shortcut holds only while that node can close
   //             ITSELF. hasOwnCheck is read off the map, the same source the commands come from.
-  const hasOwnCheck = (path) => ((m.nodeTests || new Map()).get(path) || []).some((t) => suiteById.has(t.suite))
+  //   Moved to core/suites.mjs (D23): step 6's gate asks the same question of the same map, and one
+  //   expression is what keeps "the node closes itself" from meaning two things.
+  const closesItself = (path) => hasOwnCheck(m, path)
   for (const s of (frd && frd.scenarios) || []) {
-    const over = String(s.nodes || "").split(/\s+/).filter((p) => codeIds.has(p))
+    const over = tokens(s.nodes).filter((p) => codeIds.has(p))
     if (!over.length) continue
-    if (over.length < 2 && over.every(hasOwnCheck)) continue
+    if (over.length < 2 && over.every(closesItself)) continue
     const node = { id: `scenario:${s.id}`, kind: "scenario", scenario: s.id, deps: [...new Set(over)], check: [], coveredBy: [] }
     nodes.push(node)
     byId.set(node.id, node)
@@ -232,29 +265,26 @@ export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, e
   }
   for (const e of m.edges || []) if (byId.has(e.from) && byId.has(e.to)) addDep(e.from, e.to)
 
-  // The SECOND source of direction: the design's ROUTES. A route is directed by construction — it is
-  // the scenario played out in time — and it is the only artifact that knows an edge INTO a module
-  // the change creates, because the map was built before that file existed.
+  // THE ROUTES ARE NOT A SECOND SOURCE OF DIRECTION — D42, and this is the one place that has to say
+  // why, because the loop that used to stand here read so obviously right.
   //
-  // BUG_FIX_CONTEXT: the live artifacts of runbox/quarkus-rest-json-app-v2-t3 (run c6bc2e54).
-  //   Previous: the map's edges were the only source.
-  //   Problem:  `fruits.html` gets an anchor to `fruit-card.html` (FRD UC1 step 2), and `fruit-card`
-  //             is created by this very change. No map edge can carry that — the map predates the
-  //             file — so the plan ordered the page BEFORE the page it links to, and the implementer
-  //             of instruction 1 would have had no contract to link against.
-  //   Fix:      the forward leg of every route is an edge. Only the FORWARD leg: a route returns
-  //             along the same nodes (`fruit-card#2 -> FruitResource#1 -> fruit-card#3`), and taking
-  //             the return as an edge would reintroduce exactly the two-node cycle that disqualified
-  //             `<dep>`. A node already seen in this route is where the return begins.
-  for (const r of routes || []) {
-    const steps = (r && r.steps) || []
-    const seen = new Set()
-    for (const [k, s] of steps.entries()) {
-      seen.add(s.path)
-      const next = steps[k + 1]
-      if (next && !seen.has(next.path)) addDep(s.path, next.path)   // caller waits for the callee
-    }
-  }
+  // A route is directed: it is the scenario played out in time. But its direction answers «who handed
+  // the value on», and this step asks «what must be WRITTEN first». On an ordinary joint the two
+  // agree — a page cannot call an endpoint that does not exist. On a DATA CLASS they are opposite:
+  // `Glossary` is handed on by every node that touches it and has to be written before all of them.
+  // For an existing pair the map arbitrated (`orderLegs`: a leg whose reverse the map already carries
+  // is dispatch, not dependency). For a CREATED pair there is no arbiter, and 7 of eddi's 13 nodes are
+  // created: two truthful chains gave `Glossary ↔ RestGlossaryStore`, step 9's guardrail called it a
+  // circle, and the role could not repair what it had not decided — three redelegations, escalation,
+  // live run of 2026-08-17. Three green runs before it were luck over 23 chains, not proof.
+  //
+  // The order now comes from DECLARATION: the `зовёт:` line the group's contract (9d) and the use
+  // case's plan (9e) carry, written by whoever decides that file, assembled into this graph at 9g.
+  // A circle among declared edges is a real contradiction and its author can repair it.
+  //
+  // What this loop bought and 9g owes back: run c6bc2e54, where existing `fruits.html` had to wait for
+  // the `fruit-card.html` this change creates. No map edge can carry that — the map predates the file.
+  // Until 9g lands, that ordering is not built by anything, and it is named here rather than lost.
 
   // A created module has no edge in the map — it is not there yet. Its neighbours are what the
   // designer wrote, and the undirectedness of `<dep>` is harmless here: a module that does not exist

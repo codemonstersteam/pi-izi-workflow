@@ -20,6 +20,8 @@ $END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
+- analogue: the existing mechanism this work is modelled on — {ANALOGUE_RULE}. No model to follow —
+  `none — <why>`
 - subjects[]: {SUBJECTS_MIN}..{SUBJECTS_MAX} of them; each one — {SUBJECT_RULE}
 - an anchor is a NOUN from the request, not your evaluation of it: `record`, not `retention` —
   step 3 greps it over the repository, and an evaluation matches no file
@@ -43,6 +45,7 @@ schema:
   R<N> <statement: what, not how>
      fit:    <value | range | enum | format | predicate>
      verify: <command | artifact>
+  analogue: <OneWord> — <what makes it the model>   (or: none — <why there is none>)
   subjects[]: <term> · <term> · …
   open-questions: 0
 check: {CHECK}

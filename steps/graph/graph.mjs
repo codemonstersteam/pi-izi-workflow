@@ -28,6 +28,7 @@
 
 import { ok, err } from "../../core/result.mjs"
 import { esc } from "../../core/xml.mjs"
+import { matches, under } from "../../core/suites.mjs"
 import { parsePart, GRAMMAR_VERSION, SPINE_ANSWERS } from "../scope/part.mjs"
 import { parseComputed } from "../scope/computed.mjs"
 import { newLevels } from "./levels.mjs"
@@ -54,18 +55,10 @@ const text = (s) => String(s == null ? "" : s).trim()
 // order digest already uses ("… N more declarations"). At cap 12 that remainder is large (252 of 537
 // declarations live in those 9 nodes), and it says so on the node instead of the map pretending the
 // class is small.
-const DECL_CAP = 12
+export const DECL_CAP = 12
 
-// matches — a suite's `match` against a file NAME. `*` is the only wildcard: the patterns this reads
-// come from build manifests (`*Test.java`, `*IT.java`, `test_*.py`), and a full glob engine would be
-// a dependency to interpret three characters.
-function matches(path, pattern) {
-  const name = path.slice(path.lastIndexOf("/") + 1)
-  const re = new RegExp(`^${String(pattern).split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`)
-  return re.test(name)
-}
-
-const under = (path, dir) => Boolean(dir) && (path === dir || path.startsWith(`${dir}/`))
+// `matches` and `under` live in core/suites.mjs: step 4 judges the suite by the same rule this step
+// binds files with (P8), and a second spelling would let a suite pass there and drop its files here.
 
 // FUNCTION_CONTRACT: suiteFor — which suite runs this test file
 //   Input:        path — a repo-relative file path; suites — the spine's <suite> list
@@ -98,9 +91,12 @@ export function suiteFor(path, suites = []) {
 
 // FUNCTION_CONTRACT: mergeGraph — every part and every computed fact as one map
 //   Input:        { parts, computed, plan }
-//                 parts — [{ id, kind, xml }] one per plan cell, in plan order
+//                 parts — [{ id, kind, xml }] one per cell of the FOCUS, in plan order
 //                 computed — parseComputed's shape
-//                 plan — { subjects[], gaps[] } of .agent/survey-plan.json
+//                 plan — { subjects[], gaps[], cells[] } of .agent/survey-plan.json
+//                 focus — { chosen[], cells[], repoFiles } of .agent/focus.json, or null when the
+//                         plan fitted whole. A focus naming every cell of the plan is NOT partial:
+//                         "the focus is everything" and "there is no focus" mean the same map
 //   Dependencies: parsePart, newLevels, suiteFor, EXTERNAL SPINE_ANSWERS
 //   Antecedent:   any values; missing ones read as empty. Parts are assumed to have PASSED checkPart
 //                 — this function merges, it does not re-judge a part
@@ -116,7 +112,7 @@ export function suiteFor(path, suites = []) {
 //                 failure: none — total. "The graph is bad" is checkGraph's verdict, not a throw
 //   Purity:       pure
 //   Interface:    mergeGraph({ parts, computed, plan }) -> Graph
-export function mergeGraph({ parts = [], computed = {}, plan = {} } = {}) {
+export function mergeGraph({ parts = [], computed = {}, plan = {}, focus = null } = {}) {
   const parsed = parts.map((p) => ({ id: p.id, kind: p.kind, part: parsePart(p.xml) }))
 
   // The spine's answers and lists. A missing spine cell is not an error — a repository may have no
@@ -169,14 +165,32 @@ export function mergeGraph({ parts = [], computed = {}, plan = {} } = {}) {
     if (!providers.has(p)) providers.set(p, new Set())
     providers.get(p).add(a.at)
   }
-  const edges = (computed.edges || []).map((e) => ({ from: e.from, to: e.to, via: e.via, by: "" }))
+  const paths = [...byPath.keys()].sort()
+
+  // Only edges with BOTH ends in the map. `computed` covers the whole repository — it is written by
+  // step 3, which walks the tree before anything is narrowed — while the modules of this map are the
+  // cells of the FOCUS. An edge to a node the reader cannot see says nothing it can act on.
+  //
+  // BUG_FIX_CONTEXT: this is the defect that made step 3b pointless on a monolith, and the numbers
+  //   are eddi's. Previous: every computed edge was serialised. On the acceptance forms that is
+  //   invisible — t3 has 17 modules and 8 edges, none of them dangling, so this filter is a
+  //   byte-for-byte identity there. On eddi it is 8253 edges ≈ 1855 KB against a 115 KB ceiling: the
+  //   map could not be read no matter how narrow the focus, and the refusal would arrive at step 6,
+  //   AFTER the swarm — precisely the cost step 3b exists to avoid. Filtered: ≈246 edges ≈ 56 KB.
+  // The rule is not new, only unenforced: `<focus local="level fanin fanout component">` already
+  // declares that this map's numbers are computed from what got in, and both readers of the grammar
+  // tolerate a dangling end (steps/intake/map.mjs::parseMap keeps them, levels.mjs ignores them).
+  const inMap = new Set(paths)
+  const edges = (computed.edges || [])
+    .filter((e) => inMap.has(e.from) && inMap.has(e.to))
+    .map((e) => ({ from: e.from, to: e.to, via: e.via, by: "" }))
   for (const u of computed.use || []) {
+    if (!inMap.has(u.at)) continue
     for (const to of providers.get(u.path) || []) {
-      if (to !== u.at) edges.push({ from: u.at, to, via: u.via, by: "use" })
+      if (to !== u.at && inMap.has(to)) edges.push({ from: u.at, to, via: u.via, by: "use" })
     }
   }
 
-  const paths = [...byPath.keys()].sort()
   const L = newLevels({ nodes: paths, edges })
 
   const declAt = new Map()
@@ -264,6 +278,24 @@ export function mergeGraph({ parts = [], computed = {}, plan = {} } = {}) {
   const subjects = [...(plan.subjects || [])]
   const planGaps = new Set(plan.gaps || [])
 
+  // The FOCUS, and the one thing the map must not do quietly: narrow itself. `focus` is null on
+  // every run whose plan fitted the reading cap — then the map covers the repository exactly as it
+  // always has and nothing below fires.
+  //
+  // `found` grows a THIRD value because two were no longer enough. It is read off the PLAN (an
+  // anchor that matched no file exists nowhere else — checkGraph's G2 depends on that), and the plan
+  // covers the whole repository, so under a partial focus an anchor whose files all stayed outside
+  // would arrive at step 6 as FOUND. The role would then look in the map for what the pipeline
+  // decided not to put there, and answer with a guess instead of `Unknown`:
+  //   ""        — carried by a cell of the focus: it is in this map
+  //   "no"      — matched no file in the repository at all (plan.gaps)
+  //   "outside" — matched files, and every one of them is outside the focus
+  const planCells = plan.cells || []
+  const inFocus = focus && Array.isArray(focus.cells) ? new Set(focus.cells) : null
+  const partial = Boolean(inFocus) && planCells.some((c) => !inFocus.has(c.id))
+  const focused = partial ? new Set(planCells.filter((c) => inFocus.has(c.id)).flatMap((c) => c.subjects || [])) : null
+  const foundOf = (name) => (planGaps.has(name) ? "no" : partial && !focused.has(name) ? "outside" : "")
+
   return Object.freeze({
     grammar: GRAMMAR_VERSION,
     modules: Object.freeze(modules),
@@ -272,7 +304,22 @@ export function mergeGraph({ parts = [], computed = {}, plan = {} } = {}) {
     components: L.components,
     isolated: L.isolated,
     cycle: L.cycle,
-    subjects: Object.freeze(subjects.map((name) => ({ name, found: planGaps.has(name) ? "no" : "" }))),
+    subjects: Object.freeze(subjects.map((name) => ({ name, found: foundOf(name) }))),
+    focus: partial
+      ? Object.freeze({
+          slices: [...(focus.chosen || [])].join(" "),
+          cells: inFocus.size,
+          of: planCells.length,
+          nodes: modules.length,
+          repo: focus.repoFiles || 0,
+          // What the ceiling left out, carried from step 3b — BOTH numbers. Zero is written too:
+          // "nothing was dropped" and "nobody counted" must not read the same in a file a human
+          // diagnoses from. Cells matter more than cones here: on eddi a run dropped 5 cones and 144
+          // cells, and a map that reported only the cones told the smaller half of the truth.
+          dropped: (focus.dropped && focus.dropped.slices) || 0,
+          droppedCells: (focus.dropped && focus.dropped.cells) || 0,
+        })
+      : null,
     gaps: Object.freeze(gaps),
     suites: Object.freeze(suites),
     answers: Object.freeze(answers),
@@ -329,8 +376,10 @@ export function checkGraph(graph, plan = {}) {
 //   Input:        { parts, computedXml, plan } — parts as [{ id, kind, xml }]; computedXml is the
 //                 text of .agent/graph-computed.xml; plan is the parsed .agent/survey-plan.json
 //   Dependencies: mergeGraph, checkGraph, parseComputed
-//   Antecedent:   every plan cell has a part (the CALLER proves this — ext/index.mjs::buildGraph —
-//                 because only it knows which file was missing)
+//   Antecedent:   every cell OF THE FOCUS has a part (the CALLER proves this — ext/index.mjs::
+//                 buildGraph — because only it knows which file was missing). Before step 3b the
+//                 quantifier ran over the plan; a cell the focus left out has no part by decision,
+//                 and demanding one would refuse every narrowed run
 //   Consequent:   success: the merged Graph, ready for graphXml
 //                 failure: "no-suite" when the only blocker is the missing test suite — the one
 //                          refusal a human fixes with a separate task; "invalid-graph" otherwise,
@@ -338,8 +387,8 @@ export function checkGraph(graph, plan = {}) {
 //                          they reach the operator through err("blocked"), not a role
 //   Purity:       pure
 //   Interface:    newGraph({ parts, computedXml, plan }) -> Result<Graph, "no-suite"|"invalid-graph">
-export function newGraph({ parts = [], computedXml = "", plan = {} } = {}) {
-  const graph = mergeGraph({ parts, computed: parseComputed(computedXml), plan })
+export function newGraph({ parts = [], computedXml = "", plan = {}, focus = null } = {}) {
+  const graph = mergeGraph({ parts, computed: parseComputed(computedXml), plan, focus })
   const blockers = checkGraph(graph, plan)
   if (!blockers.length) return ok(graph)
   const onlySuite = blockers.length === 1 && !graph.suites.length
@@ -347,6 +396,33 @@ export function newGraph({ parts = [], computedXml = "", plan = {} } = {}) {
 }
 
 const attr = (name, value) => ` ${name}="${esc(value)}"`
+
+// PATH_PREFIX_MIN — below this the dictionary costs more than it saves, so it is not written at all.
+// A form with fifteen files has no common root worth naming; a monolith has one in every path.
+const PATH_PREFIX_MIN = 512
+
+// bestPrefix — the directory prefix whose removal saves the most bytes across every path the map
+// writes, counting each path once per OCCURRENCE (a node names its path once, an edge names two).
+//
+// This is front coding, the oldest trick in the index-compression book: one shared head is declared
+// once and replaced by a sigil everywhere it appears. Measured on eddi's live map (run fb57f506):
+// `src/main/java/ai/labs/eddi/` is 27 characters over 352 occurrences — 9 504 B, 8% of the file,
+// with nothing lost.
+function bestPrefix(occurrences) {
+  const count = new Map()
+  for (const p of occurrences) {
+    for (let i = p.indexOf("/"); i > 0; i = p.indexOf("/", i + 1)) {
+      const pre = p.slice(0, i + 1)
+      count.set(pre, (count.get(pre) || 0) + 1)
+    }
+  }
+  let best = "", saved = 0
+  for (const [pre, n] of count) {
+    const s = (pre.length - 1) * n              // one sigil replaces the prefix
+    if (s > saved) { saved = s; best = pre }
+  }
+  return saved >= PATH_PREFIX_MIN ? best : ""
+}
 
 // answerXml — one spine answer, with its own attributes or with found="no". `found="no"` is written
 // even where the scout simply never produced the element: at step 10 the operator answers a question
@@ -374,7 +450,34 @@ export function graphXml(graph) {
   const g = graph || {}
   const modules = g.modules || []
   const L = []
+
+  // The dictionary is computed over every path this file will WRITE — node paths once, edge ends
+  // twice — because that is what it pays for.
+  const edgesAll = g.edges || []
+  // The dictionary is computed over the EDGE ends only, and only they are written short.
+  //
+  // BUG_FIX_CONTEXT: the first live run with compression (eddi). A node's path is its IDENTITY, and
+  //   the map is read by a MODEL as well as by parseMap: step 6's role copied `~modules/llm/impl/
+  //   LlmTask.java` out of a `<module>` line straight into its FRD, and the guardrail refused a path
+  //   that does not exist. Abbreviating what a reader must quote back is a trap regardless of how
+  //   well the parser expands it. The measurement says the price is small: of the 9 504 B the
+  //   dictionary saved on that map, 7 911 were in edge ends and only 1 593 in node paths.
+  const prefix = bestPrefix(edgesAll.flatMap((e) => [e.from, e.to]))
+  const P = (p) => (prefix && String(p).startsWith(prefix) ? `~${String(p).slice(prefix.length)}` : String(p))
   L.push(`<appgraph grammar="${esc(g.grammar || "")}" modules="${modules.length}" components="${(g.components || []).length}" isolated="${(g.isolated || []).length}" levels="${modules.reduce((n, m) => Math.max(n, m.level), 0)}">`)
+
+  // The boundary, declared in ONE line and only when there is one. A per-edge `<outside path why
+  // via>` was the first shape and it is deferred with a trigger (docs/big-projects-solution.md §11):
+  // it repeats a single statement dozens of times in a file that is fighting a 115 KB cap, while a
+  // dangling edge end is already legal grammar here. What this line says is what no reader can work
+  // out for itself — the map covers `nodes` of `repo`, and that is a DECISION, not an omission.
+  // `local` names the numbers computed from what got in, so a `level` or a `component` in this map
+  // never silently claims to speak about the whole tree.
+  if (g.focus) {
+    L.push(`  <focus slices="${esc(g.focus.slices)}" cells="${g.focus.cells}" of="${g.focus.of}" nodes="${g.focus.nodes}" repo="${g.focus.repo}" dropped="${g.focus.dropped}" dropped-cells="${g.focus.droppedCells}" local="level fanin fanout component"/>`)
+  }
+
+  if (prefix) L.push(`  <paths prefix="${esc(prefix)}"/>`)   // every `~` below stands for it
 
   L.push(answerXml("artifact", (g.answers || {}).artifact))
   for (const s of g.suites || []) L.push(`  <suite${Object.entries(s).map(([k, v]) => attr(k, v)).join("")}/>`)
@@ -390,7 +493,7 @@ export function graphXml(graph) {
     const k = (g.declKinds || []).find((x) => x.lang === l.lang)
     L.push(`  <lang id="${esc(l.lang)}" files="${l.files}" edges="${l.rules ? "yes" : "no-rules"}" routes="${r && r.rules ? "yes" : "no-rules"}" decls="${esc(k && k.kinds ? k.kinds : "no-rules")}"/>`)
   }
-  for (const s of g.subjects || []) L.push(`  <subject name="${esc(s.name)}"${s.found === "no" ? ' found="no"' : ""}/>`)
+  for (const s of g.subjects || []) L.push(`  <subject name="${esc(s.name)}"${s.found ? attr("found", s.found) : ""}/>`)
   for (const c of g.components || []) L.push(`  <component id="${esc(c.id)}" modules="${c.modules}" heads="${esc(c.heads.join(" "))}"/>`)
 
   for (const m of modules) {
@@ -409,7 +512,38 @@ export function graphXml(graph) {
     L.push("  </module>")
   }
 
-  for (const e of g.edges || []) L.push(`  <edge from="${esc(e.from)}" to="${esc(e.to)}" via="${esc(e.via)}"${e.by ? attr("by", e.by) : ""}/>`)
+  // `via` is the EVIDENCE of an edge — and half of it says nothing the edge does not already say.
+  //
+  // BUG_FIX_CONTEXT: live run fa8def32 (eddi). The map came out 121 384 B against a 117 760 B
+  //   ceiling — over by 3% — and step 6 refused after the swarm had been paid for. Of that file,
+  //   edges were 41 417 B and their `via` 11 901 B; 93 of the 185 carried nothing but
+  //   `import ai.labs.eddi.configs.snippets.model.PromptSnippet;` — the fully qualified name of the
+  //   node the `to` attribute already names, one fact written twice (standards/code.md §1). Dropping
+  //   exactly those brought the map to 115 698 B: it fits, with every cell and every node kept.
+  //   The alternative measured against this one was a safety margin on the focus estimate, and it
+  //   was worse: the value that saved the run (×1.2) also dropped `modules/templating`, real work.
+  // The other 92 keep theirs: a signature or an `extends` line is not derivable from two paths, and
+  // it is what lets a role say WHY a node depends on another.
+  const restatesTo = (e) => {
+    const fq = String(e.to).replace(/^.*java\//, "").replace(/\.java$/, "").replace(/\//g, ".")
+    return /^import\s+(static\s+)?[\w.]+;?$/.test(String(e.via || "").trim()) && String(e.via).includes(fq)
+  }
+  // CSR, and it is the standard sparse-graph layout rather than a trick of this file: a list of
+  // (from, to) pairs is a coordinate list, and grouping by source turns it into compressed rows. On
+  // eddi's live map 216 edges came from 60 sources — the `from` path was written 156 times for
+  // nothing. An edge that still carries evidence (`via`, `by`) keeps its own line: the row form has
+  // nowhere to put a value that differs per element.
+  const rows = new Map()
+  for (const e of edgesAll) {
+    const via = restatesTo(e) ? "" : esc(e.via)
+    if (via || e.by) {
+      L.push(`  <edge from="${esc(P(e.from))}" to="${esc(P(e.to))}"${via ? ` via="${via}"` : ""}${e.by ? attr("by", e.by) : ""}/>`)
+      continue
+    }
+    if (!rows.has(e.from)) rows.set(e.from, [])
+    rows.get(e.from).push(e.to)
+  }
+  for (const [from, tos] of rows) L.push(`  <edges from="${esc(P(from))}" to="${esc(tos.map(P).join(" "))}"/>`)
 
   L.push("  <surface>")
   for (const a of g.surface || []) L.push(`    <api name="${esc(a.name)}" kind="${esc(a.kind)}" at="${esc(a.at)}"/>`)

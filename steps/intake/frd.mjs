@@ -14,6 +14,7 @@
 //             steps/brd/brd.mjs, constraint 2); FRD_FORM is fixed at module load.
 // Interface:  FRD_FORM — the artifact's form as data (grammar, deltaForms, sources)
 //             parseFrd(xml) -> Frd
+//             endsOf(frd) -> [{ token, uc, side, text }]  — the ends of every use case
 //             checkFrd({ frd, nodes, tests, entries, edges, known }) -> string[]  — blockers, empty = green
 //             newFrd({ xml, nodes, tests, entries, edges, sources }) -> Result<Frd, "invalid-frd">
 
@@ -21,11 +22,17 @@ import { ok, err } from "../../core/result.mjs"
 // EXTERNAL_DEPENDENCY: core/xml.mjs — the tag scanner shared with steps/scope and steps/design. One
 // grammar family, one piece of code reading it; the BUG_FIX_CONTEXT for ATTRS' quote-resilience lives
 // there and is inherited here for free.
-import { attrs, ATTRS, tag } from "../../core/xml.mjs"
+import { attrs, ATTRS, tag, tokens } from "../../core/xml.mjs"
 // EXTERNAL_DEPENDENCY: steps/brd/brd.mjs::numbersIn — provenance of a number is ONE rule in this
 // pipeline, and it already has a home: the same function that judges `fit` at step 2, together with
 // its defence against designations (ISO-8601, RFC 3339, HTTP/2). A second copy here would drift.
 import { numbersIn } from "../brd/brd.mjs"
+// EXTERNAL_DEPENDENCY: steps/review/review.mjs::frdIds — "what is an id of this FRD" is answered ONCE:
+// step 11's R4 resolves a blocker's evidence against it, and F9 below (the guard against 508d74fa's
+// class of defect — a rewind's subject erased instead of repaired) resolves the SAME evidence against
+// the SAME set, on the FRD the role just rewrote. Not a cycle: review.mjs takes frd/plan as data and
+// never imports this module.
+import { frdIds } from "../review/review.mjs"
 
 // THE FORM AS DATA, so the order can SUBSTITUTE it instead of restating it (ext/index.mjs::frdForm,
 // the same device as brdForm — see its BUG_FIX_CONTEXT G9e).
@@ -51,6 +58,22 @@ export const FRD_FORM = Object.freeze({
   // is a fact of the repository, not an invented default.
   sources: Object.freeze(["TASK.md", "answers.md", "brd.md", "appgraph.xml"]),
 })
+
+// OP_STUB — the fillers a role writes into `op` when it has nothing to put there. A dash is not an
+// answer, it is the ABSENCE of one written down so the attribute is not empty, and a rule that tests
+// only for emptiness cannot tell the two apart.
+//
+// EXPORTED because step 9's rule 14 asks the same attribute the same question — «did the requirement
+// say what this node brings into the world» — and two spellings of one stub would drift the day a role
+// types «—» instead of «-» (standards/code.md §1: one rule, one place).
+//
+// BUG_FIX_CONTEXT: live run 088fb3ee (sandbox/runbox/eddi). Five of the six created modules carried
+//   `<delta new="yes" op="-" …/>` — a dash where the external point belongs. F3n below tested only
+//   `!d.op`, a dash is not empty, and step 6 closed GREEN: five new nodes travelled to step 9 with no
+//   operand at all. There pass B owes every node with a delta a non-empty `out` (rule 14,
+//   steps/design/nodes.mjs) and had nothing to take one from — two redelegations, and a third that
+//   produced three thinking blocks of ~110 000 characters and not one tool call: `crashed`.
+export const OP_STUB = /^(?:[-–—_.·*?]+|n\/?a|tbd|todo|нет|none)$/i
 
 // The text of a child element, e.g. <post>…</post>. A fresh non-global RegExp per call: `tag()` is
 // global and would carry lastIndex between callers.
@@ -116,6 +139,46 @@ export function parseFrd(xml) {
   })
 }
 
+// FUNCTION_CONTRACT: endsOf — the ENDS of every use case, as tokens
+//   Input:        frd — parseFrd's object
+//   Dependencies: —
+//   Antecedent:   any value; a missing/garbage input is an empty list
+//   Consequent:   success: [{ token, uc, side, text }] in the FRD's order — per use case its entry
+//                          (`UCx/in`, side `in`, the text of the first `<step>`), its exit
+//                          (`UCx/post`, side `out`) and one per `<ext>` (`UCx/<ext id>`, side `out`,
+//                          the `outcome`). A use case or an `<ext>` without an id is skipped: a token
+//                          built on an empty id addresses nothing
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    endsOf(frd?: Frd) -> [{ token, uc, side, text }]
+//
+// WHY IT LIVES HERE. "How many ends does this change have, and what are they called" is a fact of the
+// REQUIREMENT'S grammar — it reads `<usecase>`, `<post>`, `<ext outcome>` and nothing else. Two
+// consumers ask it: F6c below (the text of an output end is unique per use case) and step 9's pass A,
+// whose skeleton IS this list — one row per end, its `closes` token already filled in. The set must be
+// the same set, or step 6 closes green on an artifact step 9 then refuses; and one set means one piece
+// of code (standards/code.md §1) — the day an `<ext>` id gains a dot, both move together.
+//
+// It used to live in steps/design/values.mjs and be imported here — step 6 depending on step 9, an
+// edge running backwards along the band. Deleting the design slice was then impossible without
+// stopping steps 6, 7, 10 and 11, so the function came home to the grammar it reads and step 9 now
+// imports it from here.
+export function endsOf(frd = {}) {
+  const ends = []
+  for (const u of frd.usecases || []) {
+    const id = String((u && u.id) || "").trim()
+    if (!id) continue
+    ends.push({ token: `${id}/in`, uc: id, side: "in", text: (u.steps || [])[0] || "" })
+    ends.push({ token: `${id}/post`, uc: id, side: "out", text: u.post || "" })
+    for (const e of u.exts || []) {
+      const eid = String((e && e.id) || "").trim()
+      if (!eid) continue
+      ends.push({ token: `${id}/${eid}`, uc: id, side: "out", text: e.outcome || "" })
+    }
+  }
+  return ends
+}
+
 // FUNCTION_CONTRACT: provenance — F5 for one value that carries a requirement's quantity
 //   Input:        at — where the finding happened, for the blocker's text; value — `domain` or `fit`
 //   Dependencies: known — the set of the sources' numbers, or null when no sources were supplied
@@ -137,23 +200,32 @@ function provenance(at, value, source, known) {
   if (known) {
     const invented = [...numbersIn(value)].filter((n) => !known.has(n))
     if (invented.length) {
-      out.push(`F5 ${at} [invented-default]: число ${invented.join(", ")} не встречается ни в задаче, ни в ответах оператора, ни в BRD, ни в карте`)
+      // THE BLOCKER NAMES ITS EXITS. A refusal that states only the law leaves the role to invent a
+      // repair, and live run e132f0a1 shows what it invents: told the number 24 had no source, the
+      // role kept the number and changed `source` to the name of the analogue it had read it from —
+      // a second violation of the same rule. Naming the three legal exits is not politeness; a rule
+      // and the way out of it are one decision, and it belongs in one place, this one.
+      out.push(`F5 ${at} [invented-default]: число ${invented.join(", ")} не встречается ни в задаче, ни в ответах оператора, ни в BRD, ни в карте — назови формат вместо его меры, или сними число, или оставь <question>: источником может быть только файл из списка, но не память`)
     }
   }
   return out
 }
 
-// FUNCTION_CONTRACT: checkFrd — the seven rules of docs/intake.md §5
-//   Input:        { frd, nodes, known }
+// FUNCTION_CONTRACT: checkFrd — the seven rules of docs/intake.md §4, plus F9 (guard against a
+//                     rewind erasing what it was sent to repair)
+//   Input:        { frd, nodes, known, rewind }
 //                 nodes — Set<path> of the map's node keys (steps/intake/map.mjs::parseMap)
-//   Dependencies: provenance, FRD_FORM
+//                 rewind — [{ code, node, evidence }], the PREVIOUS review's blockers when it Rejected
+//                          (ext/index.mjs::checkFrd reads .agent/review.xml); [] when this is not a
+//                          rewind — F9 is then silent, exactly as F5 is silent with no sources
+//   Dependencies: provenance, FRD_FORM, steps/review/review.mjs::frdIds
 //   Antecedent:   frd — parseFrd's parse; nodes — a Set (empty means the map gave nothing, and then
 //                 F2/F3 will name every touched, which is the honest answer for an empty map)
-//   Consequent:   success: string[] of blockers, empty = green. Numbers F1..F7 match docs/intake.md
-//                          §5 and are NOT restated in prose here
+//   Consequent:   success: string[] of blockers, empty = green. Numbers F1..F7 and F9 match
+//                          docs/intake.md §4 and are NOT restated in prose here
 //                 failure: none — total; "the FRD is bad" is DATA, not a function failure
 //   Purity:       pure
-export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], known = null }) {
+export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], known = null, rewind = [] }) {
   const B = []
   // Who has an existing caller: a node someone else points an edge AT. `entries` answers the same
   // question for the world outside the repository. Both come from the map (steps/intake/map.mjs) —
@@ -184,6 +256,21 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   //   "TDD in one ticket" (docs/concept.md, step 15). The map already binds a module to its test
   //   (`<test path suite>`), which is where step 10 takes both the file and the check command from.
   const touched = new Set(frd.touched)
+  // A DELTA'S NODE IS NOT REQUIRED IN `<touched>`, and the rule that required it is gone.
+  //
+  // BUG_FIX_CONTEXT: live run a3597dd3 (eddi, 1850 files). Two of the three rounds that killed the
+  //   step were nothing but this bookkeeping: `checkFrd/1` — five F2 on `<touched>` paths spelled
+  //   `eddi/glossary/…` while the deltas said `eddi/configs/glossary/…`; `checkFrd/3` — six F3n on
+  //   the same six created modules, "не объявлен <touched>". Eleven blockers of nineteen, and the
+  //   role was being asked to keep six INVENTED paths byte-identical in two places at once —
+  //   exactly what CLAUDE.md constraint 4 forbids: a key is COPIED BY THE MACHINE.
+  //   The blocker also argued its case with something false: «шаг 8 не досчитает рябь».
+  //   steps/ripple/ripple.mjs::changeWidth is `deltaNodes ∪ touched` — step 8 counts a delta's node
+  //   whether or not it was declared touched, and the seam for that is ripple.test.mjs's own
+  //   `touched: []` case.
+  // `<touched>` keeps the job it was actually bought for (run 9a8821a7): a node that CHANGES but
+  // carries no delta — a page, a template, a build script, anything with no contract to move. There
+  // the `why` is the only statement of the work, and F2b/F2c below still demand it.
   // The nodes this change CREATES. Declared once, on the delta — `<touched>` and `<scenario nodes>`
   // derive it from here rather than repeating the attribute, because two places for one fact disagree
   // on the first artifact where the role marks only one of them (CLAUDE.md, constraint 5).
@@ -204,13 +291,18 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   //   ordered. Step 9 was ready for it all along (checkDesign rule 6 allows a delta node outside the
   //   ripple subgraph — «новый модуль это суждение дизайнера»); nothing could carry the fact there.
   const newNodes = new Set(frd.deltas.filter((d) => d.new === "yes" && d.node).map((d) => d.node))
+  // The routes of the FRD, as one set of paths. Declared ONCE here and read by both rules that ask
+  // «does a scenario run through this node» — F2b just below and F3c after it. Two spellings of one
+  // expression would drift the day `nodes` gains a separator (standards/code.md §1) — and the
+  // separator itself is declared once for the whole class, in core/xml.mjs::tokens.
+  const scenarioNodes = new Set(frd.scenarios.flatMap((s) => tokens(s.nodes)))
   // F2b — a touched must be EXPLAINED: it carries a delta of its own, or a scenario runs through it.
   // Since step 8 measures the WIDTH of the change by `touched` (docs/ripple.md §3), a node declared
   // touched on nothing but the role's say-so orders the `designer` role for free — and step 10 would
   // owe it a ticket nobody can write, because nothing in the artifact says what changes there.
   const explained = new Set([
     ...frd.deltas.map((d) => d.node).filter(Boolean),
-    ...frd.scenarios.flatMap((s) => String(s.nodes || "").split(/\s+/).filter(Boolean)),
+    ...scenarioNodes,
   ])
   for (const t of frd.touched) {
     if (newNodes.has(t)) continue   // a node this change creates: F3 below judges it, the map cannot
@@ -237,6 +329,33 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     }
   }
 
+  // F3c — F2b READ THE OTHER WAY: a delta whose node no scenario runs through. F2b asks a `<touched>`
+  // for its explanation; this asks a DELTA for the use case that answers for it. Everything after step
+  // 6 is addressed BY THE SCENARIO — step 9's routes are written one per `<scenario>` (docs/data-flow.md
+  // §6, rule 5), and its rule 2 then owes a route to every node carrying a delta. A node with a delta
+  // and no scenario is work nobody can be told to do: the `designer` may not invent a use case, that is
+  // step 6's artifact.
+  //
+  // `Unknown` and a delta with no `node` are not judged: `Unknown` is already terminal at step 7
+  // (FRD_FORM.deltaForms above), and «no node» is F3's own blocker — one defect, one blocker.
+  //
+  // BUG_FIX_CONTEXT: live runs 300c545b and 9ae1c092 (sandbox/runbox/eddi) — THE SAME deficit paid for
+  //   TWICE by the swarm: 863 666 tokens, $1.42, two identical terminal `escalate`s (code 10) on two
+  //   lines of step 9's rule 2 — «узел с delta="Added" не встречен ни в одном маршруте» for
+  //   `IRestGlossaryStore.java` and `RemoteApiResourceSource.java`. Both nodes carried a delta and stood
+  //   in no `<scenario nodes>`, so no part of the swarm answered for them and none could. The blame had
+  //   no addressee (steps/design/parts.mjs, `byNode` empty) and the band stopped. Step 8 could not
+  //   report the gap either: it seeds the ripple from the UNION `deltaNodes ∪ touched ∪ routeNodes`
+  //   (steps/ripple/ripple.mjs), and a union cannot notice a disagreement between its operands.
+  //   Judged here, the same defect costs one redelegation of this role and zero tokens of the swarm.
+  for (const d of frd.deltas) {
+    if (!d.node || d.form === "Unknown" || scenarioNodes.has(d.node)) continue
+    // THE BLOCKER NAMES ITS EXITS — all three, one command each. Without the third the role invents a
+    // use case for a service module rather than admit the node moves only behind its neighbour: the
+    // precedent is `.agent.bak-20260815`, where `TemplateEngineModule` simply vanished from the FRD.
+    B.push(`F3c дельта на «${d.node}» без сценария — ни один <scenario nodes> не называет этот узел. Впиши ${d.node} в nodes сценария, который через него работает; нет такого сценария — у изменения не хватает use case, напиши его; узел меняется лишь вслед за соседней дельтой — сними эту дельту`)
+  }
+
   // F7 — an FRD without a delta says nothing about the change.
   if (!frd.deltas.length) B.push("F7 ни одной <delta> — изменение контракта не названо")
 
@@ -256,10 +375,15 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     //   it out again — three redelegations, 392 378 tokens, `escalate`. S26 introduced `new="yes"`
     //   and never said what `op` means for a module that does not exist yet; the answer lives in the
     //   requirement, not in the map, and now the message says so.
-    if (!d.op) {
+    //
+    // A STUB IS NOT AN ANSWER (OP_STUB above, run 088fb3ee): `op="-"` is judged exactly as `op=""`,
+    // and the blocker quotes what was written so the role sees which of its own lines is meant.
+    const op = String(d.op || "").trim()
+    if (!op || OP_STUB.test(op)) {
+      const wrote = op ? `с op="${op}"` : "без op"
       B.push(d.new === "yes"
-        ? `F3 <delta new="yes"> на «${d.node || "(без node)"}» без op — у создаваемого модуля op это ВНЕШНЯЯ ТОЧКА, которую он заведёт: адрес страницы, команда, топик, имя функции — словами требования, а не именем поведения`
-        : "F3 <delta> без op — операция не названа")
+        ? `F3 <delta new="yes"> на «${d.node || "(без node)"}» ${wrote} — у создаваемого модуля op это ВНЕШНЯЯ ТОЧКА, которую он заведёт: адрес страницы, команда, топик, имя функции — словами требования, а не именем поведения и не прочерком`
+        : `F3 <delta> на «${d.node || "(без node)"}» ${wrote} — операция не названа`)
     }
     if (!FRD_FORM.deltaForms.includes(d.form)) {
       B.push(`F3 ${at}: form="${d.form || ""}" — допустимо ${FRD_FORM.deltaForms.join(" | ")}`)
@@ -271,19 +395,17 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     }
     if (!d.node) { B.push(`F3 ${at}: ${d.form} без node — дельта обязана опираться на узел карты`); continue }
     // F3n — the module this change CREATES. Everything the rules below ask of a delta is asked of it
-    // too — a `<touched>` of its own with a `why`, a scenario that runs through it — except the one
-    // thing that cannot be true of a file that does not exist yet: being in the map. The two claims
-    // are checked in the opposite direction, and the form is pinned: a module that is not there yet
-    // cannot have its contract Changed, Removed or Fixed — there is nothing to move.
+    // too, except the one thing that cannot be true of a file that does not exist yet: being in the
+    // map. The two claims are checked in the opposite direction, and the form is pinned: a module
+    // that is not there yet cannot have its contract Changed, Removed or Fixed — nothing to move.
     if (d.new === "yes") {
       if (nodes.has(d.node)) B.push(`F3 ${at}: new="yes", но узел «${d.node}» ЕСТЬ в карте — это не новый модуль, сними признак`)
       if (d.form !== "Added") B.push(`F3 ${at}: new="yes" с формой ${d.form} — у модуля, которого ещё нет, контракт двигаться не может: новый модуль это Added`)
-      if (!touched.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» не объявлен <touched> — шаг 8 не досчитает рябь`)
       continue
     }
     if (!nodes.has(d.node)) B.push(`F3 ${at}: узла «${d.node}» нет в карте — либо это Unknown, либо путь выдуман, либо модуль создаётся этим изменением и тогда дельта несёт new="yes"`)
     else if (tests.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» — тест: тест это <dod> изменения, а не изменение; назови модуль, который меняется, тест приедет с ним в один тикет (<test> карты, шаг 10)`)
-    else if (!touched.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» не объявлен <touched> — шаг 8 не досчитает рябь`)
+
     // `Changed`/`Removed` are defined BY THEIR EFFECT ON AN EXISTING CALL (steps/intake/intake.md,
     // STRATEGY §8), so they are only sayable about a node that HAS one: an `<api>` of its own, or an
     // incoming edge from another module. About a node with neither, "the existing call breaks" is a
@@ -335,10 +457,31 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     if (!sc.uc || !ucs.has(sc.uc)) B.push(`F4 ${at}: uc="${sc.uc || ""}" — такого <usecase> нет`)
     if (!sc.before || !sc.after) B.push(`F4 ${at}: before/after пусты — сценарий не различающий`)
     else if (sc.before.trim() === sc.after.trim()) B.push(`F4 ${at}: before и after совпадают — сценарий зелен и до изменения`)
-    const route = String(sc.nodes || "").split(/\s+/).filter(Boolean)
+    const route = tokens(sc.nodes)
     if (!route.length) B.push(`F4 ${at}: nodes пуст — через какие узлы карты идёт сценарий, не названо`)
     // A scenario may run through a node this change creates — that is the whole point of adding one.
     for (const p of route) if (!nodes.has(p) && !newNodes.has(p)) B.push(`F4 ${at}: узла «${p}» нет ни в карте, ни среди создаваемых этим изменением (<delta new="yes">) — маршрут сценария опирается на выдуманный путь`)
+  }
+
+  // F4b — the same binding, read the other way. F4 above refuses a scenario whose `uc` resolves to
+  // nothing; this refuses a use case no scenario distinguishes. The link is TOTAL in both directions
+  // because everything downstream is addressed BY THE SCENARIO: step 9's rule 5 demands a route per
+  // scenario of the FRD, its rule 13 takes the candidate nodes out of `<scenario nodes>`, and step 11
+  // owes a checklist line per scenario. A use case with none reaches the plan with no countable
+  // address at all — declared in the artifact, invisible to every judge after it.
+  //
+  // BUG_FIX_CONTEXT: live run 7588bf0e-5f69-4fb0-9ba1-bdacee628817
+  //   (quarkus-rest-json-app-v2-t2). The FRD declared two use cases and one scenario — `UC2`, the
+  //   inline card on the list page, had none — and step 6 closed GREEN: `deltas=1 unknown=0
+  //   scenarios=1 touched=1`. F4 was satisfied (one scenario exists, its `uc` resolves), F2b was
+  //   satisfied (the page was explained by a neighbour's delta), and the requirement travelled to the
+  //   plan as words. The judge is this rule, not the operator: the repair rail already exists — the
+  //   `intake` role writes the missing scenario out of the requirement it has already fried.
+  const covered = new Set(frd.scenarios.map((sc) => sc.uc).filter(Boolean))
+  for (const u of frd.usecases) {
+    if (!u.id || covered.has(u.id)) continue
+    B.push(`F4b ${u.id} «${u.goal}» — нет <scenario uc="${u.id}">. ` +
+           `Напиши: <scenario id="…" uc="${u.id}" before="как сейчас" after="как станет" nodes="путь путь"/>`)
   }
 
   // F5 — every quantity of the requirement has a named, declared source.
@@ -362,27 +505,134 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   if (frd.failuresFound === "no" && !frd.failuresWhy) {
     B.push('F6 <failures found="no"> без why — «распознаваемых отказов нет» это вывод из репозитория, а не пропуск раздела')
   }
-  const errs = new Set(frd.usecases.flatMap((u) => u.exts.map((e) => e.error).filter(Boolean)))
+  // NO_CODE — the branch that fails without a code of its own, said OUT LOUD.
+  //
+  // BUG_FIX_CONTEXT: live run a3597dd3 (eddi). The operator had decided that a missing glossary term
+  //   resolves to an empty string — lenient, no error at all — and the role wrote
+  //   `<ext id="4a" error="none" outcome="term не найден …"/>`. This rule read "none" as a CODE, the
+  //   failure map had no such row, and the artifact was refused. The legal move existed — leave
+  //   `error` off — but nothing said so: the order's example carries `error="CODE"` on every `<ext>`.
+  //   So the role did what this repository does everywhere else and DECLARED the absence, the way
+  //   `<failures found="no">`, `<toggles found="no">`, `<subject found="no">` and `Unknown why` do.
+  //   The form was missing a word, not the role a rule: replaying this guardrail over that same
+  //   artifact leaves zero blockers once "none" means what the role meant by it.
+  // An omitted `error` keeps meaning the same thing — F6 has always judged only the codes that exist.
+  const NO_CODE = "none"
+  const errs = new Set(frd.usecases.flatMap((u) => u.exts.map((e) => e.error).filter((e) => e && e !== NO_CODE)))
   const codes = new Set(frd.failures.map((f) => f.code).filter(Boolean))
   for (const e of errs) if (!codes.has(e)) B.push(`F6 код «${e}» из <ext> не описан в карте отказов`)
   for (const c of codes) if (!errs.has(c)) B.push(`F6 код «${c}» карты отказов не встречен ни одним <ext>`)
+
+  // F6c — one cause of failure, a different OBSERVATION on every layer. The ends are taken from
+  // `endsOf` (above, this module), side `out`: `UCx/post` and every `<ext outcome>` — exactly the
+  // set step 9's dictionary collapses onto, so the rule judges the cause of the dead end and not its
+  // symptom. Two ends of DIFFERENT use cases may not carry one text; two ends of ONE use case may (two
+  // branches of one layer with one observation is a legal shape, and step 9's dictionary rule judges
+  // it there).
+  //
+  // One blocker per COLLIDING END — each later end is paired with the first end carrying that text —
+  // so three use cases on one text cost two blockers, not nine: a role repairing an artifact pays a
+  // redelegation per round, not per line, and n² lines of one defect drown the other rules.
+  //
+  // BUG_FIX_CONTEXT: live run 9b019d80-d28e-4d40-bc94-15bb9b14fff6 (quarkus-rest-json-app-v2-t2). The
+  //   FRD declared UC1 (`actor="api-client"`) and UC2 (`actor="list-page-user"`), both with
+  //   `<ext error="FRUIT_NOT_FOUND" outcome="фрукт не найден, вернуто HTTP 404"/>` — VERBATIM the same
+  //   text. F6 compares only the presence of a code, so the artifact closed green and incomplete:
+  //   `{"ok":true,"deltas":1,"scenarios":2,"touched":1}`. The page had no end of its own for the
+  //   failure branch, and step 9's pass C span the fork «не доставить 404» (rule 10) against «ответить
+  //   карточкой» (rule 11) until it escalated — 212 107 tokens, $0.41. The missing thing was a
+  //   sentence in the FRD, not a rule of step 9.
+  const seen = new Map()
+  for (const e of endsOf(frd)) {
+    if (e.side !== "out") continue
+    const text = String(e.text || "").trim()
+    const first = seen.get(text)
+    if (!first) { seen.set(text, e); continue }
+    if (first.uc === e.uc) continue
+    B.push(`F6c ${first.token} и ${e.token} несут один текст конца «${text}» — это разные use case, а отказ и успех наблюдаются на каждом слое ПО-СВОЕМУ. outcome ветки — отрицание <post> СВОЕГО use case, словами своего актёра`)
+  }
+
+  // F6d — `from` names ALL the branches of its code. One `<failure>` row per code stays; its `from` is
+  // a LIST (`from="UC1/1a UC2/2a"`, separators — whitespace or comma), and coverage is checked both
+  // ways: every branch carrying the code is named by the row, every token of `from` resolves to an
+  // existing branch. Two of the three live forms already write the list (`t3`, `eddi`); the order's
+  // schema showed one token and said nothing about a list — which is where 9b019d80's gap came from.
+  //
+  // ONE DEFECT, ONE BLOCKER: only the codes F6 is silent about are judged here. A code missing from the
+  // failure map entirely — or a row whose code no `<ext>` raises — is already F6's blocker, and a
+  // second line about the same defect buys the role nothing but a longer FEEDBACK.
+  const judged = new Set([...codes].filter((c) => errs.has(c)))
+  // The token of a branch is built by the SAME expression as steps/review/review.mjs::frdIds — two
+  // spellings of one token drift the day an id changes shape.
+  const branchTokens = new Set()
+  const branches = []
+  for (const u of frd.usecases) {
+    for (const x of u.exts) {
+      if (!u.id || !x.id) continue
+      const token = `${u.id}/${x.id}`
+      branchTokens.add(token)
+      if (x.error && x.error !== NO_CODE) branches.push({ token, code: x.error })
+    }
+  }
+  const named = new Map()
+  for (const f of frd.failures) {
+    if (!judged.has(f.code)) continue
+    const branchesOfCode = tokens(f.from)
+    if (!named.has(f.code)) named.set(f.code, new Set())
+    for (const t of branchesOfCode) {
+      named.get(f.code).add(t)
+      if (!branchTokens.has(t)) {
+        B.push(`F6d <failure code="${f.code}"> ссылается на «${t}», а такой ветки нет: токен ветки это id use case и id её <ext> через косую черту (UC1/1a)`)
+      }
+    }
+  }
+  for (const b of branches) {
+    if (!judged.has(b.code)) continue
+    if (named.get(b.code) && named.get(b.code).has(b.token)) continue
+    B.push(`F6d ветка ${b.token} поднимает «${b.code}», но не названа в from его строки — <failure code="${b.code}" … from="…"/> перечисляет ВСЕ ветки этого кода: from="UC1/1a UC2/2a"`)
+  }
+
+  // F9 — a rewind's SUBJECT survives the repair. `rewind` carries the previous review's blockers only
+  // when it Rejected (ext/index.mjs::checkFrd reads .agent/review.xml); [] otherwise, and then this
+  // rule is as silent as F5 is with no sources.
+  //
+  // Only `goal-not-delivered` is judged: its carrier is always expressible in FRD grammar (a touched,
+  // a delta, a scenario, a use case's own `<post>`) so "the element is gone" is unambiguously a defect
+  // of the REPAIR, not of the finding. `unverifiable-node` gets no row here — after CODE_OWNER moved it
+  // to `operator` (steps/review/review.mjs) that code never reaches this rewind at all, and a rule for
+  // a rewind that cannot occur is a promise about a mechanism this artifact does not have.
+  //
+  // BUG_FIX_CONTEXT: live run 508d74fa (sandbox/runbox/quarkus-rest-json-app-v2-t2, before this fix
+  //   existed). A `goal-not-delivered` blocker named UC2 as its evidence; the role facing it deleted
+  //   UC2's carrier — `<touched>` emptied, `fruits.html` cut from `S2@nodes` — instead of adding one.
+  //   The blocker vanished because its subject no longer existed to point at, the plan collapsed from
+  //   3 nodes to 1, and BRD requirement R2 stopped being delivered by anyone, silently.
+  const ids = rewind.some((r) => r && r.code === "goal-not-delivered") ? frdIds(frd) : null
+  for (const r of rewind) {
+    if (!r || r.code !== "goal-not-delivered") continue
+    const evidence = String((r && r.evidence) || "").trim()
+    if (evidence && !ids.has(evidence)) {
+      B.push(`F9 предмет перемотки «${evidence}» удалён из FRD — требование не гасят удалением; верни элемент; если требование действительно снято оператором, оно снимается из TASK.md/BRD отдельной работой, не полосой`)
+    }
+  }
 
   return B
 }
 
 // FUNCTION_CONTRACT: newFrd — step 6's artifact, fit to be handed to steps 7-9
-//   Input:        { xml, nodes, tests, sources } — xml as the role wrote it in staging
+//   Input:        { xml, nodes, tests, sources, rewind } — xml as the role wrote it in staging
 //   Dependencies: parseFrd, checkFrd, numbersIn
 //   Antecedent:   xml — any value; nodes — Set<path> from the map; tests — its subset marked
 //                 `kind="test"` (steps/intake/map.mjs::parseMap); sources — the texts a number may
 //                 come from (TASK.md, the VALUES of operator answers, the BRD, the map itself); an
-//                 empty array means "no sources supplied" and F5's number rule stays silent
+//                 empty array means "no sources supplied" and F5's number rule stays silent; rewind —
+//                 forwarded to checkFrd's F9 unchanged, [] when this is not a rewind
 //   Consequent:   success: the frozen FRD plus `unknown` — how many deltas the role could not
 //                          classify; step 7 refuses to write a weight while that number is non-zero
 //                 failure: "invalid-frd" — the detail carries EVERY blocker, one per line, and rides
 //                          in the FEEDBACK of the redelegation exactly as newBrd's does
 //   Purity:       pure
-export function newFrd({ xml, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], sources = [] }) {
+export function newFrd({ xml, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], sources = [], rewind = [] }) {
   const frd = parseFrd(xml)
   if (!frd.usecases.length && !frd.deltas.length) {
     return err("invalid-frd", "в артефакте нет ни <usecase>, ни <delta> — грамматика не распознана: staging пуст или это не frd.xml")
@@ -391,7 +641,7 @@ export function newFrd({ xml, nodes = new Set(), tests = new Set(), entries = ne
   const src = sources.filter(Boolean)
   const known = src.length ? new Set(src.flatMap((t) => [...numbersIn(t)])) : null
 
-  const blockers = checkFrd({ frd, nodes, tests, entries, edges, known })
+  const blockers = checkFrd({ frd, nodes, tests, entries, edges, known, rewind })
   if (blockers.length) return err("invalid-frd", blockers.join("\n  "))
 
   return ok(Object.freeze({ ...frd, unknown: frd.deltas.filter((d) => d.form === "Unknown").length }))

@@ -1,49 +1,114 @@
+
 $START_TASK
-Judge the work plan as a program: does every instruction's antecedent follow from what stands before
-it, and do the consequents together deliver the requirement's goal. Return a verdict.
+Оцени план работ как программу.
+
+Проверь два условия корректности плана:
+
+1. Предусловие → выполним  
+   Для каждого узла: всё, на что он ссылается (файлы, контракты, endpoints),  
+   уже произведено предыдущими узлами или существовало до изменения.
+
+2. Consequent(Постусловие) → цель  
+   Объединение результатов всех узлов влечёт цель требования  
+   (`<post>` use case и `after` сценариев из FRD).
+
+Верни вердикт.
 $END_TASK
 
 $START_DATA
 $START_DOCUMENT
 path: .agent/plan-index.json
-the plan whole — `order[]` is the sequence of instructions, and each node carries its `kind`, its
-`delta`, its `deps`, its check commands and the scenarios that cover it. An id of this file is the
-only address a finding of yours may have
+План целиком.
+`order[]` — последовательность инструкций.
+Каждый узел несёт `kind`, `delta`, `deps`, команды проверки и сценарии, которые его покрывают.
+Id из этого файла — единственный адрес, который может иметь твоё finding.
 $END_DOCUMENT
 $START_CONTENT
 {PLAN}
 $END_CONTENT
+
 $START_DOCUMENT
 path: .agent/frd.xml
-what must be true after the work — the goal, the use cases with their steps and `<post>`, the
-scenarios with `before`/`after`, the deltas and the failure map. This is the requirement the plan
-above owes; it is not a plan and it is not yours to change
+Что должно быть истинно после работы:
+- цель,
+- use case с шагами и `<post>`,
+- сценарии с `before`/`after`,
+- дельты,
+- карта сбоев.
+
+Это требование, которое план обязан закрыть.
+Это не план. Менять его нельзя.
 $END_DOCUMENT
 $START_CONTENT
 {FRD}
 $END_CONTENT
+
+$START_DOCUMENT
+CHECKLIST — по одной строке на каждый долг плана.
+У каждой строки есть id, который сгенерировала машина.
+Копируй id, никогда не составляй сам.
+
+Два вида строк:
+1. То, что требование ПРОСИТ (`<post>`, `after`, ветка `<ext>`, `<nfr>`).
+2. Узел, который план НЕСЁТ ВСЁ РАВНО (FRD его нигде не называет — его положил planning-step из ответов репозитория).
+
+Каждая строка закрывается ровно один раз:
+- либо `<covers item="…" node="…"/>`,
+- либо blocker, у которого `evidence` = этот id.
+$END_DOCUMENT
+$START_CONTENT
+{OWED}
+$END_CONTENT
+
+$START_DOCUMENT
+Узлы плана, О КОТОРЫХ ВОПРОС: своей команды проверки у них нет.
+За каждым узлом перечислены команды сценариев, которые его закрывают.
+Последние строки блока начинаются с пояснения — это узлы, о которых не спрашивают.
+
+Для КАЖДОГО узла ИЗ СПИСКА:
+- напиши `<witness node="…" cmd="…"/>`, указав команду из этого списка (копируй символ в символ),
+- либо blocker `unverifiable-node`.
+
+Это про достижимость, а не про то, станет ли suite красным.
+$END_DOCUMENT
+$START_CONTENT
+{UNCHECKED}
+$END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
-- vocabulary of `code`: {CODES} — a finding outside it is rejected before anyone reads it
-- `node` of a blocker is an id of `.agent/plan-index.json`, character for character, `scenario:` ids
-  included
-- `evidence` is fixed BY the code: `unreachable-antecedent` takes the id of the plan node whose
-  result is missing — that pair is the edge a script then applies; `goal-not-delivered` takes the id
-  of the FRD element nobody delivers (a use case, a scenario, a failure's code, a delta's `op`)
-- one line of text per blocker, in the language of the documents above
-- do NOT report what earlier steps already refuse: node membership, the topological order, a node
-  without a command or a scenario, an unresolved touched path, contracts that do not stitch, a route
-  missing for a scenario, a declared failure named in no contract
-- do NOT judge whether a check command would turn red — that is measured after the work, against the
-  branch baseline
-- do NOT turn a declared gap of the plan into a blocker: the operator reads `gaps` on the plan itself
+- Словарь `code`: {CODES}. Finding вне словаря отвергается до чтения.
+- Каждая строка checklist закрывается ровно один раз — `<covers item node/>` или blocker с этим id в `evidence`.
+  Открытая строка = красная форма. «В целом да» писать некуда.
+- `open-question` пишет guardrail, не ты. Не повторяй его ни в каком виде.
+- Каждый узел из второго списка тоже решается:
+  один `<witness node cmd/>` с командой, скопированной из списка,
+  либо один blocker на этот узел.
+  Молчание = красная форма.
+  Команда сверяется с планом — придуманная будет отвергнута.
+- `<covers>` закрывается узлом, который может ОТВЕТИТЬ на строку:
+  - строка сценария → узлом этого сценария или узлом, который FRD перечисляет под ним;
+  - строка `UC…` → сценарием этого use case или его узлами.
+- Назвать witness ≠ сказать, что команда пройдёт.
+  Станет ли suite красным — измеряется после работы относительно baseline ветки.
+- `node` blocker’а — id из `.agent/plan-index.json` символ в символ (включая `scenario:`).
+- `evidence` жёстко задаётся кодом:
+  - `unreachable-antecedent` → id узла плана, чей результат отсутствует (эта пара = ребро, которое потом применит скрипт);
+  - `goal-not-delivered` → id элемента FRD, который никто не доставляет (use case, `UC1/post`, `UC1/2a`, сценарий, код сбоя, `op` дельты, `nfr:<subject>`);
+  - `unverifiable-node` → тот же вид id;
+  - `node-not-required` → собственный id узла (finding = «он ни на что не отвечает»).
+- На каждый blocker — одна строка текста на языке документов выше.
+- Не сообщай то, что уже отвергают предыдущие шаги:
+  принадлежность узла, топологический порядок, узел без команды/сценария, нерезолвленный touched-путь, контракты, которые не сходятся, маршрут без сценария, объявленный сбой, не названный ни в одном контракте.
+- Не суди, станет ли команда проверки красной — это измеряется после работы.
+- Не превращай объявленный gap плана в blocker: оператор читает `gaps` на самом плане.
 $END_CONSTRAINTS
 
 $START_FEEDBACK
-Evidence from the last red check, if this is a redelegation. Empty means the first attempt. Every
-blocker here is about the FORM of your file — an unknown code, an address that resolves to nothing —
-never about your judgement: keep the finding and fix its address.
+Evidence последней красной проверки (пусто = первая попытка).
+Каждый blocker здесь — про ФОРМУ твоего файла (неизвестный code, адрес, который никуда не резолвится).
+Никогда не про твоё суждение.
+Оставь finding, почини только адрес.
 $START_CONTENT
 {FEEDBACK}
 $END_CONTENT
@@ -52,11 +117,17 @@ $END_FEEDBACK
 $START_OUTPUT
 path: {STAGING}
 schema:
-  <review verdict="Pass | Reject" grammar="1">
-    <blocker code="…" node="…" evidence="…">one line: what does not compose</blocker>
+  <review verdict="Pass | Reject" grammar="2">
+    <covers item="<id строки checklist>" node="<id узла плана, который на неё отвечает>"/>
+    <witness node="<узел без собственной команды>" cmd="<команда, скопированная из списка выше>"/>
+    <blocker code="…" node="…" evidence="…">одна строка: что не сходится</blocker>
   </review>
-  a Pass carries no blocker at all: <review verdict="Pass" grammar="1"/>
+
+Правила закрытия:
+- каждая строка checklist появляется РОВНО один раз — как `<covers>` или как `evidence` blocker’а (ни оба, ни ни одного);
+- каждый узел из второго списка несёт один `<witness>` или один blocker;
+- `Pass` = обе таблицы полные и blocker’ов нет.
+
 check: {CHECK}
-return: call workflow_result — the shape and the choice of rail are declared by your ROLE's
-OUTPUT_FORMAT
+return: вызови workflow_result по OUTPUT_FORMAT своей ROLE
 $END_OUTPUT

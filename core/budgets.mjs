@@ -12,22 +12,29 @@
 //             number while the operator believed it had been raised
 // Interface:  DEFAULT_BUDGETS — the defaults, the only copy of these numbers
 //             BUDGETS_PATH — the name of the configuration file in the run's root
+//             ORDER_CAP_CHARS — the ceiling on ONE assembled order, in characters
 //             newBudgets(raw) -> Result<Budgets, "invalid-budgets">
 
 import { ok, err } from "./result.mjs"
 
-// loops — redelegations of a role after a RED guardrail check; questions — QUESTIONS per run, not
-// exchanges; questionRounds — how many times a role may come out to the operator at all;
-// checkpointRetries — re-asks of one pause when no answer showed up in answers.md. Four distinct
-// counters, never to be confused: a question does not spend loops (workflows/izi.js::brd).
+// loops — redelegations of a role after a RED guardrail check; questionRounds — how many times a role
+// may come out to the operator at all; checkpointRetries — re-asks of one pause when no answer showed
+// up in answers.md. Distinct counters, never to be confused: a question does not spend loops
+// (workflows/izi.js::brd).
 //
-// WHY QUESTIONS AND ROUNDS ARE TWO NUMBERS (S21, the operator's decision). Frying a requirement on a
-// real project is a grilling session of 25-30 questions, and asking them ONE PER EXCHANGE makes the
-// role re-read the BRD and the map on every one of them — the round, not the question, is what costs
-// context. So `intake` asks them in ONE BATCH, and the two limits mean different things: 60 questions
-// is how much may be asked, 3 rounds is how many times the pipeline may come back for more. With a
-// single counter of 60 the role could take sixty round trips — exactly the price the batch exists to
-// remove.
+// WHY THERE IS NO BUDGET OF QUESTIONS, only of rounds (S33). S21 introduced both, on this reasoning:
+// asking ONE PER EXCHANGE makes the role re-read the BRD and the whole map every time — "the round,
+// not the question, is what costs context". That reasoning names the cheap axis itself, and we capped
+// it anyway; the expensive one, the round, is the only real limit.
+//
+// The cap did not merely fail to help. S21's own commit body described a real grilling as "25-30
+// questions per round", and that DESCRIPTIVE figure travelled into the role's strategy as the
+// PRESCRIPTION "thirty is normal". Two live runs then landed on it exactly — e132f0a1 asked 25 in one
+// batch, e4a583a7 asked 12 and wanted 18 more — and a third of the last batch was step 9's business
+// (a resolver's CDI scope, a cache's key) or answered itself by the analogue. A number shown to a
+// role as "left in this run" is read as an allowance, not as a ceiling. So the number is gone, and
+// what bounds elicitation now is the completeness the guardrail judges anyway: a question is a gap
+// F1..F7 would name.
 //
 // reviewRounds — how many times the band may be REWOUND by step 11's critic (docs/review.md §6). It
 // is not `loops` and not `questionRounds`: a rewind re-runs steps 6-11 on the artifact whose owner
@@ -40,8 +47,48 @@ import { ok, err } from "./result.mjs"
 // exists because the workflow sandbox has no limiter at all: `parallel` is `Promise.all`
 // (pi-extensible-workflows/packages/core/src/execution.ts:245-266), so a hundred cells would go to
 // the model at once. The default 8 is pi's own concurrency ceiling.
-export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, questions: 60, questionRounds: 3, checkpointRetries: 2, maxParallel: 8, reviewRounds: 2 })
+// intakeLoops — `loops` for step 6 ALONE, and the one budget that is not shared. Live run e132f0a1
+// measured the difference: `checkFrd` is total, so a round's blocker list is the WHOLE remaining
+// distance to green, and round 2 came back with exactly one line — the artifact was one attribute
+// from done. Round 3 repaired that line and lost a rule from round 1, and the run escalated on the
+// third of three. Step 6 is the only place where one file answers to seven rules at once; the other
+// four loops (brd, scope, design, review) judge a narrower artifact and keep the shared `loops`.
+export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, intakeLoops: 6, questionRounds: 5, checkpointRetries: 2, maxParallel: 8, reviewRounds: 2 })
 export const BUDGETS_PATH = "izi.config.json"
+
+// ORDER_CAP_CHARS — how big ONE assembled order may be, in CHARACTERS, and it is NOT a budget of the
+// izi.config.json kind: nothing an operator prefers moves it. It is the window of the model the roles
+// run on, minus what the request claims beside the order, and it is declared here because the workflow
+// sandbox has no place to derive it in (it receives it through budgets(), it does not carry a copy).
+//
+// WHY IT EXISTS: the arithmetic is the one steps/intake/map.mjs writes out over MAP_CAP_BYTES, and its
+// closing sentence names this gap — "nobody measures the ASSEMBLED order against the window before the
+// role is launched, and the map cap cannot stand in for it: it sees one of five terms". Live run
+// 162e8b02 (form eddi) died of exactly that: the request was 112 tokens over the window, HTTP 400, and
+// the role never ran at all — an outcome indistinguishable, from the operator's chair, from a role that
+// answered badly.
+//
+// THE DERIVATION, every term measured on that run and on the model catalogue, none of them invented:
+//   262 144   the window of the roles' model (steps/intake/map.mjs, the comment over MAP_CAP_BYTES)
+//  − 32 768   claimed for the OUTPUT — pi's maxTokens for these roles, and the ceiling three crashed
+//             runs hit exactly (d5f1d0b4, 35972d1c, 5bbe5de4 — 98 304 = 3 × 32 768)
+//  −  8 192   the request beside the order: pi's own boilerplate ≈ 4 930 tokens + tool schemas ≈ 1 780
+//             + the role file itself (the project's AGENTS.md, 16 010 tokens on that run, no longer
+//             travels — every role declares `contextFiles: []`)
+//  = 221 184  tokens left for the order
+//  × 3.82     characters per token, MEASURED on that request's own order and map — not the 4.0 the
+//             provider's estimator assumes, because the estimator undershot by 4 208 tokens there and
+//             a cap built on it would refuse to notice the very request that died
+//  ≈ 844 923  characters, rounded DOWN to the number below
+//
+// WHAT IT IS NOT: it is not a cure for a role that reasons itself into the output ceiling. That failure
+// was measured and the size hypothesis did NOT explain it — what separates the orders that write a file
+// from the ones that do not is the number of independent obligations in them (145 for pass A on eddi
+// against 1-4 for a swarm part), and the cure is a projection or a swarm, never a resizer. This number
+// answers a different and narrower question: will the request the workflow is about to send exist at
+// all. Today's largest order is 49 884 characters, 6 % of it — a cap that fires is a cap that has just
+// prevented an HTTP 400.
+export const ORDER_CAP_CHARS = 800000
 
 const KEYS = Object.keys(DEFAULT_BUDGETS)
 

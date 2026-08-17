@@ -84,11 +84,15 @@ $START_CONSTRAINTS
    comment, and a comment does not stop the caller. Live cost: run `46edab60`. `answerEntry` declared
    "no newlines: each field is one line", a batch of six questions arrived multi-line anyway, the
    file parsed back into a stump, and an operator who HAD answered was re-asked twice.
-8. **Machines read English, the operator reads Russian.** Code, comments, contracts, role files,
-   order templates, host-function descriptions and test names are English — a model reads them.
-   Russian stays where the operator reads: the `subject` of a question, a `blocked` diagnosis,
-   `log()`, `docs/*.md`, `backlog.md`. This says nothing about artifacts: a role's LAW "the artifact
-   speaks the language of the ORDER" is untouched — a Russian `TASK.md` still yields a Russian BRD.
+8. **Machines read English, the operator reads Russian.** Code, comments, contracts, order templates,
+   host-function descriptions and test names are English — a model reads them. Russian stays where
+   the operator reads: the `subject` of a question, a `blocked` diagnosis, `log()`, `docs/*.md`,
+   `backlog.md`. **Role files are the exception, and they are Russian** — every one of them since
+   commit `36663ef`: a role is executed by a 27B model on a Russian request, and an instruction it
+   must obey word for word is written in the language of the artifact it produces. The rule that once
+   said otherwise was a constant with no consumer and no lint behind it; it is deleted, not relaxed.
+   This says nothing about artifacts either: a role's LAW "the artifact speaks the language of the ORDER" is untouched —
+   a Russian `TASK.md` still yields a Russian BRD, and the guardrail for that is `core/lang.mjs`.
 $END_CONSTRAINTS
 
 $START_TESTS

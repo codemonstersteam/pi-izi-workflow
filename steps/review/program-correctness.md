@@ -6,88 +6,95 @@ source: izi-flow/skills/lib/program-design §9 "Reconcile the consistency of all
 ---
 
 $START_GOAL
-A plan is a program: a node is an instruction, `order` is the path of execution, `deps` are the edges
-where paths merge. This file says WHY it is judged that way. WHAT is judged lives in exactly one
-place — `$START_LAW` of `steps/review/critic.md` — and is not repeated here.
+План — это программа.
+Узел — инструкция.
+`order` — путь выполнения.
+`deps` — рёбра, в которых пути сливаются.
+
+Этот файл объясняет, ПОЧЕМУ план судят именно так.
+ЧТО именно судят — живёт в одном месте: `$START_LAW` файла `steps/review/critic.md`.
+Здесь это не повторяется.
 $END_GOAL
 
 $START_CONTEXT
-Three inherited sources, one method.
+Три унаследованных источника, один метод.
 
-**Design by Contract.** Every instruction carries an **antecedent** — what must hold before it runs —
-and a **consequent** — what holds after. The pair IS its correctness; nothing else is.
+**Design by Contract.**  
+Каждая инструкция несёт:
+- **антеcedent** — что должно быть истинно до её выполнения;
+- **consequent** — что становится истинно после.
+Пара и есть её корректность. Больше ничего.
 
-**Analytical verification (Floyd/Hoare, Dijkstra).** Correctness is established by checking the
-assertions across the instructions, and only then confirmed by tests. Where several paths merge
-before an instruction, its antecedent must follow from the consequents of ALL of them.
+**Аналитическая верификация (Floyd/Hoare, Dijkstra).**  
+Корректность устанавливается проверкой утверждений между инструкциями и только потом подтверждается тестами.  
+Если перед инструкцией сходится несколько путей — её антеcedent должен следовать из consequent’ов ВСЕХ этих путей.
 
-**Modularity.** A module has one entry and one exit, implements a single function, and is seen from
-outside as a black box: the caller knows its input and its output and nothing else. That is why a
-node of work HAS an antecedent and a consequent at all — and why an implementer who sees one ticket
-and no future can still be right.
+**Модульность.**  
+Модуль имеет один вход и один выход, реализует одну функцию и снаружи виден как чёрный ящик: вызывающий знает только вход и выход.  
+Именно поэтому у узла работы вообще есть антеcedent и consequent — и почему исполнитель, который видит один тикет и не видит будущего, всё равно может быть прав.
 $END_CONTEXT
 
 $START_CONTRACTS
-**Antecedent of a work node** = the files, contracts and endpoints its work refers to. It is
-satisfied when an earlier node produces them, or when they existed before the change. Nothing else
-satisfies it — a promise made later in the order is not an antecedent, it is a hope.
+**Антеcedent узла работы** = файлы, контракты и endpoints, на которые его работа ссылается.  
+Он выполнен, когда их производит более ранний узел, либо когда они существовали до изменения.  
+Ничто другое его не удовлетворяет. Обещание, данное позже в `order`, — не антеcedent, а надежда.
 
-**Path merging.** Where several nodes converge on one — a `scenario` node depends on all the nodes it
-distinguishes — the antecedent must follow from the consequents of ALL of them, not from the
-convenient one.
+**Слияние путей.**  
+Когда несколько узлов сходятся в один (узел `scenario` зависит от всех узлов, которые он различает) — антеcedent должен следовать из consequent’ов ВСЕХ них, а не из удобного.
 
-**Consequents imply the goal.** The requirement's `<post>` conditions are the program's final
-assertion. A plan every instruction of which is executable, whose union of consequents does not imply
-that assertion, is a correct program solving a different problem.
+**Consequent’ы должны влечь цель.**  
+Условия `<post>` требования — финальное утверждение программы.  
+План, в котором каждая инструкция выполнима, но объединение consequent’ов не влечёт это утверждение — корректная программа, решающая другую задачу.
 
-**Where the rest of the method already lives.** The inherited reconciliation checks six items per
-call-graph arrow; five of them are enforced by scripts of this band and are therefore NOT judgements
-of step 11:
+**Где уже живёт остальная часть метода.**  
+Унаследованная сверка проверяет шесть пунктов на каждой стрелке call-graph.  
+Пять из них уже исполняются скриптами этого пояса и поэтому НЕ являются суждениями step 11:
 
-| inherited check | where it runs today |
+| унаследованная проверка | где работает сейчас |
 |---|---|
-| the type on the arrow exists; names match | `checkFrd` F2/F3 — every touched path resolves to a node |
-| consequent of A ⊆ antecedent of B | `checkDesign` rule 4 — `out(k)` verbatim among `in(k+1)` |
-| error classes are consistent | `checkDesign` rule 8 — every declared `<failure>` is named in some contract |
-| every `Then` maps onto a node | `checkDesign` rule 5 — every FRD scenario has a route |
-| a node no `Then` asks for is dead | by construction — the plan's nodes come from the FRD's own touched paths |
+| тип на стрелке существует; имена совпадают | `checkFrd` F2/F3 — каждый touched-путь резолвится в узел |
+| consequent A ⊆ antecedent B | `checkDesign` rule 4 — `out(k)` дословно среди `in(k+1)` |
+| классы ошибок согласованы | `checkDesign` rule 8 — каждый объявленный `<failure>` назван в каком-то контракте |
+| каждый `Then` ложится на узел | `checkDesign` rule 5 — у каждого сценария FRD есть маршрут |
+| узел, которого ни один `Then` не просит — мёртвый | по построению: узлы плана берутся из touched-путей FRD |
 
-What is left over is prose against artifact, and that is the whole of step 11.
+Остаётся только сверка прозы с артефактом. Это и есть весь step 11.
 $END_CONTRACTS
 
 $START_FORBIDDEN
-- **Do not judge whether a check command would go red.** "Testing shows the presence of errors, not
-  their absence" is true, and it is measured by the acceptance step against the branch baseline,
-  AFTER the work — not guessed from the text of a command before a file exists. That step owns a
-  fact; this one would own an impression.
-- **Do not restate the executable rules here.** They live in the role, with their machine checks
-  named. A method that repeats the rules becomes their second copy, and two copies drift
-  (`standards/code.md` §1).
+- Не суди, станет ли красной команда проверки.  
+  «Тестирование показывает наличие ошибок, а не их отсутствие» — верно.  
+  Это измеряет acceptance-шаг относительно baseline ветки ПОСЛЕ выполнения работы, а не догадка по тексту команды до появления файла.  
+  Тот шаг владеет фактом. Этот владел бы впечатлением.
+
+- Не повторяй здесь исполняемые правила.  
+  Они живут в роли вместе с именами машинных проверок.  
+  Метод, который повторяет правила, становится их второй копией. Две копии расходятся (`standards/code.md` §1).
 $END_FORBIDDEN
 
 $START_EXAMPLE
-A different domain on purpose — payroll, not the repository under work.
+Пример из другого домена (payroll), намеренно не из текущего репозитория.
 
 ```
-FRD    UC1/3: "the payslip page renders the net amount returned by GET /payroll/{id}"
-       scenario S1 after: "the payslip page shows the net amount"
+FRD    UC1/3: "страница payslip рисует net amount, который вернул GET /payroll/{id}"
+       scenario S1 after: "страница payslip показывает net amount"
 plan   order: [ payslip.html, PayrollResource.java, scenario:S1 ]
 ```
 
-`payslip.html` is ordered FIRST and its work refers to `GET /payroll/{id}`, whose contract the node
-after it produces: the antecedent of instruction 1 follows from nothing. The blocker's evidence is
-`PayrollResource.java` — the node it needs — because that pair is the missing edge, and the machine
-adds it and re-sorts.
+`payslip.html` стоит ПЕРВЫМ, а его работа ссылается на `GET /payroll/{id}`, контракт которого производит узел ПОСЛЕ него.  
+Антеcedent инструкции 1 не следует ни из чего.  
+Evidence blocker’а — `PayrollResource.java` (нужный узел), потому что именно эта пара — отсутствующее ребро. Машина добавляет его и пересортировывает.
 
-The goal side is silent here: the `after` of `S1` lands on `payslip.html`. Silence is the normal
-outcome — a plan assembled by a script from artifacts eight guardrails have judged is usually
-correct, and a `Pass` costs one call. What would break it: a `<post>` saying "the amount is also
-written to the audit log" while no node of the plan touches an audit module. The plan is executable
-and the goal is not reached — the last place before a human approves it where that is visible.
+Сторона цели здесь молчит: `after` сценария S1 ложится на `payslip.html`.  
+Молчание — нормальный исход. План, собранный скриптом из артефактов, которые уже прошли восемь guardrail’ов, обычно корректен. `Pass` стоит одного вызова.
+
+Что его сломает: `<post>`, который говорит «сумма ещё пишется в audit log», а ни один узел плана не трогает audit-модуль.  
+План выполним, цель не достигнута. Это последнее место перед человеческим approve, где это видно.
 $END_EXAMPLE
 
 $START_SUCCESS
-- The two judgements of step 11 are stated once, in the role, and this file explains neither more nor
-  fewer of them than the role executes.
-- Nothing here describes a step that does not exist, and nothing repeats a check another step runs.
+- Два суждения step 11 сформулированы один раз — в роли.  
+  Этот файл объясняет ровно столько, сколько роль реально исполняет — ни больше, ни меньше.
+- Здесь нет описания шагов, которых не существует, и нет повторения проверок, которые выполняет другой шаг.
 $END_SUCCESS
+

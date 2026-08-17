@@ -7,6 +7,8 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { mergeGraph, newGraph, graphXml, suiteFor } from "./graph.mjs"
 import { parseComputed } from "../scope/computed.mjs"
+import { parseMap } from "../intake/map.mjs"
+import { GRAMMAR_VERSION } from "../scope/part.mjs"
 
 const M = "src/main/java/org/acme/rest/json"
 const T = "src/test/java/org/acme/rest/json"
@@ -76,7 +78,7 @@ test("happy: the live form merges into a map — modules, suites bound by name, 
   const at = (p) => g.modules.find((m) => m.path === p)
 
   assert.equal(g.modules.length, 6)                     // a module is a FILE, exactly as in a part
-  assert.equal(g.grammar, "3")                          // stamped from the part grammar, not a second counter
+  assert.equal(g.grammar, GRAMMAR_VERSION)              // stamped FROM the part grammar — one counter, not a copy that drifts
 
   // THE binding this step exists for: two suites over one folder, told apart by `match`. Bound by
   // path alone, the IT would have taken the unit command and executed nothing, green.
@@ -122,7 +124,7 @@ test("happy: the live form merges into a map — modules, suites bound by name, 
   assert.ok(g.gaps.some((x) => x.path === "src/main/resources/import.sql"))   // the part's own gap survives
 
   const xml = graphXml(g)
-  assert.match(xml, /^<appgraph grammar="3" modules="6" components="1" isolated="1" levels="4">/)
+  assert.match(xml, new RegExp(`^<appgraph grammar="${GRAMMAR_VERSION}" modules="6" components="1" isolated="1" levels="4">`))
   assert.match(xml, /<artifact name="rest-json-quickstart" root="\."\/>/)
   assert.match(xml, /<toggles found="no"\/>/)
   assert.match(xml, new RegExp(`<module path="${T}/FruitResourceIT\\.java" kind="test" suite="component-native"`))
@@ -209,6 +211,125 @@ test("invalid-graph: a duplicated path and a lost anchor are broken INVARIANTS, 
   assert.equal(r.ok, true)
   assert.equal(stripped.subjects.length, 1)             // this is what deriving would have produced
   assert.equal(r.value.subjects.length, 2)              // this is what copying produces
+})
+
+// --- the focus: a map that covers part of the repository must SAY so ---------------------------
+//
+// Step 3b may narrow the survey to the cones the BRD points at (docs/big-projects-solution.md). Two
+// things then stop being true by construction and have to be written down instead: the map is no
+// longer the repository, and an anchor may exist in the tree while being absent from the map.
+const FOCUS_PLAN = {
+  subjects: ["fruit", "search", "berry"],
+  gaps: ["search"],                                   // matched no file ANYWHERE — the old meaning of found="no"
+  cells: [
+    { id: "spine", kind: "spine", subjects: [] },
+    { id: "root", kind: "survey", subjects: ["fruit"] },
+    { id: "left-out", kind: "survey", subjects: ["berry"] },   // real files, and the focus dropped them
+  ],
+}
+const FOCUS = { chosen: ["s1"], cells: ["spine", "root"], repoFiles: 40, dropped: { slices: 2, cells: 7 } }
+
+test("a narrowed map declares its boundary, and an anchor left outside it is not 'found'", () => {
+  const r = newGraph({ parts: PARTS, computedXml: COMPUTED, plan: FOCUS_PLAN, focus: FOCUS })
+  assert.equal(r.ok, true, r.ok ? "" : r.error && r.error.detail)
+  const g = r.value
+
+  assert.deepEqual(g.focus, { slices: "s1", cells: 2, of: 3, nodes: g.modules.length, repo: 40, dropped: 2, droppedCells: 7 })
+  assert.deepEqual(g.subjects, [
+    { name: "fruit", found: "" },                     // its cell is in the focus
+    { name: "search", found: "no" },                  // no file in the repository at all
+    { name: "berry", found: "outside" },              // files exist — the focus left them out
+  ])
+
+  const xml = graphXml(g)
+  assert.match(xml, /<focus slices="s1" cells="2" of="3" nodes="\d+" repo="40" dropped="2" dropped-cells="7" local="level fanin fanout component"\/>/)
+  assert.match(xml, /<subject name="berry" found="outside"\/>/)
+
+  // …and `outside` must not collapse into `no`: step 6's role answers Unknown on the first and asks
+  // nothing about the second, and step 7 carries the difference to the operator (docs/weight.md §5).
+  assert.equal(xml.includes('name="berry" found="no"'), false)
+})
+
+test("an edge's via is dropped when it only restates the node the edge already names", () => {
+  // BUG_FIX_CONTEXT run fa8def32: 93 of eddi's 185 edges carried `import <fq name of `to`>;` and
+  // nothing else — 5 686 B of one fact written twice, in a map that missed its ceiling by 3 624 B.
+  const g = newGraph({ parts: PARTS, computedXml: COMPUTED, plan: PLAN }).value
+  const xml = graphXml(g)
+
+  // the edge is still there, and still says which two nodes it joins
+  assert.match(xml, new RegExp(`<edge from="${M}/FruitResource\\.java" to="${M}/Fruit\\.java"`))
+
+  // …but the evidence that merely repeats `to` is gone, while a real one survives
+  const restating = `<edge from="${M}/A.java" to="${M}/Fruit.java" via="import org.acme.rest.json.Fruit;"/>`
+  const carrying = `<edge from="${M}/A.java" to="${M}/Fruit.java" via="private Set&lt;Fruit&gt; fruits"/>`
+  const one = (edge) => graphXml(newGraph({ parts: PARTS, computedXml: COMPUTED.replace("</computed>", `  ${edge}\n</computed>`), plan: PLAN }).value)
+  assert.equal(one(restating).includes('via="import org.acme.rest.json.Fruit;"'), false)
+  assert.ok(one(carrying).includes("private Set"))
+})
+
+test("the map compresses without losing anything: one path head, edges as rows", () => {
+  // Two techniques from index compression, both lossless, measured on eddi's live map (run fb57f506,
+  // 120 050 B): front coding of the shared path head (352 occurrences of a 27-char prefix) and CSR —
+  // a coordinate list of (from, to) pairs becomes compressed rows, 216 edges out of 60 sources.
+  // Together they took that map to 109 188 B, under the ceiling it had died over.
+  const g = newGraph({ parts: PARTS, computedXml: COMPUTED, plan: PLAN }).value
+  const xml = graphXml(g)
+
+  // the form's paths share too little to pay for a dictionary — it is not written at all
+  assert.equal(xml.includes("<paths prefix="), false, "no dictionary where it would cost more than it saves")
+
+  // …and a tree that does share one gets it, with every path written short
+  const long = "src/main/java/com/example/very/deep/package/"
+  const many = { ...g, modules: Array.from({ length: 40 }, (_, i) => ({ ...g.modules[0], path: `${long}M${i}.java` })), edges: Array.from({ length: 40 }, (_, i) => ({ from: `${long}M0.java`, to: `${long}M${i}.java`, via: "", by: "" })) }
+  const packed = graphXml(many)
+  assert.match(packed, new RegExp(`<paths prefix="${long.replace(/[/.]/g, "\\$&")}"`))
+  assert.match(packed, /<edges from="~M0\.java" to="~M0\.java ~M1\.java/)
+
+  // A NODE's path is never abbreviated, and that is not an oversight — it is identity, and the map
+  // is read by a model as well as by parseMap. BUG_FIX_CONTEXT: the first live run with compression
+  // had step 6's role copy `~modules/llm/impl/LlmTask.java` out of a <module> line into its FRD, and
+  // the guardrail refused a path that does not exist.
+  assert.match(packed, new RegExp(`<module path="${long.replace(/[/.]/g, "\\$&")}M0\\.java"`))
+  assert.equal(/<module path="~/.test(packed), false)
+
+  // THE property that matters: the reader gets the same graph either way
+  const back = parseMap(packed)
+  assert.equal(back.nodes.size, 40)
+  assert.equal(back.edges.length, 40)
+  assert.ok([...back.nodes].every((p) => p.startsWith(long)), "paths come back whole")
+  assert.ok(back.edges.every((e) => e.from.startsWith(long) && e.to.startsWith(long)))
+})
+
+test("an edge with an end outside the map is not written — the map is not the repository", () => {
+  // `computed` is written by step 3, which walks the WHOLE tree; the modules of this map are the
+  // cells of the focus. Serialising every computed edge is what made step 3b pointless on a
+  // monolith: 8253 edges ≈ 1855 KB of eddi's map against a 115 KB ceiling, no matter how narrow the
+  // focus — and the refusal lands at step 6, after the swarm has been paid for.
+  const outside = `${COMPUTED.slice(0, -12)}
+  <edge from="${M}/FruitResource.java" to="src/main/java/org/acme/absent/NotSurveyed.java" via="import"/>
+  <edge from="src/main/java/org/acme/absent/NotSurveyed.java" to="${M}/Fruit.java" via="import"/>
+</computed>`
+  const g = newGraph({ parts: PARTS, computedXml: outside, plan: FOCUS_PLAN, focus: FOCUS }).value
+
+  assert.equal(g.edges.some((e) => e.from.includes("absent") || e.to.includes("absent")), false)
+  assert.equal(graphXml(g).includes("NotSurveyed"), false)
+
+  // …and the edges that DO belong are untouched: this is a filter, not a rewrite
+  assert.equal(g.edges.length, newGraph({ parts: PARTS, computedXml: COMPUTED, plan: FOCUS_PLAN, focus: FOCUS }).value.edges.length)
+})
+
+test("a focus that names EVERY cell is not a narrowing — the map says nothing new", () => {
+  const whole = { ...FOCUS, cells: ["spine", "root", "left-out"] }
+  const g = newGraph({ parts: PARTS, computedXml: COMPUTED, plan: FOCUS_PLAN, focus: whole }).value
+
+  assert.equal(g.focus, null, "'the focus is everything' and 'there is no focus' are the same map")
+  assert.equal(graphXml(g).includes("<focus"), false)
+  assert.equal(g.subjects.find((s) => s.name === "berry").found, "", "nothing is outside when nothing was dropped")
+
+  // the regression that matters most: with no focus at all — every form the pipeline is green on
+  // today — the artifact is byte-for-byte what it was before step 3b existed
+  const before = graphXml(newGraph({ parts: PARTS, computedXml: COMPUTED, plan: FOCUS_PLAN }).value)
+  assert.equal(before, graphXml(g))
 })
 
 test("suiteFor: the deepest folder wins, an unbreakable tie stays UNBOUND rather than guessed", () => {

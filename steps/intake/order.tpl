@@ -1,28 +1,35 @@
 $START_TASK
-Fry the BRD against the repository's map: return the functional requirements and the delta of the
-contract, expressed over nodes of that map.
+Прожарь BRD о карту репозитория.
+
+Верни функциональные требования и дельту контракта, выраженную через узлы этой карты.
 $END_TASK
 
 $START_DATA
 $START_DOCUMENT
 path: .agent/brd.md
-the measurable business requirement — what is wanted; every number in it already has a source
+Измеримое бизнес-требование — что хотят.
+Каждое число в нём уже имеет источник.
 $END_DOCUMENT
 $START_CONTENT
 {BRD}
 $END_CONTENT
+
 $START_DOCUMENT
 path: .agent/answers.md
-operator answers to your earlier questions, accumulated
+Накопленные ответы оператора на твои предыдущие вопросы.
 $END_DOCUMENT
 $START_CONTENT
 {ANSWERS}
 $END_CONTENT
+
 $START_DOCUMENT
 path: .agent/appgraph.xml
-the map of the repository as it is today — what exists. `path` on a `<module>` is the NODE KEY: the
-only kind of path you may write. `<api>` is what the repository exposes, `<suite>`/`<test>` how it is
-checked, `<systems>` what it talks to. `found="no"` means the repository did not answer that question
+Карта репозитория «как есть» — что существует.
+`path` у `<module>` — КЛЮЧ УЗЛА. Это единственный вид пути, который ты можешь писать.
+`<api>` — что репозиторий выставляет наружу.
+`<suite>` / `<test>` — как это проверяется.
+`<systems>` — с чем он разговаривает.
+`found="no"` значит, что репозиторий на этот вопрос не ответил.
 $END_DOCUMENT
 $START_CONTENT
 {MAP}
@@ -30,56 +37,95 @@ $END_CONTENT
 $END_DATA
 
 $START_CONSTRAINTS
-- questions left in this run: {QUESTIONS_LEFT}. Ask every gap you have IN ONE BATCH, not one per
-  exchange: each exchange costs a full re-read of the BRD and of the map
-- a delta's form is one of: {DELTA_FORMS} — nothing else is a form
-- a quantity (range, enum, format, limit) carries `source`, and it is one of: {SOURCES}
-- one external input — one `<usecase>`; one alternate or failing branch — one `<ext>`; one `<ext>`
-  code — one `<failure>` row, in both directions
-- a `<scenario>` states what happens before the change and what happens after, and the two differ
+- Все пробелы, которые блокируют артефакт, спрашивай ОДНОЙ ПАЧКОЙ. Больше ничего.
+  Каждый обмен стоит полного перечитывания BRD и карты.
+  Пробел, который нельзя закрыть — это `<question>` в артефакте.
+- Form дельты — только один из: {DELTA_FORMS}. Других form нет.
+- Каждая величина (диапазон, enum, формат, лимит) несёт `source`.
+  Источник — один из: {SOURCES}.
+  Источник = файл, который СОДЕРЖИТ значение.
+  Назвать формат вместо его измерений нельзя.
+  Величина, на которую нельзя указать в одном из этих файлов → `<question>`, а не источник «из памяти».
+- Один внешний вход → один `<usecase>`.
+  Одна альтернативная/падающая ветка → один `<ext>`.
+- Один код `<ext>` → одна строка `<failure>`, и её `from` перечисляет ВСЕ ветки этого кода:
+  `from="UC1/1a UC2/2a"`.
+- `outcome` ветки — отрицание `<post>` своего use case, словами своего актёра. Две ветки не могут
+  нести один текст.
+- `<scenario>` обязан показывать, что было до изменения и что стало после. Два значения должны различаться.
+- На каждый `<usecase>` — свой `<scenario uc="…">`. Сценарий заводится на use case, а не на дельту.
 $END_CONSTRAINTS
 
 $START_FEEDBACK
-Evidence from the last red check on the staging file, if this is a redelegation. Empty means this is
-the first attempt — nothing to fix yet. Every line names its SOURCE, and the two are repaired
-differently:
-- `guardrail:` (or a bare rule code such as F3) — the FORM of the artifact broke a rule. Repair
-  EXACTLY the rule and the element it names, before anything else, and change nothing else.
-- `critic:` — step 11 judged the PLAN built out of this FRD and found the requirement itself
-  wanting: the line carries a code, the node it sits on and the evidence. There is no rule number to
-  fix; reconsider the CONTENT — the scenario, the delta or the use case that node comes from — and
-  write the FRD that delivers what the blocker says is missing.
-A question about something else leaves the blocker where it is.
+Evidence последней красной проверки staging-файла (пусто = первая попытка).
+Каждая строка называет свой SOURCE. Чинятся по-разному:
+
+- `guardrail:` (или голый код правила, например F3) — сломана ФОРМА артефакта.
+  Чини РОВНО правило и элемент, которые названы. Больше ничего не трогай.
+
+- `critic:` — step 11 оценил ПЛАН, построенный из этого FRD, и нашёл, что не хватает самого требования.
+  В строке есть код, узел и evidence.
+  Правила чинить не нужно. Пересмотри СОДЕРЖАНИЕ — сценарий, дельту или use case, из которого этот узел берётся.
+  Напиши FRD, который закрывает то, чего не хватает.
+
+Вопрос про что-то другое оставляет blocker на месте.
 $START_CONTENT
 {FEEDBACK}
 $END_CONTENT
 $END_FEEDBACK
 
+$START_SELFCHECK
+Перед записью файла выпиши ответы. Ответ — число, список id или таблица. «Да» ответом не является.
+
+1. id всех `<usecase>` — списком.
+   Против каждого id — `<scenario uc="этот id">`, какой именно. Пусто хотя бы у одного → F4b.
+
+2. Концы всех use case — таблицей: `UC<id>/post` и `UC<id>/<id ветки>` · их текст.
+   Два конца разных use case с одним текстом → F6c.
+   Ветка с кодом, не названная в `from` строки этого кода → F6d.
+
+3. Число `<delta>` и число `<touched>`. Каждая дельта `Changed` или `Fixed` — `from` и `to`
+   выписаны и различны → F3b.
+
+4. Каждый `<touched path>` — есть в карте заказа, не тест, `why` непуст → F2, F2c.
+
+5. Каждое число в `domain` и `fit` — из какого источника.
+   Источник не нашёлся — это `<question>`, а не значение → F5.
+
+Список сошёлся — пиши файл. Не сошёлся — чини артефакт, список не подгоняй.
+$END_SELFCHECK
+
 $START_OUTPUT
 path: {STAGING}
 schema:
-  <frd grammar="1" goal="one phrase">
-    <actor name="…" kind="human|system" via="the interface at this boundary"/>
+  <frd grammar="1" goal="одна фраза">
+    <actor name="…" kind="human|system" via="интерфейс на этой границе"/>
     <usecase id="UC1" actor="…" goal="…">
       <pre>…</pre>
-      <post>the success guarantee</post>
+      <post>гарантия успеха</post>
       <step n="1">…</step>
       <ext id="1a" error="CODE" outcome="…"/>
+      <ext id="1b" error="none" outcome="…"/>
+      <!-- ветка, которая падает БЕЗ собственного кода:
+           пиши `none`, никогда не изобретай код, для которого в репозитории нет идиомы -->
     </usecase>
-    <field name="…" in="the operation or entity" type="…" domain="range | enum | format"
+    <field name="…" in="операция или сущность" type="…" domain="range | enum | format"
            required="yes|no" error="CODE" source="…"/>
-    <failure code="CODE" status="…" client="…" operator="…" from="UC1/1a"/>
-    <failures found="no" why="…"/>   <!-- instead of the <failure> rows when the change has no failure
-                                          modes at all; one of the two is mandatory -->
-
-    <delta op="the operation" form="…" node="path from the map" from="…" to="…"/>
-    <delta op="the operation" form="Unknown" why="why it could not be classified"/>
+    <failure code="CODE" status="…" client="…" operator="…" from="UC1/1a UC2/2a"/>
+    <failures found="no" why="…"/>
+    <!-- вместо строк <failure>, если у изменения вообще нет failure-режимов;
+         один из двух вариантов обязателен -->
+    <delta op="операция" form="…" node="path из карты" from="…" to="…"/>
+    <delta op="операция" form="Unknown" why="почему не удалось классифицировать"/>
     <scenario id="S1" uc="UC1" before="…" after="…" nodes="path path"/>
-    <touched path="path from the map" why="what changes in this node"/>
+    <touched path="path из карты" why="что меняется в этом узле"/>
+    <!-- ТОЛЬКО для узла, который меняется и НЕ несёт <delta>:
+         страница, шаблон, build-скрипт — то, у чего нет контракта для сдвига.
+         Узел, который ты уже назвал в <delta>, сюда повторять НЕЛЬЗЯ:
+         step 8 посчитает его в любом случае. -->
     <nfr subject="…" fit="…" source="…"/>
     <question subject="…" why="…"/>
   </frd>
 check: {CHECK}
-return: call workflow_result — the shape and the choice of rail are declared by your ROLE's
-OUTPUT_FORMAT
+return: вызови workflow_result по OUTPUT_FORMAT своей ROLE
 $END_OUTPUT

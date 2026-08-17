@@ -16,6 +16,8 @@
 //             constant, not a function)
 //             severityOf(code) -> "blocker" | "advice"
 //             adviceLines(text) -> string[] — the evidence a guardrail printed, out of its output
+//             carriedBlockers({ blockers, seen }) -> { text, seen } — a repair loop's feedback,
+//             carrying what was already red in this run
 //
 // The pipeline maps "a red check" onto "redelegate the artifact's owner". So the price of a WRONG
 // rule is higher than a red lamp: it ORDERS the role to spoil a correct artifact in order to fit the
@@ -77,6 +79,70 @@ export function adviceLines(text) {
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => /^⚠\s*\[/.test(l))
+}
+
+// THE MEMORY OF A REPAIR LOOP IS THE RUN, NOT THE ROUND.
+//
+// A redelegation hands the role the LAST check's blockers and nothing else. That is the whole truth
+// about the artifact as it stands — every guardrail here is total, so the list is the entire distance
+// left to green — and it is still not enough to repair by, because the role does not PATCH the file:
+// it writes it again from the order. Everything the last check did not name is re-derived, and a
+// requirement satisfied on round N is at the mercy of the same reasoning that got it wrong on N-1.
+//
+// Live run e132f0a1 spent its budget exactly there. Round 1: `F4 uc="UC1,UC4"` plus `F5` on two
+// invented numbers. Round 2: one line left, `F4` alone — the artifact was one attribute from done.
+// Round 3 repaired that attribute and brought both `F5` numbers back, in the same field, word for
+// word. The escalation was not a role that could not converge; it was a role with a memory one round
+// long.
+//
+// TEXTS, NOT RULE NUMBERS. The regressed element came back identical (`<field name="id">`, the number
+// 24), so round 1's line stayed applicable verbatim, and it carried two facts a bare `F5` does not:
+// WHICH number and WHERE. A rule code tells a model which law it broke; only the line tells it what to
+// leave alone.
+
+// THE CEILING OF ROUNDS IS A REFUSAL, NOT A DEATH.
+//
+// Until S33 the trip that exceeded `questionRounds` killed the run: live run e4a583a7 escalated with
+// twelve answered questions, a built map, a whole surveyed swarm — and no artifact at all. Nothing
+// about that is truer than the alternative: the role is told the trips are over and writes the FRD it
+// can write, with every unresolved gap standing in it as a `<question>`. The grammar has carried that
+// element from the start (steps/intake/frd.mjs::parseFrd → questions[]) and the workflow already
+// reports how many an accepted artifact holds — an open question is an OUTPUT, which is exactly what
+// the role's source says it is (requirements-intake/SKILL.md: "a first-class output, not a blocker to
+// hide"). The refusal costs one redelegation, so the loop stays bounded.
+export const OUT_OF_ROUNDS =
+  "guardrail: кругов уточнения к оператору больше нет. Всё, что осталось невыясненным, — <question subject=\"…\" why=\"…\"/> в артефакте: отданный обратно пробел это результат, а пауза, которой не будет, — нет."
+
+// FUNCTION_CONTRACT: carriedBlockers — the feedback of a redelegation: what is red NOW, plus what was
+//                    red EARLIER in this run and must not come back
+//   Input:        { blockers — the current red check's text; seen — lines already red in this run, in
+//                  first-seen order; outOfRounds — the trips to the operator ran out, and the refusal
+//                  leads the feedback because it changes what the role must DO, not just fix }
+//   Dependencies: —
+//   Antecedent:   any values; `blockers` may be empty (nothing red now) and `seen` may be absent
+//   Consequent:   success: { text — the FEEDBACK to hand the role, `seen` — the accumulated lines,
+//                            first-seen order, deduplicated, current lines appended }
+//                          The carried block is omitted entirely when nothing was red before or when
+//                          the earlier lines are all repeated in the current check: a role must never
+//                          be shown a demand it is already being asked to fix, as two copies of one
+//                          blocker read as two defects.
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    carriedBlockers({ blockers, seen, outOfRounds }) -> { text: string, seen: string[] }
+export function carriedBlockers({ blockers, seen = [], outOfRounds = false }) {
+  const linesOf = (t) => String(t || "").split("\n").map((l) => l.trim()).filter(Boolean)
+  const now = linesOf(outOfRounds ? `${OUT_OF_ROUNDS}\n${String(blockers || "")}` : blockers)
+  const before = (Array.isArray(seen) ? seen : []).map((l) => String(l).trim()).filter(Boolean)
+
+  const carried = before.filter((l) => !now.includes(l))
+  const head = now.join("\n")
+  const text = carried.length
+    ? `${head}\n\nAlready red earlier in this run — repairing the above must not bring them back:\n${carried.map((l) => `  ${l}`).join("\n")}`
+    : head
+
+  const next = []
+  for (const l of [...before, ...now]) if (!next.includes(l)) next.push(l)
+  return { text, seen: next }
 }
 
 // blockersOf and adviceOf were removed: phase 8 made them dead. Evidence now travels on the BUILT BRD

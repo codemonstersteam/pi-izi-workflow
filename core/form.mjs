@@ -4,13 +4,12 @@
 //             placeholder instead of retelling it; the drift has already cost a whole live run (see
 //             the paragraph below).
 // io:         none
-// Invariants: the constant dictionaries (BRD_FORM, ABSENT_DOC, PROMPT_LANG, SYSTEM_LAYERS,
-//             USER_LAYERS, REQUIRED_SYSTEM, REQUIRED_USER) are fixed at module load and do not change
-//             at run time; layersOf/missingLayers/extraLayers/withoutExample/cyrillicRatio are pure
+// Invariants: the constant dictionaries (BRD_FORM, ABSENT_DOC, SYSTEM_LAYERS, USER_LAYERS,
+//             REQUIRED_SYSTEM, REQUIRED_USER) are fixed at module load and do not change
+//             at run time; layersOf/missingLayers/extraLayers/withoutExample are pure
 //             stateless functions whose result depends on their arguments alone.
 // Interface:  BRD_FORM — the mandatory fields and rules of the BRD artifact
 //             ABSENT_DOC — what is substituted for an optional document that does not exist yet
-//             PROMPT_LANG — the language of a subagent's prompts and the threshold it is checked by
 //             SYSTEM_LAYERS — the full list of a role's system-prompt layers
 //             USER_LAYERS — the full list of the user prompt's (the order's) layers
 //             REQUIRED_SYSTEM — the subset of SYSTEM_LAYERS that must be present
@@ -19,7 +18,6 @@
 //             missingLayers(text, required) — which declared layers the text lacks
 //             extraLayers(text, allowed) — which layers of the text the registry does not declare
 //             withoutExample(text) — the text without its EXAMPLE layer (the instructive part)
-//             cyrillicRatio(text) — the share of Cyrillic among the text's letters
 //
 // THE FORM REGISTRY — the one place that declares what we demand of an artifact.
 //
@@ -43,10 +41,21 @@ export const BRD_FORM = {
   openQuestions: "0",               // the line must exist and must be zero
   subjectsMin: 3,
   subjectsMax: 7,
-  // The wording travels INTO THE ORDER by substitution, and an order is written in the prompt
-  // language (PROMPT_LANG). So the rule is written in it too: translating it "in place", in the
-  // template, would bring back two texts of one requirement — what this registry exists against.
+  // The wording travels INTO THE ORDER by substitution, and the order is English. So the rule is
+  // written in English too: translating it "in place", in the template, would bring back two texts of
+  // one requirement — what this registry exists against.
   subjectRule: "greppable: one word, not a phrase; in the language of the repository, not of the request",
+  // The analogue obeys the subject rule for the same reason — step 3b greps the repository with it —
+  // and adds the one thing a subject has no use for: an explanation, which travels after a dash and
+  // is not searched with.
+  analogueRule: "greppable: one word, not a phrase; the explanation follows after a dash",
+  // THE FORM'S OWN WORDS — the closed list a Latin token in a `fit:` may be, without being the
+  // model's own English (core/lang.mjs::freeWords, ground 5). Membership has ONE admission test: a
+  // PARSER reads the word (parseBrd recognises every entry below as a line or as a declared absence).
+  // `unchanged` was refused entry deliberately: no parser reads it, so declaring it a form word would
+  // buy a whole class of untranslated English criteria — `формат ответа — unchanged` — the exemption
+  // of a word that means nothing to any machine here.
+  formWords: ["fit", "verify", "subjects", "open-questions", "analogue", "none"],
 }
 
 // An optional document may not exist (the first exchange with the operator). Absence is DECLARED
@@ -54,30 +63,6 @@ export const BRD_FORM = {
 // emptiness. The string lives here because the role quotes it ($START_INPUT) and the composer
 // substitutes it — two consumers of one requirement.
 export const ABSENT_DOC = "(no operator answers yet)"
-
-// A SUBAGENT'S PROMPT LANGUAGE is English, and that is a property of the participant, not a taste.
-// The pipeline's model (S11: a literal in workflows/izi.js, the role gilb.md) is 27B: for it, mixing
-// languages in one context eats the very structural density the $START_<LAYER> markup exists for.
-//
-// The threshold is PER LINE, and that is not an implementation detail. A per-file share does not hold
-// the rule: a Russian paragraph pasted into an English role gives 0.017 over the file — under any
-// sane ceiling — and the lint stays silent. Verified by reintroducing the defect, not by reasoning. A
-// LINE, by contrast, is either written in Russian or it is not.
-//
-// The scope is every PROMPT this repository writes for a model: a step's role.md, its order.tpl and
-// the router prompts/izi.md. The router was the one exception while its text quoted the acceptance
-// script's Russian output verbatim; it no longer does — it delegates a pause's wording to
-// workflows/izi.js::askOperator — so the exception is gone with its reason. What stays Russian is
-// what the OPERATOR reads: a question's subject, a `blocked` diagnosis, log() and docs/*.md.
-//
-// $START_EXAMPLE is excluded from the check on purpose: an example shows an input and an artifact,
-// and their language is set by the order, not by the role (F16, standards/role.md). An English
-// example with a Russian fixture inside it is legal; an English role with a Russian strategy is not.
-export const PROMPT_LANG = Object.freeze({
-  code: "en",
-  maxCyrillicPerLine: 0.5,
-  scope: "every prompt this repo writes: steps/<id>/role.md, its order.tpl and prompts/izi.md",
-})
 
 // --- Prompt layers --------------------------------------------------------------------------------
 //
@@ -174,21 +159,4 @@ export function extraLayers(text, allowed) {
 // Needed where a role's WORDING is judged rather than its example: an order sets an example's language.
 export function withoutExample(text) {
   return String(text || "").replace(/\$START_EXAMPLE[\s\S]*?\$END_EXAMPLE/g, "")
-}
-
-// FUNCTION_CONTRACT: cyrillicRatio — the share of Cyrillic among a text's letters
-//   Input:        text — any text; coerced to a string, type unconstrained
-//   Dependencies: —
-//   Antecedent:   any value
-//   Consequent:   success: a number 0..1 — Cyrillic letters divided by all letters; no letters in the
-//                          text (empty, digits, markup) → 0, never a division by zero
-//                 failure: none — total
-// The SHARE is judged, not the presence: a single term, a file name or a quotation from somebody
-// else's artifact are legal in an English prompt; a paragraph of prose is not. The threshold is
-// declared in PROMPT_LANG, not here.
-export function cyrillicRatio(text) {
-  const s = String(text || "")
-  const letters = s.match(/\p{L}/gu)
-  if (!letters) return 0
-  return letters.filter((c) => /[Ѐ-ӿ]/.test(c)).length / letters.length
 }
