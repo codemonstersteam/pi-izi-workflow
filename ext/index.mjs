@@ -81,7 +81,7 @@ import { routesSkeleton, parseChains, checkChains, assemble } from "../steps/des
 // `checkPart` шага 4 (часть графа) уже занимает это имя в файле — ядро шага 9 приезжает под
 // псевдонимом. Одно имя на два разных вопроса было бы дефектом чтения, а не удобством.
 import { partsOf, partCardOf, sectionsOf, checkPart as judgePartPlan } from "../steps/design/card.mjs"
-import { coverageOf, orderOf, planDoc } from "../steps/design/plandoc.mjs"
+import { coverageOf, orderOf, planDoc, gateView, readGate } from "../steps/design/plandoc.mjs"
 import { newPlanIndex, KEY_QUESTION, TASK_KEY } from "../steps/plan/plan.mjs"
 import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
@@ -623,6 +623,8 @@ function hitsFor(path, text, anchors) {
 const goModuleOf = (root) => ((readIfExists(root, "go.mod").match(/^module[ \t]+(\S+)/m) || [])[1] || "")
 
 const sha1 = (text) => createHash("sha1").update(text).digest("hex")
+// The gate token pins the plan by CONTENT: sha1 is the cache's hash, this one guards an approval.
+const sha256 = (text) => createHash("sha256").update(text).digest("hex")
 
 // COMPUTED_PATH — what the script computed, as a SEPARATE artifact beside the roles' parts.
 //
@@ -1806,6 +1808,74 @@ export const planbook = {
   },
 }
 
+// --- gate1: the operator approves the plan --------------------------------------------------------
+// Step 12. The presentation is assembled by SCRIPT — every line a cut or a count — for the same
+// reason the prose header was reverted out of PLAN.md: the gate is where an unverifiable sentence
+// does the most damage, because a human who reads a confident introduction stops reading the plan.
+//
+// The token pins the PLAN's hash. Without it `approve` of yesterday's plan closes today's, and the
+// band would cut a branch for work nobody looked at — the same rule as «judge the staging path
+// before promoting it», moved to the gate.
+const GATE_PATH = ".agent/gate1.json"
+
+export const gate1 = {
+  description: "Step 12: show the operator the plan and record the decision. Without an answer on disk: ok:false with ask:true and the PRESENTATION as the question — the goal from the FRD, the partitions with their use case ids and module counts, what is written first and why, the check commands, the branch. With an answer: approve writes .agent/gate1.json (the task key, a sha256 of PLAN.md and the decision), «rework: <текст>» returns the operator's words for step 6, stop ends the band. An unrecognised answer is a blocker naming the three words. Costs no tokens.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      ask: { type: "boolean" },
+      subject: { type: "string" },
+      blockers: { type: "string" },
+      rework: { type: "string" },
+      stop: { type: "boolean" },
+      at: { type: "string" },
+      modules: { type: "number" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_ = {}, context) {
+    const root = runRoot(context)
+    const key = taskKey(root)
+    if (!key) return { ok: false, why: "ключ задачи не отвечен — гейт не знает, какой план утверждается" }
+    const planPath = `task/${key}/PLAN.md`
+    if (!existsSync(at(root, planPath))) return { ok: false, why: `${planPath} не существует — шаг 9 не отработал, утверждать нечего` }
+    if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, GRAPH_PATH))) {
+      return { ok: false, why: `${FRD_PATH} или ${GRAPH_PATH} не существует` }
+    }
+
+    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+    const map = readFileSync(at(root, GRAPH_PATH), "utf8")
+    const { modules, parts: cut } = partsOf({ frd, ripple: readIfExists(root, RIPPLE_PATH) })
+    const sections = cut.flatMap((one) => sectionsOf(readIfExists(root, `task/${key}/design/${one.slug}.md`)))
+    const { order } = orderOf({ sections, modules, edges: parseMap(map).edges })
+    const view = gateView({ frd, modules, parts: cut, sections, order, key, base: gitTrunk(root) })
+
+    // The presentation IS the question: an answer is recognised by the question's text (core/answers.mjs),
+    // so the operator's word is bound to the plan they were shown, not to the plan that exists now.
+    const said = parsedAnswers(readIfExists(root, ANSWERS_PATH))
+    const hit = (said.ok ? said.value : []).find((a) => String(a.question || "").trim() === view.trim())
+    if (!hit) return { ok: false, ask: true, subject: view }
+
+    const decision = readGate(hit.text)
+    if (decision.kind === "stop") return { ok: false, stop: true, why: "оператор остановил полосу на гейте 1" }
+    if (decision.kind === "rework") return { ok: false, rework: decision.comment }
+    if (decision.kind !== "approve") {
+      return { ok: false, blockers: `ответ «${String(hit.text).slice(0, 60)}» не разобран — ответь одним из трёх: approve · rework: <что не так> · stop` }
+    }
+
+    writeFileSync(at(root, GATE_PATH), `${JSON.stringify({
+      key,
+      plan: sha256(readFileSync(at(root, planPath), "utf8")),
+      answer: "approve",
+    }, null, 2)}\n`)
+    return { ok: true, at: GATE_PATH, modules: modules.size }
+  },
+}
+
 // --- plan: the change as an ordered DAG of work ---------------------------------------------------
 // Step 10. One io function, and the ONLY one in the band that both asks the operator and applies the
 // answer itself: there is no role here to re-delegate to, so the value the operator typed is
@@ -2164,10 +2234,10 @@ export const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.15.0",
+    version: "1.16.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
-    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/parts/part/planbook/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, parts, part, planbook, plan, review },
+    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/parts/part/planbook/gate1/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, parts, part, planbook, gate1, plan, review },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

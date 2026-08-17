@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import { parseFrd } from "../intake/frd.mjs"
 import { sectionsOf } from "./card.mjs"
 import { partsOf } from "./card.mjs"
-import { coverageOf, orderOf, planDoc } from "./plandoc.mjs"
+import { coverageOf, orderOf, planDoc, gateView, readGate } from "./plandoc.mjs"
 
 const FRD = parseFrd(`<frd grammar="1" goal="хранилище словарей">
   <usecase id="UC1" actor="api" goal="создать">
@@ -107,4 +107,46 @@ test("тотальность: без входов — пустой план и �
   assert.deepEqual(coverageOf(), [])
   assert.deepEqual([...orderOf().order], [])
   assert.equal(typeof planDoc(), "string")
+})
+
+// --- гейт 1: вид и разбор ответа --------------------------------------------------------------------
+const PART = { id: "src", slug: "src-rest", modules: ["src/rest/RestStore.java", "src/model/Doc.java"], ucs: ["UC1", "UC2"], neighbours: [] }
+
+test("вид гейта: каждая строка — вырезка или счёт, ни одного нового слова", () => {
+  const { order } = orderOf({ sections: SECTIONS, modules })
+  const v = gateView({ frd: FRD, modules, parts: [PART], sections: SECTIONS, order, key: "DOS-42", base: "main" })
+
+  assert.match(v, /^ГЕЙТ 1 · DOS-42 · план: task\/DOS-42\/PLAN\.md/)
+  // Цель — дословно из FRD, а не пересказ.
+  assert.ok(v.includes(FRD.goal))
+  // Ветвь партии: диапазон use case, slug, счёт модулей и сколько из них новых.
+  assert.match(v, /UC1-UC2\s+──► src-rest · 2 модуля \(все новые\)/)
+  // Что писать первым и сколько модулей его зовут — из порядка ⑦ и строк «зовёт».
+  assert.match(v, /первым Doc\.java, его зовут 1 из 2/)
+  // Команды считаются по самой команде: оператор видит цену проверки.
+  assert.match(v, /Проверка: 2 команд — \.\/mvnw test ×2/)
+  assert.match(v, /Ветка: feature\/DOS-42 от main/)
+  assert.match(v, /Ответ: approve · rework: <что не так> · stop/)
+})
+
+test("вид тотален: без плана и без ключа не роняет полосу", () => {
+  assert.equal(typeof gateView(), "string")
+  assert.match(gateView(), /Ветка: feature\/<КЛЮЧ> от <транк>/)
+})
+
+// Решение гейта — слово, а не проза: на нём ветвится полоса, и разбор из предложения был бы решением,
+// которое следующий прогон не воспроизведёт.
+test("ответ оператора разбирается в одно из трёх решений", () => {
+  assert.equal(readGate("approve").kind, "approve")
+  assert.equal(readGate("  APPROVE  ").kind, "approve")
+  assert.equal(readGate("stop").kind, "stop")
+
+  const r = readGate("rework: экспорт должен уметь выборочные глоссарии")
+  assert.equal(r.kind, "rework")
+  assert.equal(r.comment, "экспорт должен уметь выборочные глоссарии")
+
+  // «rework» без слов — не решение: шагу 6 нечего читать, гейт спросит заново.
+  assert.equal(readGate("rework:").kind, "")
+  assert.equal(readGate("ну в общем нормально").kind, "")
+  assert.equal(readGate().kind, "")
 })
