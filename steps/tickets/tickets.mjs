@@ -22,6 +22,8 @@
 
 // reaches — зовёт ли `from` модуль `to`, прямо или через цепочку. Круга здесь быть не может: его
 // отверг гардрейл фазы ⑦ шага 9, но `seen` стоит всё равно — тотальность важнее веры в соседа.
+import { SECTION_KEYS } from "../design/card.mjs"
+
 const reaches = (from, to, calls, seen = new Set()) => {
   for (const c of calls.get(from) || []) {
     if (c === to) return true
@@ -77,7 +79,36 @@ const stepText = (frd, uc, n) => {
 }
 
 const line = (body, name) => (String(body || "").match(new RegExp(`^\\s*${name}:\\s*([^\\n]+)`, "m")) || ["", ""])[1].trim()
-const paths = (text) => (String(text || "").match(/[\w./-]+\.[A-Za-z0-9]+/g) || []).filter((x) => x.includes("/"))
+
+// ЗНАЧЕНИЕ КЛЮЧА — ЭТО БЛОК, А НЕ СТРОКА. Длинный перечень роль переносит: `сигнатуры:` несёт первую
+// подпись, остальные идут продолжениями с отступом. Читая одну физическую строку, тикет уносил первую
+// и молчал про остальные — тесту на СОЗДАНИЕ предъявляли сигнатуру ЧТЕНИЯ дескрипторов.
+//
+// BUG_FIX_CONTEXT: разбор тикетов живого прогона eddi. Разделов с многострочными сигнатурами — 8,
+// тикетов, куда приехала одна строка, — 17.
+//
+// Продолжение узнаётся по СЛОВАРЮ (steps/design/card.mjs::SECTION_KEYS): строка, не начинающаяся ни
+// одним ключом раздела, принадлежит предыдущему значению. Склейка через ` · ` — тем же разделителем
+// роль перечисляет в одну строку, поэтому вид тикета не зависит от того, как она поставила переносы.
+const starts = (l) => SECTION_KEYS.some((k) => new RegExp(`^\\s*${k}\\s*:`).test(l))
+const block = (body, name) => {
+  const all = String(body || "").split("\n")
+  const at = all.findIndex((l) => new RegExp(`^\\s*${name}\\s*:`).test(l))
+  if (at < 0) return ""
+  const head = all[at].replace(new RegExp(`^\\s*${name}\\s*:\\s*`), "")
+  const tail = []
+  for (const l of all.slice(at + 1)) {
+    if (!l.trim() || starts(l) || /^##\\s/.test(l)) break
+    tail.push(l.trim())
+  }
+  return [head.trim(), ...tail].filter(Boolean).join(" · ")
+}
+// ВХОД — ПУТЬ, А НЕ ВСЁ, ГДЕ ЕСТЬ СЛЭШ. `по образцу` — проза, и в ней встречается URI ресурса, пакет,
+// ссылка. Токен, начинающийся со слэша или несущий `//`, путём не бывает ни в одном репозитории.
+// BUG_FIX_CONTEXT: живой план eddi писал `eddi://ai.labs.glossary`, и во входы тикета уезжало
+// `//ai.labs.glossary` — исполнителю велели прочитать то, чего нет.
+const paths = (text) => (String(text || "").match(/[\w./-]+\.[A-Za-z0-9]+/g) || [])
+  .filter((x) => x.includes("/") && !x.startsWith("/") && !x.includes("//"))
 const slug = (path) => String(path).split("/").pop().replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9]+/g, "-").toLowerCase()
 const rx = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, (m) => `\\${m}`)
 
@@ -155,7 +186,7 @@ const namedTest = (check) => {
 // ТЕСТ ВСЕГДА РАНЬШЕ МОДУЛЯ, и это не пожелание: модульный тикет ЖДЁТ свои тесты через `blocked_by`,
 // а тестовый файл не входит в его `outputs`. Привести модуль к тесту исполнитель может, привести тест
 // к модулю — нет.
-export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branch = "", match = "*", testDir = "" } = {}) {
+export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branch = "", match = "*", testDir = "", known = new Set() } = {}) {
   const byPath = new Map(sections.map((s) => [s.path, s]))
   const owner = ownerOf({ sections, order })
 
@@ -167,13 +198,50 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
   }
 
   const list = []
+  // КТО НАБЛЮДАЕТ МОДУЛЬ — обратный граф «зовёт», из тех же разделов, что и прямой.
+  const watch = new Map()
+  for (const s of sections) {
+    for (const c of s.calls || []) if (byPath.has(c) && c !== s.path) watch.set(c, [...(watch.get(c) || []), s.path])
+  }
+
+  // Тест-классы и имена тикетов КАЖДОГО модуля считаются ДО главного цикла: наблюдатель стоит в
+  // очереди работ позже наблюдаемого, и к моменту обработки зовомого тикетов зовущего ещё нет.
+  const byTests = new Map()
+  for (const path of order) {
+    const s = byPath.get(path)
+    if (!s) continue
+    const named = namedTest(line(s.body, "проверка"))
+    const ucs = [...(mine.get(path) || new Map()).keys()]
+    byTests.set(path, {
+      classes: ucs.map((uc) => testFile(named, uc, match).replace(/\.[^.]+$/, "")).filter(Boolean),
+      names: ucs.map((uc) => `test-${slug(path)}-${uc.toLowerCase()}`),
+    })
+  }
+
+  // Ближайшие наблюдатели, у которых тесты ЕСТЬ: вверх по обратному графу, пока не найдутся. Не нашлось
+  // никого — остаётся голый сьют, и это честный последний случай: «собирается и не ломает существующее».
+  const climb = (path, pick, seen = new Set()) => {
+    const out = []
+    for (const w of watch.get(path) || []) {
+      if (seen.has(w)) continue
+      seen.add(w)
+      const got = pick(byTests.get(w) || { classes: [], names: [] })
+      out.push(...(got.length ? got : climb(w, pick, seen)))
+    }
+    return [...new Set(out)]
+  }
+  const watchers = (path) => climb(path, (t) => t.classes)
+  const watcherTests = (path) => climb(path, (t) => t.names)
+
   for (const path of order) {
     const s = byPath.get(path)
     if (!s) continue
     const check = line(s.body, "проверка")
     const cmd = check.split("·")[0].trim()
     const named = namedTest(check)
-    const sample = paths(line(s.body, "по образцу"))
+    // Вход обязан быть путём, который КТО-ТО знает: узлом карты или модулем, который пишет сам план.
+    // Всё прочее в строке «по образцу» — проза.
+    const sample = paths(block(s.body, "по образцу")).filter((p) => known.has(p) || byPath.has(p))
     const deps = (s.calls || []).filter((c) => byPath.has(c) && c !== path)
 
     // ③ тесты — по одному на use case, которым владеет модуль
@@ -187,7 +255,7 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
         uc,
         name: `test-${slug(path)}-${uc.toLowerCase()}`,
         steps: steps.map((x) => ({ step: x, text: stepText(frd, uc, x.split("/")[1]) })),
-        signatures: line(s.body, "сигнатуры"),
+        signatures: block(s.body, "сигнатуры"),
         // Тест ложится туда, где их держит репозиторий (`<suite path>` карты): раскладку решает
         // проект, а не этот код.
         outputs: file ? [testPath(path, file, testDir)] : [],
@@ -207,8 +275,13 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
     // флаг, которым команду параметризовала разведка; модуль без собственных тестов закрывается
     // сьютом целиком — «собирается и не ломает существующее».
     const own = tests.map((t) => t.testClass).filter(Boolean)
-    const moduleVerify = own.length
-      ? cmd.replace(/-D(it\.)?test=\S+/, (m) => m.replace(/=.*/, `=${own.join(",")}`))
+    // МОДУЛЬ БЕЗ СВОИХ ШАГОВ ЗАКРЫВАЕТСЯ ТЕСТАМИ ТОГО, КТО ЕГО ЗОВЁТ. Шагов за ним не осталось ровно
+    // потому, что он наблюдаем ЧЕРЕЗ зовущего (ownerOf, правило отсева) — значит и проверка его та же.
+    // Целый сьют репозитория проверкой не является: на eddi это 722 теста, ни один из которых не про
+    // этот модуль, и «сделано» становится недоказуемым. Правило графовое: ни слова о виде модуля.
+    const seen_ = own.length ? own : watchers(path)
+    const moduleVerify = seen_.length
+      ? cmd.replace(/-D(it\.)?test=\S+/, (m) => m.replace(/=.*/, `=${seen_.join(",")}`))
       : cmd.replace(/\s*-D(it\.)?test=\S+/, "")
 
     list.push({
@@ -220,9 +293,11 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
       outputs: [path],
       inputs: [...new Set([...sample, ...deps, ...tests.flatMap((t) => t.outputs)])],
       verify: moduleVerify,
-      testClass: own.join(", "),
+      testClass: seen_.join(", "),
       waitsFor: [...deps],
-      waitsForTests: tests.map((t) => t.name),
+      // Ждёт СВОИ тесты, а если их нет — тесты наблюдателя: RED-first держится и здесь, тест зовущего
+      // идёт волной раньше зовомого.
+      waitsForTests: own.length ? tests.map((t) => t.name) : watcherTests(path),
     })
   }
 
@@ -265,7 +340,7 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
 // ШЕСТЬ ПРАВИЛ, И КАЖДОЕ ЛОВИТ ПОТЕРЮ, А НЕ ВКУС. Правильно ли решён модуль — прочитал человек на
 // гейте 1; здесь проверяется, что ни одна работа не осталась без исполнителя, ни одно требование не
 // проверено дважды или ни разу, и что тест нельзя подогнать под реализацию.
-export function checkTickets({ tickets = [], sections = [], frd = {} } = {}) {
+export function checkTickets({ tickets = [], sections = [], frd = {}, known = new Set() } = {}) {
   const B = []
   const mods = tickets.filter((t) => t.kind === "module")
   const tests = tickets.filter((t) => t.kind === "test")
@@ -323,6 +398,17 @@ export function checkTickets({ tickets = [], sections = [], frd = {} } = {}) {
     if (ghost.length) B.push(`тикет ${t.id} ждёт несуществующие ${ghost.join(", ")}`)
   }
 
+  // 7. КАЖДЫЙ ВХОД — ПУТЬ, КОТОРЫЙ КТО-ТО ЗНАЕТ. Исполнителю нельзя велеть прочитать то, чего нет:
+  // ни карта, ни план такого файла не называют, значит в наряде проза, а не вход. Тесты, которые
+  // тикет сам же и порождает, знает план по построению.
+  //
+  // Без карты правило МОЛЧИТ — той же дисциплиной, что F5 без источников: судить не по чему, и
+  // выдумывать нечего (steps/intake/frd.mjs::provenance).
+  const ours = new Set(planned)
+  const stray = known.size ? [...new Set(tickets.flatMap((t) => (t.inputs || [])
+    .filter((p) => !known.has(p) && !ours.has(p) && !tickets.some((x) => (x.outputs || []).includes(p)))))] : []
+  if (stray.length) B.push(`во входах пути, которых не знает ни карта, ни план: ${stray.join(", ")} — исполнителю нечего по ним открыть`)
+
   return B
 }
 
@@ -373,7 +459,9 @@ export function ticketText(t = {}) {
     "## Зачем — шаги, которые это закрывает", "",
     steps.join("\n"), "",
     "## Как проверить", "",
-    `${t.verify || ""}${t.testClass ? ` · ${t.testClass}` : ""}`, "",
+    // Имя класса дописывается, только если команда его не назвала: у модуля с девятью наблюдателями
+    // это был бы тот же список второй раз, а тикет читает слабая модель.
+    `${t.verify || ""}${t.testClass && !String(t.verify || "").includes(t.testClass) ? ` · ${t.testClass}` : ""}`, "",
     "Тесты уже написаны и лежат по путям из inputs. Правь МОДУЛЬ, пока они не станут зелёными;",
     "тестовые файлы не трогай — они не в твоих outputs.",
   ].join("\n")

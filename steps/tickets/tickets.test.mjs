@@ -44,9 +44,13 @@ const SECTIONS = [
   },
 ]
 const ORDER = ["src/model/Doc.java", "src/mongo/Store.java", "src/rest/RestStore.java"]
+// Карта знает и то, что план правит, и образцы, с которых он списывает. Всё, чего в ней нет и что не
+// пишет план, — проза, а не вход.
+const KNOWN = new Set(["src/model/Doc.java", "src/mongo/Store.java", "src/rest/RestStore.java",
+  "src/model/Old.java", "src/mongo/OldStore.java", "src/rest/OldRest.java"])
 const cut = (over = {}) => ticketsOf({
   sections: SECTIONS, order: ORDER, frd: FRD, key: "DOS-1", branch: "feature/DOS-1",
-  match: "*Test.java", testDir: "src/test/java", ...over,
+  match: "*Test.java", testDir: "src/test/java", known: KNOWN, ...over,
 })
 
 // ГЛАВНОЕ ПРАВИЛО ШАГА. Один шаг требования проходит через несколько модулей, и все они называют его
@@ -172,4 +176,67 @@ test("тотальность: без входов — пусто, и ни одн
   assert.deepEqual([...ticketsOf()], [])
   assert.deepEqual(checkTickets(), [])
   assert.equal(typeof ticketText(), "string")
+})
+
+// Д1. Роль переносит длинные перечни на следующие строки — это НОРМА формата раздела, и живой план
+// eddi так и написан: у `IRestGlossaryStore` пять сигнатур, первая в строке `сигнатуры:`, остальные
+// продолжениями. Читая одну физическую строку, тикет уносил первую и молчал про остальные: тесту на
+// СОЗДАНИЕ глоссария предъявляли сигнатуру ЧТЕНИЯ дескрипторов. Восемь разделов, семнадцать тикетов.
+test("многострочный перечень доезжает в тикет целиком", () => {
+  const many = SECTIONS.map((s) => (s.path !== "src/mongo/Store.java" ? s : {
+    ...s,
+    body: s.body.replace("сигнатуры: create(Doc d) : Id · read(String id) : Doc",
+      "сигнатуры: create(Doc d) : Id\n           read(String id) : Doc\n           delete(String id) : void"),
+  }))
+  const t = ticketsOf({ sections: many, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN })
+  const one = t.find((x) => x.kind === "test" && x.module === "src/mongo/Store.java")
+  for (const sig of ["create(Doc d) : Id", "read(String id) : Doc", "delete(String id) : void"]) {
+    assert.match(one.signatures, new RegExp(sig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `сигнатура потеряна: ${sig}`)
+  }
+  assert.match(ticketText(one), /delete\(String id\) : void/, "в теле тикета контракт всё ещё обрезан")
+
+  // Та же обрезка била по образцу: со второй строки пути не доезжали.
+  const sample = SECTIONS.map((s) => (s.path !== "src/rest/RestStore.java" ? s : {
+    ...s, body: s.body.replace("по образцу: src/rest/OldRest.java — стиль", "по образцу: src/rest/OldRest.java — стиль\n            src/mongo/OldStore.java — тоже"),
+  }))
+  const t2 = ticketsOf({ sections: sample, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN })
+  assert.ok(t2.find((x) => x.kind === "module" && x.module === "src/rest/RestStore.java").inputs.includes("src/mongo/OldStore.java"))
+})
+
+// Д3. `по образцу` — проза с путями внутри, и в ней встречается всё: URI ресурса, пакет, ссылка.
+// Живой план eddi писал `eddi://ai.labs.glossary`, и во входы тикета уезжало `//ai.labs.glossary` —
+// исполнителю велели прочитать то, чего нет. Вход обязан быть путём, который знает карта или план.
+test("во входах только пути, известные карте или плану", () => {
+  const prose = SECTIONS.map((s) => (s.path !== "src/mongo/Store.java" ? s : {
+    ...s, body: s.body.replace("по образцу: src/mongo/OldStore.java — стиль",
+      "по образцу: src/mongo/OldStore.java — стиль, ресурс eddi://ai.labs.glossary, пакет com/example/Thing.class"),
+  }))
+  const t = ticketsOf({ sections: prose, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN })
+  const mod = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
+  assert.ok(mod.inputs.includes("src/mongo/OldStore.java"), "настоящий образец потерялся")
+  assert.deepEqual(mod.inputs.filter((p) => !KNOWN.has(p) && !p.startsWith("src/test/")), [],
+    `во входах путь, которого не знает ни карта, ни план: ${mod.inputs.join(", ")}`)
+
+  // И гардрейл говорит об этом вслух, а не молчит.
+  const bad = t.map((x) => (x === mod ? { ...x, inputs: [...x.inputs, "//ai.labs.glossary"] } : x))
+  assert.match(checkTickets({ tickets: bad, sections: prose, frd: FRD, known: KNOWN }).join("\n"), /\/\/ai\.labs\.glossary/)
+})
+
+// Д2. За модулем не осталось шагов ровно потому, что он наблюдаем ЧЕРЕЗ зовущего (ownerOf). Значит и
+// закрывать его должны тесты зовущего. Целый сьют репозитория проверкой не является: на eddi это 722
+// теста, ни один из которых не про этот модуль, — «сделано» становится недоказуемым.
+test("модуль без своих шагов закрывается тестами того, кто его зовёт", () => {
+  const t = cut()
+  const doc = t.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
+  assert.equal(t.some((x) => x.kind === "test" && x.module === "src/model/Doc.java"), false, "фикстура изменилась: у Doc появились свои тесты")
+
+  // Store зовёт Doc и владеет шагами двух use case — его тесты и есть наблюдение за Doc.
+  const storeTests = t.filter((x) => x.kind === "test" && x.module === "src/mongo/Store.java")
+  assert.match(doc.verify, /-Dtest=/, "модуль закрывается целым сьютом — проверка ни о чём")
+  for (const one of storeTests) assert.match(doc.verify, new RegExp(one.testClass), `тест зовущего не назван: ${one.testClass}`)
+
+  // И ждёт их: RED-first держится — тест зовущего, потом зовомый, потом зовущий.
+  for (const one of storeTests) assert.ok(doc.blocked_by.includes(one.id), `не ждёт тест ${one.id}`)
+  const store = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
+  assert.ok(doc.wave < store.wave, "зовомый обязан быть готов раньше зовущего")
 })

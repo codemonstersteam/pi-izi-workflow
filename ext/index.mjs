@@ -2221,6 +2221,7 @@ export const tickets = {
       modules: { type: "number" },
       waves: { type: "array", items: { type: "number" } },
       chars: { type: "number" },
+      files: { type: "array", items: { type: "string" } },
     },
     required: ["ok"],
     additionalProperties: false,
@@ -2255,17 +2256,27 @@ export const tickets = {
       branch: (() => { try { return JSON.parse(readIfExists(root, BRANCH_PATH) || "{}").name || "" } catch { return "" } })(),
       match: suite.match || "*",
       testDir: suite.path || "",
+      // Карта — словарь путей, которые в репозитории ЕСТЬ: по нему отсеивается проза из строки
+      // «по образцу», и по нему же судит седьмое правило гардрейла.
+      known: parseMap(map).nodes,
     })
-    const bad = checkTickets({ tickets: list, sections, frd })
+    const bad = checkTickets({ tickets: list, sections, frd, known: parseMap(map).nodes })
     if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
 
     const dir = `task/${key}/${TICKETS_DIR}`
     mkdirSync(at(root, dir), { recursive: true })
     let chars = 0
+    // ШАГ ОТВЕЧАЕТ ЗА СВОИ ТИКЕТЫ ПОИМЁННО. Список уезжает в отметку журнала артефактами: удалили
+    // каталог — лестница говорит «артефакт исчез» и шаг переигрывается сам; правили тикет руками —
+    // ловит отпечаток. Без этого шаг 14 закрывался «на слово», и перегенерировать его было нечем,
+    // кроме ручной правки состояния прогона.
+    const files = []
     for (const t of list) {
       const text = ticketText(t)
       chars = Math.max(chars, text.length)
-      writeFileSync(at(root, `${dir}/${t.id}-${t.name}.md`), `${text}\n`)
+      const one = `${dir}/${t.id}-${t.name}.md`
+      writeFileSync(at(root, one), `${text}\n`)
+      files.push(one)
     }
     const waves = [...new Set(list.map((t) => t.wave))].sort((a, b) => a - b)
     return {
@@ -2276,6 +2287,7 @@ export const tickets = {
       modules: list.filter((t) => t.kind === "module").length,
       waves: waves.map((w) => list.filter((t) => t.wave === w).length),
       chars,
+      files,
     }
   },
 }
@@ -2638,7 +2650,7 @@ export const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.19.0",
+    version: "1.20.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
     description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/parts/part/planbook/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
     functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, parts, part, planbook, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },

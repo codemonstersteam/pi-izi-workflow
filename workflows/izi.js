@@ -1416,8 +1416,7 @@ async function band(from0) {
       const cut = await tickets({});
       if (!cut.ok) exit(err("blocked", { subject: cut.blockers || cut.why, evidence: "шаг 14: тикеты не нарезаны" }));
       log(`tickets: ${cut.total} нарядов — тестов ${cut.tests}, модулей ${cut.modules}; волны ${cut.waves.join(" · ")}; крупнейший ${cut.chars} симв → ${cut.at}`);
-      // Каталог отпечатком не снять — счёт нарядов в note и есть улика этого шага.
-      await runlogMark({ step: 14, name: "tickets", status: "done", note: `нарядов ${cut.total}, волн ${cut.waves.length}` });
+      await runlogMark({ step: 14, name: "tickets", status: "done", artifacts: cut.files, note: `нарядов ${cut.total}, волн ${cut.waves.length}` });
     }
 
     if (STOP_AFTER_TICKETS) {
