@@ -286,6 +286,20 @@ test("F5: a number with no source among the sources, and a source outside the vo
   const invented = FRD.replace('fit="не больше 20 записей"', 'fit="не больше 50 записей"')
   assert.match(blockersOf(invented).join("\n"), /F5 нфт response-size \[invented-default\]: число 50/)
   assert.match(blockersOf(FRD.replace('source="TASK.md"', 'source="здравый смысл"')).join("\n"), /F5 поле track: source="здравый смысл"/)
+  // ...and the refusal names its exit, like the invented-default branch beside it: a rule that states
+  // only the law leaves the role to invent a repair. Live run d4ed43a0 burned three intake rounds on
+  // exactly this — the role wrote a source MORE precise than the law and could not read why it was red.
+  assert.match(blockersOf(FRD.replace('source="TASK.md"', 'source="здравый смысл"')).join("\n"), /имя файла назови отдельным словом/)
+
+  // A LOCATOR INSIDE THE FILE IS NOT A VIOLATION — it is better provenance. `brd.md R4` names the
+  // requirement the quantity came from; the rule judges the FILE, in any word order, and nothing else
+  // reads this attribute.
+  assert.deepEqual(blockersOf(FRD.replace('source="TASK.md"', 'source="TASK.md, строка 12"')), [])
+  assert.deepEqual(blockersOf(FRD.replace('source="TASK.md"', 'source="строка 12 в TASK.md"')), [])
+
+  // ...but the file must be a WHOLE WORD. Containment would pass prose that merely mentions it — and
+  // prose with a number in it is exactly what F5 exists to refuse.
+  assert.match(blockersOf(FRD.replace('source="TASK.md"', 'source="взял из головы, похоже наTASK.mdx"')).join("\n"), /F5 поле track/)
 
   // The counting window is narrow ON PURPOSE: status/step/grammar numbers are not the requirement's
   // quantities, and counting them would fail an honest artifact (docs/intake.md §5, run ed1d4094).
@@ -412,19 +426,10 @@ test("no sources supplied — the number rule stays silent, the rest still judge
   assert.equal(r.ok, true)
 })
 
-// The order is a file the host reads, not code, but prompt() demands an EXACT bidirectional match
-// between its placeholders and the values the workflow passes (execution.ts: "Missing prompt value" /
-// "Unused prompt value" both throw) — a mismatch kills the run at launch, not at review.
-// S33: `QUESTIONS_LEFT` is gone with the budget of questions itself. A count handed to a role as
-// "left in this run" is read as an allowance to spend, and two live runs spent it (core/budgets.mjs).
-const ORDER_KEYS = ["BRD", "MAP", "ANSWERS", "FEEDBACK", "STAGING", "CHECK", "DELTA_FORMS", "SOURCES"]
-const placeholders = (tpl) =>
-  [...tpl.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
-
-test("order.tpl uses exactly the keys the workflow passes", () => {
-  const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
-  assert.deepEqual([...new Set(placeholders(tpl))].sort(), [...ORDER_KEYS].sort())
-})
+// The order's placeholders against the workflow's keys is judged in core/orders.test.mjs, for EVERY
+// step at once and by reading workflows/izi.js itself. The list of keys that used to sit here was
+// retyped by hand, so it could only ever agree with the template — the third party to the contract,
+// the workflow, was not in the room.
 
 test("role: intake.md names the machine check behind each of its prohibitions", () => {
   // The role file is named by ROLE, not by step: pi resolves agent({role: "intake"}) by FILENAME

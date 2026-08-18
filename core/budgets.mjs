@@ -53,7 +53,16 @@ import { ok, err } from "./result.mjs"
 // from done. Round 3 repaired that line and lost a rule from round 1, and the run escalated on the
 // third of three. Step 6 is the only place where one file answers to seven rules at once; the other
 // four loops (brd, scope, design, review) judge a narrower artifact and keep the shared `loops`.
-export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, intakeLoops: 6, questionRounds: 5, checkpointRetries: 2, maxParallel: 8, reviewRounds: 2 })
+export const DEFAULT_BUDGETS = Object.freeze({ loops: 3, intakeLoops: 6, questionRounds: 5, checkpointRetries: 2, maxParallel: 8, reviewRounds: 2, baseline: true })
+
+// baseline — ЕДИНСТВЕННЫЙ ключ этого файла, который не число, и он здесь не по прихоти. Шаг 13
+// после среза ветки гоняет все сьюты репозитория: ветка равна свежему транку, поэтому зелёный
+// прогон доказывает релизопригодность транка, а красный называет дефект ЧУЖИМ. Без этого якоря
+// красный сьют на шаге 16 не улика — его с равным правом можно списать на наследство.
+//
+// Выключается там, где якорь не нужен и дорог: песочница гоняет полосу по десять раз в день, и
+// полный `mvn verify` на каждом срезе стоит больше, чем доказывает.
+const FLAGS = Object.freeze(["baseline"])
 export const BUDGETS_PATH = "izi.config.json"
 
 // ORDER_CAP_CHARS — how big ONE assembled order may be, in CHARACTERS, and it is NOT a budget of the
@@ -122,9 +131,13 @@ export function newBudgets(raw) {
     return err("invalid-budgets", `${BUDGETS_PATH}: неизвестный ключ ${unknown.join(", ")} — бюджеты это ${KEYS.join(", ")}`)
   }
 
-  const bad = KEYS.filter((k) => k in cfg && !(Number.isInteger(cfg[k]) && cfg[k] >= 1))
+  const bad = KEYS.filter((k) => k in cfg && !FLAGS.includes(k) && !(Number.isInteger(cfg[k]) && cfg[k] >= 1))
   if (bad.length) {
     return err("invalid-budgets", `${BUDGETS_PATH}: ${bad.map((k) => `${k} = ${JSON.stringify(cfg[k])}`).join(", ")} — бюджет это целое ≥ 1`)
+  }
+  const notFlag = FLAGS.filter((k) => k in cfg && typeof cfg[k] !== "boolean")
+  if (notFlag.length) {
+    return err("invalid-budgets", `${BUDGETS_PATH}: ${notFlag.map((k) => `${k} = ${JSON.stringify(cfg[k])}`).join(", ")} — это флаг, true либо false`)
   }
 
   return ok(Object.freeze({ ...DEFAULT_BUDGETS, ...cfg }))

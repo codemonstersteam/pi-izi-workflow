@@ -83,6 +83,11 @@ import { routesSkeleton, parseChains, checkChains, assemble } from "../steps/des
 import { partsOf, partCardOf, sectionsOf, checkPart as judgePartPlan } from "../steps/design/card.mjs"
 import { coverageOf, orderOf, planDoc, gateView, readGate } from "../steps/design/plandoc.mjs"
 import { newPlanIndex, KEY_QUESTION, TASK_KEY } from "../steps/plan/plan.mjs"
+import { newBranch } from "../steps/branch/branch.mjs"
+import { newLog, render, begin, mark, ticket, resumeAt, pending } from "../core/runlog.mjs"
+import { ticketsOf, checkTickets, ticketText } from "../steps/tickets/tickets.mjs"
+// attrs — тот же разбор атрибутов, каким карту читают все шаги: базлайн берёт cmd сьютов оттуда же.
+import { attrs, elem } from "../core/xml.mjs"
 import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
 import { parseMap, mapMeasure, mapIndex, MAP_CAP_BYTES } from "../steps/intake/map.mjs"
 import { decide, entryFor } from "../steps/scope/cache.mjs"
@@ -297,6 +302,7 @@ export const budgets = {
       // so the NEXT budget cannot be forgotten here at all.
       maxParallel: { type: "number" },
       reviewRounds: { type: "number" },
+      baseline: { type: "boolean" },
       // orderCap is NOT a member of DEFAULT_BUDGETS and must not become one: newBudgets accepts any
       // key it declares from izi.config.json, and a project lowering — or raising — the window of the
       // model it does not choose would be a budget over somebody else's fact. It rides this channel
@@ -1193,7 +1199,22 @@ export const checkFrd = {
     }
 
     const mapText = readFileSync(at(root, GRAPH_PATH), "utf8")
-    const ans = parsedAnswers(readIfExists(root, ANSWERS_PATH))
+    // PROVENANCE IS JUDGED WHEN THE ARTEFACT IS WRITTEN, NOT FOREVER AFTER. The two callers are told
+    // apart by the path. STAGING is an artefact a role is writing NOW: every number must be evidence
+    // of THIS run, or a dead run's answer legalises an invented default — the rule newRun exists for,
+    // and the seam beside it in ext/index.test.mjs. The PROMOTED .agent/frd.xml is a different
+    // question: resume asks whether the artefact still STANDS (workflows/izi.js::band) — its nodes
+    // resolve, its use cases carry scenarios, its deltas are classified. It already passed provenance
+    // once, under evidence that existed then; re-deriving it against today's files re-judges history.
+    //
+    // BUG_FIX_CONTEXT: live run c87db886. The FRD went green, the operator approved the plan, step 13
+    // refused on an unrelated defect — and no later run could close step 6 again: `newRun` moves
+    // answers.md into .agent/prev/, and .agent/prev/ holds exactly ONE run, so the twenty answers
+    // behind the FRD's numbers were overwritten by the next run's two. The band replayed from step 6
+    // and asked everything anew. Provenance kept as a resume rule means: an artefact whose evidence
+    // is one run old can never be resumed — on any project where numbers come from the operator.
+    const judgingStaged = String(path).includes(`${STAGING_DIR}/`)
+    const ans = judgingStaged ? parsedAnswers(readIfExists(root, ANSWERS_PATH)) : { ok: false }
     // The provenance of a number: the task, the VALUES of the operator's answers (never the wording
     // of a question — the alternatives an offer lists are the role's own words), the fit criteria of
     // the BRD, and the map. The BRD arrives through parseBrd — one parser, from steps/brd.
@@ -1202,7 +1223,11 @@ export const checkFrd = {
     // role deleted a correct number to satisfy a blocker that was wrong. A number in the criterion by
     // which a requirement is CHECKED is that requirement's number just as much as one in its fit.
     const fits = parseBrd(readIfExists(root, ".agent/brd.md")).requirements.map((r) => `${r.fit || ""}\n${r.verify || ""}`).join("\n")
-    const sources = [readIfExists(root, TASK_PATH), ...(ans.ok ? ans.value.map((a) => a.text) : []), fits, mapText]
+    // Числа судятся только на staging: пустой список источников гасит ветку invented-default в
+    // steps/intake/frd.mjs::provenance, а словарь допустимых `source` остаётся в силе для обоих.
+    const sources = judgingStaged
+      ? [readIfExists(root, TASK_PATH), ...(ans.ok ? ans.value.map((a) => a.text) : []), fits, mapText]
+      : []
 
     const map = parseMap(mapText)
     // F9's input: a rewind exists only when the LAST review Rejected — band() only rewinds to step 6
@@ -1819,7 +1844,7 @@ export const planbook = {
 const GATE_PATH = ".agent/gate1.json"
 
 export const gate1 = {
-  description: "Step 12: show the operator the plan and record the decision. Without an answer on disk: ok:false with ask:true and the PRESENTATION as the question — the goal from the FRD, the partitions with their use case ids and module counts, what is written first and why, the check commands, the branch. With an answer: approve writes .agent/gate1.json (the task key, a sha256 of PLAN.md and the decision), «rework: <текст>» returns the operator's words for step 6, stop ends the band. An unrecognised answer is a blocker naming the three words. Costs no tokens.",
+  description: "Step 12: show the operator the plan and record the decision. Without an answer on disk: ok:false with ask:true and the PRESENTATION as the question — the goal from the FRD, the partitions with their use case ids and module counts, what is written first and why, the check commands, the branch. With an answer: approve writes .agent/gate1.json (the task key, a sha256 of PLAN.md and the decision), «rework: <текст>» returns the operator's words for step 6, stop ends the band. An unrecognised answer is a blocker naming the three words. A VALID TOKEN IS HONOURED: when .agent/gate1.json already carries this key, this plan's sha256 and approve, the operator is not asked again (ok:true with kept:true) — the answer lives in .agent/answers.md, which newRun carries into .agent/prev/ before the band starts. Costs no tokens.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -1827,6 +1852,7 @@ export const gate1 = {
       ok: { type: "boolean" },
       why: { type: "string" },
       ask: { type: "boolean" },
+      kept: { type: "boolean" },
       subject: { type: "string" },
       blockers: { type: "string" },
       rework: { type: "string" },
@@ -1843,6 +1869,22 @@ export const gate1 = {
     if (!key) return { ok: false, why: "ключ задачи не отвечен — гейт не знает, какой план утверждается" }
     const planPath = `task/${key}/PLAN.md`
     if (!existsSync(at(root, planPath))) return { ok: false, why: `${planPath} не существует — шаг 9 не отработал, утверждать нечего` }
+
+    // РЕЦЕПТ ГЕЙТА ПРИЗНАЁТСЯ ЕГО ЖЕ ВЛАДЕЛЬЦЕМ, И РАНЬШЕ ВСЕГО ОСТАЛЬНОГО. Токен пишется здесь, а
+    // читали его до сих пор только шаги 13 и 14: сам гейт искал свой ответ исключительно в
+    // .agent/answers.md — файле, который newRun уносит в .agent/prev/ ПЕРВЫМ действием прогона.
+    // Поэтому перезапуск спрашивал оператора снова над тем же самым планом; на живом прогоне 08675093
+    // один из таких повторов ушёл в модель-раздатчик и вернулся не словом `approve`, а описанием
+    // проекта — шаг умер терминально.
+    //
+    // Токен действителен ровно пока действителен план: тот же ключ и тот же sha256 файла, который
+    // оператор ЧИТАЛ. Переписали план — токен перестаёт годиться, и гейт спрашивает заново над новым.
+    // Проверка стоит до сборки презентации: при живом рецепте ни карта, ни разделы не нужны.
+    const planNow = sha256(readFileSync(at(root, planPath), "utf8"))
+    const token = (() => { try { return JSON.parse(readIfExists(root, GATE_PATH) || "{}") } catch { return {} } })()
+    if (token.answer === "approve" && token.key === key && token.plan === planNow) {
+      return { ok: true, at: GATE_PATH, kept: true }
+    }
     if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, GRAPH_PATH))) {
       return { ok: false, why: `${FRD_PATH} или ${GRAPH_PATH} не существует` }
     }
@@ -1867,12 +1909,374 @@ export const gate1 = {
       return { ok: false, blockers: `ответ «${String(hit.text).slice(0, 60)}» не разобран — ответь одним из трёх: approve · rework: <что не так> · stop` }
     }
 
-    writeFileSync(at(root, GATE_PATH), `${JSON.stringify({
-      key,
-      plan: sha256(readFileSync(at(root, planPath), "utf8")),
-      answer: "approve",
-    }, null, 2)}\n`)
+    writeFileSync(at(root, GATE_PATH), `${JSON.stringify({ key, plan: planNow, answer: "approve" }, null, 2)}\n`)
     return { ok: true, at: GATE_PATH, modules: modules.size }
+  },
+}
+
+// --- runlog: память полосы о том, что уже сделано --------------------------------------------------
+// Тонкий io вокруг чистого ядра (core/runlog.mjs): здесь читается диск, считаются отпечатки и ставится
+// время — решение «шаг закрыт» принимает ядро и только оно.
+//
+// ЖУРНАЛ НЕ РОТИРУЕТСЯ. newRun уносит в .agent/prev/ ровно состояние ПРОГОНА — ответы, вопрос,
+// staging. Журнал — не состояние прогона, а память проекта о полосе: унеси его, и следующий запуск
+// снова не будет знать, что сделано. Ровно эта потеря стоила прогону c87db886 двух переигранных
+// шагов 6 подряд, когда уликами артефакта служил файл, живущий один прогон.
+const RUNLOG_PATH = ".agent/run.yaml"
+
+const runlogOf = (root) => {
+  const r = newLog(readIfExists(root, RUNLOG_PATH))
+  return r.ok ? r.value : null
+}
+// ПИСАТЬ ПОВЕРХ НЕЧИТАЕМОГО ЖУРНАЛА — ЗНАЧИТ СТЕРЕТЬ ПАМЯТЬ МОЛЧА. Живой прогон: разбор спотыкался на
+// одном поле, отметка начинала журнал с чистого листа, и двенадцать закрытых шагов исчезали без
+// единого сообщения — та самая тихая потеря, ради которой весь механизм и заведён. Отметка на
+// испорченном журнале ПАДАЕТ; читать его (runlogRead) по-прежнему можно, и он честно говорит «не знаю».
+const runlogNow = (root) => {
+  const raw = readIfExists(root, RUNLOG_PATH)
+  const r = newLog(raw)
+  if (!r.ok) throw new Error(`${RUNLOG_PATH} не разбирается (${r.error.detail}) — отметка не пишется поверх: журнал прогона был бы стёрт`)
+  return raw ? r.value : undefined
+}
+const runlogPut = (root, log) => {
+  const text = render(log)
+  if (!text.ok) throw new Error(`журнал не записывается: ${text.error.detail}`)
+  mkdirSync(at(root, ".agent"), { recursive: true })
+  writeFileSync(at(root, RUNLOG_PATH), text.value)
+}
+const stamp = () => new Date().toISOString().replace(/\.\d+Z$/, "Z")
+
+export const runlogRead = {
+  description: "The run's memory: where the band enters. Reads .agent/run.yaml, fingerprints every artefact the journal names, and answers with the FIRST step that is not closed — a step is closed by its own mark plus a sha256 that still matches the file on disk. No journal at all answers from: 1. `why` says which of the four reasons it is (no mark · the run was cut on that step · the artefact is gone · the artefact was edited after the mark), so the operator reads a cause, not a number. Costs no tokens.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      from: { type: "number" },
+      why: { type: "string" },
+      closed: { type: "array", items: { type: "number" } },
+      broken: { type: "boolean" },
+      tickets: { type: "number" },
+    },
+    required: ["from", "why"],
+    additionalProperties: false,
+  },
+  run(_ = {}, context) {
+    const root = runRoot(context)
+    const log = runlogOf(root)
+    // Испорченный журнал — это не «шагов нет», это «мы не знаем». Полоса идёт с начала и говорит почему.
+    if (!log) return { from: 1, why: `${RUNLOG_PATH} не разбирается — журнал испорчен, полоса идёт с начала`, closed: [], broken: true, tickets: 0 }
+
+    const seen = {}
+    for (const m of log.steps) {
+      for (const a of m.artifacts) {
+        seen[a.path] = existsSync(at(root, a.path)) ? sha256(readFileSync(at(root, a.path), "utf8")) : null
+      }
+    }
+    const r = resumeAt(log, { seen })
+    return { from: r.from, why: r.why, closed: r.closed, broken: false, tickets: log.tickets.length }
+  },
+}
+
+export const runlogMark = {
+  description: "Write one step's receipt into .agent/run.yaml: the step number, its phase name, an optional unit inside the step (a scouting cell, a partition of step 9), the status (running|done|failed|skipped) and the artefacts it is answerable for. The sha256 of every artefact is taken HERE, at the moment of the mark — that fingerprint is what a later launch compares against, so a file edited by hand replays its step. The time is the host's. A mark REPLACES the previous one for the same step and unit. Costs no tokens.",
+  input: {
+    type: "object",
+    properties: {
+      step: { type: "number" },
+      name: { type: "string" },
+      unit: { type: "string" },
+      status: { type: "string" },
+      note: { type: "string" },
+      artifacts: { type: "array", items: { type: "string" } },
+    },
+    required: ["step", "status"],
+    additionalProperties: false,
+  },
+  output: { type: "object", properties: { at: { type: "string" }, sealed: { type: "number" } }, required: ["at"], additionalProperties: false },
+  run({ step, name = "", unit = "", status, note = "", artifacts = [] }, context) {
+    const root = runRoot(context)
+    const at_ = stamp()
+    const prints = (artifacts || [])
+      .filter(Boolean)
+      .map((path) => ({ path, sha256: existsSync(at(root, path)) ? sha256(readFileSync(at(root, path), "utf8")) : "" }))
+    const log = mark(begin(runlogNow(root), { key: taskKey(root), at: at_ }), { step, name, unit, status, at: at_, note, artifacts: prints })
+    runlogPut(root, log)
+    return { at: at_, sealed: prints.length }
+  },
+}
+
+export const runlogTicket = {
+  description: "Write one implementer ticket's row into .agent/run.yaml (step 15): its id, its wave, and the status — running|green|failed. A row REPLACES the previous one for the same id, so a retried ticket does not grow the file. This is what lets a run cut in the middle of a wave pick up exactly the tickets that are not green. Costs no tokens.",
+  input: {
+    type: "object",
+    properties: { id: { type: "string" }, wave: { type: "number" }, status: { type: "string" }, note: { type: "string" } },
+    required: ["id", "status"],
+    additionalProperties: false,
+  },
+  output: { type: "object", properties: { at: { type: "string" } }, required: ["at"], additionalProperties: false },
+  run({ id, wave = 0, status, note = "" }, context) {
+    const root = runRoot(context)
+    const at_ = stamp()
+    runlogPut(root, ticket(runlogNow(root), { id, wave, status, at: at_, note }))
+    return { at: at_ }
+  },
+}
+
+export const runlogPending = {
+  description: "Which units of a step are still not closed — the scouting cells step 4 has yet to take, the partitions step 9 has yet to write, the tickets of a wave that are not green. Answers with the members of `of` that carry no done mark, in the caller's own order, so a stage is entered in its MIDDLE instead of from its start. Costs no tokens.",
+  input: {
+    type: "object",
+    properties: { step: { type: "number" }, of: { type: "array", items: { type: "string" } } },
+    required: ["step", "of"],
+    additionalProperties: false,
+  },
+  output: { type: "object", properties: { units: { type: "array", items: { type: "string" } }, done: { type: "number" } }, required: ["units"], additionalProperties: false },
+  run({ step, of = [] }, context) {
+    const log = runlogOf(runRoot(context))
+    const units = log ? pending(log, { step, of }) : (of || [])
+    return { units, done: (of || []).length - units.length }
+  },
+}
+
+// --- branch: короткая ветка от свежего транка ------------------------------------------------------
+// Step 13, и весь его код — это io вокруг одного чистого суждения (steps/branch/branch.mjs::newBranch).
+// Ядро судит по СНИМКУ фактов git; здесь снимок делается и, если суждение зелёное, режется ветка.
+//
+// СВЕЖЕСТЬ — ФАКТ, А НЕ ПАМЯТЬ: `git fetch` идёт ДО снимка, и база берётся из `<remote>/<base>`.
+// Отставший локальный транк в ветвлении не участвует вовсе — иначе ветка режется от вчерашнего дня, и
+// зелёный базлайн доказывает релизопригодность того, чего уже нет.
+const BRANCH_PATH = ".agent/branch.json"
+
+// gitFacts — то, что репозиторий говорит о себе ПРЯМО СЕЙЧАС. Ошибка любой команды — это отсутствие
+// факта, а не ноль: `trunk: ""` уедет отказом `no-trunk`, и никто не спутает его с «транк называется
+// пустой строкой» (standards/code.md, правило 4).
+const gitFacts = (root, planPath) => {
+  const git = (args) => {
+    try {
+      return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()
+    } catch {
+      return ""
+    }
+  }
+  const remote = git(["remote"]).split("\n").filter(Boolean)[0] || null
+  const trunk = gitTrunk(root)
+  if (remote && trunk) git(["fetch", remote, trunk])          // свежесть берётся здесь
+
+  return {
+    // `-uall` РАЗВОРАЧИВАЕТ нетронутые каталоги в файлы: без него полностью новый `task/DOS-535/`
+    // приезжает одной строкой `?? task/`, и ядро не может отличить свою поставку от чужого ключа.
+    head: git(["rev-parse", "--abbrev-ref", "HEAD"]),
+    dirtyPaths: git(["status", "--porcelain", "-uall"]).split("\n")
+      .map((l) => l.slice(3).trim())
+      .map((p) => (p.includes(" -> ") ? p.split(" -> ").pop() : p))
+      .filter(Boolean),
+    refs: git(["for-each-ref", "--format=%(refname:short)", "refs/heads"]).split("\n").filter(Boolean),
+    trunk,
+    trunkSha: remote ? git(["rev-parse", `${remote}/${trunk}`]) : git(["rev-parse", trunk]),
+    remote,
+    planHash: existsSync(at(root, planPath)) ? sha256(readFileSync(at(root, planPath), "utf8")) : "",
+  }
+}
+
+export const branch = {
+  description: "Step 13: cut the work branch. Reads the gate's token (.agent/gate1.json), takes a snapshot of git — the uncommitted PATHS, local refs, trunk, its sha at the REMOTE after a fetch, and a sha256 of the approved plan; the run's own deliverable under task/<KEY>/ is not dirt, anything else is — and judges by steps/branch/branch.mjs::newBranch: no-gate · plan-changed · dirty-worktree · no-trunk · branch-exists. On green cuts <prefix>/<KEY> from <remote>/<trunk> and writes .agent/branch.json. No role, no repair rail: a dirty worktree and a taken branch name are the state of a human's machine, and every refusal is terminal with the evidence. Costs no tokens.",
+  input: { type: "object", properties: { baseline: { type: "boolean" } }, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      kind: { type: "string" },
+      name: { type: "string" },
+      kept: { type: "boolean" },
+      baseline: { type: "string" },
+      base: { type: "string" },
+      baseSha: { type: "string" },
+      remote: { type: "string" },
+      at: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ baseline = true } = {}, context) {
+    const root = runRoot(context)
+    // РЕЦЕПТ СТИРАЕТСЯ, ТОЛЬКО ЕСЛИ ОН УЖЕ ЛЖЁТ. Раньше его сносил ЛЮБОЙ отказ шага — грязная копия,
+    // изменившийся план, нечитаемый токен, — и вместе с ним пропадала единственная улика, по которой
+    // шаг узнаёт СВОЮ ветку. Живой прогон: ветка на месте, HEAD на ней, работа продолжается, а
+    // рецепта уже нет, потому что один посторонний отказ его снёс — и шаг отказывает `branch-exists`
+    // о ветке, которую сам же и отрезал, теперь уже навсегда.
+    const drop = () => {
+      if (!existsSync(at(root, BRANCH_PATH))) return
+      const said = (() => { try { return JSON.parse(readFileSync(at(root, BRANCH_PATH), "utf8")) } catch { return null } })()
+      const alive = said && said.name && (() => {
+        try { return execFileSync("git", ["rev-parse", "--verify", said.name], { cwd: root, stdio: ["ignore", "pipe", "ignore"] }) && true } catch { return false }
+      })()
+      if (!alive) rmSync(at(root, BRANCH_PATH))
+    }
+
+    const token = readIfExists(root, GATE_PATH)
+    let gate = null
+    try {
+      gate = token ? JSON.parse(token) : null
+    } catch (e) {
+      drop()
+      return { ok: false, kind: "no-gate", why: `${GATE_PATH} не разбирается как JSON — ${e.message}` }
+    }
+    const key = String((gate && gate.key) || "").trim()
+    const planPath = `task/${key}/PLAN.md`
+
+    // Рецепт прошлого среза — вход суждения, а не его вывод: признать свою ветку своей может только
+    // ядро, потому что имя ветки выводится там же, из ключа и веса.
+    const prior = (() => { try { return JSON.parse(readIfExists(root, BRANCH_PATH) || "null") } catch { return null } })()
+    const r = newBranch({
+      gate: gate ? { key, planHash: gate.plan, answer: gate.answer } : null,
+      prior,
+      planText: readIfExists(root, planPath),
+      mode: readIfExists(root, MODE_PATH).trim(),
+      git: gitFacts(root, planPath),
+    })
+    if (!r.ok) { drop(); return { ok: false, kind: r.error.cls, why: r.error.detail } }
+
+    const b = r.value
+    // ВЕТКА УЖЕ НАША: ни git switch, ни базлайна — оба уже случились в прогоне, который её отрезал.
+    // Артефакт остаётся на месте нетронутым: перезаписать его значило бы стереть вердикт базлайна.
+    // Хост валидирует ВЫХОД: `null` в поле, объявленном строкой, роняет прогон на «Invalid output
+    // from branch» — тот же класс, что дважды стоил прогона на budgets. Отсутствие удалённого — это
+    // пустая строка, а не отсутствие значения.
+    if (b.kept) return { ok: true, kept: true, name: b.name, base: b.base, baseSha: b.baseSha, remote: String(b.remote || ""), at: BRANCH_PATH, baseline: String((prior && prior.baseline) || "") }
+
+    try {
+      execFileSync("git", ["switch", "-c", b.name, b.remote ? `${b.remote}/${b.base}` : b.base], { cwd: root, stdio: "ignore" })
+    } catch (e) {
+      drop()
+      return { ok: false, kind: "cut-failed", why: `git switch -c ${b.name} не выполнился — ${e.message}` }
+    }
+    // АРТЕФАКТ ПИШЕТСЯ СРАЗУ ПОСЛЕ СРЕЗА, до базлайна. Живой урок: исключение между `git switch` и
+    // записью оставило срезанную ветку без квитанции, и повторный запуск отказал бы `branch-exists` о
+    // ветке, которую сам же и создал. Состояние git изменилось — значит запись о нём уже должна быть.
+    writeFileSync(at(root, BRANCH_PATH), `${JSON.stringify({ ...b, baseline: "не гонялся" }, null, 2)}\n`)
+
+    // БАЗЛАЙН — ДО ПЕРВОЙ СТРОЧКИ РАБОТЫ. Ветка равна свежему транку, поэтому зелёный прогон
+    // доказывает релизопригодность транка, а красный называет дефект ЧУЖИМ. Без этого якоря красный
+    // сьют на шаге 16 не улика: его с равным правом спишут на наследство.
+    //
+    // Флаг `baseline` (izi.config.json) выключает его там, где якорь дорог и не нужен: песочница
+    // гоняет полосу десять раз в день, и полный `mvn verify` на каждом срезе стоит больше, чем
+    // доказывает. Ветка при этом уже срезана — отказ базлайна не откатывает git, он ОБЪЯВЛЯЕТ, что
+    // якоря нет (`baseline: "red: <сьют>"` в артефакте), и полоса встаёт с именем чужого дефекта.
+    const suites = [...readFileSync(at(root, GRAPH_PATH), "utf8").matchAll(/<suite\b([^>]*)\/>/g)]
+      .map((m) => attrs(m[1])).filter((a) => a.cmd)
+    let note = "выключен флагом izi.config.json"
+    if (baseline && suites.length) {
+      const red = []
+      for (const one of suites) {
+        try {
+          execFileSync("/bin/sh", ["-c", one.cmd], { cwd: root, stdio: "ignore", timeout: 30 * 60 * 1000 })
+        } catch {
+          red.push(one.id || one.cmd)
+        }
+      }
+      note = red.length ? `red: ${red.join(", ")}` : `зелен: ${suites.map((x) => x.id || x.cmd).join(", ")}`
+      if (red.length) {
+        writeFileSync(at(root, BRANCH_PATH), `${JSON.stringify({ ...b, baseline: note }, null, 2)}\n`)
+        return {
+          ok: false,
+          kind: "red-baseline",
+          name: b.name,
+          baseline: note,
+          why: `базлайн красный на свежем транке: ${red.join(", ")} — это ЧУЖОЙ дефект, ветка ${b.name} уже срезана. Почини транк либо запусти полосу заново: молча чинить чужое здесь нельзя`,
+        }
+      }
+    } else if (baseline) {
+      note = "сьютов в карте нет"
+    }
+
+    writeFileSync(at(root, BRANCH_PATH), `${JSON.stringify({ ...b, baseline: note }, null, 2)}\n`)
+    return { ok: true, at: BRANCH_PATH, name: b.name, base: b.base, baseSha: b.baseSha, remote: b.remote || "", baseline: note }
+  },
+}
+
+// --- tickets: план → наряды исполнителям ----------------------------------------------------------
+// Step 14, и роли на нём нет: что менять решил шаг 6, как менять — фаза ④ шага 9, в каком порядке —
+// фаза ⑦, можно ли вообще — гейт 1. Здесь только раскладка, и она стоит 0 токенов.
+//
+// ТИКЕТОВ ДВА РОДА, И ПОРЯДОК ЖЁСТКИЙ: тест раньше модуля. Оба пишутся по ОДНОЙ вырезке раздела, а
+// тестовый файл не входит в `outputs` модульного наряда — привести модуль к тесту исполнитель может,
+// привести тест к модулю нет. Это и есть соблюдение контракта, снятое с доброй воли.
+const TICKETS_DIR = "tickets"
+
+export const tickets = {
+  description: "Step 14: cut the approved plan into implementer tickets. Two kinds: a TEST ticket per «module × use case» (the checks come from the FRD's own steps, failure branches and their codes) and a MODULE ticket per section of the plan, which waits for its tests and may not write into their files. Every step of the requirement gets exactly one owner — the module through which it is observable, decided by the declared «зовёт» edges, never by guessing what kind of module it is. Writes task/<KEY>/tickets/<NN>-<name>.md and returns the wave layout step 15 dispatches by. Six structural rules; no role, no tokens.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" },
+      why: { type: "string" },
+      blockers: { type: "string" },
+      at: { type: "string" },
+      total: { type: "number" },
+      tests: { type: "number" },
+      modules: { type: "number" },
+      waves: { type: "array", items: { type: "number" } },
+      chars: { type: "number" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_ = {}, context) {
+    const root = runRoot(context)
+    const key = taskKey(root)
+    if (!key) return { ok: false, why: "ключ задачи не отвечен — тикеты класть некуда" }
+
+    const gate = readIfExists(root, GATE_PATH)
+    if (!gate) return { ok: false, why: `${GATE_PATH} не существует — план не утверждён, резать тикеты рано` }
+    if (!existsSync(at(root, FRD_PATH)) || !existsSync(at(root, GRAPH_PATH))) {
+      return { ok: false, why: `${FRD_PATH} или ${GRAPH_PATH} не существует` }
+    }
+
+    const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
+    const map = readFileSync(at(root, GRAPH_PATH), "utf8")
+    const { modules, parts: cut } = partsOf({ frd, ripple: readIfExists(root, RIPPLE_PATH) })
+    const sections = cut.flatMap((one) => sectionsOf(readIfExists(root, `task/${key}/design/${one.slug}.md`)))
+    if (!sections.length) return { ok: false, why: `в task/${key}/design нет ни одного раздела — шаг 9 не отработал` }
+
+    const { order, cycle } = orderOf({ sections, modules, edges: parseMap(map).edges })
+    if (cycle.length) return { ok: false, why: `очередь работ замкнута: ${cycle.join(" → ")} — артефакты разошлись с утверждённым планом` }
+
+    // Куда кладут тесты и как их называют, решает РЕПОЗИТОРИЙ: разведка записала это в карту, и
+    // здесь оно только читается. Юнитовый сьют первым — модульный тикет закрывается им.
+    const suites = [...map.matchAll(elem("suite"))].map((m) => attrs(m[1]))
+    const suite = suites.find((x) => x.kind === "unit") || suites[0] || {}
+
+    const list = ticketsOf({
+      sections, order, frd, key,
+      branch: (() => { try { return JSON.parse(readIfExists(root, BRANCH_PATH) || "{}").name || "" } catch { return "" } })(),
+      match: suite.match || "*",
+      testDir: suite.path || "",
+    })
+    const bad = checkTickets({ tickets: list, sections, frd })
+    if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
+
+    const dir = `task/${key}/${TICKETS_DIR}`
+    mkdirSync(at(root, dir), { recursive: true })
+    let chars = 0
+    for (const t of list) {
+      const text = ticketText(t)
+      chars = Math.max(chars, text.length)
+      writeFileSync(at(root, `${dir}/${t.id}-${t.name}.md`), `${text}\n`)
+    }
+    const waves = [...new Set(list.map((t) => t.wave))].sort((a, b) => a - b)
+    return {
+      ok: true,
+      at: dir,
+      total: list.length,
+      tests: list.filter((t) => t.kind === "test").length,
+      modules: list.filter((t) => t.kind === "module").length,
+      waves: waves.map((w) => list.filter((t) => t.wave === w).length),
+      chars,
+    }
   },
 }
 
@@ -2234,10 +2638,10 @@ export const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.16.0",
+    version: "1.19.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
-    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/parts/part/planbook/gate1/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, parts, part, planbook, gate1, plan, review },
+    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/parts/part/planbook/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, parts, part, planbook, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

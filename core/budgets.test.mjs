@@ -40,3 +40,19 @@ test("a broken config is a refusal, never a silent default", () => {
   assert.match(newBudgets('{"questionRound": 10}').error.detail, /неизвестный ключ/) // a typo in the key name
   assert.match(newBudgets('{"questionRounds": 0}').error.detail, /целое ≥ 1/)    // not a budget
 })
+
+// `baseline` — первый ключ конфига, который не число. Форма расширена, и обе её половины судятся
+// по-разному: бюджет остаётся целым ≥ 1, флаг обязан быть булевым. Сотри различение — и
+// `"baseline": 0` проедет как «выключено», хотя это ноль прогонов, а не false.
+test("baseline — флаг конфига: true по умолчанию, булев в файле, не число", () => {
+  assert.equal(DEFAULT_BUDGETS.baseline, true, "по умолчанию якорь есть: красный сьют шага 16 обязан быть уликой")
+  assert.equal(newBudgets('{"baseline": false}').value.baseline, false)
+  assert.equal(newBudgets('{"baseline": true}').value.baseline, true)
+
+  // Число флагом не считается — и наоборот, флаг не считается бюджетом.
+  assert.match(newBudgets('{"baseline": 0}').error.detail, /это флаг, true либо false/)
+  assert.match(newBudgets('{"loops": true}').error.detail, /бюджет это целое ≥ 1/)
+
+  // Остальные ключи от расширения не пострадали: числовой конфиг читается как раньше.
+  assert.equal(newBudgets('{"loops": 5}').value.baseline, true)
+})

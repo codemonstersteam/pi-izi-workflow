@@ -194,8 +194,17 @@ export function endsOf(frd = {}) {
 // measurable token" rule the operator removed after live run ed1d4094 (core/form.mjs).
 function provenance(at, value, source, known) {
   const out = []
-  if (!FRD_FORM.sources.includes(source)) {
-    out.push(`F5 ${at}: source="${source || ""}" — допустимо ${FRD_FORM.sources.join(" | ")}`)
+  // THE RULE JUDGES THE FILE, NOT THE WORD ORDER. A role that writes `brd.md R4` or `R4 в brd.md` has
+  // named the requirement the quantity came from — better provenance than the bare file, and no
+  // consumer of this attribute exists to break on it. Live run d4ed43a0 burned three intake rounds
+  // refusing exactly that, and the blocker said only which files were legal, so the role had nothing
+  // to repair towards.
+  //
+  // A LEGAL FILE MUST BE A WHOLE WORD, not a substring: containment would pass «взял из головы, похоже
+  // на brd.md» — the prose this rule exists to refuse. Run e132f0a1 shows the field being gamed under
+  // pressure, when the role kept an invented number and moved `source` to the analogue it had read.
+  if (!String(source || "").split(/[\s,;]+/).some((w) => FRD_FORM.sources.includes(w))) {
+    out.push(`F5 ${at}: source="${source || ""}" — допустимо ${FRD_FORM.sources.join(" | ")}; имя файла назови отдельным словом, уточнение внутри файла можно дописать рядом`)
   }
   if (known) {
     const invented = [...numbersIn(value)].filter((n) => !known.has(n))
