@@ -410,8 +410,12 @@ async function brd() {
   while (attempt < LOOPS) {
     const seen = await answers({});
     const ANSWERS = answersBlock(seen, FORM.absentDoc);
+    // Прошлый ответ роли едет в наряде: иначе она переписывает BRD с нуля каждый круг, ориентируясь
+    // на претензии к документу, которого не видит. Тот же приём, что у шагов 6 и 9.
+    const PREVIOUS = await readText({ path: STAGING });
     const order = sized("brd", orderTpl, {
       TASK,
+      PREVIOUS,
       ANSWERS,
       FEEDBACK: feedback,
       STAGING,
@@ -548,8 +552,10 @@ async function scout(cell, orderTpl, BRD) {
   if (!files.ok) return { ok: false, why: `${cell.id}: ${files.why}` };
 
   for (let attempt = 0; attempt < LOOPS; attempt++) {
+    const PREVIOUS = await readText({ path: STAGING });
     const order = sized(`scope/${cell.id}`, orderTpl, {
       CELL: cell.id,
+      PREVIOUS,
       BRD,
       STAGING,
       CHECK,
@@ -1002,7 +1008,9 @@ async function designing(from = 6) {
   if (!book.ok) exit(err("escalate", { subject: book.blockers || book.why, evidence: book.cycle ? `очередь работ: ${book.cycle}` : "полнота плана шага 9" }));
   log(`design/plan: PLAN.md собран — модулей ${book.modules}, разделов ${book.sections}, use case ${book.ucs}`);
 
-  return "PLAN.md";
+  // Путь поставки, а не голое имя: его называет отметка журнала, и по нему лестница узнаёт, что план
+  // снесли и шаг надо переиграть.
+  return book.at || "PLAN.md";
 
   return ".agent/data-flow.md";
 }
@@ -1034,8 +1042,18 @@ async function onePart(one, since = "(none — first attempt)") {
     if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `план партии ${one.slug}: цикл исчерпан за ${LOOPS} попыток` }));
     if (silent > LOOPS) exit(err("escalate", { subject: `роль ${silent} раз вернула track:"ok", не записав ${staging}`, evidence: `план партии ${one.slug}: артефакта нет` }));
 
+    // ПРОШЛЫЙ ОТВЕТ РОЛИ ЕДЕТ В НАРЯДЕ, как у шага 6 и у обоих проходов выше. Без него роль каждый
+    // круг переписывает все разделы партии с нуля, ориентируясь на претензии к документу, которого
+    // не видит: живой прогон дал 5 → 5 → 4 → 6 блокеров за пять кругов и эскалацию. Отсутствующий
+    // файл читается как "" — первая попытка ничего не несёт.
+    // ПРОШЛЫЙ ОТВЕТ ИЩЕТСЯ ТАМ, ГДЕ ОН ЕСТЬ. Зелёная партия ПРОМОУЧЕНА: staging пуст, а текст лежит в
+    // поставке. На кругах полноты (фаза ⑥ возвращает партию) чтение одного staging давало пустоту, и
+    // роль писала все разделы заново — живой прогон качался 4 → 1 → ЗЕЛЁНЫЙ → 4.
+    const key9 = (await checkTask({})).key || "";
+    const PREVIOUS = (await readText({ path: staging }))
+      || (key9 ? await readText({ path: `task/${key9}/design/${one.slug}.md` }) : "");
     const o = sized(`design/part/${one.slug}`, tpl, {
-      CARD, FEEDBACK: feedback, STAGING: staging,
+      CARD, PREVIOUS, FEEDBACK: feedback, STAGING: staging,
       CHECK: 'part({slug, path}) — раздел на каждый модуль партии, чужих нет, use case закрыты, у каждого «проверка» и «зовёт»',
     });
     if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд партии ${one.slug} не помещается в окно модели — роль не запускалась` }));
@@ -1240,7 +1258,8 @@ async function reviewing() {
   let feedback = "(none — first attempt)", attempt = 0, wasRed = [];
 
   while (attempt < LOOPS) {
-    const order = sized("review", orderTpl, { PLAN, FRD, CODES: FORM.codes, OWED: FORM.owed, UNCHECKED: FORM.unchecked, FEEDBACK: feedback, STAGING, CHECK });
+    const PREVIOUS = await readText({ path: STAGING });
+    const order = sized("review", orderTpl, { PLAN, FRD, PREVIOUS, CODES: FORM.codes, OWED: FORM.owed, UNCHECKED: FORM.unchecked, FEEDBACK: feedback, STAGING, CHECK });
     if (order.over) exit(err("blocked", { subject: order.why, evidence: "наряд шага 11 не помещается в окно модели — роль не запускалась" }));
     const env = await agent(order.text, { role: "critic", outputSchema: ENVELOPE });
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
@@ -1327,7 +1346,12 @@ async function bandStart() {
   // (a green pass B assembles the pair in the same breath), so there is nothing left to re-judge —
   // and the gate of the step erases the pair on every entry for exactly that reason. Its EXISTENCE is
   // therefore the whole signal, and a run resumed at step 11 keeps the design its plan was built from.
-  if (!skipped && !(graph && flow)) { log(`resume: шаг 6 закрыт — .agent/frd.xml зелен сейчас (дельт ${frd.deltas})`); return 9; }
+  // ПОСТАВКА ШАГА — PLAN.md, а не только его внутренние артефакты. Лестница, смотревшая на одну пару
+  // `design-graph.xml`+`data-flow.md`, объявляла шаг закрытым и после того, как разделы плана снесли:
+  // живая попытка переиграть шаг 9 дважды ушла мимо него, прямо к гейту.
+  const key9 = (await checkTask({})).key || "";
+  const book = key9 ? await readText({ path: `task/${key9}/PLAN.md` }) : "";
+  if (!skipped && !(graph && flow && book)) { log(`resume: шаг 6 закрыт — .agent/frd.xml зелен сейчас (дельт ${frd.deltas})`); return 9; }
 
   const verdict = await readText({ path: ".agent/review.xml" });
   if (!/verdict="Pass"/.test(verdict)) { log("resume: шаги 6 и 9 закрыты — их артефакты зелены сейчас"); return 11; }
@@ -1361,9 +1385,12 @@ async function band(from0) {
     if (from <= 9) {
       phase("design"); planned = await designing(from);
       // На рельсе `skip` роль шага 9 не звалась и графа с потоком нет — отметка несёт то, что есть.
+      // ПОСТАВКА ШАГА — ЭТО PLAN.md, а не только его внутренние артефакты. Отметка, называвшая один
+      // `.agent/design-graph.xml`, считала шаг закрытым и после того, как разделы плана снесли: живая
+      // попытка переиграть шаг 9 ушла прямо в шаг 14.
       const made = (await readText({ path: ".agent/design" })).trim() === "skip"
         ? [".agent/design"]
-        : [".agent/design-graph.xml", ".agent/data-flow.md"];
+        : [".agent/design-graph.xml", ".agent/data-flow.md", ...(planned && planned !== ".agent/design" ? [planned] : [])];
       await runlogMark({ step: 9, name: "design", status: "done", artifacts: made, note: planned });
     }
 

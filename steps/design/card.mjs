@@ -380,7 +380,7 @@ export function sectionsOf(text = "") {
 // the gate; a script can tell only whether every module of the partition got a decision, whether a
 // foreign one crept in, whether every use case is shown as closed, whether the work can be checked,
 // and whether what the module calls is an ADDRESS rather than prose.
-export function checkPart({ text = "", part = {}, known = [] } = {}) {
+export function checkPart({ text = "", part = {}, known = [], texts = {} } = {}) {
   const B = []
   const mine = [...((part && part.modules) || [])]
   const ucs = [...((part && part.ucs) || [])]
@@ -418,7 +418,66 @@ export function checkPart({ text = "", part = {}, known = [] } = {}) {
   const all = new Set([...known, ...mine])
   for (const x of sections) {
     const ghost = x.calls.filter((c) => !all.has(c))
-    if (ghost.length) B.push(`в разделе ${x.path} «зовёт» ссылается на ${ghost.join(", ")} — такого файла нет ни среди модулей изменения, ни в репозитории`)
+    // БЛОКЕР НАЗЫВАЕТ ВЫХОД. Роль пишет в «зовёт» то, что вызывает — `source.readGlossaries`, — и на
+    // отказ «такого файла нет» чинит его перебором имён файлов. Отличить одно от другого дёшево: в
+    // пути есть слэш, в вызове — точка и ни одного слэша.
+    if (ghost.length) {
+      const calls = ghost.filter((g) => g.includes(".") && !g.includes("/"))
+      B.push(calls.length
+        ? `в разделе ${x.path} «зовёт» несёт вызовы, а не пути: ${calls.join(", ")} — напиши ПУТЬ файла, а что именно вызываешь, скажи словами после тире`
+        : `в разделе ${x.path} «зовёт» ссылается на ${ghost.join(", ")} — такого файла нет ни среди модулей изменения, ни в репозитории`)
+    }
+  }
+
+  // 6 — ШАГ ЗАКРЫВАЕТ ТОТ, КТО МОЖЕТ ЕГО ПРОВЕРИТЬ. Если текст шага называет модуль изменения, шаг
+  // закрывает либо он сам, либо тот, кто его ЗОВЁТ: иначе исполнителю нечем проверить свой же наряд.
+  //
+  // BUG_FIX_CONTEXT: живой прогон eddi. План объявил, что «система инвалидирует кэш GlossaryService»
+  // закрывает монго-хранилище — у того в сигнатурах один CRUD, а в «зовёт» один интерфейс. Правило
+  // владения шага 14 вмешаться не могло: шаг объявил ровно ОДИН раздел, отсеивать было некого. Наряд
+  // дошёл до исполнителя, и слабая модель закрыла шаг требования `assertTrue(true)`.
+  //
+  // Сверяются имена модулей САМОГО плана, целым словом и с учётом регистра — это не разбор языка, а
+  // сличение с тем, что роль написала в заголовках своих же разделов. Текстов нет — правило молчит,
+  // той же дисциплиной, что F5 без источников: судить не по чему.
+  const named = new Map([...mine, ...known].map((p) => [p.split("/").pop().replace(/\.[^.]+$/, ""), p]))
+  for (const x of sections) {
+    for (const c of x.closes) {
+      const t = String(texts[c] || "")
+      if (!t) continue
+      const speaks = [...named].filter(([n, p]) => p !== x.path && mine.includes(p) && new RegExp(`\\b${n}\\b`).test(t))
+      const blind = speaks.filter(([, p]) => !x.calls.includes(p))
+      if (blind.length) {
+        // БЛОКЕР НАЗЫВАЕТ КАНДИДАТА, А НЕ ТОЛЬКО ОШИБКУ. Кто зовёт названный модуль — известно из тех
+        // же разделов, и роль, не получив этого имени, перебирает соседей: живой прогон переносил один
+        // шаг с GlossaryStore на IGlossaryStore, потом на IRestGlossaryStore — три круга наугад.
+        const who = blind.map(([, p]) => {
+          const callers = sections.filter((y) => y.path !== p && y.calls.includes(p)).map((y) => y.path)
+          return `${p}${callers.length ? ` (его зовёт ${callers.join(", ")})` : " — его не зовёт никто"}`
+        })
+        B.push(`шаг ${c.replace("/", " шаг ")} закрывает ${x.path}, а его текст говорит о ${who.join(", ")} — отдай шаг тому, кто зовёт названный модуль, либо допиши «зовёт» здесь`)
+      }
+    }
+  }
+
+  // 7 — МОДУЛЬ ПАРТИИ СВЯЗАН С ИЗМЕНЕНИЕМ: его зовут либо он зовёт. Оторванный не проверит ничто —
+  // ни компилятор потребителя, ни граница. Связь считается в обе стороны намеренно: реализацию
+  // интерфейса никто не зовёт по имени, но она объявляет «зовёт: <интерфейс> — реализует».
+  //
+  // BUG_FIX_CONTEXT: живой прогон eddi. `RestGlossaryStore` не объявил, что реализует
+  // `IRestGlossaryStore`, хотя соседний `GlossaryStore` для своего интерфейса это объявил. Интерфейс
+  // остался без шагов и без связей, и отказал шаг 14 — там, где чинить уже некому.
+  //
+  // Партия из одного модуля связывать не с кем — правило молчит.
+  if (mine.length > 1) {
+    for (const x of sections) {
+      if (!mine.includes(x.path)) continue
+      const uses = x.calls.some((c) => mine.includes(c) && c !== x.path)
+      const used = sections.some((y) => y.path !== x.path && y.calls.includes(x.path))
+      if (!uses && !used) {
+        B.push(`модуль ${x.path} не связан с изменением: он никого не зовёт, и его никто не зовёт — проверить его нечем; допиши «зовёт» ему или тому, кто его реализует`)
+      }
+    }
   }
 
   return B

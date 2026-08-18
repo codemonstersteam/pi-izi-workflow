@@ -228,16 +228,8 @@ test("P6: two suites over one folder must be told apart by file name, or step 5 
 //    This is also why `-Dtest={{class}}` in the spine order is doubled: `{class}` would read as a
 //    placeholder the workflow never passes.
 // 2. standards/role.md: every prohibition in a role names the machine check that catches it.
-const ORDER_KEYS = ["CELL", "FILES", "SUBJECTS", "BRD", "FEEDBACK", "STAGING", "CHECK"]
-const placeholders = (tpl) =>
-  [...tpl.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
-
-test("orders: both templates use exactly the keys the workflow passes", () => {
-  for (const file of ["order.survey.tpl", "order.spine.tpl"]) {
-    const tpl = readFileSync(new URL(file, import.meta.url), "utf8")
-    assert.deepEqual([...new Set(placeholders(tpl))].sort(), [...ORDER_KEYS].sort(), file)
-  }
-})
+// Слоты против ключей полосы судит core/orders.test.mjs — для ВСЕХ нарядов сразу и читая
+// workflows/izi.js. Список, набранный здесь руками, сходился с шаблоном всегда.
 
 // A file-name pattern written anywhere in the spine order is copied into `match`, and `match` is
 // judged by step 5 against the file NAME — extension included.

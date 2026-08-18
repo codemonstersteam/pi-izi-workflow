@@ -87,3 +87,37 @@ test("каждый шаг полосы кончается отметкой в ж
   assert.deepEqual(mute, [], `шаги без отметки — возобновление будет входить в них вечно: ${mute.join(", ")}`)
   assert.ok(marked.has(1), "шаг 1 не отмечается — лестница не сдвинется с первой ступени")
 })
+
+// САМОПРОВЕРКА РОЛИ — ЭТО НЕ УКРАШЕНИЕ, А ЕДИНСТВЕННОЕ МЕСТО, ГДЕ ЛОВИТСЯ НЕНАБЛЮДАЕМЫЙ ШАГ ДО
+// ГАРДРЕЙЛА. Живой прогон: план объявил, что монго-хранилище закрывает шаг про кэш чужого сервиса;
+// исполнителю нечем было это проверить, и слабая модель закрыла шаг требования `assertTrue(true)`.
+// Гардрейл партии ловит это правилом 6, но роль должна увидеть раньше — выписав таблицу «шаг → чем
+// он проверяется» своей же рукой.
+test("наряды, которые пишут решения, требуют выписанной самопроверки", () => {
+  for (const step of ["intake", "design"]) {
+    const files = readdirSync(join(ROOT, "steps", step)).filter((f) => f.endsWith(".tpl"))
+    const withCheck = files.filter((f) => readFileSync(join(ROOT, "steps", step, f), "utf8").includes("$START_SELFCHECK"))
+    assert.ok(withCheck.length, `${step}: ни один наряд не требует самопроверки`)
+  }
+  const part = readFileSync(join(ROOT, "steps/design/order-part.tpl"), "utf8")
+  assert.match(part, /чем он проверяется/, "самопроверка не требует связи шага с сигнатурой")
+  assert.match(part, /«Да» ответом не является|«да» ответом не является/, "ответом сделали слово «да»")
+})
+
+// НАРЯД С КРУГОМ ПОЧИНКИ НЕСЁТ ПРОШЛЫЙ ОТВЕТ РОЛИ. Иначе роль каждый круг пишет заново, ориентируясь
+// на претензии к документу, которого не видит: шаг 6 дал 10 → 4 → 6 блокеров и эскалацию, шаг 9 —
+// 5 → 5 → 4 → 6 и её же. С блоком PREVIOUS оба сошлись за два круга.
+//
+// Признак круга починки — слот FEEDBACK: наряд, которому шлют блокеры, обязан показывать и то, что
+// эти блокеры описывают.
+test("наряд, которому шлют блокеры, несёт и текст, который они описывают", () => {
+  const mute = []
+  for (const dir of readdirSync(join(ROOT, "steps"), { withFileTypes: true }).filter((d) => d.isDirectory())) {
+    for (const f of readdirSync(join(ROOT, "steps", dir.name)).filter((x) => x.endsWith(".tpl"))) {
+      const tpl = readFileSync(join(ROOT, "steps", dir.name, f), "utf8")
+      const slots = slotsOf(tpl)
+      if (slots.has("FEEDBACK") && !slots.has("PREVIOUS")) mute.push(`${dir.name}/${f}`)
+    }
+  }
+  assert.deepEqual(mute, [], `наряды чинят вслепую — роль не видит, что написала: ${mute.join(", ")}`)
+})

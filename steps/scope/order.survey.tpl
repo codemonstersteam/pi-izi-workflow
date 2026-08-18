@@ -72,6 +72,18 @@ $START_CONSTRAINTS
 - a raw `<` inside an attribute value is written `&lt;`
 $END_CONSTRAINTS
 
+$START_PREVIOUS
+$START_DOCUMENT
+path: {STAGING}
+ТВОЙ ПРОШЛЫЙ ОТВЕТ — тот самый файл, который забраковала проверка (пусто = первая попытка).
+Это ПОЧИНКА, а не новый ответ: правь названные ниже места ЭТОГО текста, остальное оставь как есть.
+Написанное заново ломает то, что проверку уже прошло.
+$END_DOCUMENT
+$START_CONTENT
+{PREVIOUS}
+$END_CONTENT
+$END_PREVIOUS
+
 $START_FEEDBACK
 Evidence from the last red check, if this is a redelegation. Empty means the first attempt. Each
 blocker carries its rule number and the path it is about — repair exactly what it names, first.

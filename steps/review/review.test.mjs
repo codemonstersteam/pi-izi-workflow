@@ -478,13 +478,8 @@ test("R4×R5 совместны: Reject с evidence=\"UC2/post\" на PLAN_508+F
 // The two seams the SLICE keeps outside the core, the same pair steps/design/design.test.mjs holds:
 // the order carries exactly the keys the workflow passes (prompt() demands a bidirectional match and
 // throws at LAUNCH otherwise), and the role's frontmatter survives YAML.
-const ORDER_KEYS = ["PLAN", "FRD", "CODES", "OWED", "UNCHECKED", "FEEDBACK", "STAGING", "CHECK"]
-
-test("order.tpl uses exactly the keys the workflow passes", () => {
-  const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
-  const keys = [...tpl.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
-  assert.deepEqual([...new Set(keys)].sort(), [...ORDER_KEYS].sort())
-})
+// Слоты против ключей полосы судит core/orders.test.mjs — для ВСЕХ нарядов сразу и читая
+// workflows/izi.js. Список, набранный здесь руками, сходился с шаблоном всегда.
 
 // A bare colon in a frontmatter value makes YAML read it as a nested mapping and the host rejects the
 // whole run on metadata validation — the price is known: run ffe8cb7b was thrown away for it.

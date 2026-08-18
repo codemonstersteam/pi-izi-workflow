@@ -1724,7 +1724,14 @@ export const part = {
       return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
     }
     const staged = readFileSync(at(root, path), "utf8")
-    const bad = judgePartPlan({ text: staged, part: one, known: knownPaths(map) })
+    // ТЕКСТЫ ШАГОВ — вход правила 6: владелец шага обязан звать модуль, о котором шаг говорит. FRD
+    // здесь уже открыт, и второго разбора не заводится.
+    const stepTexts = {}
+    for (const u of frd.usecases || []) {
+      ;(u.steps || []).forEach((t, k) => { stepTexts[`${u.id}/${k + 1}`] = String(t) })
+      for (const e of u.exts || []) stepTexts[`${u.id}/${e.id}`] = `${e.error || ""} ${e.outcome || ""}`.trim()
+    }
+    const bad = judgePartPlan({ text: staged, part: one, known: knownPaths(map), texts: stepTexts })
     if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
 
     // Promoted OUT of `.agent/`, under the task's own directory (see taskDir).
@@ -2681,7 +2688,7 @@ export const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.21.0",
+    version: "1.22.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
     description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/parts/part/planbook/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
     functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, parts, part, planbook, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },

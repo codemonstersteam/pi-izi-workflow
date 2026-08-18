@@ -276,12 +276,12 @@ test("the role no longer demonstrates what the guardrail forbids", () => {
 // the values workflows/izi.js passes (execution.ts throws "Missing prompt value"/"Unused prompt
 // value" at LAUNCH). 2: G9e — a rule copied into the template instead of substituted is a second
 // text of one requirement, and the guardrail refuses in the words of the REGISTRY, not of the copy.
-const ORDER_KEYS = ["TASK", "ANSWERS", "FEEDBACK", "STAGING", "CHECK", "SUBJECTS_MIN", "SUBJECTS_MAX", "SUBJECT_RULE", "ANALOGUE_RULE"]
-
-test("order.tpl: exactly the keys the workflow passes, and the anchor rule is SUBSTITUTED not copied", () => {
+// Слоты против ключей полосы судит core/orders.test.mjs — для ВСЕХ нарядов сразу и читая
+// workflows/izi.js. Список, набранный здесь руками, сходился с шаблоном всегда: третьей стороны
+// договора — полосы — в такой сверке нет. Здесь остаётся то, чего та проверка не знает: правило
+// приезжает ПОДСТАНОВКОЙ, а не копией (G9e).
+test("order.tpl: правило якорей ПОДСТАВЛЯЕТСЯ, а не копируется", () => {
   const tpl = readFileSync(join(HERE, "order.tpl"), "utf8")
-  const placeholders = [...tpl.matchAll(/{{|}}|{([A-Za-z_$][\w$]*)}/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]))
-  assert.deepEqual([...new Set(placeholders)].sort(), [...ORDER_KEYS].sort())
   assert.ok(!tpl.includes(BRD_FORM.subjectRule), "the rule must arrive by substitution, not as a copy")
 })
 
