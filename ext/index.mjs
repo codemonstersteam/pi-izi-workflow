@@ -2258,6 +2258,27 @@ export const tickets = {
     // последней волны по замыслу.
     const build = attrs(((map.match(/<build\b([^>]*)\/>/) || ["", ""])[1])).compile || ""
 
+    // ОБРАЗЦЫ ВНЕШНЕГО СЬЮТА — файлы, которые репозиторий уже держит под своим же шаблоном. Один из
+    // них едет в граничный тикет, и из него исполнитель берёт фреймворк, базовый класс, доступ к
+    // защищённым эндпоинтам и уборку за собой. Карта их не знает: их клетка не попала в разведку —
+    // а искать по объявленному шаблону дешевле и точнее, чем спрашивать роль.
+    const samples = outer && outer.path && outer.match
+      ? (() => {
+          const rx = new RegExp(`^${String(outer.match).split("*").map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`)
+          const walk = (dir, into = []) => {
+            let all = []
+            try { all = readdirSync(at(root, dir), { withFileTypes: true }) } catch { return into }
+            for (const e of all) {
+              const one = `${dir}/${e.name}`
+              if (e.isDirectory()) walk(one, into)
+              else if (rx.test(e.name)) into.push(one)
+            }
+            return into
+          }
+          return walk(String(outer.path).replace(/\/$/, "")).sort()
+        })()
+      : []
+
     const list = ticketsOf({
       sections, order, frd, key,
       branch: (() => { try { return JSON.parse(readIfExists(root, BRANCH_PATH) || "{}").name || "" } catch { return "" } })(),
@@ -2268,6 +2289,7 @@ export const tickets = {
       known: parseMap(map).nodes,
       outer,
       build,
+      samples,
     })
     const bad = checkTickets({ tickets: list, sections, frd, known: parseMap(map).nodes })
     if (bad.length) return { ok: false, blockers: bad.join("\n  ") }

@@ -8,6 +8,7 @@ import { ownerOf, layersOf, ticketsOf, checkTickets, ticketText } from "./ticket
 
 const FRD = parseFrd(`<frd grammar="1" goal="хранилище словарей">
   <actor name="api" kind="system" via="HTTP /store"/>
+  <field name="key" in="Term" type="string" domain="1–64 символа, lowercase" required="yes" error="CONFLICT" source="brd.md"/>
   <usecase id="UC1" actor="api" goal="создать">
     <post>создан</post>
     <step n="1">POST /store с документом</step>
@@ -51,11 +52,15 @@ const ORDER = ["src/model/Doc.java", "src/mongo/Store.java", "src/rest/RestStore
 // граничную проверку; нет — все шаги достаются владельцам.
 const OUTER = { cmd: "./mvnw verify", one: "-Dit.test={class}", path: "src/test/java", match: "*IT.java" }
 const BUILD = "./mvnw -q -DskipTests package"
+// Существующие тесты внешнего сьюта: их находит io по <suite path>/<suite match>. Из них берётся
+// ОБРАЗЕЦ — единственный факт, который сообщает исполнителю фреймворк, базовый класс, авторизацию и
+// уборку. Без него слабая модель подставляет самый частый фреймворк и файл не компилируется.
+const SAMPLES = ["src/test/java/app/integration/OldStoreCrudIT.java", "src/test/java/app/integration/HealthIT.java"]
 const KNOWN = new Set(["src/model/Doc.java", "src/mongo/Store.java", "src/rest/RestStore.java",
   "src/model/Old.java", "src/mongo/OldStore.java", "src/rest/OldRest.java"])
 const cut = (over = {}) => ticketsOf({
   sections: SECTIONS, order: ORDER, frd: FRD, key: "DOS-1", branch: "feature/DOS-1",
-  match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, ...over,
+  match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES, ...over,
 })
 
 // ГЛАВНОЕ ПРАВИЛО ШАГА. Один шаг требования проходит через несколько модулей, и все они называют его
@@ -104,7 +109,7 @@ test("многострочный перечень доезжает в тикет
     body: s.body.replace("сигнатуры: create(Doc d) : Id · read(String id) : Doc",
       "сигнатуры: create(Doc d) : Id\n           read(String id) : Doc\n           delete(String id) : void"),
   }))
-  const t = ticketsOf({ sections: many, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD })
+  const t = ticketsOf({ sections: many, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES })
   const one = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
   for (const sig of ["create(Doc d) : Id", "read(String id) : Doc", "delete(String id) : void"]) {
     assert.match(one.signatures, new RegExp(sig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `сигнатура потеряна: ${sig}`)
@@ -115,7 +120,7 @@ test("многострочный перечень доезжает в тикет
   const sample = SECTIONS.map((s) => (s.path !== "src/rest/RestStore.java" ? s : {
     ...s, body: s.body.replace("по образцу: src/rest/OldRest.java — стиль", "по образцу: src/rest/OldRest.java — стиль\n            src/mongo/OldStore.java — тоже"),
   }))
-  const t2 = ticketsOf({ sections: sample, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD })
+  const t2 = ticketsOf({ sections: sample, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES })
   assert.ok(t2.find((x) => x.kind === "module" && x.module === "src/rest/RestStore.java").inputs.includes("src/mongo/OldStore.java"))
 })
 
@@ -127,7 +132,7 @@ test("во входах только пути, известные карте и�
     ...s, body: s.body.replace("по образцу: src/mongo/OldStore.java — стиль",
       "по образцу: src/mongo/OldStore.java — стиль, ресурс eddi://ai.labs.glossary, пакет com/example/Thing.class"),
   }))
-  const t = ticketsOf({ sections: prose, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD })
+  const t = ticketsOf({ sections: prose, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES })
   const mod = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
   assert.ok(mod.inputs.includes("src/mongo/OldStore.java"), "настоящий образец потерялся")
   assert.deepEqual(mod.inputs.filter((p) => !KNOWN.has(p) && !p.startsWith("src/test/")), [],
@@ -214,7 +219,7 @@ test("модуль без своих шагов закрывается одно�
 
   // Doc владеет UC1/2 и UC2/2 — у него ЕСТЬ шаги. Возьмём модуль без шагов отдельным раскладом.
   const bare = SECTIONS.map((s) => (s.path === "src/model/Doc.java" ? { ...s, closes: [], body: s.body.replace("закрывает: UC1 шаг 2 · UC2 шаг 2", "закрывает: нет") } : s))
-  const t2 = ticketsOf({ sections: bare, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD })
+  const t2 = ticketsOf({ sections: bare, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES })
   const bareDoc = t2.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
   assert.equal(bareDoc.verify, BUILD, "модуль без шагов закрывается не одной сборкой")
   assert.deepEqual(bareDoc.outputs, ["src/model/Doc.java"], "у модуля без шагов появился тестовый файл")
@@ -244,7 +249,7 @@ test("гардрейл судит новую нарезку и называет 
   // интерфейса никто не зовёт по имени, но она зовёт интерфейс — и её проверяет компилятор и граница.
   // Оторванный модуль: шагов нет, никто не зовёт ЕГО и он не зовёт никого.
   const orphan = [...SECTIONS.map((s) => (s.path === "src/model/Doc.java" ? { ...s, closes: [], calls: [] } : { ...s, calls: s.calls.filter((c) => c !== "src/model/Doc.java") }))]
-  const t3 = ticketsOf({ sections: orphan, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD })
+  const t3 = ticketsOf({ sections: orphan, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES })
   assert.match(checkTickets({ tickets: t3, sections: orphan, frd: FRD, known: KNOWN, outer: OUTER }).join("\n"), /не связан с изменением/)
 })
 
@@ -259,4 +264,39 @@ test("без команды сборки модуль без шагов закр
   const doc = t.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
   assert.equal(doc.verify, "./mvnw test", `ворота несут чужое: ${doc.verify}`)
   assert.deepEqual(checkTickets({ tickets: t, sections: bare, frd: FRD, known: KNOWN }), [])
+})
+
+// Эмуляция на слабой модели: ей выдали граничный тикет и запретили читать репозиторий — она написала
+// тест на Spring Boot для проекта на Quarkus, и файл не собрался бы. Не выдумка от лени: в тикете
+// стояло только «проект: Java». У модульного тикета есть строка «по образцу», у граничного не было
+// ничего — и это единственный факт, который чинит разом фреймворк, базовый класс, авторизацию и
+// уборку за собой: исполнитель читает образец и берёт оттуда всё.
+test("граница несёт ОБРАЗЕЦ существующего теста и кладёт файл рядом с ним", () => {
+  const one = cut().find((x) => x.kind === "boundary" && x.uc === "UC1")
+  assert.ok(one.inputs.some((p) => SAMPLES.includes(p)), `образца нет во входах: ${one.inputs.join(", ")}`)
+  assert.match(ticketText(one), /[Пп]о образцу/, "тело не называет образец — исполнителю неоткуда взять фреймворк")
+
+  // Файл ложится ТУДА, ГДЕ ЖИВУТ такие тесты, а не в пакет модуля: иначе пакет и каталог разойдутся.
+  assert.match(one.outputs[0], /^src\/test\/java\/app\/integration\//, `граница уехала не в свой каталог: ${one.outputs[0]}`)
+
+  // Ближайший образец, а не первый попавшийся: у входа образец OldRest — берётся OldStoreCrudIT.
+  assert.ok(one.inputs.includes("src/test/java/app/integration/OldStoreCrudIT.java"))
+})
+
+// Ветка отказа даёт КОД, но не даёт правила, которое она нарушает: правило живёт в <field domain> и
+// уходило владельцу шага. Модель угадывала, чем вызвать 400.
+test("граница несёт правила полей — чем вызвать отказ, а не только его код", () => {
+  const text = ticketText(cut().find((x) => x.kind === "boundary" && x.uc === "UC1"))
+  assert.match(text, /key/)
+  assert.match(text, /1–64 символа, lowercase/, "правило, которое нарушает ветка отказа, не приехало")
+})
+
+// Сьют объявлен, а ни одного его файла нет — писать границу не по чему. Это отказ шага, а не повод
+// выдумать: пустой `samples` при живом `outer` означает, что карта и репозиторий разошлись.
+test("сьют без единого своего файла — граница не режется вовсе", () => {
+  const t = cut({ samples: [] })
+  assert.equal(t.some((x) => x.kind === "boundary"), false)
+  // И тогда шаги входа достаются владельцам: требование не остаётся без проверки.
+  const steps = t.flatMap((x) => (x.steps || []).map((s) => s.step))
+  assert.ok(steps.includes("UC1/1"), "шаг внешнего входа потерян вместе с границей")
 })

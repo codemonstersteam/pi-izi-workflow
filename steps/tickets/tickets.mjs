@@ -232,7 +232,7 @@ const coded = (frd, code) => Boolean((((frd || {}).failures || []).find((f) => f
 //
 //   boundary  один на use case, чей актёр входит через путь · волна 0 · обязан быть КРАСНЫМ
 //   module    один на раздел плана · волна = слой графа «зовёт» · ворота: сборка + ТОЛЬКО свои тесты
-export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branch = "", match = "*", testDir = "", known = new Set(), outer = null, build = "" } = {}) {
+export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branch = "", match = "*", testDir = "", known = new Set(), outer = null, build = "", samples = [] } = {}) {
   const byPath = new Map(sections.map((s) => [s.path, s]))
   const owner = ownerOf({ sections, order })
   const layers = layersOf({ sections, order })
@@ -244,7 +244,32 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
   const outerSteps = new Set()
   const list = []
   const ucs = (frd.usecases || [])
-  if (outer && outer.cmd) {
+  // ОБРАЗЕЦ — ЕДИНСТВЕННОЕ, ЧТО СООБЩАЕТ ГРАНИЦЕ, В КАКОМ ПРОЕКТЕ ОНА ЖИВЁТ. Эмуляция на слабой
+  // модели: выдали граничный тикет без образца — она написала тест на Spring Boot для проекта на
+  // Quarkus, и файл не собрался бы. Из одного существующего теста того же сьюта исполнитель берёт
+  // разом фреймворк, базовый класс, авторизацию и уборку за собой — ничего этого полоса не знает и
+  // знать не должна.
+  //
+  // Сьют объявлен, а файлов его нет — граница не режется вовсе: выдумывать проект не по чему, а шаги
+  // внешнего входа тогда достаются владельцам, и требование без проверки не остаётся.
+  const near = (want) => {
+    const list = (samples || []).filter(Boolean)
+    if (!list.length) return ""
+    const stem = String(want || "").split("/").pop().replace(/\.[^.]+$/, "").toLowerCase()
+    const score = (p) => {
+      const n = p.split("/").pop().replace(/\.[^.]+$/, "").toLowerCase()
+      let k = 0
+      while (k < n.length && k < stem.length && n[k] === stem[k]) k++
+      return k
+    }
+    return [...list].sort((a, b) => score(b) - score(a) || a.localeCompare(b))[0]
+  }
+  // Словарь величин изменения: ветка отказа даёт КОД, а поле — правило, которое она нарушает. Без
+  // него исполнителю нечем вызвать отказ, и он его выдумывает.
+  const fields = (frd.fields || []).filter((f) => f && f.name && f.domain)
+    .map((f) => `${f.name}${f.in ? ` (${f.in})` : ""}: ${f.domain}${f.required ? ` · обязательно: ${f.required}` : ""}`)
+
+  if (outer && outer.cmd && (samples || []).filter(Boolean).length) {
     for (const u of ucs) {
       const via = viaOf(frd, u.actor)
       if (!via.includes("/")) continue                      // канал не путь — снаружи не позвать
@@ -253,6 +278,9 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
       if (!mine.length) continue
       for (const x of mine) outerSteps.add(x)
       const entry = owner.get(`${u.id}/1`) || ""
+      // Ближайший образец: по корню имени того, с чего списан сам вход. Не совпало — любой; даже он
+      // даёт правильный фреймворк и базовый класс.
+      const sample = near(paths(block((byPath.get(entry) || {}).body, "по образцу"))[0] || entry)
       // ИМЯ ГРАНИЧНОГО КЛАССА — ИЗ КЛЮЧА ЗАДАЧИ, А НЕ ИЗ МОДУЛЯ. Имя вида RestGlossaryStoreUC1IT
       // читается слабой моделью как приглашение импортировать этот класс — а его ещё нет, и весь
       // смысл границы в том, что она о нём не знает. Ключ нейтрален и не меняется от волны к волне.
@@ -266,8 +294,12 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
         goal: String(u.goal || ""),
         post: String(u.post || ""),
         steps: mine.map((x) => ({ step: x, text: stepText(frd, x.split("/")[0], x.split("/")[1]) })),
-        outputs: [testPath(entry, `${cls}.java`, outer.path || testDir)],
-        inputs: [],
+        // Файл ложится ТУДА, ГДЕ ЖИВУТ такие тесты — в каталог образца. Пакет и каталог сходятся по
+        // построению, а не по догадке исполнителя.
+        outputs: [`${sample.split("/").slice(0, -1).join("/")}/${cls}.java`],
+        inputs: [sample],
+        sample,
+        fields,
         verify: String(outer.one || "").includes("{class}")
           ? `${outer.cmd} ${String(outer.one).replace("{class}", cls)}`
           : String(outer.cmd),
@@ -414,8 +446,10 @@ export function checkTickets({ tickets = [], sections = [], frd = {}, known = ne
 
   // 7 — каждый вход знает карта или план. Без карты правило молчит — той же дисциплиной, что F5 без
   // источников: судить не по чему.
+  // Образец граничного тикета — настоящий файл репозитория, найденный по шаблону сьюта; карта его не
+  // знает только потому, что его клетка не попала в разведку.
   const stray = known.size ? [...new Set(tickets.flatMap((t) => (t.inputs || [])
-    .filter((p) => !known.has(p) && !ours.has(p) && !tickets.some((x) => (x.outputs || []).includes(p)))))] : []
+    .filter((p) => p !== t.sample && !known.has(p) && !ours.has(p) && !tickets.some((x) => (x.outputs || []).includes(p)))))] : []
   if (stray.length) B.push(`во входах пути, которых не знает ни карта, ни план: ${stray.join(", ")} — исполнителю нечего по ним открыть`)
 
   // 8 — модуль без шагов обязан быть СВЯЗАН с изменением: его зовут либо он зовёт. Оторванный модуль
@@ -478,6 +512,14 @@ export function ticketText(t = {}) {
       String(t.via || ""), "",
       "Ни одного класса и ни одного пути из этой доработки в тексте теста: он обязан компилироваться",
       "СЕЙЧАС, до того как написана хоть одна строка кода.", "",
+      t.sample ? "## По образцу — как такие тесты написаны В ЭТОМ репозитории" : "", t.sample ? "" : "",
+      t.sample || "",
+      t.sample ? "" : "",
+      t.sample ? "Открой его и возьми оттуда всё, чего нет здесь: фреймворк и его аннотации, базовый" : "",
+      t.sample ? "класс, как получают доступ к защищённым эндпоинтам, как убирают за собой. Ничего из" : "",
+      t.sample ? "этого не выдумывай — в проекте это уже решено." : "", t.sample ? "" : "",
+      (t.fields || []).length ? "## Величины — чем вызвать отказ" : "", (t.fields || []).length ? "" : "",
+      (t.fields || []).join("\n"), (t.fields || []).length ? "" : "",
       "## Правило", "",
       "Тест обязан быть КРАСНЫМ и по деловой причине: канала ещё нет, ответ не тот. Ошибка сборки",
       "красным не считается — значит ты сослался на то, чего нет. Зелёный тест здесь значит, что он",
