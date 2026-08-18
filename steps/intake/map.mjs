@@ -177,6 +177,19 @@ export const MAP_EST_SLACK = 1.05
 //               string that reads as an answer (standards/code.md §2).
 //   cycles    — every module named by a `<cycle modules="…">`. Step 10 topologically sorts, and a
 //               cycle is the one thing a topological sort cannot survive.
+// FIVE MORE FOR STEP 14 (steps/tickets/facts.mjs), and again no second reader of this grammar:
+//   pkgs        — `<module pkg>`: the namespace a directory carries. A file that has to declare its
+//                 package cannot be written without it, and a NEW file's package is derived from
+//                 these, never guessed.
+//   decls       — `<decl kind name sig>` per node: the signature of a type that ALREADY EXISTS here.
+//                 A ticket names such types in its own signatures, and a weak model given a name with
+//                 no signature invents the constructor (live count).
+//   nodeSystems — the `<io system>` a node touches: `mongodb`, `nats`. It is the sample's stack, and
+//                 the executor otherwise learns which store it writes to from the class name.
+//   langs       — `<lang id files decls>` without the `(unknown)` bucket, biggest first. This is the
+//                 PRIMING of every ticket; without it a weak model wrote Spring Boot in a Quarkus
+//                 repository, twice.
+//   build       — `<build cmd compile>`: `compile` closes a module with no steps of its own.
 export function parseMap(xml) {
   const s = String(xml || "")
   // The map may declare a shared path head once and write `~` in its place everywhere
@@ -189,6 +202,9 @@ export function parseMap(xml) {
   const tests = new Set()
   const entries = new Set()
   const nodeTests = new Map()
+  const pkgs = new Map()
+  const decls = new Map()
+  const nodeSystems = new Map()
   for (const m of s.matchAll(elem("module"))) {
     const a = attrs(m[1])
     if (!a.path) continue
@@ -196,6 +212,14 @@ export function parseMap(xml) {
     nodes.add(path)
     if (a.kind === "test") tests.add(path)
     if (/<api\b/.test(m[2] || "")) entries.add(path)
+    if (a.pkg) pkgs.set(path, String(a.pkg))
+    const said = [...String(m[2] || "").matchAll(tag("decl"))]
+      .map((d) => attrs(d[1]))
+      .filter((d) => d.name)
+      .map((d) => Object.freeze({ kind: d.kind || "", name: d.name, sig: d.sig || "" }))
+    if (said.length) decls.set(path, Object.freeze(said))
+    const sys = [...new Set([...String(m[2] || "").matchAll(tag("io"))].map((io) => attrs(io[1]).system).filter(Boolean))]
+    if (sys.length) nodeSystems.set(path, Object.freeze(sys))
     const own = [...String(m[2] || "").matchAll(tag("test"))]
       .map((t) => attrs(t[1]))
       .filter((t) => t.path)
@@ -239,7 +263,19 @@ export function parseMap(xml) {
       .filter((a) => a.from && a.to)
       .flatMap((a) => String(a.to).split(/\s+/).filter(Boolean).map((t) => Object.freeze({ from: full(a.from), to: full(t) }))),
   ]
-  return { nodes, tests, entries, edges, count: nodes.size, nodeTests, suites, spine, cycles }
+  // THE STACK'S OWN FACTS — read here because they are written here, and nowhere twice. `langs` are
+  // `<lang id files …>` with the unknown bucket dropped (a bucket is not a language); `build` is
+  // `<build cmd compile/>`, whose `compile` is the gate of a module with no steps left.
+  const langs = [...s.matchAll(tag("lang"))]
+    .map((m) => attrs(m[1]))
+    .filter((a) => a.id && !a.id.startsWith("("))
+    .map((a) => Object.freeze({ id: a.id, files: Number(a.files || 0), decls: a.decls || "" }))
+    .sort((a, b) => b.files - a.files)
+  const b = (s.match(tag("build", "/?>")) || [""])[0]
+  const ba = b ? attrs(b.replace(/^<build\b/, "").replace(/\/?>$/, "")) : {}
+  const build = Object.freeze({ cmd: ba.cmd || "", compile: ba.compile || "" })
+
+  return { nodes, tests, entries, edges, count: nodes.size, nodeTests, suites, spine, cycles, pkgs, decls, nodeSystems, langs, build }
 }
 
 // FUNCTION_CONTRACT: mapMeasure — the price of handing this map to a role

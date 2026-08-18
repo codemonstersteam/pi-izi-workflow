@@ -5,25 +5,27 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { parseFrd } from "../intake/frd.mjs"
 import { ownerOf, layersOf, ticketsOf, checkTickets, ticketText } from "./tickets.mjs"
+import { parseMap } from "../intake/map.mjs"
+import { factsOf } from "./facts.mjs"
 
-const FRD = parseFrd(`<frd grammar="1" goal="хранилище словарей">
+const FRD = parseFrd(`<frd grammar="1" goal="a document store">
   <actor name="api" kind="system" via="HTTP /store"/>
-  <field name="key" in="Term" type="string" domain="1–64 символа, lowercase" required="yes" error="CONFLICT" source="brd.md"/>
-  <usecase id="UC1" actor="api" goal="создать">
-    <post>создан</post>
-    <step n="1">POST /store с документом</step>
-    <step n="2">система пишет запись</step>
-    <ext id="2a" error="CONFLICT" outcome="дубль отклонён"/>
+  <field name="key" in="Term" type="string" domain="1-64 chars, lowercase" required="yes" error="CONFLICT" source="brd.md"/>
+  <usecase id="UC1" actor="api" goal="create a document">
+    <post>the document is stored</post>
+    <step n="1">the client sends POST /store with the document</step>
+    <step n="2">the system writes the record</step>
+    <ext id="2a" error="CONFLICT" outcome="the duplicate is rejected"/>
   </usecase>
-  <usecase id="UC2" actor="api" goal="прочитать">
-    <post>прочитан</post>
-    <step n="1">GET /store/{id}</step>
-    <step n="2">система читает запись</step>
+  <usecase id="UC2" actor="api" goal="read a document">
+    <post>the document is returned</post>
+    <step n="1">the client sends GET /store/{id}</step>
+    <step n="2">the system reads the record</step>
   </usecase>
-  <failure code="CONFLICT" status="409" client="дубль" operator="—" from="UC1/2a"/>
+  <failure code="CONFLICT" status="409" client="duplicate" operator="—" from="UC1/2a"/>
   <delta op="POST /store" form="Added" node="src/rest/RestStore.java" new="yes"/>
-  <scenario id="S1" uc="UC1" before="нет" after="есть" nodes="src/rest/RestStore.java src/mongo/Store.java src/model/Doc.java"/>
-  <scenario id="S2" uc="UC2" before="нет" after="есть" nodes="src/rest/RestStore.java src/mongo/Store.java src/model/Doc.java"/>
+  <scenario id="S1" uc="UC1" before="absent" after="present" nodes="src/rest/RestStore.java src/mongo/Store.java src/model/Doc.java"/>
+  <scenario id="S2" uc="UC2" before="absent" after="present" nodes="src/rest/RestStore.java src/mongo/Store.java src/model/Doc.java"/>
 </frd>`)
 
 // Разделы, как их пишет роль: точка входа зовёт стор, стор зовёт запись. Шаг UC1/1 закрывает только
@@ -32,17 +34,17 @@ const SECTIONS = [
   {
     path: "src/model/Doc.java", calls: [], checks: true,
     closes: ["UC1/2", "UC2/2"],
-    body: "что это: запись\nсигнатуры: getName() : String\nзовёт: нет\nпо образцу: src/model/Old.java — стиль\nзакрывает: UC1 шаг 2 · UC2 шаг 2\nпроверка: ./mvnw test -Dtest=DocTest · DocTest\n",
+    body: "what: the record\nsignatures: getName() : String\ndeclares: public class Doc\ncalls: none\nsample: src/model/Old.java — same style\ncloses: UC1 step 2 · UC2 step 2\nverify: ./mvnw test -Dtest=DocTest · DocTest\n",
   },
   {
     path: "src/mongo/Store.java", calls: ["src/model/Doc.java"], checks: true,
     closes: ["UC1/2", "UC1/2a", "UC2/2"],
-    body: "что это: монго-хранилище\nсигнатуры: create(Doc d) : Id · read(String id) : Doc\nзовёт: src/model/Doc.java — запись\nпо образцу: src/mongo/OldStore.java — стиль\nзакрывает: UC1 шаг 2 · UC1 шаг 2a · UC2 шаг 2\nпроверка: ./mvnw test -Dtest=StoreTest · StoreTest\n",
+    body: "what: the mongo store\nsignatures: create(Doc d) : Id · read(String id) : Doc\ndeclares: public class Store extends BaseStore\ncalls: src/model/Doc.java — the record\nsample: src/mongo/OldStore.java — same style\ncloses: UC1 step 2 · UC1 step 2a · UC2 step 2\nverify: ./mvnw test -Dtest=StoreTest · StoreTest\n",
   },
   {
     path: "src/rest/RestStore.java", calls: ["src/mongo/Store.java", "src/model/Doc.java"], checks: true,
     closes: ["UC1/1", "UC2/1"],
-    body: "что это: точка входа\nсигнатуры: post(Doc d) : Response · get(String id) : Response\nзовёт: src/mongo/Store.java — хранит · src/model/Doc.java — модель\nпо образцу: src/rest/OldRest.java — стиль\nзакрывает: UC1 шаг 1 · UC2 шаг 1\nпроверка: ./mvnw test -Dtest=RestStoreTest · RestStoreTest\n",
+    body: "what: the entry point\nsignatures: post(Doc d) : Response · get(String id) : Response\ndeclares: public class RestStore implements IRestStore\ncalls: src/mongo/Store.java — stores · src/model/Doc.java — the model\nsample: src/rest/OldRest.java — same style\ncloses: UC1 step 1 · UC2 step 1\nverify: ./mvnw test -Dtest=RestStoreTest · RestStoreTest\n",
   },
 ]
 const ORDER = ["src/model/Doc.java", "src/mongo/Store.java", "src/rest/RestStore.java"]
@@ -57,10 +59,34 @@ const BUILD = "./mvnw -q -DskipTests package"
 // уборку. Без него слабая модель подставляет самый частый фреймворк и файл не компилируется.
 const SAMPLES = ["src/test/java/app/integration/OldStoreCrudIT.java", "src/test/java/app/integration/HealthIT.java"]
 const KNOWN = new Set(["src/model/Doc.java", "src/mongo/Store.java", "src/rest/RestStore.java",
-  "src/model/Old.java", "src/mongo/OldStore.java", "src/rest/OldRest.java"])
+  "src/model/Old.java", "src/mongo/OldStore.java", "src/rest/OldRest.java",
+  // Тест образца лежит ЗЕРКАЛЬНО образцу модуля — по нему исполнитель берёт фреймворк и базовый класс.
+  "src/test/java/mongo/OldStoreTest.java"])
+
+// Карта того же репозитория: из неё растут факты шага 14 — стек, пакет и сигнатуры типов, которые
+// здесь УЖЕ ЕСТЬ (steps/tickets/facts.mjs). `BaseStore` назван в объявлении Store и не принадлежит
+// изменению: именно такой тип исполнитель выдумывал, потому что взять его сигнатуру было негде.
+const FACTS = factsOf(parseMap(`<appgraph grammar="4">
+  <suite id="unit" kind="unit" cmd="./mvnw test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
+  <build cmd="./mvnw verify" compile="./mvnw -q -DskipTests package"/>
+  <toggles mechanism="Quarkus MicroProfile Config" config="app.on"/>
+  <lang id="java" files="500" edges="yes" decls="class,method"/>
+  <module path="src/mongo/OldStore.java" pkg="mongo">
+    <io kind="db" dir="out" system="mongodb" target="documents"/>
+  </module>
+  <module path="src/db/BaseStore.java" pkg="db">
+    <decl kind="class" name="BaseStore" sig="public abstract class BaseStore"/>
+    <decl kind="method" name="save(Object o)" sig="protected Id save(Object o)"/>
+  </module>
+</appgraph>`))
 const cut = (over = {}) => ticketsOf({
   sections: SECTIONS, order: ORDER, frd: FRD, key: "DOS-1", branch: "feature/DOS-1",
-  match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES, ...over,
+  match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES,
+  facts: FACTS, ...over,
+})
+const judge = (over = {}) => checkTickets({
+  tickets: cut(), sections: SECTIONS, frd: FRD, known: KNOWN,
+  stack: FACTS.stack, match: "*Test.java", testDir: "src/test/java", ...over,
 })
 
 // ГЛАВНОЕ ПРАВИЛО ШАГА. Один шаг требования проходит через несколько модулей, и все они называют его
@@ -100,14 +126,14 @@ test("тотальность: без входов — пусто, и ни одн
 })
 
 // Д1. Роль переносит длинные перечни на следующие строки — это НОРМА формата раздела, и живой план
-// eddi так и написан: у `IRestGlossaryStore` пять сигнатур, первая в строке `сигнатуры:`, остальные
+// eddi так и написан: у `IRestGlossaryStore` пять сигнатур, первая в строке `signatures:`, остальные
 // продолжениями. Читая одну физическую строку, тикет уносил первую и молчал про остальные: тесту на
 // СОЗДАНИЕ глоссария предъявляли сигнатуру ЧТЕНИЯ дескрипторов. Восемь разделов, семнадцать тикетов.
 test("многострочный перечень доезжает в тикет целиком", () => {
   const many = SECTIONS.map((s) => (s.path !== "src/mongo/Store.java" ? s : {
     ...s,
-    body: s.body.replace("сигнатуры: create(Doc d) : Id · read(String id) : Doc",
-      "сигнатуры: create(Doc d) : Id\n           read(String id) : Doc\n           delete(String id) : void"),
+    body: s.body.replace("signatures: create(Doc d) : Id · read(String id) : Doc",
+      "signatures: create(Doc d) : Id\n           read(String id) : Doc\n           delete(String id) : void"),
   }))
   const t = ticketsOf({ sections: many, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES })
   const one = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
@@ -116,9 +142,9 @@ test("многострочный перечень доезжает в тикет
   }
   assert.match(ticketText(one), /delete\(String id\) : void/, "в теле тикета контракт всё ещё обрезан")
 
-  // Та же обрезка била по образцу: со второй строки пути не доезжали.
+  // Та же обрезка била sample: со второй строки пути не доезжали.
   const sample = SECTIONS.map((s) => (s.path !== "src/rest/RestStore.java" ? s : {
-    ...s, body: s.body.replace("по образцу: src/rest/OldRest.java — стиль", "по образцу: src/rest/OldRest.java — стиль\n            src/mongo/OldStore.java — тоже"),
+    ...s, body: s.body.replace("sample: src/rest/OldRest.java — same style", "sample: src/rest/OldRest.java — same style\n            src/mongo/OldStore.java — it too"),
   }))
   const t2 = ticketsOf({ sections: sample, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES })
   assert.ok(t2.find((x) => x.kind === "module" && x.module === "src/rest/RestStore.java").inputs.includes("src/mongo/OldStore.java"))
@@ -129,8 +155,8 @@ test("многострочный перечень доезжает в тикет
 // исполнителю велели прочитать то, чего нет. Вход обязан быть путём, который знает карта или план.
 test("во входах только пути, известные карте или плану", () => {
   const prose = SECTIONS.map((s) => (s.path !== "src/mongo/Store.java" ? s : {
-    ...s, body: s.body.replace("по образцу: src/mongo/OldStore.java — стиль",
-      "по образцу: src/mongo/OldStore.java — стиль, ресурс eddi://ai.labs.glossary, пакет com/example/Thing.class"),
+    ...s, body: s.body.replace("sample: src/mongo/OldStore.java — same style",
+      "sample: src/mongo/OldStore.java — same style, resource eddi://ai.labs.glossary, package com/example/Thing.class"),
   }))
   const t = ticketsOf({ sections: prose, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES })
   const mod = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
@@ -177,7 +203,7 @@ test("граничный тикет — на use case, чей вход несё�
   for (const s of SECTIONS) assert.doesNotMatch(text, new RegExp(s.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `граница ссылается на новый класс: ${s.path}`)
   assert.match(text, /HTTP \/store/, "граница обязана звать систему через её канал")
   assert.doesNotMatch(one.outputs[0], /RestStore/, "имя граничного класса собрано из модуля, которого ещё нет")
-  assert.match(text, /обязан быть КРАСНЫМ/)
+  assert.match(text, /MUST be RED/)
 })
 
 test("шаги делятся без догадок: вход и ветки с кодом — границе, остальное — владельцу", () => {
@@ -218,7 +244,7 @@ test("модуль без своих шагов закрывается одно�
   const store = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
 
   // Doc владеет UC1/2 и UC2/2 — у него ЕСТЬ шаги. Возьмём модуль без шагов отдельным раскладом.
-  const bare = SECTIONS.map((s) => (s.path === "src/model/Doc.java" ? { ...s, closes: [], body: s.body.replace("закрывает: UC1 шаг 2 · UC2 шаг 2", "закрывает: нет") } : s))
+  const bare = SECTIONS.map((s) => (s.path === "src/model/Doc.java" ? { ...s, closes: [], body: s.body.replace("closes: UC1 step 2 · UC2 step 2", "closes: none") } : s))
   const t2 = ticketsOf({ sections: bare, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES })
   const bareDoc = t2.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
   assert.equal(bareDoc.verify, BUILD, "модуль без шагов закрывается не одной сборкой")
@@ -258,7 +284,7 @@ test("гардрейл судит новую нарезку и называет 
 // чужой класс, который позеленеет волнами позже. Живой прогон уперся ровно в это.
 test("без команды сборки модуль без шагов закрывается сьютом без флага, а не чужим тестом", () => {
   const bare = SECTIONS.map((s) => (s.path === "src/model/Doc.java"
-    ? { ...s, closes: [], body: s.body.replace("закрывает: UC1 шаг 2 · UC2 шаг 2", "закрывает: нет").replace("-Dtest=DocTest · DocTest", "-Dtest=StoreTest · StoreTest") }
+    ? { ...s, closes: [], body: s.body.replace("closes: UC1 step 2 · UC2 step 2", "closes: none").replace("-Dtest=DocTest · DocTest", "-Dtest=StoreTest · StoreTest") }
     : s))
   const t = ticketsOf({ sections: bare, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER })
   const doc = t.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
@@ -274,7 +300,7 @@ test("без команды сборки модуль без шагов закр
 test("граница несёт ОБРАЗЕЦ существующего теста и кладёт файл рядом с ним", () => {
   const one = cut().find((x) => x.kind === "boundary" && x.uc === "UC1")
   assert.ok(one.inputs.some((p) => SAMPLES.includes(p)), `образца нет во входах: ${one.inputs.join(", ")}`)
-  assert.match(ticketText(one), /[Пп]о образцу/, "тело не называет образец — исполнителю неоткуда взять фреймворк")
+  assert.match(ticketText(one), /Follow the sample/, "тело не называет образец — исполнителю неоткуда взять фреймворк")
 
   // Файл ложится ТУДА, ГДЕ ЖИВУТ такие тесты, а не в пакет модуля: иначе пакет и каталог разойдутся.
   assert.match(one.outputs[0], /^src\/test\/java\/app\/integration\//, `граница уехала не в свой каталог: ${one.outputs[0]}`)
@@ -288,7 +314,7 @@ test("граница несёт ОБРАЗЕЦ существующего тес
 test("граница несёт правила полей — чем вызвать отказ, а не только его код", () => {
   const text = ticketText(cut().find((x) => x.kind === "boundary" && x.uc === "UC1"))
   assert.match(text, /key/)
-  assert.match(text, /1–64 символа, lowercase/, "правило, которое нарушает ветка отказа, не приехало")
+  assert.match(text, /1-64 chars, lowercase/, "правило, которое нарушает ветка отказа, не приехало")
 })
 
 // Сьют объявлен, а ни одного его файла нет — писать границу не по чему. Это отказ шага, а не повод
@@ -312,16 +338,110 @@ test("модульный тикет называет чужие файлы по�
   const store = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
   const text = ticketText(store)
 
-  assert.match(text, /## Запрещено/)
+  assert.match(text, /## Do not touch/)
   // Doc назван в «зовёт» и в сигнатурах — его файл обязан быть в запрете, вместе с номером наряда.
   const doc = t.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
-  assert.match(text, new RegExp(`src/model/Doc\\.java\\s+— наряд ${doc.id}`), "чужой файл не назван с номером наряда")
+  assert.match(text, new RegExp(`src/model/Doc\\.java\\s+— ticket ${doc.id}`), "чужой файл не назван с номером наряда")
   // А свой файл в запрете стоять не может — это его работа.
-  assert.doesNotMatch(text.split("## Запрещено")[1], /src\/mongo\/Store\.java/)
+  assert.doesNotMatch(text.split("## Do not touch")[1], /src\/mongo\/Store\.java/)
   // И тавтология названа прямо.
   assert.match(text, /assertTrue\(true\)/)
 
   // Модуль, ничьих имён не поминающий, лишнего раздела не получает.
   const bare = t.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
-  assert.doesNotMatch(ticketText(bare), /## Запрещено/)
+  assert.doesNotMatch(ticketText(bare), /## Do not touch/)
+})
+
+// --- В ЧЁМ это пишется: четыре факта, которых в наряде не было ----------------------------------
+//
+// Наряд отвечал на ЧТО (шаги требования дословно из FRD) и на ГДЕ (inputs/outputs/verify), и молчал
+// о том, В ЧЁМ. Прочитанный глазами исполнителя `15-glossarystore` живого прогона не говорит ни
+// языка, ни фреймворка, ни базового класса, ни пакета, ни того, чем в этом репозитории тестируют.
+// Слабая модель закрывает каждую такую дыру догадкой, и догадки измерены: эмуляция граничного наряда
+// на Haiku дважды выдала файл на Spring Boot для проекта на Quarkus.
+//
+// Все четыре факта лежали в карте и просто не доезжали до тела наряда — токенов они не стоят.
+test("модульный наряд несёт стек, объявление с пакетом, чужие сигнатуры и тест образца", () => {
+  const store = cut().find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
+  const text = ticketText(store)
+
+  // PRIMING. Язык, механизм конфигурации, чем собирают, чем и как называют тесты — и внешняя система
+  // ОБРАЗЦА: хранилище пишет в mongodb, и об этом исполнителю говорит карта, а не имя класса.
+  assert.match(text, /## Stack/)
+  assert.match(text, /java/, "языка нет — модель выберет фреймворк по имени класса")
+  assert.match(text, /Quarkus MicroProfile Config/)
+  assert.match(text, /\*Test\.java run by \.\/mvnw test/, "как называются и чем гоняются тесты — из карты")
+  assert.match(text, /mongodb/, "внешняя система образца не доехала")
+
+  // ОБЪЯВЛЕНИЕ И ПАКЕТ. Строка `declares` — из карточки плана; пакет вычислен от корня, выведенного
+  // из карты, и для файла, которого ЕЩЁ НЕТ.
+  assert.match(text, /## Declaration/)
+  assert.match(text, /public class Store extends BaseStore/)
+  assert.match(text, /package mongo/, "пакет нового файла не вычислен — первая строка файла ниоткуда не следует")
+
+  // СИГНАТУРЫ ТИПА, КОТОРЫЙ УЖЕ ЕСТЬ ЗДЕСЬ. `BaseStore` назван в объявлении и не принадлежит
+  // изменению: без его сигнатуры исполнитель выдумывает базовый класс.
+  assert.match(text, /src\/db\/BaseStore\.java\s+\(already exists in this repository\)/)
+  assert.match(text, /public abstract class BaseStore · protected Id save\(Object o\)/)
+
+  // ОБРАЗЕЦ ТЕСТА — зеркало образца модуля, найденное шаблоном сьюта, и только если файл существует.
+  assert.ok(store.inputs.includes("src/test/java/mongo/OldStoreTest.java"), `образца теста нет во входах: ${store.inputs.join(", ")}`)
+  assert.match(text, /test: src\/test\/java\/mongo\/OldStoreTest\.java/)
+
+  // И критерий закрытия — не только команда.
+  assert.match(text, /## Done when/)
+  assert.match(text, /every step above is asserted by a test that quotes its text/)
+})
+
+// ЗЕРКАЛА НЕТ — СТРОКИ НЕТ, И ЭТО ЧЕСТНО. Выдумывать проект не по чему: у образца `src/model/Old.java`
+// теста в репозитории не существует, и наряд Doc о тестах образца молчит вместо того, чтобы указать
+// на несуществующий файл.
+test("образец теста не выдумывается: нет файла — нет строки", () => {
+  const doc = cut().find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
+  assert.deepEqual(doc.sampleTests, [])
+  assert.doesNotMatch(ticketText(doc), /src\/test\/java\/model\/OldTest\.java/)
+})
+
+// --- швы правил 9-12: каждое краснеет возвращением своего дефекта --------------------------------
+
+test("правило 9: карта объявила язык, а наряд без стека — блокер", () => {
+  assert.deepEqual(judge(), [], "исправная нарезка зелена")
+  // Дефект возвращается ровно тот, что был до правки: факты не доехали до тела наряда.
+  const blind = ticketsOf({
+    sections: SECTIONS, order: ORDER, frd: FRD, key: "DOS-1", branch: "feature/DOS-1",
+    match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES,
+  })
+  const B = judge({ tickets: blind }).join("\n")
+  assert.match(B, /наряды без стека/)
+  assert.match(B, /java/, "блокер обязан назвать стек, который карта уже знает")
+
+  // Карта языка не объявила — сказать нечего, и правило молчит.
+  assert.deepEqual(judge({ tickets: blind, stack: "" }).filter((b) => /без стека/.test(b)), [])
+})
+
+test("правило 10: раздел плана без «declares:» — наряд, в котором нечем открыть файл", () => {
+  const flat = SECTIONS.map((s) => ({ ...s, body: s.body.replace(/^declares:.*\n/m, "") }))
+  const B = judge({ tickets: cut({ sections: flat }), sections: flat }).join("\n")
+  assert.match(B, /наряды без объявления: doc, store, reststore/)
+})
+
+test("правило 11: тест образца лежит в репозитории, а наряд его не назвал", () => {
+  // Снимаем именно проводку зеркала — inputs без него, всё остальное на месте.
+  const tickets = cut().map((t) => (t.kind === "module"
+    ? { ...t, inputs: t.inputs.filter((p) => !p.startsWith("src/test/java")) }
+    : t))
+  const B = judge({ tickets }).join("\n")
+  assert.match(B, /store пишет тест, а образца теста не назвал/)
+  assert.match(B, /src\/test\/java\/mongo\/OldStoreTest\.java/)
+  // Наряд, у которого зеркала нет, правило не трогает.
+  assert.doesNotMatch(B, /^doc пишет тест/m)
+})
+
+test("правило 12: кириллица из артефактов выше доезжает до исполнителя", () => {
+  const ru = SECTIONS.map((s) => (s.path === "src/mongo/Store.java"
+    ? { ...s, body: s.body.replace("what: the mongo store", "what: монго-хранилище") }
+    : s))
+  const B = judge({ tickets: cut({ sections: ru }), sections: ru }).join("\n")
+  assert.match(B, /store несёт кириллицу из артефактов выше: монго-хранилище/)
+  assert.match(B, /полоса ниже FRD пишется по-английски/)
 })

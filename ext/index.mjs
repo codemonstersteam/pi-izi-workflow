@@ -86,6 +86,7 @@ import { newPlanIndex, KEY_QUESTION, TASK_KEY } from "../steps/plan/plan.mjs"
 import { newBranch } from "../steps/branch/branch.mjs"
 import { newLog, render, begin, mark, ticket, resumeAt, pending } from "../core/runlog.mjs"
 import { ticketsOf, checkTickets, ticketText } from "../steps/tickets/tickets.mjs"
+import { factsOf } from "../steps/tickets/facts.mjs"
 // attrs — тот же разбор атрибутов, каким карту читают все шаги: базлайн берёт cmd сьютов оттуда же.
 import { attrs, elem } from "../core/xml.mjs"
 import { newReview, parseReview, owedItems, autoFindings, askedNodes, createdNodes, CODES, CODE_CULPRIT, CODE_OWNER, OPERATOR_NOTE } from "../steps/review/review.mjs"
@@ -1757,7 +1758,7 @@ export const part = {
 
 
 export const planbook = {
-  description: "Step 9, phases ⑥⑦⑧: read every docs/design/<slug>.md a partition promoted, check that the requirement is covered whole (every module planned, every use case named, every step and failure branch closed), order the modules by what the plans DECLARE in «зовёт:» plus the map's static edges between existing files, and assemble PLAN.md — the header of counts and every section verbatim in the order of work. Refuses with the holes named, or with the circle's modules named, and REMOVES PLAN.md on any refusal. Costs no tokens.",
+  description: "Step 9, phases ⑥⑦⑧: read every docs/design/<slug>.md a partition promoted, check that the requirement is covered whole (every module planned, every use case named, every step and failure branch closed), order the modules by what the plans DECLARE in `calls:` plus the map's static edges between existing files, and assemble PLAN.md — the header of counts and every section verbatim in the order of work. Refuses with the holes named, or with the circle's modules named, and REMOVES PLAN.md on any refusal. Costs no tokens.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -1824,7 +1825,7 @@ export const planbook = {
         ok: false,
         cycle: cycle.join(" → "),
         guilty: [...new Set(cycle.map((m) => ownerOf.get(m)).filter(Boolean))],
-        blockers: `очередь работ не строится: ${cycle.map((m) => m.split("/").pop()).join(" → ")} замкнуты в круг строками «зовёт:». Разорви круг: у одного из них вызов другого — не зависимость сборки, а обратный вызов. Убери его из «зовёт» того модуля, который пишется ПЕРВЫМ, и опиши связь словами в «что это». Полные пути: ${cycle.join(" → ")}`,
+        blockers: `очередь работ не строится: ${cycle.map((m) => m.split("/").pop()).join(" → ")} замкнуты в круг строками «calls:». Разорви круг: у одного из них вызов другого — не зависимость сборки, а обратный вызов. Убери его из «calls» того модуля, который пишется ПЕРВЫМ, и опиши связь словами в «what». Полные пути: ${cycle.join(" → ")}`,
       }
     }
 
@@ -2214,7 +2215,7 @@ export const branch = {
 const TICKETS_DIR = "tickets"
 
 export const tickets = {
-  description: "Step 14: cut the approved plan into implementer tickets. Two kinds: a TEST ticket per «module × use case» (the checks come from the FRD's own steps, failure branches and their codes) and a MODULE ticket per section of the plan, which waits for its tests and may not write into their files. Every step of the requirement gets exactly one owner — the module through which it is observable, decided by the declared «зовёт» edges, never by guessing what kind of module it is. Writes task/<KEY>/tickets/<NN>-<name>.md and returns the wave layout step 15 dispatches by. Six structural rules; no role, no tokens.",
+  description: "Step 14: cut the approved plan into implementer tickets. Two kinds: a BOUNDARY ticket per use case whose actor enters through a path (a black box through that channel, wave 0) and a MODULE ticket per section of the plan, carrying the code and its own tests. Every step of the requirement gets exactly one owner — the module through which it is observable, decided by the declared `calls` edges, never by guessing what kind of module it is. The body also carries what the repository already knows and the ticket used to omit: the stack, the package, the declaration, the signatures of types that exist here, and the mirrored test of the sample (steps/tickets/facts.mjs). Ticket text is ENGLISH — from the FRD down the reader is the small model that writes the code. Writes task/<KEY>/tickets/<NN>-<name>.md and returns the wave layout step 15 dispatches by. Twelve structural rules; no role, no tokens.",
   input: { type: "object", properties: {}, additionalProperties: false },
   output: {
     type: "object",
@@ -2286,19 +2287,28 @@ export const tickets = {
         })()
       : []
 
+    // ОДИН РАЗБОР КАРТЫ НА ВЕСЬ ШАГ. Из него же растут факты репозитория (steps/tickets/facts.mjs):
+    // стек, пакет и сигнатуры типов, которые в репозитории уже есть. Токенов не стоит — карту
+    // оплатил шаг 5.
+    const parsed = parseMap(map)
+    const facts = factsOf(parsed)
     const list = ticketsOf({
       sections, order, frd, key,
       branch: (() => { try { return JSON.parse(readIfExists(root, BRANCH_PATH) || "{}").name || "" } catch { return "" } })(),
       match: suite.match || "*",
       testDir: suite.path || "",
       // Карта — словарь путей, которые в репозитории ЕСТЬ: по нему отсеивается проза из строки
-      // «по образцу», и по нему же судит седьмое правило гардрейла.
-      known: parseMap(map).nodes,
+      // «sample», и по нему же судит седьмое правило гардрейла.
+      known: parsed.nodes,
       outer,
       build,
       samples,
+      facts,
     })
-    const bad = checkTickets({ tickets: list, sections, frd, known: parseMap(map).nodes })
+    const bad = checkTickets({
+      tickets: list, sections, frd, known: parsed.nodes,
+      stack: facts.stack, match: suite.match || "*", testDir: suite.path || "",
+    })
     if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
 
     const dir = `task/${key}/${TICKETS_DIR}`

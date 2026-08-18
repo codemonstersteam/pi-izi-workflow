@@ -25,22 +25,22 @@ const FRD = parseFrd(`<frd grammar="1" goal="хранилище словарей
 
 const { modules } = partsOf({ frd: FRD })
 
-// План партии, каким его пишет роль: раздел на модуль, «зовёт» путями, шаги по номерам.
+// План партии, каким его пишет роль: раздел на модуль, «calls» путями, шаги по номерам.
 // Ветка отказа названа ТОЙ ЖЕ буквой, что в FRD: единообразие обеспечивает гардрейл фазы ⑤.
 const PLAN = `# src — хранилище
 
 ## src/rest/RestStore.java  (новый)
-что это: REST-точка
-зовёт: src/model/Doc.java — принимает запись
-закрывает: UC1 шаг 1 · UC1 шаг 2 · UC1 шаг 2a · UC2 шаг 1
-проверка: ./mvnw test -Dtest=RestStoreTest · RestStoreTest
+what: REST-точка
+calls: src/model/Doc.java — принимает запись
+closes: UC1 step 1 · UC1 step 2 · UC1 step 2a · UC2 step 1
+verify: ./mvnw test -Dtest=RestStoreTest · RestStoreTest
 
 ## src/model/Doc.java  (новый)
-что это: запись
-поля: name: String — имя
-зовёт: нет
-закрывает: UC1 шаг 2 · UC2 шаг 1
-проверка: ./mvnw test -Dtest=DocTest · DocTest
+what: запись
+fields: name: String — имя
+calls: none
+closes: UC1 step 2 · UC2 step 1
+verify: ./mvnw test -Dtest=DocTest · DocTest
 `
 const SECTIONS = sectionsOf(PLAN)
 
@@ -54,11 +54,11 @@ test("полнота ловит три дыры, и каждую называе�
   assert.match(coverageOf({ frd: FRD, modules, sections: one }).join("\n"), /модули изменения без раздела: src\/model\/Doc.java/)
 
   // 2. use case, не названный нигде — требование, которое ничем не закрыто
-  const noUc2 = sectionsOf(PLAN.replace(/ · UC2 шаг 1/g, ""))
+  const noUc2 = sectionsOf(PLAN.replace(/ · UC2 step 1/g, ""))
   assert.match(coverageOf({ frd: FRD, modules, sections: noUc2 }).join("\n"), /use case UC2 не назван/)
 
   // 3. ветка отказа, которую никто не закрыл — половина use case, тихо не уехавшая
-  const noExt = sectionsOf(PLAN.replace(" · UC1 шаг 2a", ""))
+  const noExt = sectionsOf(PLAN.replace(" · UC1 step 2a", ""))
   assert.match(coverageOf({ frd: FRD, modules, sections: noExt }).join("\n"), /у UC1 не закрыты шаги: 2a/)
 })
 
@@ -66,7 +66,7 @@ test("полнота ловит три дыры, и каждую называе�
 // иногда наоборот, в одном файле. Единообразие держит гардрейл фазы ⑤, а не нормализация здесь:
 // иначе дефект становится невидимым — покрыто на бумаге, набрано другой буквой на диске.
 test("номер другой буквой — дыра полноты, а не молчаливое совпадение", () => {
-  const cyr = sectionsOf(PLAN.replace("UC1 шаг 2a", "UC1 шаг 2а"))
+  const cyr = sectionsOf(PLAN.replace("UC1 step 2a", "UC1 step 2а"))
   assert.match(coverageOf({ frd: FRD, modules, sections: cyr }).join("\n"), /у UC1 не закрыты шаги: 2a/)
 })
 
@@ -77,7 +77,7 @@ test("порядок: зовомый раньше зовущего, и он фу
 })
 
 test("круг из объявлений — отказ с именами: чинить его есть кому, строки писала роль", () => {
-  const both = sectionsOf(PLAN.replace("зовёт: нет", "зовёт: src/rest/RestStore.java — обратно"))
+  const both = sectionsOf(PLAN.replace("calls: none", "calls: src/rest/RestStore.java — обратно"))
   const { order, cycle } = orderOf({ sections: both, modules })
   assert.equal(cycle.length > 0, true)
   assert.deepEqual([...order], [])
@@ -95,12 +95,12 @@ test("PLAN.md несёт разделы ДОСЛОВНО и в порядке р
   const { order } = orderOf({ sections: SECTIONS, modules })
   const text = planDoc({ frd: FRD, sections: SECTIONS, order, modules })
 
-  assert.match(text, /# План доработки — 2 модулей, 2 use case/)
+  assert.match(text, /# Change plan — 2 modules, 2 use cases/)
   // Порядок в шапке и в теле — один и тот же.
   assert.ok(text.indexOf("## 1. src/model/Doc.java") < text.indexOf("## 2. src/rest/RestStore.java"))
   // Тело раздела скопировано, а не пересказано: тикет режется из этих же строк.
-  assert.match(text, /проверка: \.\/mvnw test -Dtest=DocTest · DocTest/)
-  assert.match(text, /зовёт: src\/model\/Doc\.java — принимает запись/)
+  assert.match(text, /verify: \.\/mvnw test -Dtest=DocTest · DocTest/)
+  assert.match(text, /calls: src\/model\/Doc\.java — принимает запись/)
 })
 
 test("тотальность: без входов — пустой план и ни одного броска", () => {
@@ -121,7 +121,7 @@ test("вид гейта: каждая строка — вырезка или с�
   assert.ok(v.includes(FRD.goal))
   // Ветвь партии: диапазон use case, slug, счёт модулей и сколько из них новых.
   assert.match(v, /UC1-UC2\s+──► src-rest · 2 модуля \(все новые\)/)
-  // Что писать первым и сколько модулей его зовут — из порядка ⑦ и строк «зовёт».
+  // Что писать первым и сколько модулей его зовут — из порядка ⑦ и строк «calls».
   assert.match(v, /первым Doc\.java, его зовут 1 из 2/)
   // Команды считаются по самой команде: оператор видит цену проверки.
   assert.match(v, /Проверка: 2 команд — \.\/mvnw test ×2/)

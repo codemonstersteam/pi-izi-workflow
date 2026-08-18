@@ -17,7 +17,7 @@
 //             sampleOf(path, map) -> { kind, path }   — the ladder: self · twin · neighbour · none
 //             partCardOf({ part, frd, map, graph }) -> { text, chars }   — фаза ③
 //             sectionsOf(text) -> Section[]           — ОДИН разбор плана партии
-//             checkPart({ text, part, known }) -> string[]  — фаза ⑤, пять правил
+//             checkPart({ text, part, known }) -> string[]  — фаза ⑤, девять правил
 //
 // THE MEASUREMENT THAT MAKES THIS STEP NECESSARY. On form `eddi`: 13 nodes of the change, and **8 of
 // them are touched by two or more use cases** — `RestGlossaryStore`, `IGlossaryStore` and
@@ -30,6 +30,7 @@
 // designers who could not see each other.
 
 import { attrs, elem, tag, tokens } from "../../core/xml.mjs"
+import { cyrillicWords } from "../../core/lang.mjs"
 
 // The longest directory both paths share, as the group's readable name. A group's id is never
 // invented (`g1`, `g2`): it is read by a human on the gate and printed in the order's header, and a
@@ -326,8 +327,17 @@ export function partCardOf({ part = {}, frd = {}, map = "", graph = "" } = {}) {
 // перечень роль переносит на следующие строки, и продолжение отличается от нового ключа только тем,
 // что не начинается ни одним словом отсюда. Две копии этого словаря — это тикет, разошедшийся с
 // планом, поэтому копия одна и живёт там же, где формат раздела.
+//
+// КЛЮЧИ АНГЛИЙСКИЕ, ПОТОМУ ЧТО ИХ ЧИТАЕТ ИСПОЛНИТЕЛЬ. Тело раздела уезжает в наряд ДОСЛОВНОЙ
+// вырезкой (steps/tickets/tickets.mjs::ticketText), а наряд исполняет слабая модель, пишущая код в
+// английском репозитории. Кириллический ключ в её заказе — заголовок, на который она не может
+// действовать; граница языка полосы проходит по FRD, и всё ниже него говорит на языке репозитория.
+//
+// `declares` — единственный ключ, которого не было до этого решения. Объявление модуля (пакет,
+// аннотации, `class X extends Y implements Z`) жило ПРОЗОЙ внутри `sample`, и слабая модель угадывала
+// базовый класс: живой счёт — файл на Spring Boot в проекте на Quarkus, дважды.
 export const SECTION_KEYS = Object.freeze([
-  "что это", "поля", "сигнатуры", "зовёт", "по образцу", "закрывает", "проверка",
+  "what", "fields", "signatures", "declares", "calls", "sample", "closes", "verify",
 ])
 
 // A HEADING IS A FILE SECTION WHEN IT NAMES A PATH. Prose the role adds of its own accord is not a
@@ -348,19 +358,23 @@ export function sectionsOf(text = "") {
     const from = h.index + h[0].length
     const to = k + 1 < heads.length ? heads[k + 1].index : src.length
     const body = src.slice(from, to)
-    const calls = [...body.matchAll(/^\s*зовёт:\s*([^\n]*)$/gm)].map((m) => m[1])
+    const calls = [...body.matchAll(/^\s*calls:\s*([^\n]*)$/gm)].map((m) => m[1])
     out.push(Object.freeze({
       path,
       body,
-      // The declared calls: paths only. «нет» is a legal answer and yields an empty list — what is
+      // The declared calls: paths only. `none` is a legal answer and yields an empty list — what is
       // NOT legal is the line missing altogether, because then the order of work has no operand
       // (measured: 8 sections of a live contract declared 2 edges, the rest was prose).
       says: calls.length > 0,
       calls: Object.freeze([...new Set(calls.join(" ").match(/[\w./-]+\.[A-Za-z0-9]+/g) || [])]),
-      checks: /^\s*проверка:\s*\S/m.test(body),
-      // «шаг 2а» пишется и латиницей, и кириллицей — обе формы наблюдались в одном живом прогоне.
-      // Здесь номер берётся КАК НАПИСАН; сравнивает его с FRD фаза ⑥ (steps/design/plandoc.mjs).
-      closes: Object.freeze([...body.matchAll(/(UC\d+)\s+шаг\s+([^\s·,;]+)/g)].map((m) => `${m[1]}/${m[2]}`)),
+      checks: /^\s*verify:\s*\S/m.test(body),
+      // The declaration a module opens with: package, annotations, `class X extends Y implements Z`.
+      // Its ABSENCE is what the guardrail judges — the text itself is a verbatim cut for the ticket.
+      declares: /^\s*declares:\s*\S/m.test(body),
+      // `step 2a` is written the one way now: the number is taken AS WRITTEN and phase ⑥ compares it
+      // with the FRD (steps/design/plandoc.mjs). While the card was Russian both alphabets were
+      // observed for `2а` in ONE file of run e79a460e; an English card has one alphabet to write it in.
+      closes: Object.freeze([...body.matchAll(/(UC\d+)\s+step\s+([^\s·,;]+)/g)].map((m) => `${m[1]}/${m[2]}`)),
       ucs: Object.freeze([...new Set([...body.matchAll(/\bUC\d+\b/g)].map((m) => m[0]))]),
     }))
   }
@@ -403,16 +417,24 @@ export function checkPart({ text = "", part = {}, known = [], texts = {} } = {})
   const closes = sections.flatMap((x) => x.closes)
   const closed = new Set(closes.map((c) => c.split("/")[0]))
   const missed = ucs.filter((id) => !closed.has(id))
-  if (missed.length) B.push(`use case ${missed.join(", ")} не закрыт ни одним разделом — покажи строкой «закрывает: ${missed[0]} шаг N», что именно его закрывает`)
+  if (missed.length) B.push(`use case ${missed.join(", ")} не закрыт ни одним разделом — покажи строкой «closes: ${missed[0]} step N», что именно его закрывает`)
   const numbered = new Set((part && part.steps) || [])
   const alien = [...new Set(closes.filter((c) => closed.has(c.split("/")[0]) && !numbered.has(c)))]
-  if (alien.length) B.push(`в «закрывает» названы шаги, которых нет в use case: ${alien.map((c) => c.replace("/", " шаг ")).join(", ")} — номер копируется из заказа дословно, той же буквой (${[...numbered].slice(0, 4).map((c) => c.replace("/", " шаг ")).join(", ")}…)`)
+  if (alien.length) B.push(`в «closes» названы шаги, которых нет в use case: ${alien.map((c) => c.replace("/", " step ")).join(", ")} — номер копируется из заказа дословно, той же буквой (${[...numbered].slice(0, 4).map((c) => c.replace("/", " step ")).join(", ")}…)`)
 
   // 4 — every section says how it is checked and what it calls
   const dumb = sections.filter((x) => !x.checks).map((x) => x.path)
-  if (dumb.length) B.push(`у разделов ${dumb.join(", ")} нет строки «проверка: <команда> · <имя тест-класса>» — без неё работу нечем закрыть`)
+  if (dumb.length) B.push(`у разделов ${dumb.join(", ")} нет строки «verify: <команда> · <имя тест-класса>» — без неё работу нечем закрыть`)
   const mute = sections.filter((x) => !x.says).map((x) => x.path)
-  if (mute.length) B.push(`у разделов ${mute.join(", ")} нет строки «зовёт:» — напиши пути либо слово «нет»; из этой строки строится порядок работ`)
+  if (mute.length) B.push(`у разделов ${mute.join(", ")} нет строки «calls:» — напиши пути либо слово «none»; из этой строки строится порядок работ`)
+
+  // 4' — ОБЪЯВЛЕНИЕ. Наряд открывается им, и без него исполнитель угадывает, от чего наследовать:
+  // живой счёт — эмуляция на слабой модели дважды дала файл на Spring Boot в проекте на Quarkus,
+  // потому что базовый класс стоял ПРОЗОЙ внутри «sample», а не строкой, которую можно скопировать.
+  // Спрашивается со всех разделов, а не только с новых файлов: у существующего объявление уже лежит
+  // в $START_NODES заказа, и переписать его оттуда роли ничего не стоит.
+  const bare = sections.filter((x) => !x.declares).map((x) => x.path)
+  if (bare.length) B.push(`у разделов ${bare.join(", ")} нет строки «declares:» — напиши пакет, аннотации и объявление типа (public class X extends Y implements Z); по ней исполнитель открывает файл`)
 
   // 5 — and what it calls is an address
   const all = new Set([...known, ...mine])
@@ -424,8 +446,8 @@ export function checkPart({ text = "", part = {}, known = [], texts = {} } = {})
     if (ghost.length) {
       const calls = ghost.filter((g) => g.includes(".") && !g.includes("/"))
       B.push(calls.length
-        ? `в разделе ${x.path} «зовёт» несёт вызовы, а не пути: ${calls.join(", ")} — напиши ПУТЬ файла, а что именно вызываешь, скажи словами после тире`
-        : `в разделе ${x.path} «зовёт» ссылается на ${ghost.join(", ")} — такого файла нет ни среди модулей изменения, ни в репозитории`)
+        ? `в разделе ${x.path} «calls» несёт вызовы, а не пути: ${calls.join(", ")} — напиши ПУТЬ файла, а что именно вызываешь, скажи словами после тире`
+        : `в разделе ${x.path} «calls» ссылается на ${ghost.join(", ")} — такого файла нет ни среди модулей изменения, ни в репозитории`)
     }
   }
 
@@ -455,14 +477,14 @@ export function checkPart({ text = "", part = {}, known = [], texts = {} } = {})
           const callers = sections.filter((y) => y.path !== p && y.calls.includes(p)).map((y) => y.path)
           return `${p}${callers.length ? ` (его зовёт ${callers.join(", ")})` : " — его не зовёт никто"}`
         })
-        B.push(`шаг ${c.replace("/", " шаг ")} закрывает ${x.path}, а его текст говорит о ${who.join(", ")} — отдай шаг тому, кто зовёт названный модуль, либо допиши «зовёт» здесь`)
+        B.push(`шаг ${c.replace("/", " step ")} закрывает ${x.path}, а его текст говорит о ${who.join(", ")} — отдай шаг тому, кто зовёт названный модуль, либо допиши «calls» здесь`)
       }
     }
   }
 
   // 7 — МОДУЛЬ ПАРТИИ СВЯЗАН С ИЗМЕНЕНИЕМ: его зовут либо он зовёт. Оторванный не проверит ничто —
   // ни компилятор потребителя, ни граница. Связь считается в обе стороны намеренно: реализацию
-  // интерфейса никто не зовёт по имени, но она объявляет «зовёт: <интерфейс> — реализует».
+  // интерфейса никто не зовёт по имени, но она объявляет «calls: <интерфейс> — implements it».
   //
   // BUG_FIX_CONTEXT: живой прогон eddi. `RestGlossaryStore` не объявил, что реализует
   // `IRestGlossaryStore`, хотя соседний `GlossaryStore` для своего интерфейса это объявил. Интерфейс
@@ -475,10 +497,17 @@ export function checkPart({ text = "", part = {}, known = [], texts = {} } = {})
       const uses = x.calls.some((c) => mine.includes(c) && c !== x.path)
       const used = sections.some((y) => y.path !== x.path && y.calls.includes(x.path))
       if (!uses && !used) {
-        B.push(`модуль ${x.path} не связан с изменением: он никого не зовёт, и его никто не зовёт — проверить его нечем; допиши «зовёт» ему или тому, кто его реализует`)
+        B.push(`модуль ${x.path} не связан с изменением: он никого не зовёт, и его никто не зовёт — проверить его нечем; допиши «calls» ему или тому, кто его реализует`)
       }
     }
   }
+
+  // 8 — ПЛАН ПАРТИИ ГОВОРИТ ПО-АНГЛИЙСКИ. Граница языка полосы проходит по FRD: выше него артефакт
+  // читает человек на языке заказа, ниже — слабая модель, которая по дословной вырезке из этого
+  // текста пишет код в английском репозитории. Одного кириллического слова достаточно: это заголовок
+  // или требование, на которое исполнителю нечем действовать (core/lang.mjs::cyrillicWords).
+  const foreign = cyrillicWords(text)
+  if (foreign.length) B.push(`план партии пишется ПО-АНГЛИЙСКИ — его дословную вырезку исполняет слабая модель в английском репозитории; переведи: ${foreign.join(", ")}`)
 
   return B
 }

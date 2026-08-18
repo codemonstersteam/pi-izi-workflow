@@ -23,6 +23,7 @@
 // reaches — зовёт ли `from` модуль `to`, прямо или через цепочку. Круга здесь быть не может: его
 // отверг гардрейл фазы ⑦ шага 9, но `seen` стоит всё равно — тотальность важнее веры в соседа.
 import { SECTION_KEYS } from "../design/card.mjs"
+import { cyrillicWords } from "../../core/lang.mjs"
 
 const reaches = (from, to, calls, seen = new Set()) => {
   for (const c of calls.get(from) || []) {
@@ -103,7 +104,7 @@ const block = (body, name) => {
   }
   return [head.trim(), ...tail].filter(Boolean).join(" · ")
 }
-// ВХОД — ПУТЬ, А НЕ ВСЁ, ГДЕ ЕСТЬ СЛЭШ. `по образцу` — проза, и в ней встречается URI ресурса, пакет,
+// ВХОД — ПУТЬ, А НЕ ВСЁ, ГДЕ ЕСТЬ СЛЭШ. `sample` — проза, и в ней встречается URI ресурса, пакет,
 // ссылка. Токен, начинающийся со слэша или несущий `//`, путём не бывает ни в одном репозитории.
 // BUG_FIX_CONTEXT: живой план eddi писал `eddi://ai.labs.glossary`, и во входы тикета уезжало
 // `//ai.labs.glossary` — исполнителю велели прочитать то, чего нет.
@@ -158,7 +159,21 @@ const testPath = (modulePath, file, testDir) => {
   return [testDir, ...dir.slice(k), file].join("/")
 }
 
-// Имя теста, как его назвала роль: второе поле строки «проверка» либо флаг команды. Роль пишет и
+// ТЕСТ ОБРАЗЦА ИЩЕТСЯ ТЕМ ЖЕ ОТОБРАЖЕНИЕМ, КАКИМ СТРОИТСЯ СВОЙ. Наряд говорит «sample: <модуль>»,
+// и исполнитель знает, ЧТО писать в своём тесте, но не знает КАК — какой фреймворк, моки или живая
+// база, базовый класс, чем подменяются зависимости. Ровно эта дыра дважды дала файл на Spring Boot в
+// проекте на Quarkus (эмуляция граничного наряда на слабой модели).
+//
+// Образец теста лежит зеркально образцу модуля, и берётся он механически: имя по шаблону `match`
+// сьюта, каталог по `testPath`. Нет такого файла среди узлов карты — строки в наряде нет, и это
+// честно: выдумывать проект не по чему.
+const mirrorTest = (modulePath, match, testDir) => {
+  const base = String(modulePath).split("/").pop().replace(/\.[^.]+$/, "")
+  const file = testFile(base, "", match)
+  return file ? testPath(modulePath, file, testDir) : ""
+}
+
+// Имя теста, как его назвала роль: второе поле строки «verify» либо флаг команды. Роль пишет и
 // `<команда> · XTest`, и `<команда> -Dtest=XTest` — оба разбираются здесь, один раз.
 const namedTest = (check) => {
   const parts = String(check || "").split("·").map((x) => x.trim()).filter(Boolean)
@@ -177,7 +192,7 @@ const namedTest = (check) => {
 //                 failure: none — тотальна; круг (его отверг бы гардрейл шага 9) не зацикливает
 //   Purity:       pure
 //
-// ОЧЕРЕДЬ ДАЁТ ЛИНИЮ, СЛОИ ДАЮТ ВОЛНЫ. Рёбра те же самые — объявленные строкой «зовёт». Слой и есть
+// ОЧЕРЕДЬ ДАЁТ ЛИНИЮ, СЛОИ ДАЮТ ВОЛНЫ. Рёбра те же самые — объявленные строкой «calls». Слой и есть
 // ответ на вопрос «что можно делать одновременно»: внутри него ни один модуль не зовёт другого.
 export function layersOf({ sections = [], order = [] } = {}) {
   const byPath = new Map((sections || []).map((s) => [s.path, s]))
@@ -232,7 +247,10 @@ const coded = (frd, code) => Boolean((((frd || {}).failures || []).find((f) => f
 //
 //   boundary  один на use case, чей актёр входит через путь · волна 0 · обязан быть КРАСНЫМ
 //   module    один на раздел плана · волна = слой графа «зовёт» · ворота: сборка + ТОЛЬКО свои тесты
-export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branch = "", match = "*", testDir = "", known = new Set(), outer = null, build = "", samples = [] } = {}) {
+export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branch = "", match = "*", testDir = "", known = new Set(), outer = null, build = "", samples = [], facts = null } = {}) {
+  // ФАКТЫ РЕПОЗИТОРИЯ — steps/tickets/facts.mjs, 0 токенов. Нет карты — нет и фактов: наряд тогда
+  // выходит без стека и без пакета, как выходил до этой правки, вместо стека, взятого из головы.
+  const F = facts || { stack: "", pkgOf: () => "", declOf: () => null, systemsOf: () => [] }
   const byPath = new Map(sections.map((s) => [s.path, s]))
   const owner = ownerOf({ sections, order })
   const layers = layersOf({ sections, order })
@@ -267,7 +285,7 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
   // Словарь величин изменения: ветка отказа даёт КОД, а поле — правило, которое она нарушает. Без
   // него исполнителю нечем вызвать отказ, и он его выдумывает.
   const fields = (frd.fields || []).filter((f) => f && f.name && f.domain)
-    .map((f) => `${f.name}${f.in ? ` (${f.in})` : ""}: ${f.domain}${f.required ? ` · обязательно: ${f.required}` : ""}`)
+    .map((f) => `${f.name}${f.in ? ` (${f.in})` : ""}: ${f.domain}${f.required ? ` · required: ${f.required}` : ""}`)
 
   if (outer && outer.cmd && (samples || []).filter(Boolean).length) {
     for (const u of ucs) {
@@ -280,7 +298,7 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
       const entry = owner.get(`${u.id}/1`) || ""
       // Ближайший образец: по корню имени того, с чего списан сам вход. Не совпало — любой; даже он
       // даёт правильный фреймворк и базовый класс.
-      const sample = near(paths(block((byPath.get(entry) || {}).body, "по образцу"))[0] || entry)
+      const sample = near(paths(block((byPath.get(entry) || {}).body, "sample"))[0] || entry)
       // ИМЯ ГРАНИЧНОГО КЛАССА — ИЗ КЛЮЧА ЗАДАЧИ, А НЕ ИЗ МОДУЛЯ. Имя вида RestGlossaryStoreUC1IT
       // читается слабой моделью как приглашение импортировать этот класс — а его ещё нет, и весь
       // смысл границы в том, что она о нём не знает. Ключ нейтрален и не меняется от волны к волне.
@@ -299,6 +317,8 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
         outputs: [`${sample.split("/").slice(0, -1).join("/")}/${cls}.java`],
         inputs: [sample],
         sample,
+        stack: F.stack,
+        pkg: F.pkgOf(`${sample.split("/").slice(0, -1).join("/")}/${cls}.java`),
         fields,
         verify: String(outer.one || "").includes("{class}")
           ? `${outer.cmd} ${String(outer.one).replace("{class}", cls)}`
@@ -319,13 +339,26 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
   for (const path of order) {
     const s = byPath.get(path)
     if (!s) continue
-    const check = line(s.body, "проверка")
+    const check = line(s.body, "verify")
     const cmd = check.split("·")[0].trim()
     const named = namedTest(check)
     const steps = mine.get(path) || []
     const deps = (s.calls || []).filter((c) => byPath.has(c) && c !== path)
-    const sample = paths(block(s.body, "по образцу")).filter((p) => known.has(p) || byPath.has(p))
+    const sample = paths(block(s.body, "sample")).filter((p) => known.has(p) || byPath.has(p))
     const file = steps.length && named ? testPath(path, `${named}.java`, testDir) : ""
+    // Образец ТЕСТА — только тот, что реально лежит в репозитории; зеркало, которого нет, в наряд
+    // не едет (см. mirrorTest).
+    const sampleTests = [...new Set(sample.map((p) => mirrorTest(p, match, testDir)).filter((p) => p && known.has(p)))]
+    const declares = block(s.body, "declares")
+    // СИГНАТУРЫ ТИПОВ, КОТОРЫЕ УЖЕ ЕСТЬ ЗДЕСЬ. Роль пишет `GlossaryStore(IResourceStorageFactory f,
+    // IDocumentBuilder b)` — тип назван, а взять его негде: «чем пользуемся» несёт только модули
+    // ЭТОГО изменения. Слабая модель выдумывает конструктор фабрики. Кандидаты — заглавные имена из
+    // собственного объявления и сигнатур; остаются те, кого ЗНАЕТ КАРТА, поэтому `String` и `List`
+    // отсеиваются сами, без списка исключений.
+    const mentions = [...new Set(`${declares}\n${block(s.body, "signatures")}`.match(/\b[A-Z][A-Za-z0-9_]*\b/g) || [])]
+    const repoTypes = mentions.map((n) => ({ name: n, ...(F.declOf(n) || {}) }))
+      .filter((x) => x.path && x.path !== path && !byPath.has(x.path))
+      .filter((x, k, all) => all.findIndex((y) => y.path === x.path) === k)
 
     // ВОРОТА — СБОРКА И ТОЛЬКО СВОИ ТЕСТЫ. Никогда чужие: зовущий реализуется волнами позже, и
     // требовать его зелени значит требовать невозможного (дефект ① эмуляции). Модуль, за которым не
@@ -339,10 +372,18 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
       body: s.body,
       steps: steps.map((x) => ({ step: x, text: stepText(frd, x.split("/")[0], x.split("/")[1]) })),
       // Сигнатуры тех, кого он ЗОВЁТ: без них тест на шаг, проверяемый через соседа, писать не по чему.
-      uses: deps.map((d) => ({ path: d, signatures: block((byPath.get(d) || {}).body, "сигнатуры") })).filter((x) => x.signatures),
-      signatures: block(s.body, "сигнатуры"),
+      uses: [
+        ...deps.map((d) => ({ path: d, signatures: block((byPath.get(d) || {}).body, "signatures"), mine: true })).filter((x) => x.signatures),
+        ...repoTypes.map((x) => ({ path: x.path, signatures: [x.sig, ...(x.members || [])].filter(Boolean).join(" · "), mine: false })).filter((x) => x.signatures),
+      ],
+      signatures: block(s.body, "signatures"),
+      declares,
+      stack: [F.stack, ...new Set(sample.flatMap((p) => F.systemsOf(p)))].filter(Boolean).join(" · "),
+      pkg: F.pkgOf(path),
+      samples: sample,
+      sampleTests,
       outputs: [path, ...(file ? [file] : [])],
-      inputs: [...new Set([...sample, ...deps])],
+      inputs: [...new Set([...sample, ...sampleTests, ...deps])],
       // Команды сборки в карте может не быть (карта снята до того, как разведку стали о ней спрашивать).
       // Тогда модуль без шагов закрывается сьютом БЕЗ флага — «собирается и не ломает существующее».
       // Сырую строку роли брать нельзя: в ней стоит имя теста её РЕАЛИЗАЦИИ, то есть чужой класс,
@@ -362,7 +403,7 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
   // нарядов 10 и 12. Запрет «не трогай чужое» такой модели ничего не говорит; список файлов говорит.
   //
   // В список идут не все чужие модули, а те, чьи имена ВСТРЕЧАЮТСЯ В ТЕЛЕ этого наряда — в
-  // сигнатурах, в «зовёт», в «по образцу». Совпадение целым словом по базовым именам путей плана,
+  // сигнатурах, в «calls», в «sample». Совпадение целым словом по базовым именам путей плана,
   // тем же способом, каким гардрейл шага 9 судит владельца шага.
   const named = new Map([...byModule.keys()].map((p) => [p.split("/").pop().replace(/\.[^.]+$/, ""), p]))
   const tempting = (t) => t.kind !== "module" ? [] : [...named]
@@ -385,17 +426,18 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
 }
 
 // FUNCTION_CONTRACT: checkTickets — судить РАСКЛАДКУ, а не смысл
-//   Input:        { tickets, sections, frd, known }
-//   Dependencies: —
+//   Input:        { tickets, sections, frd, known, stack, match, testDir }
+//   Dependencies: mirrorTest, core/lang.mjs::cyrillicWords
 //   Antecedent:   любые значения
 //   Consequent:   success: string[] блокеров, пусто = зелено
 //                 failure: none — тотальна
 //   Purity:       pure
 //
-// Восемь правил. Четвёртое и пятое куплены эмуляцией живого прогона: ворота, зависящие от чужой
+// Двенадцать правил. Четвёртое и пятое куплены эмуляцией живого прогона: ворота, зависящие от чужой
 // работы, и тест, который не скомпилируется до кода, — оба выглядят нормально в тексте наряда и оба
-// делают его неисполнимым.
-export function checkTickets({ tickets = [], sections = [], frd = {}, known = new Set() } = {}) {
+// делают его неисполнимым. Правила 9-12 куплены чтением наряда ГЛАЗАМИ ИСПОЛНИТЕЛЯ: наряд говорит,
+// ЧТО сделать и ГДЕ, и молчит о том, В ЧЁМ это пишется.
+export function checkTickets({ tickets = [], sections = [], frd = {}, known = new Set(), stack = "", match = "*", testDir = "" } = {}) {
   const B = []
   const mods = tickets.filter((t) => t.kind === "module")
   const bounds = tickets.filter((t) => t.kind === "boundary")
@@ -482,6 +524,41 @@ export function checkTickets({ tickets = [], sections = [], frd = {}, known = ne
     if (!used && !uses) B.push(`${t.name}: за модулем нет ни одного шага, и он не связан с изменением — ни его зовут, ни он зовёт; проверить его нечем`)
   }
 
+  // 9 — PRIMING. Карта объявила язык — значит стек известен, и наряд без него отправляет исполнителя
+  // выбирать фреймворк по имени класса. Живой счёт: эмуляция на слабой модели дважды выдала файл на
+  // Spring Boot в проекте на Quarkus. Карта языка не объявила — правило молчит: сказать нечего.
+  if (stack) {
+    const dark = tickets.filter((t) => !t.stack).map((t) => t.name)
+    if (dark.length) B.push(`наряды без стека: ${dark.join(", ")} — карта объявила «${stack}», и без этой строки исполнитель выбирает фреймворк сам`)
+  }
+
+  // 10 — ОБЪЯВЛЕНИЕ. Чем открывается файл — пакет, аннотации, `class X extends Y implements Z`. Без
+  // него исполнитель угадывает базовый класс; строка приходит из карточки плана (`declares`), и её
+  // отсутствие здесь означает, что разошлись артефакты.
+  const bare = mods.filter((t) => !t.declares).map((t) => t.name)
+  if (bare.length) B.push(`наряды без объявления: ${bare.join(", ")} — в разделе плана нет строки «declares:», и открыть файл исполнителю не по чему`)
+
+  // 11 — ОБРАЗЕЦ ТЕСТА. Наряд, который пишет тест, обязан назвать существующий тест образца, если тот
+  // ЛЕЖИТ в репозитории: исполнитель знает, ЧТО утверждать, и не знает КАК — фреймворк, базовый
+  // класс, чем подменяются зависимости. Зеркала нет — правила нет, и это честно.
+  for (const t of mods) {
+    if (!t.testClass) continue
+    const want = (t.samples || []).map((p) => mirrorTest(p, match, testDir)).filter((p) => p && known.has(p))
+    if (want.length && !want.some((p) => (t.inputs || []).includes(p))) {
+      B.push(`${t.name} пишет тест, а образца теста не назвал: ${want.join(", ")} лежит в репозитории — без него исполнитель выдумывает фреймворк`)
+    }
+  }
+
+  // 12 — НАРЯД ГОВОРИТ ПО-АНГЛИЙСКИ. Судятся именно ВЫРЕЗКИ — тело раздела, тексты шагов, сигнатуры:
+  // фиксированный текст шаблона английский по построению, а кириллица может приехать только из
+  // артефакта выше. Тогда это утечка языка заказа к исполнителю, и чинится она там, где написана.
+  for (const t of tickets) {
+    const cuts = [t.body, t.declares, t.signatures, t.goal, t.post, t.via,
+      ...(t.steps || []).map((x) => x.text), ...(t.uses || []).map((u) => u.signatures), ...(t.fields || [])]
+    const foreign = cyrillicWords(cuts.filter(Boolean).join("\n"))
+    if (foreign.length) B.push(`${t.name} несёт кириллицу из артефактов выше: ${foreign.join(", ")} — наряд исполняет слабая модель в английском репозитории, и полоса ниже FRD пишется по-английски`)
+  }
+
   return B
 }
 
@@ -493,8 +570,21 @@ export function checkTickets({ tickets = [], sections = [], frd = {}, known = ne
 //   Purity:       pure
 //   Interface:    ticketText(ticket) -> string
 //
-// ВСЁ В ТИКЕТЕ — ВЫРЕЗКА. Тело модуля копируется из раздела плана, шаги — из FRD, команда — из строки
-// «проверка». Пересказ здесь означал бы второй источник правды об одной работе.
+// ВСЁ В ТИКЕТЕ — ВЫРЕЗКА. Тело модуля копируется из раздела плана по ключам грамматики карточки,
+// шаги — из FRD, команда — из строки `verify`, стек и пакет — из карты. Пересказ здесь означал бы
+// второй источник правды об одной работе.
+//
+// ТЕКСТ АНГЛИЙСКИЙ, ПОТОМУ ЧТО ЕГО ИСПОЛНЯЕТ СЛАБАЯ МОДЕЛЬ, ПИШУЩАЯ КОД. Граница языка полосы
+// проходит по FRD: выше него артефакт читает человек на языке заказа, ниже — исполнитель, для
+// которого требование на одном языке и репозиторий на другом есть ровно тот контекст, в котором он
+// угадывает.
+//
+// ПОРЯДОК БЛОКОВ — ПОРЯДОК ПРОМПТА ДЛЯ СЛАБОЙ МОДЕЛИ, а не порядок карточки:
+//   PRIMING (Stack) · ЦЕЛЬ (Goal) · ФОРМА (Declaration, Signatures) · ЧЕМ РАСПОЛАГАЕШЬ (What you
+//   call) · ЧТО ДОКАЗАТЬ (What you must prove) · ПОРЯДОК · КРИТЕРИЙ (Done when) · ПРИМЕР (Follow the
+//   sample) · ЗАПРЕТ (Do not touch) · КОМАНДА.
+// Стек стоит ПЕРВЫМ намеренно: без него модель выбирает фреймворк по имени класса, и живой счёт
+// эмуляции — файл на Spring Boot в проекте на Quarkus, дважды.
 export function ticketText(t = {}) {
   const head = [
     "---",
@@ -510,67 +600,90 @@ export function ticketText(t = {}) {
     "---",
   ].join("\n")
 
-  const steps = (t.steps || []).map((s) => `${String(s.step).replace("/", " шаг ")}${s.text ? `: ${s.text}` : ""}`)
+  const steps = (t.steps || []).map((s) => `${String(s.step).replace("/", " step ")}${s.text ? `: ${s.text}` : ""}`)
+  const stack = t.stack ? ["## Stack", "", String(t.stack), ""] : []
 
   // ГРАНИЦА. Ни одного пути и ни одного нового класса в теле — только канал, которым актёр входит в
   // программу, и то, что он обязан увидеть в ответ. Поэтому она компилируется СЕЙЧАС и краснеет по
   // делу: канала ещё нет.
   if (t.kind === "boundary") {
     return [head, "",
-      `## Что проверяем — ${t.uc} снаружи, проверок ${steps.length}`, "",
-      t.goal ? `цель: ${t.goal}` : "",
-      t.post ? `после успеха: ${t.post}` : "", "",
+      ...stack,
+      `## What to check — ${t.uc} from the outside, ${steps.length} checks`, "",
+      t.goal ? `goal: ${t.goal}` : "",
+      t.post ? `after success: ${t.post}` : "", "",
       steps.join("\n"), "",
-      "## Как звать — ТОЛЬКО через границу программы", "",
+      "## How to call it — ONLY through the program boundary", "",
       String(t.via || ""), "",
-      "Ни одного класса и ни одного пути из этой доработки в тексте теста: он обязан компилироваться",
-      "СЕЙЧАС, до того как написана хоть одна строка кода.", "",
-      t.sample ? "## По образцу — как такие тесты написаны В ЭТОМ репозитории" : "", t.sample ? "" : "",
+      "Not one class and not one path of this change may appear in the text of the test: it MUST",
+      "compile NOW, before a single line of the code is written.", "",
+      t.sample ? "## Follow the sample — how such tests are written IN THIS REPOSITORY" : "", t.sample ? "" : "",
       t.sample || "",
       t.sample ? "" : "",
-      t.sample ? "Открой его и возьми оттуда всё, чего нет здесь: фреймворк и его аннотации, базовый" : "",
-      t.sample ? "класс, как получают доступ к защищённым эндпоинтам, как убирают за собой. Ничего из" : "",
-      t.sample ? "этого не выдумывай — в проекте это уже решено." : "", t.sample ? "" : "",
-      (t.fields || []).length ? "## Величины — чем вызвать отказ" : "", (t.fields || []).length ? "" : "",
+      t.sample ? "Open it and take everything that is not given here: the framework and its annotations," : "",
+      t.sample ? "the base class, how protected endpoints are reached, how it cleans up after itself. Invent" : "",
+      t.sample ? "none of it — this project has already decided." : "", t.sample ? "" : "",
+      (t.fields || []).length ? "## Values — what makes it refuse" : "", (t.fields || []).length ? "" : "",
       (t.fields || []).join("\n"), (t.fields || []).length ? "" : "",
-      "## Правило", "",
-      "Тест обязан быть КРАСНЫМ и по деловой причине: канала ещё нет, ответ не тот. Ошибка сборки",
-      "красным не считается — значит ты сослался на то, чего нет. Зелёный тест здесь значит, что он",
-      "ничего не проверяет.", "",
-      "Он позеленеет САМ, когда лягут все модули. Ни один другой наряд не имеет права его править.", "",
-      "## Как запустить", "", String(t.verify || ""),
+      "## Rule", "",
+      "The test MUST be RED, and red for a business reason: the channel is not there yet, the answer is",
+      "not the one required. A build error does NOT count as red — it means you referred to something",
+      "that does not exist. A green test here means it checks nothing.",
+      "",
+      "It turns green BY ITSELF once every module is in. No other ticket may edit it.", "",
+      "## How to run", "", String(t.verify || ""),
     ].filter((x) => x !== "").join("\n")
   }
 
-  const uses = (t.uses || []).map((u) => `${u.path}\n${u.signatures}`).join("\n\n")
+  // МОДУЛЬ. Тело режется ПО КЛЮЧАМ карточки, а не сваливается целиком: `declares` и `sample` стоят
+  // своими блоками, и второй раз внутри «цели» они были бы тем же текстом, прочитанным дважды.
+  const cut = (key) => block(String(t.body || ""), key)
+  const goal = [cut("what"), cut("fields")].filter(Boolean).join("\n")
+  const own = [t.pkg ? `package ${t.pkg}` : "", t.declares || ""].filter(Boolean).join("\n")
+  const uses = (t.uses || []).map((u) => `${u.path}${u.mine === false ? "   (already exists in this repository)" : ""}\n${u.signatures}`).join("\n\n")
+  const sample = [cut("sample"), ...(t.sampleTests || []).map((p) => `test: ${p}`)].filter(Boolean).join("\n")
+
   return [head, "",
-    "## Что делаем", "",
-    String(t.body || "").trim().split("\n").filter((l) => !/^\s*(закрывает|проверка):/.test(l)).join("\n").trim(), "",
-    uses ? "## Чем пользуемся — сигнатуры тех, кого зовём" : "", uses ? "" : "", uses, uses ? "" : "",
-    steps.length ? "## Что проверяем — шаги, которыми владеет этот модуль" : "",
+    ...stack,
+    "## Goal", "", goal || String(t.body || "").trim(), "",
+    own ? "## Declaration — how the file opens" : "", own ? "" : "", own, own ? "" : "",
+    t.signatures ? "## Signatures — what this module exposes" : "", t.signatures ? "" : "",
+    t.signatures || "", t.signatures ? "" : "",
+    uses ? "## What you call — their signatures" : "", uses ? "" : "", uses, uses ? "" : "",
+    steps.length ? "## What you must prove — the requirement steps this module owns" : "",
     steps.length ? "" : "", steps.join("\n"), steps.length ? "" : "",
-    "## Порядок", "",
+    "## Order of work", "",
     steps.length
-      ? ["Сначала тест по шагам выше — по ТЕКСТУ шага, а не по тому, как удобнее реализовать.",
-         "Потом модуль. Потом прогон. Тест и код — твои оба, поэтому подгонять тест под реализацию",
-         "некому запретить, кроме тебя: он обязан утверждать шаг дословно.",
-         "Границу программы проверяет другой наряд, и править его файлы ты не можешь."].join("\n")
-      : ["За этим модулем не осталось ни одного шага требования: его проверяет тот, кто его",
-         "зовёт. Поэтому ворота здесь — СБОРКА. Твоя сигнатура будет проверена компилятором уже на",
-         "следующей волне, когда против неё напишут зовущего, а форма данных наружу — граничным",
-         "тестом в конце."].join("\n"), "",
-    (t.forbidden || []).length ? "## Запрещено" : "", (t.forbidden || []).length ? "" : "",
+      ? ["Write the TEST first, against the TEXT of the steps above — not against whatever is convenient",
+         "to implement. Then the module. Then run it. The test and the code are both yours, so there is",
+         "nobody but you to forbid bending the test to the implementation: it must assert the step word",
+         "for word.",
+         "The program boundary is checked by another ticket, and you may not edit its files."].join("\n")
+      : ["No requirement step is left with this module: it is checked by whoever calls it. So the gate",
+         "here is the BUILD. Your signature will be checked by the compiler of the caller on the very",
+         "next wave, and the shape of the data going out — by the boundary test at the end."].join("\n"), "",
+    "## Done when", "",
+    [`every file listed in outputs exists: ${(t.outputs || []).join(", ")}`,
+     ...(steps.length ? ["every step above is asserted by a test that quotes its text"] : []),
+     "the command under `How to run` is green"].map((x) => `- ${x}`).join("\n"), "",
+    sample ? "## Follow the sample — how THIS repository does it" : "", sample ? "" : "",
+    sample, sample ? "" : "",
+    sample && (t.sampleTests || []).length
+      ? "Open the sample test and take from it what is not written here: the framework, the base class,\nhow dependencies are faked, how it cleans up. Invent none of it — this project has already decided."
+      : "",
+    sample && (t.sampleTests || []).length ? "" : "",
+    (t.forbidden || []).length ? "## Do not touch" : "", (t.forbidden || []).length ? "" : "",
     (t.forbidden || []).length
-      ? ["Создавать или править файлы, которых нет в твоих outputs. Их пишут другие наряды:",
-         ...(t.forbidden || []).map((f) => `  ${f.path}  — наряд ${f.ticket}`),
-         "Не хватает чего-то из них — это дефект наряда, а не повод написать самому."].join("\n")
+      ? ["Creating or editing files that are not in your outputs. Other tickets write them:",
+         ...(t.forbidden || []).map((f) => `  ${f.path}  — ticket ${f.ticket}`),
+         "Something missing in them is a defect of the ticket, not a reason to write it yourself."].join("\n")
       : "",
     (t.forbidden || []).length ? "" : "",
     // Запрет на тавтологию — только там, где тесты вообще пишутся: у модуля без шагов ворота это
     // сборка, и писать ему нечего.
-    steps.length ? "Утверждение-константа (assertTrue(true), assert 1 == 1) тестом не является: такой тест" : "",
-    steps.length ? "зелен всегда и не проверяет ничего. Каждая проверка обязана утверждать ТЕКСТ своего шага." : "",
+    steps.length ? "A constant assertion (assertTrue(true), assert 1 == 1) is not a test: it is green always" : "",
+    steps.length ? "and checks nothing. Every check MUST assert the TEXT of its own step." : "",
     steps.length ? "" : "",
-    "## Как проверить", "", String(t.verify || ""),
+    "## How to run", "", String(t.verify || ""),
   ].filter((x) => x !== "").join("\n")
 }
