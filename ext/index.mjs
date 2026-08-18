@@ -2217,7 +2217,7 @@ export const tickets = {
       blockers: { type: "string" },
       at: { type: "string" },
       total: { type: "number" },
-      tests: { type: "number" },
+      tests: { type: "number" },      // граничных нарядов: род `test` исчез вместе с прежней нарезкой
       modules: { type: "number" },
       waves: { type: "array", items: { type: "number" } },
       chars: { type: "number" },
@@ -2250,6 +2250,13 @@ export const tickets = {
     // здесь оно только читается. Юнитовый сьют первым — модульный тикет закрывается им.
     const suites = [...map.matchAll(elem("suite"))].map((m) => attrs(m[1]))
     const suite = suites.find((x) => x.kind === "unit") || suites[0] || {}
+    // СЬЮТ НЕ-UNIT — то, чем репозиторий гоняет программу СНАРУЖИ. Есть он — есть куда положить
+    // граничную проверку, которую никто не подгонит; нет — все шаги достаются владельцам.
+    const outer = suites.find((x) => x.kind && x.kind !== "unit") || null
+    // Команда сборки БЕЗ прогона тестов: ею закрывается модуль, за которым не осталось шагов. Полная
+    // сборка (`<build cmd>`) для этого не годится — она гоняет и граничные тесты, а те красные до
+    // последней волны по замыслу.
+    const build = attrs(((map.match(/<build\b([^>]*)\/>/) || ["", ""])[1])).compile || ""
 
     const list = ticketsOf({
       sections, order, frd, key,
@@ -2259,6 +2266,8 @@ export const tickets = {
       // Карта — словарь путей, которые в репозитории ЕСТЬ: по нему отсеивается проза из строки
       // «по образцу», и по нему же судит седьмое правило гардрейла.
       known: parseMap(map).nodes,
+      outer,
+      build,
     })
     const bad = checkTickets({ tickets: list, sections, frd, known: parseMap(map).nodes })
     if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
@@ -2283,7 +2292,7 @@ export const tickets = {
       ok: true,
       at: dir,
       total: list.length,
-      tests: list.filter((t) => t.kind === "test").length,
+      tests: list.filter((t) => t.kind === "boundary").length,
       modules: list.filter((t) => t.kind === "module").length,
       waves: waves.map((w) => list.filter((t) => t.wave === w).length),
       chars,
@@ -2650,7 +2659,7 @@ export const iziAnswer = {
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
-    version: "1.20.0",
+    version: "1.21.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
     description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/parts/part/planbook/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
     functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, design, parts, part, planbook, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },

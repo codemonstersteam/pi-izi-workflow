@@ -61,6 +61,9 @@ export const GRAMMAR_VERSION = "4"
 export const SPINE_ANSWERS = Object.freeze([
   Object.freeze({ el: "artifact", keys: ["name"] }),
   Object.freeze({ el: "suites", keys: [] }), // answered by <suite> elements, see checkSpine
+  // `compile` — сборка БЕЗ прогона тестов, необязательный ответ рядом с `cmd`: им шаг 14 закрывает
+  // модуль, за которым не осталось шагов. Ключом «отвечено ли» остаётся `cmd`: карта, снятая до
+  // появления этого вопроса, не становится задним числом неполной.
   Object.freeze({ el: "build", keys: ["cmd"] }),
   Object.freeze({ el: "toggles", keys: ["mechanism"] }),
   Object.freeze({ el: "branching", keys: ["branches", "commits"] }),

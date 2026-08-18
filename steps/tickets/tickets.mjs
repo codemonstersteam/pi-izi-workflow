@@ -168,246 +168,272 @@ const namedTest = (check) => {
   return flag ? flag[1] : ""
 }
 
-// FUNCTION_CONTRACT: ticketsOf — наряды исполнителям: сперва тесты, потом модули
-//   Input:        { sections, order, frd, key, branch, match, testDir }
-//                 match   — шаблон имени теста из `<suite match>` карты
-//                 testDir — каталог тестов из `<suite path>` карты
-//   Dependencies: ownerOf, stepText, testFile, namedTest
+// FUNCTION_CONTRACT: layersOf — слои изменения снизу вверх
+//   Input:        { sections, order } — разделы плана и очередь работ фазы ⑦
+//   Dependencies: —
 //   Antecedent:   любые значения
-//   Consequent:   success: Ticket[] в порядке исполнения — тест раньше своего модуля
-//                 failure: нет — тотальна
+//   Consequent:   success: string[][] — слой 0 не зовёт никого из изменения, слой k зовёт только
+//                          слои ниже; внутри слоя порядок очереди работ
+//                 failure: none — тотальна; круг (его отверг бы гардрейл шага 9) не зацикливает
 //   Purity:       pure
-//   Interface:    ticketsOf({ sections, order, frd, key, branch, match, testDir }) -> Ticket[]
 //
-// ЕДИНИЦА ТЕСТОВОГО ТИКЕТА — ПАРА «МОДУЛЬ × USE CASE», а не модуль. Модуль, закрывающий два десятка
-// шагов восьми use case, дал бы один неподъёмный наряд; разрезанный по use case — восемь нарядов по
-// две-четыре проверки, и каждый читается слабой моделью целиком.
+// ОЧЕРЕДЬ ДАЁТ ЛИНИЮ, СЛОИ ДАЮТ ВОЛНЫ. Рёбра те же самые — объявленные строкой «зовёт». Слой и есть
+// ответ на вопрос «что можно делать одновременно»: внутри него ни один модуль не зовёт другого.
+export function layersOf({ sections = [], order = [] } = {}) {
+  const byPath = new Map((sections || []).map((s) => [s.path, s]))
+  const line = (order || []).filter((p) => byPath.has(p))
+  const at = new Map()
+  const level = (p, seen = new Set()) => {
+    if (at.has(p)) return at.get(p)
+    if (seen.has(p)) return 0
+    seen.add(p)
+    const deps = (byPath.get(p).calls || []).filter((c) => byPath.has(c) && c !== p)
+    const v = deps.length ? 1 + Math.max(...deps.map((c) => level(c, seen))) : 0
+    at.set(p, v)
+    return v
+  }
+  const out = []
+  for (const p of line) {
+    const k = level(p)
+    ;(out[k] = out[k] || []).push(p)
+  }
+  return out.filter(Boolean)
+}
+
+// via — как актёр входит в программу, словами самого FRD. Путь в нём означает ВНЕШНИЙ канал: актёр
+// зовёт систему через её границу, а не через класс. Это не догадка о протоколе, а то, что роль
+// написала в `<actor via>`, и единственное место, где полоса вообще узнаёт о границе.
+const viaOf = (frd, name) => String((((frd || {}).actors || []).find((a) => String(a.name || "") === String(name || "")) || {}).via || "")
+
+// Ветка отказа наблюдаема снаружи, когда у её кода есть статус: `<failure status>` и есть то, что
+// граничный тест утверждает. Ветка без статуса живёт внутри и достаётся владельцу шага.
+const coded = (frd, code) => Boolean((((frd || {}).failures || []).find((f) => f.code === code) || {}).status)
+
+// FUNCTION_CONTRACT: ticketsOf — план и требование → наряды исполнителям
+//   Input:        { sections, order, frd, key, branch, match, testDir, known, outer, build }
+//                 outer — сьют НЕ-unit из карты ({ cmd, one, path, match }) или null: место, куда
+//                         кладётся граничная проверка. Нет такого сьюта — нет и границы
+//                 build — команда сборки БЕЗ прогона тестов (`<build compile>` карты); ею
+//                         закрывается модуль, за которым не осталось шагов
+//                 known — узлы карты: по ним отсеивается проза из строки «по образцу»
+//   Dependencies: ownerOf, layersOf, viaOf, coded, block, line, paths, testPath, namedTest, stepText
+//   Antecedent:   любые значения; пустой план даёт пустой список
+//   Consequent:   success: frozen Ticket[] двух родов — `boundary` (волна 0) и `module` (волна = слой)
+//                 failure: none — тотальна
+//   Purity:       pure
 //
-// ТЕСТ ВСЕГДА РАНЬШЕ МОДУЛЯ, и это не пожелание: модульный тикет ЖДЁТ свои тесты через `blocked_by`,
-// а тестовый файл не входит в его `outputs`. Привести модуль к тесту исполнитель может, привести тест
-// к модулю — нет.
-export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branch = "", match = "*", testDir = "", known = new Set() } = {}) {
+// ДВА РОДА, И РАЗДЕЛЕНИЕ ЖИВЁТ НА ГРАНИЦЕ. Отдельный тестовый тикет ПЕРЕД модульным ломает
+// компиляцию: тест ссылается на класс, которого ещё нет, и его «красный» — ошибка сборки, а не
+// проверка. Эмуляция 35 нарядов живого прогона показала это на четырёх тикетах, чьи ворота
+// недостижимы на их волне. Оба изученных конвейера (rationaldev-ai-sdlc-skills,
+// oh-my-openagent) независимо пришли к одному решению: юнит-тест живёт в тикете своего модуля, а
+// неподгоняемая проверка выносится НА ГРАНИЦУ программы, где она не называет ни одного нового класса
+// и потому компилируется с первой минуты.
+//
+//   boundary  один на use case, чей актёр входит через путь · волна 0 · обязан быть КРАСНЫМ
+//   module    один на раздел плана · волна = слой графа «зовёт» · ворота: сборка + ТОЛЬКО свои тесты
+export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branch = "", match = "*", testDir = "", known = new Set(), outer = null, build = "" } = {}) {
   const byPath = new Map(sections.map((s) => [s.path, s]))
   const owner = ownerOf({ sections, order })
+  const layers = layersOf({ sections, order })
+  const level = new Map()
+  layers.forEach((one, k) => one.forEach((p) => level.set(p, k)))
 
+  // ① ГРАНИЦА. Шаг достаётся ей по правилу без догадок: внешний вход (шаг 1) и ветка, у кода которой
+  // есть статус — то есть ровно то, что наблюдаемо снаружи. Всё прочее внутреннее и идёт владельцу.
+  const outerSteps = new Set()
+  const list = []
+  const ucs = (frd.usecases || [])
+  if (outer && outer.cmd) {
+    for (const u of ucs) {
+      const via = viaOf(frd, u.actor)
+      if (!via.includes("/")) continue                      // канал не путь — снаружи не позвать
+      const mine = [`${u.id}/1`, ...(u.exts || []).filter((e) => coded(frd, e.error)).map((e) => `${u.id}/${e.id}`)]
+        .filter((x) => stepText(frd, x.split("/")[0], x.split("/")[1]))
+      if (!mine.length) continue
+      for (const x of mine) outerSteps.add(x)
+      const entry = owner.get(`${u.id}/1`) || ""
+      // ИМЯ ГРАНИЧНОГО КЛАССА — ИЗ КЛЮЧА ЗАДАЧИ, А НЕ ИЗ МОДУЛЯ. Имя вида RestGlossaryStoreUC1IT
+      // читается слабой моделью как приглашение импортировать этот класс — а его ещё нет, и весь
+      // смысл границы в том, что она о нём не знает. Ключ нейтрален и не меняется от волны к волне.
+      const cls = `${String(key).replace(/[^A-Za-z0-9]/g, "") || "Boundary"}${u.id}${String(outer.match || "*IT.java").split("*").pop().replace(/\.[^.]+$/, "")}`
+      list.push({
+        kind: "boundary",
+        uc: u.id,
+        module: entry,                                      // вход программы — им же проверяется
+        name: `boundary-${u.id.toLowerCase()}`,
+        via,
+        goal: String(u.goal || ""),
+        post: String(u.post || ""),
+        steps: mine.map((x) => ({ step: x, text: stepText(frd, x.split("/")[0], x.split("/")[1]) })),
+        outputs: [testPath(entry, `${cls}.java`, outer.path || testDir)],
+        inputs: [],
+        verify: String(outer.one || "").includes("{class}")
+          ? `${outer.cmd} ${String(outer.one).replace("{class}", cls)}`
+          : String(outer.cmd),
+        testClass: cls,
+        waitsFor: [],
+      })
+    }
+  }
+
+  // ② МОДУЛИ. Раздел плана → тикет: код и его тесты пишет один исполнитель, в порядке «сначала тест
+  // по шагам отсюда, потом код». Тест не опережает свой класс — компиляция цела на каждой волне.
   const mine = new Map()
   for (const [step, path] of owner) {
-    const uc = step.split("/")[0]
-    if (!mine.has(path)) mine.set(path, new Map())
-    mine.get(path).set(uc, [...(mine.get(path).get(uc) || []), step])
+    if (outerSteps.has(step)) continue                      // шаг уже проверяется снаружи
+    mine.set(path, [...(mine.get(path) || []), step])
   }
-
-  const list = []
-  // КТО НАБЛЮДАЕТ МОДУЛЬ — обратный граф «зовёт», из тех же разделов, что и прямой.
-  const watch = new Map()
-  for (const s of sections) {
-    for (const c of s.calls || []) if (byPath.has(c) && c !== s.path) watch.set(c, [...(watch.get(c) || []), s.path])
-  }
-
-  // Тест-классы и имена тикетов КАЖДОГО модуля считаются ДО главного цикла: наблюдатель стоит в
-  // очереди работ позже наблюдаемого, и к моменту обработки зовомого тикетов зовущего ещё нет.
-  const byTests = new Map()
-  for (const path of order) {
-    const s = byPath.get(path)
-    if (!s) continue
-    const named = namedTest(line(s.body, "проверка"))
-    const ucs = [...(mine.get(path) || new Map()).keys()]
-    byTests.set(path, {
-      classes: ucs.map((uc) => testFile(named, uc, match).replace(/\.[^.]+$/, "")).filter(Boolean),
-      names: ucs.map((uc) => `test-${slug(path)}-${uc.toLowerCase()}`),
-    })
-  }
-
-  // Ближайшие наблюдатели, у которых тесты ЕСТЬ: вверх по обратному графу, пока не найдутся. Не нашлось
-  // никого — остаётся голый сьют, и это честный последний случай: «собирается и не ломает существующее».
-  const climb = (path, pick, seen = new Set()) => {
-    const out = []
-    for (const w of watch.get(path) || []) {
-      if (seen.has(w)) continue
-      seen.add(w)
-      const got = pick(byTests.get(w) || { classes: [], names: [] })
-      out.push(...(got.length ? got : climb(w, pick, seen)))
-    }
-    return [...new Set(out)]
-  }
-  const watchers = (path) => climb(path, (t) => t.classes)
-  const watcherTests = (path) => climb(path, (t) => t.names)
-
   for (const path of order) {
     const s = byPath.get(path)
     if (!s) continue
     const check = line(s.body, "проверка")
     const cmd = check.split("·")[0].trim()
     const named = namedTest(check)
-    // Вход обязан быть путём, который КТО-ТО знает: узлом карты или модулем, который пишет сам план.
-    // Всё прочее в строке «по образцу» — проза.
-    const sample = paths(block(s.body, "по образцу")).filter((p) => known.has(p) || byPath.has(p))
+    const steps = mine.get(path) || []
     const deps = (s.calls || []).filter((c) => byPath.has(c) && c !== path)
+    const sample = paths(block(s.body, "по образцу")).filter((p) => known.has(p) || byPath.has(p))
+    const file = steps.length && named ? testPath(path, `${named}.java`, testDir) : ""
 
-    // ③ тесты — по одному на use case, которым владеет модуль
-    const tests = []
-    for (const [uc, steps] of (mine.get(path) || new Map())) {
-      const file = testFile(named, uc, match)
-      const cls = file.replace(/\.[^.]+$/, "")
-      tests.push({
-        kind: "test",
-        module: path,
-        uc,
-        name: `test-${slug(path)}-${uc.toLowerCase()}`,
-        steps: steps.map((x) => ({ step: x, text: stepText(frd, uc, x.split("/")[1]) })),
-        signatures: block(s.body, "сигнатуры"),
-        // Тест ложится туда, где их держит репозиторий (`<suite path>` карты): раскладку решает
-        // проект, а не этот код.
-        outputs: file ? [testPath(path, file, testDir)] : [],
-        inputs: [...new Set([...sample, ...deps])],
-        // Команда закрывает ИМЕННО этот тест: подстановка идёт в тот же флаг, который назвала роль.
-        verify: cmd.replace(/-D(it\.)?test=\S+/, (m) => m.replace(/=.*/, `=${cls}`)),
-        testClass: cls,
-        blocked_by: [],
-      })
-    }
-    list.push(...tests)
-
-    // ④ модуль — ждёт свои тесты и зовомые модули.
-    //
-    // ЗАКРЫВАЕТСЯ ОН СВОИМИ ТЕСТАМИ, а не тем именем, которое роль написала в «проверке»: тесты
-    // разрезаны по use case, и класса с исходным именем никто не создаёт. Подстановка идёт в тот же
-    // флаг, которым команду параметризовала разведка; модуль без собственных тестов закрывается
-    // сьютом целиком — «собирается и не ломает существующее».
-    const own = tests.map((t) => t.testClass).filter(Boolean)
-    // МОДУЛЬ БЕЗ СВОИХ ШАГОВ ЗАКРЫВАЕТСЯ ТЕСТАМИ ТОГО, КТО ЕГО ЗОВЁТ. Шагов за ним не осталось ровно
-    // потому, что он наблюдаем ЧЕРЕЗ зовущего (ownerOf, правило отсева) — значит и проверка его та же.
-    // Целый сьют репозитория проверкой не является: на eddi это 722 теста, ни один из которых не про
-    // этот модуль, и «сделано» становится недоказуемым. Правило графовое: ни слова о виде модуля.
-    const seen_ = own.length ? own : watchers(path)
-    const moduleVerify = seen_.length
-      ? cmd.replace(/-D(it\.)?test=\S+/, (m) => m.replace(/=.*/, `=${seen_.join(",")}`))
-      : cmd.replace(/\s*-D(it\.)?test=\S+/, "")
-
+    // ВОРОТА — СБОРКА И ТОЛЬКО СВОИ ТЕСТЫ. Никогда чужие: наблюдатель реализуется волнами позже, и
+    // требовать его зелени значит требовать невозможного (дефект ① эмуляции). Модуль, за которым не
+    // осталось шагов, закрывается ОДНОЙ СБОРКОЙ: его сигнатуру проверит компилятор потребителя уже
+    // на следующей волне, а форму данных наружу — граничный тест в конце.
+    const own = file ? cmd.replace(/-D(it\.)?test=\S+/, (m) => m.replace(/=.*/, `=${named}`)) : ""
     list.push({
       kind: "module",
       module: path,
       name: slug(path),
       body: s.body,
-      steps: (s.closes || []).map((x) => ({ step: x, text: stepText(frd, x.split("/")[0], x.split("/")[1]) })),
-      outputs: [path],
-      inputs: [...new Set([...sample, ...deps, ...tests.flatMap((t) => t.outputs)])],
-      verify: moduleVerify,
-      testClass: seen_.join(", "),
+      steps: steps.map((x) => ({ step: x, text: stepText(frd, x.split("/")[0], x.split("/")[1]) })),
+      // Сигнатуры тех, кого он ЗОВЁТ: без них тест на шаг, наблюдаемый через соседа, писать не по чему.
+      uses: deps.map((d) => ({ path: d, signatures: block((byPath.get(d) || {}).body, "сигнатуры") })).filter((x) => x.signatures),
+      signatures: block(s.body, "сигнатуры"),
+      outputs: [path, ...(file ? [file] : [])],
+      inputs: [...new Set([...sample, ...deps])],
+      // Команды сборки в карте может не быть (карта снята до того, как разведку стали о ней спрашивать).
+      // Тогда модуль без шагов закрывается сьютом БЕЗ флага — «собирается и не ломает существующее».
+      // Сырую строку роли брать нельзя: в ней стоит имя теста её РЕАЛИЗАЦИИ, то есть чужой класс,
+      // который позеленеет волнами позже.
+      verify: [build, own].filter(Boolean).join(" && ") || cmd.replace(/\s*-D(it\.)?test=\S+/, ""),
+      testClass: file ? named : "",
+      layer: level.get(path) ?? 0,
       waitsFor: [...deps],
-      // Ждёт СВОИ тесты, а если их нет — тесты наблюдателя: RED-first держится и здесь, тест зовущего
-      // идёт волной раньше зовомого.
-      waitsForTests: own.length ? tests.map((t) => t.name) : watcherTests(path),
     })
   }
 
   const id = new Map(list.map((t, k) => [t.name, String(k + 1).padStart(2, "0")]))
   const byModule = new Map(list.filter((t) => t.kind === "module").map((t) => [t.module, t.name]))
-
   const withDeps = list.map((t) => ({
     ...t,
     id: id.get(t.name),
     key,
     branch,
-    blocked_by: (t.kind === "test"
-      ? []                                          // тест не ждёт ничего: он пишется по контракту
-      : [...t.waitsForTests, ...t.waitsFor.map((d) => byModule.get(d)).filter(Boolean)]
-    ).map((n) => id.get(n)).filter(Boolean).sort(),
+    // Граница не ждёт ничего — она пишется до всякого кода. Модуль ждёт тех, кого зовёт.
+    blocked_by: (t.kind === "boundary" ? [] : t.waitsFor.map((d) => byModule.get(d)))
+      .map((n) => id.get(n)).filter(Boolean).sort(),
   }))
 
-  // ⑤ волны — по blocked_by, а не по позиции: тикеты одной волны не связаны ничем
-  const byId = new Map(withDeps.map((t) => [t.id, t]))
-  const wave = new Map()
-  const waveOf = (t, seen = new Set()) => {
-    if (wave.has(t.id)) return wave.get(t.id)
-    if (seen.has(t.id)) return 0
-    seen.add(t.id)
-    const w = Math.max(0, ...t.blocked_by.map((d) => (byId.has(d) ? waveOf(byId.get(d), seen) + 1 : 0)))
-    wave.set(t.id, w)
-    return w
-  }
-  return Object.freeze(withDeps.map((t) => Object.freeze({ ...t, wave: waveOf(t) })))
+  // ③ ВОЛНЫ. Граница — нулевая, модуль — свой слой плюс один. Слой считается по рёбрам «зовёт», а не
+  // по blocked_by, поэтому волна зовомого строго меньше волны зовущего по построению.
+  return Object.freeze(withDeps.map((t) => Object.freeze({ ...t, wave: t.kind === "boundary" ? 0 : (t.layer || 0) + 1 })))
 }
 
-// FUNCTION_CONTRACT: checkTickets — раскладка судится, смысл не судится
-//   Input:        { tickets, sections, frd }
+// FUNCTION_CONTRACT: checkTickets — судить РАСКЛАДКУ, а не смысл
+//   Input:        { tickets, sections, frd, known }
 //   Dependencies: —
 //   Antecedent:   любые значения
-//   Consequent:   success: string[] — по блокеру на дефект, пусто = зелено
+//   Consequent:   success: string[] блокеров, пусто = зелено
+//                 failure: none — тотальна
 //   Purity:       pure
-//   Interface:    checkTickets({ tickets, sections, frd }) -> string[]
 //
-// ШЕСТЬ ПРАВИЛ, И КАЖДОЕ ЛОВИТ ПОТЕРЮ, А НЕ ВКУС. Правильно ли решён модуль — прочитал человек на
-// гейте 1; здесь проверяется, что ни одна работа не осталась без исполнителя, ни одно требование не
-// проверено дважды или ни разу, и что тест нельзя подогнать под реализацию.
+// Восемь правил. Четвёртое и пятое куплены эмуляцией живого прогона: ворота, зависящие от чужой
+// работы, и тест, который не скомпилируется до кода, — оба выглядят нормально в тексте наряда и оба
+// делают его неисполнимым.
 export function checkTickets({ tickets = [], sections = [], frd = {}, known = new Set() } = {}) {
   const B = []
   const mods = tickets.filter((t) => t.kind === "module")
-  const tests = tickets.filter((t) => t.kind === "test")
+  const bounds = tickets.filter((t) => t.kind === "boundary")
+  const planned = sections.map((s) => s.path)
+  const ours = new Set(planned)
 
   // 1 — модульный тикет на каждый раздел плана, и ни одного лишнего
-  const planned = sections.map((s) => s.path)
-  const cut = mods.map((t) => t.module)
-  const lost = planned.filter((p) => !cut.includes(p))
-  const extra = cut.filter((p) => !planned.includes(p))
-  if (lost.length) B.push(`модули плана без тикета: ${lost.join(", ")} — их работу никто не исполнит`)
+  const have = new Set(mods.map((t) => t.module))
+  const missing = planned.filter((p) => !have.has(p))
+  if (missing.length) B.push(`модули плана без тикета: ${missing.join(", ")} — работа, которую никто не исполнит`)
+  const extra = [...have].filter((p) => !ours.has(p))
   if (extra.length) B.push(`тикеты на модули вне плана: ${extra.join(", ")}`)
 
-  // 2 — каждый шаг требования принадлежит РОВНО одному тестовому тикету
-  const owned = new Map()
-  for (const t of tests) for (const s of t.steps || []) owned.set(s.step, [...(owned.get(s.step) || []), t.id])
-  const twice = [...owned].filter(([, who]) => who.length > 1)
-  if (twice.length) B.push(`шаги, проверяемые дважды: ${twice.map(([s, who]) => `${s} (${who.join(", ")})`).join("; ")} — у шага один владелец`)
-
-  const want = []
-  for (const u of (frd && frd.usecases) || []) {
-    const uid = String((u && u.id) || "").trim()
+  // 2 — каждый шаг требования покрыт РОВНО ОДИН раз: границей ИЛИ владельцем
+  const want = new Set()
+  for (const u of frd.usecases || []) {
+    const uid = String(u.id || "").trim()
     if (!uid) continue
-    for (const [k] of (u.steps || []).entries()) want.push(`${uid}/${k + 1}`)
-    for (const e of u.exts || []) if (e && e.id) want.push(`${uid}/${e.id}`)
+    ;(u.steps || []).forEach((_, k) => want.add(`${uid}/${k + 1}`))
+    for (const e of u.exts || []) want.add(`${uid}/${e.id}`)
   }
-  const unchecked = want.filter((w) => !owned.has(w))
-  if (unchecked.length) B.push(`шаги требования без единой проверки: ${unchecked.join(", ")}`)
-
-  // 3 — outputs непуст, и ни один путь не назван дважды
   const seen = new Map()
+  for (const t of tickets) for (const s of t.steps || []) seen.set(s.step, [...(seen.get(s.step) || []), t.name])
+  const twice = [...seen].filter(([, who]) => who.length > 1)
+  if (twice.length) B.push(`шаги, проверяемые дважды: ${twice.map(([st, who]) => `${st} (${who.join(", ")})`).join("; ")}`)
+  const unchecked = [...want].filter((x) => !seen.has(x))
+  if (unchecked.length) B.push(`шаги требования без единой проверки: ${unchecked.sort().join(", ")}`)
+
+  // 3 — outputs непуст, и ни один путь не назван в двух тикетах
+  const mute = tickets.filter((t) => !(t.outputs || []).length)
+  if (mute.length) B.push(`тикеты без outputs: ${mute.map((t) => t.name).join(", ")}`)
+  const owners = new Map()
+  for (const t of tickets) for (const o of t.outputs || []) owners.set(o, [...(owners.get(o) || []), t.name])
+  const clash = [...owners].filter(([, who]) => who.length > 1)
+  if (clash.length) B.push(`один путь в двух тикетах: ${clash.map(([p, who]) => `${p} (${who.join(", ")})`).join("; ")}`)
+
+  // 4 — ворота модуля не называют ЧУЖОЙ тест-класс: он позеленеет волнами позже, и наряд станет
+  // недостижимым. Дефект ① эмуляции: четыре тикета ждали зелени от модулей следующих волн.
+  const classes = new Map(tickets.filter((t) => t.testClass).map((t) => [t.testClass, t.name]))
+  for (const t of mods) {
+    const alien = [...classes].filter(([cls, who]) => who !== t.name && new RegExp(`\\b${cls}\\b`).test(t.verify || ""))
+    if (alien.length) B.push(`ворота ${t.name} держат чужой тест: ${alien.map(([c, w]) => `${c} (${w})`).join(", ")} — он позеленеет позже этой волны`)
+  }
+
+  // 5 — граничный тикет не называет ни одного пути, который эта же нарезка собирается создать: иначе
+  // он не скомпилируется до кода, и «красный» будет ошибкой сборки, а не проверкой. Дефект ②.
+  const made = new Set(mods.flatMap((t) => t.outputs || []))
+  for (const t of bounds) {
+    const leak = [...(t.inputs || []), ...(t.uses || []).map((u) => u.path)].filter((p) => made.has(p))
+    if (leak.length) B.push(`граница ${t.name} ссылается на то, чего ещё нет: ${leak.join(", ")} — она не скомпилируется до кода`)
+  }
+
+  // 6 — blocked_by резолвится, и волна зовомого строго меньше волны зовущего
+  const byId = new Map(tickets.map((t) => [t.id, t]))
   for (const t of tickets) {
-    if (!(t.outputs || []).length) B.push(`тикет ${t.id} (${t.name}) ничего не производит — outputs пуст`)
-    for (const o of t.outputs || []) seen.set(o, [...(seen.get(o) || []), t.id])
-  }
-  const shared = [...seen].filter(([, who]) => who.length > 1)
-  if (shared.length) B.push(`один путь в двух тикетах: ${shared.map(([o, who]) => `${o} (${who.join(", ")})`).join("; ")} — двух исполнителей на файле не бывает`)
-
-  // 4 — verify непуст
-  const dumb = tickets.filter((t) => !String(t.verify || "").trim()).map((t) => t.id)
-  if (dumb.length) B.push(`тикеты без команды проверки: ${dumb.join(", ")} — закрыть их нечем`)
-
-  // 5 — модуль ждёт свои тесты, и тестовый файл не в его outputs
-  for (const m of mods) {
-    const its = tests.filter((t) => t.module === m.module)
-    const missed = its.map((t) => t.id).filter((x) => !(m.blocked_by || []).includes(x))
-    if (missed.length) B.push(`тикет ${m.id} не ждёт свои тесты ${missed.join(", ")} — реализация опередит проверку`)
-    const touch = (m.outputs || []).filter((o) => its.flatMap((t) => t.outputs || []).includes(o))
-    if (touch.length) B.push(`тикет ${m.id} пишет в тестовый файл ${touch.join(", ")} — подгонка теста под реализацию`)
+    const ghost = (t.blocked_by || []).filter((d) => !byId.has(d))
+    if (ghost.length) B.push(`${t.name} ждёт несуществующие ${ghost.join(", ")}`)
+    const early = (t.blocked_by || []).map((d) => byId.get(d)).filter(Boolean).filter((d) => d.wave >= t.wave)
+    if (early.length) B.push(`${t.name} (волна ${t.wave}) ждёт то, что лежит не раньше: ${early.map((d) => `${d.name} волна ${d.wave}`).join(", ")}`)
   }
 
-  // 6 — blocked_by резолвится
-  const ids = new Set(tickets.map((t) => t.id))
-  for (const t of tickets) {
-    const ghost = (t.blocked_by || []).filter((d) => !ids.has(d))
-    if (ghost.length) B.push(`тикет ${t.id} ждёт несуществующие ${ghost.join(", ")}`)
-  }
-
-  // 7. КАЖДЫЙ ВХОД — ПУТЬ, КОТОРЫЙ КТО-ТО ЗНАЕТ. Исполнителю нельзя велеть прочитать то, чего нет:
-  // ни карта, ни план такого файла не называют, значит в наряде проза, а не вход. Тесты, которые
-  // тикет сам же и порождает, знает план по построению.
-  //
-  // Без карты правило МОЛЧИТ — той же дисциплиной, что F5 без источников: судить не по чему, и
-  // выдумывать нечего (steps/intake/frd.mjs::provenance).
-  const ours = new Set(planned)
+  // 7 — каждый вход знает карта или план. Без карты правило молчит — той же дисциплиной, что F5 без
+  // источников: судить не по чему.
   const stray = known.size ? [...new Set(tickets.flatMap((t) => (t.inputs || [])
     .filter((p) => !known.has(p) && !ours.has(p) && !tickets.some((x) => (x.outputs || []).includes(p)))))] : []
   if (stray.length) B.push(`во входах пути, которых не знает ни карта, ни план: ${stray.join(", ")} — исполнителю нечего по ним открыть`)
+
+  // 8 — модуль без шагов обязан быть СВЯЗАН с изменением: его зовут либо он зовёт. Оторванный модуль
+  // без шагов не проверит НИЧТО — ни компилятор потребителя на следующей волне, ни граница в конце.
+  //
+  // Связь считается в ОБЕ стороны намеренно. Реализацию интерфейса никто не зовёт по имени — её
+  // выбирает контейнер, а зовут интерфейс; на живом плане eddi так живут ZipResourceSource и
+  // RemoteApiResourceSource. Их проверяет компилятор (реализация обязана сойтись с интерфейсом) и
+  // граничный тест того use case, который через них проходит.
+  const calls = new Map(sections.map((s) => [s.path, (s.calls || []).filter((c) => ours.has(c))]))
+  for (const t of mods) {
+    if ((t.steps || []).length) continue
+    // Вход программы шагов не держит по построению — они ушли границе, которая его и проверяет.
+    if (bounds.some((b) => b.module === t.module)) continue
+    const used = [...calls].some(([who, cs]) => who !== t.module && cs.includes(t.module))
+    const uses = (calls.get(t.module) || []).some((c) => c !== t.module)
+    if (!used && !uses) B.push(`${t.name}: за модулем нет ни одного шага, и он не связан с изменением — ни его зовут, ни он зовёт; проверить его нечем`)
+  }
 
   return B
 }
@@ -439,30 +465,45 @@ export function ticketText(t = {}) {
 
   const steps = (t.steps || []).map((s) => `${String(s.step).replace("/", " шаг ")}${s.text ? `: ${s.text}` : ""}`)
 
-  if (t.kind === "test") {
+  // ГРАНИЦА. Ни одного пути и ни одного нового класса в теле — только канал, которым актёр входит в
+  // программу, и то, что он обязан увидеть в ответ. Поэтому она компилируется СЕЙЧАС и краснеет по
+  // делу: канала ещё нет.
+  if (t.kind === "boundary") {
     return [head, "",
-      `## Что проверяем — ${t.uc}, проверок ${steps.length}`, "",
+      `## Что проверяем — ${t.uc} снаружи, проверок ${steps.length}`, "",
+      t.goal ? `цель: ${t.goal}` : "",
+      t.post ? `после успеха: ${t.post}` : "", "",
       steps.join("\n"), "",
-      "## Что зовём — сигнатуры модуля, они же контракт", "",
-      t.module, String(t.signatures || "(сигнатуры не названы)"), "",
+      "## Как звать — ТОЛЬКО через границу программы", "",
+      String(t.via || ""), "",
+      "Ни одного класса и ни одного пути из этой доработки в тексте теста: он обязан компилироваться",
+      "СЕЙЧАС, до того как написана хоть одна строка кода.", "",
       "## Правило", "",
-      "Тест пишется ДО модуля и обязан УПАСТЬ: модуля ещё нет. Зелёный тест на этом месте значит, что",
-      "он ничего не проверяет. Одна проверка на шаг: happy-путь по тексту шага, отказ по его коду.",
-      "Зови модуль ровно теми сигнатурами, что названы выше, — их же реализует другой наряд.", "",
+      "Тест обязан быть КРАСНЫМ и по деловой причине: канала ещё нет, ответ не тот. Ошибка сборки",
+      "красным не считается — значит ты сослался на то, чего нет. Зелёный тест здесь значит, что он",
+      "ничего не проверяет.", "",
+      "Он позеленеет САМ, когда лягут все модули. Ни один другой наряд не имеет права его править.", "",
       "## Как запустить", "", String(t.verify || ""),
-    ].join("\n")
+    ].filter((x) => x !== "").join("\n")
   }
 
+  const uses = (t.uses || []).map((u) => `${u.path}\n${u.signatures}`).join("\n\n")
   return [head, "",
     "## Что делаем", "",
     String(t.body || "").trim().split("\n").filter((l) => !/^\s*(закрывает|проверка):/.test(l)).join("\n").trim(), "",
-    "## Зачем — шаги, которые это закрывает", "",
-    steps.join("\n"), "",
-    "## Как проверить", "",
-    // Имя класса дописывается, только если команда его не назвала: у модуля с девятью наблюдателями
-    // это был бы тот же список второй раз, а тикет читает слабая модель.
-    `${t.verify || ""}${t.testClass && !String(t.verify || "").includes(t.testClass) ? ` · ${t.testClass}` : ""}`, "",
-    "Тесты уже написаны и лежат по путям из inputs. Правь МОДУЛЬ, пока они не станут зелёными;",
-    "тестовые файлы не трогай — они не в твоих outputs.",
-  ].join("\n")
+    uses ? "## Чем пользуемся — сигнатуры тех, кого зовём" : "", uses ? "" : "", uses, uses ? "" : "",
+    steps.length ? "## Что проверяем — шаги, которыми владеет этот модуль" : "",
+    steps.length ? "" : "", steps.join("\n"), steps.length ? "" : "",
+    "## Порядок", "",
+    steps.length
+      ? ["Сначала тест по шагам выше — по ТЕКСТУ шага, а не по тому, как удобнее реализовать.",
+         "Потом модуль. Потом прогон. Тест и код — твои оба, поэтому подгонять тест под реализацию",
+         "некому запретить, кроме тебя: он обязан утверждать шаг дословно.",
+         "Границу программы проверяет другой наряд, и править его файлы ты не можешь."].join("\n")
+      : ["За этим модулем не осталось ни одного шага требования: он наблюдаем через того, кто его",
+         "зовёт. Поэтому ворота здесь — СБОРКА. Твоя сигнатура будет проверена компилятором уже на",
+         "следующей волне, когда против неё напишут зовущего, а форма данных наружу — граничным",
+         "тестом в конце."].join("\n"), "",
+    "## Как проверить", "", String(t.verify || ""),
+  ].filter((x) => x !== "").join("\n")
 }

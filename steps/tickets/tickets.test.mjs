@@ -4,9 +4,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { parseFrd } from "../intake/frd.mjs"
-import { ownerOf, ticketsOf, checkTickets, ticketText } from "./tickets.mjs"
+import { ownerOf, layersOf, ticketsOf, checkTickets, ticketText } from "./tickets.mjs"
 
 const FRD = parseFrd(`<frd grammar="1" goal="хранилище словарей">
+  <actor name="api" kind="system" via="HTTP /store"/>
   <usecase id="UC1" actor="api" goal="создать">
     <post>создан</post>
     <step n="1">POST /store с документом</step>
@@ -46,11 +47,15 @@ const SECTIONS = [
 const ORDER = ["src/model/Doc.java", "src/mongo/Store.java", "src/rest/RestStore.java"]
 // Карта знает и то, что план правит, и образцы, с которых он списывает. Всё, чего в ней нет и что не
 // пишет план, — проза, а не вход.
+// Сьют НЕ-unit — тот, которым репозиторий гоняет программу снаружи. Есть он — есть куда положить
+// граничную проверку; нет — все шаги достаются владельцам.
+const OUTER = { cmd: "./mvnw verify", one: "-Dit.test={class}", path: "src/test/java", match: "*IT.java" }
+const BUILD = "./mvnw -q -DskipTests package"
 const KNOWN = new Set(["src/model/Doc.java", "src/mongo/Store.java", "src/rest/RestStore.java",
   "src/model/Old.java", "src/mongo/OldStore.java", "src/rest/OldRest.java"])
 const cut = (over = {}) => ticketsOf({
   sections: SECTIONS, order: ORDER, frd: FRD, key: "DOS-1", branch: "feature/DOS-1",
-  match: "*Test.java", testDir: "src/test/java", known: KNOWN, ...over,
+  match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, ...over,
 })
 
 // ГЛАВНОЕ ПРАВИЛО ШАГА. Один шаг требования проходит через несколько модулей, и все они называют его
@@ -78,97 +83,8 @@ test("правило смотрит на рёбра, а не на вид мод�
   assert.equal(owner.get("UC1/2"), "src/mongo/Store.java")
 })
 
-test("тесты режутся по use case, модуль ждёт свои тесты", () => {
-  const t = cut()
-  const tests = t.filter((x) => x.kind === "test")
-  const mods = t.filter((x) => x.kind === "module")
-
-  assert.equal(mods.length, 3, "модульный тикет на каждый раздел")
-  // Store владеет шагами двух use case → два тестовых тикета, а не один на пять проверок.
-  const storeTests = tests.filter((x) => x.module === "src/mongo/Store.java")
-  assert.deepEqual(storeTests.map((x) => x.uc).sort(), ["UC1", "UC2"])
-  // Doc не владеет ничем — теста нет: его корректность видна через того, кто его зовёт.
-  assert.equal(tests.some((x) => x.module === "src/model/Doc.java"), false)
-
-  const store = mods.find((x) => x.module === "src/mongo/Store.java")
-  for (const x of storeTests) assert.ok(store.blocked_by.includes(x.id), `модуль ждёт тест ${x.id}`)
-  assert.ok(store.wave > Math.max(...storeTests.map((x) => x.wave)), "модуль идёт волной позже своих тестов")
-})
-
-// Имя теста выводится из шаблона сьюта, найденного разведкой, а не придумывается: восемь тикетов
-// одного модуля обязаны писать в восемь РАЗНЫХ файлов, иначе восемь исполнителей сядут на один.
-test("файл теста — из шаблона сьюта, с пакетом модуля и без двойного суффикса", () => {
-  const t = cut()
-  const one = t.find((x) => x.kind === "test" && x.module === "src/mongo/Store.java" && x.uc === "UC1")
-  assert.deepEqual([...one.outputs], ["src/test/java/mongo/StoreUC1Test.java"])
-  assert.match(one.verify, /-Dtest=StoreUC1Test$/)
-
-  // Другой проект — другой шаблон и другой корень; кода это не касается.
-  const py = cut({ match: "test_*.py", testDir: "tests" })
-  const first = py.find((x) => x.kind === "test")
-  assert.match(first.outputs[0], /^tests\//)
-  assert.match(first.outputs[0], /\.py$/)
-})
-
 test("гардрейл зелен на исправной нарезке", () => {
   assert.deepEqual(checkTickets({ tickets: cut(), sections: SECTIONS, frd: FRD }), [])
-})
-
-test("гардрейл ловит шесть потерь, и каждую называет", () => {
-  const t = cut()
-
-  // 1 — модуль плана без тикета
-  assert.match(checkTickets({ tickets: t.filter((x) => x.module !== "src/model/Doc.java"), sections: SECTIONS, frd: FRD }).join("\n"),
-    /модули плана без тикета: src\/model\/Doc.java/)
-
-  // 2а — шаг проверяется дважды
-  const twice = [...t, { ...t.find((x) => x.kind === "test"), id: "99", name: "dup" }]
-  assert.match(checkTickets({ tickets: twice, sections: SECTIONS, frd: FRD }).join("\n"), /проверяемые дважды/)
-
-  // 2б — шаг требования без единой проверки
-  const noUc2 = t.filter((x) => !(x.kind === "test" && x.uc === "UC2"))
-  assert.match(checkTickets({ tickets: noUc2, sections: SECTIONS, frd: FRD }).join("\n"), /без единой проверки: UC2\/1, UC2\/2/)
-
-  // 3 — один путь в двух тикетах
-  const clash = t.map((x) => (x.kind === "test" && x.uc === "UC2" ? { ...x, outputs: t.find((y) => y.kind === "test" && y.uc === "UC1").outputs } : x))
-  assert.match(checkTickets({ tickets: clash, sections: SECTIONS, frd: FRD }).join("\n"), /один путь в двух тикетах/)
-
-  // 4 — тикет без команды проверки
-  const mute = t.map((x) => (x.kind === "module" ? { ...x, verify: "" } : x))
-  assert.match(checkTickets({ tickets: mute, sections: SECTIONS, frd: FRD }).join("\n"), /без команды проверки/)
-
-  // 5 — модуль не ждёт свои тесты: реализация опередит проверку
-  const early = t.map((x) => (x.kind === "module" ? { ...x, blocked_by: [] } : x))
-  assert.match(checkTickets({ tickets: early, sections: SECTIONS, frd: FRD }).join("\n"), /не ждёт свои тесты/)
-
-  // 5б — модуль пишет в тестовый файл: подгонка теста под реализацию
-  const testOut = t.find((x) => x.kind === "test").outputs[0]
-  const rewrite = t.map((x) => (x.kind === "module" && x.module === "src/mongo/Store.java" ? { ...x, outputs: [...x.outputs, testOut] } : x))
-  assert.match(checkTickets({ tickets: rewrite, sections: SECTIONS, frd: FRD }).join("\n"), /пишет в тестовый файл/)
-
-  // 6 — ждёт несуществующий тикет
-  const ghost = t.map((x) => (x.kind === "module" ? { ...x, blocked_by: [...x.blocked_by, "99"] } : x))
-  assert.match(checkTickets({ tickets: ghost, sections: SECTIONS, frd: FRD }).join("\n"), /ждёт несуществующие 99/)
-})
-
-test("тело тикета — вырезки: шаги дословно, код отказа из карты, сигнатуры из раздела", () => {
-  const t = cut()
-  const testTicket = t.find((x) => x.kind === "test" && x.module === "src/mongo/Store.java" && x.uc === "UC1")
-  const text = ticketText(testTicket)
-
-  assert.match(text, /kind: test/)
-  assert.match(text, /UC1 шаг 2: система пишет запись/)
-  // Ветка отказа приезжает с кодом из карты отказов — тесту есть что утверждать.
-  assert.match(text, /UC1 шаг 2a: CONFLICT — дубль отклонён — HTTP 409/)
-  assert.match(text, /create\(Doc d\) : Id/)
-  assert.match(text, /обязан УПАСТЬ/)
-
-  const mod = ticketText(t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java"))
-  assert.match(mod, /kind: module/)
-  assert.match(mod, /что это: монго-хранилище/)
-  assert.match(mod, /тестовые файлы не трогай/)
-  // Строки «закрывает» и «проверка» в тело не дублируются — они уже в заголовке и в секциях.
-  assert.doesNotMatch(mod, /^закрывает:/m)
 })
 
 test("тотальность: без входов — пусто, и ни одного броска", () => {
@@ -188,8 +104,8 @@ test("многострочный перечень доезжает в тикет
     body: s.body.replace("сигнатуры: create(Doc d) : Id · read(String id) : Doc",
       "сигнатуры: create(Doc d) : Id\n           read(String id) : Doc\n           delete(String id) : void"),
   }))
-  const t = ticketsOf({ sections: many, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN })
-  const one = t.find((x) => x.kind === "test" && x.module === "src/mongo/Store.java")
+  const t = ticketsOf({ sections: many, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD })
+  const one = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
   for (const sig of ["create(Doc d) : Id", "read(String id) : Doc", "delete(String id) : void"]) {
     assert.match(one.signatures, new RegExp(sig.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `сигнатура потеряна: ${sig}`)
   }
@@ -199,7 +115,7 @@ test("многострочный перечень доезжает в тикет
   const sample = SECTIONS.map((s) => (s.path !== "src/rest/RestStore.java" ? s : {
     ...s, body: s.body.replace("по образцу: src/rest/OldRest.java — стиль", "по образцу: src/rest/OldRest.java — стиль\n            src/mongo/OldStore.java — тоже"),
   }))
-  const t2 = ticketsOf({ sections: sample, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN })
+  const t2 = ticketsOf({ sections: sample, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD })
   assert.ok(t2.find((x) => x.kind === "module" && x.module === "src/rest/RestStore.java").inputs.includes("src/mongo/OldStore.java"))
 })
 
@@ -211,7 +127,7 @@ test("во входах только пути, известные карте и�
     ...s, body: s.body.replace("по образцу: src/mongo/OldStore.java — стиль",
       "по образцу: src/mongo/OldStore.java — стиль, ресурс eddi://ai.labs.glossary, пакет com/example/Thing.class"),
   }))
-  const t = ticketsOf({ sections: prose, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN })
+  const t = ticketsOf({ sections: prose, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD })
   const mod = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
   assert.ok(mod.inputs.includes("src/mongo/OldStore.java"), "настоящий образец потерялся")
   assert.deepEqual(mod.inputs.filter((p) => !KNOWN.has(p) && !p.startsWith("src/test/")), [],
@@ -222,21 +138,125 @@ test("во входах только пути, известные карте и�
   assert.match(checkTickets({ tickets: bad, sections: prose, frd: FRD, known: KNOWN }).join("\n"), /\/\/ai\.labs\.glossary/)
 })
 
-// Д2. За модулем не осталось шагов ровно потому, что он наблюдаем ЧЕРЕЗ зовущего (ownerOf). Значит и
-// закрывать его должны тесты зовущего. Целый сьют репозитория проверкой не является: на eddi это 722
-// теста, ни один из которых не про этот модуль, — «сделано» становится недоказуемым.
-test("модуль без своих шагов закрывается тестами того, кто его зовёт", () => {
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// НОВАЯ НАРЕЗКА: граница снаружи, модули снизу вверх.
+//
+// Эмуляция 35 нарядов живого прогона показала, что порядок неисполним: тестовый тикет ПЕРЕД модульным
+// не компилируется (тест ссылается на класс, которого нет), а модуль без своих шагов закрывался
+// тестами наблюдателей, которые зеленеют только волнами позже. Оба изученных конвейера — sdlc-skills
+// и oh-my-openagent — независимо пришли к одному: юнит-тест живёт в тикете модуля, а неподгоняемая
+// проверка выносится на ГРАНИЦУ программы, где она не ссылается ни на один новый класс.
+
+test("слои считаются по рёбрам «зовёт», снизу вверх", () => {
+  const L = layersOf({ sections: SECTIONS, order: ORDER })
+  assert.deepEqual(L, [["src/model/Doc.java"], ["src/mongo/Store.java"], ["src/rest/RestStore.java"]])
+
+  // Ребро исчезло — слои сплющиваются: правило смотрит на граф, а не на порядок в списке.
+  const flat = SECTIONS.map((s) => ({ ...s, calls: [] }))
+  assert.deepEqual(layersOf({ sections: flat, order: ORDER }).length, 1)
+  assert.deepEqual(layersOf(), [])
+})
+
+test("граничный тикет — на use case, чей вход несёт api, и он не знает ни одного нового класса", () => {
+  const t = cut()
+  const bs = t.filter((x) => x.kind === "boundary")
+  assert.deepEqual(bs.map((x) => x.uc).sort(), ["UC1", "UC2"], "граница заводится на каждый use case входа")
+
+  const one = bs.find((x) => x.uc === "UC1")
+  assert.equal(one.wave, 0, "граница пишется первой волной — до всякого кода")
+  assert.deepEqual(one.blocked_by, [])
+
+  // ГЛАВНОЕ СВОЙСТВО: текст не называет ни одного пути, который эта же нарезка только собирается
+  // создать. Иначе тест не скомпилируется до кода, и его «красный» будет ошибкой сборки, а не проверкой.
+  const text = ticketText(one)
+  for (const s of SECTIONS) assert.doesNotMatch(text, new RegExp(s.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `граница ссылается на новый класс: ${s.path}`)
+  assert.match(text, /HTTP \/store/, "граница обязана звать систему через её канал")
+  assert.doesNotMatch(one.outputs[0], /RestStore/, "имя граничного класса собрано из модуля, которого ещё нет")
+  assert.match(text, /обязан быть КРАСНЫМ/)
+})
+
+test("шаги делятся без догадок: вход и ветки с кодом — границе, остальное — владельцу", () => {
+  const t = cut()
+  const at = (kind, uc) => t.filter((x) => x.kind === kind && x.uc === uc).flatMap((x) => x.steps.map((s) => s.step))
+
+  // UC1: шаг 1 — внешний вход, 2a — ветка с кодом 409. Оба у границы.
+  assert.deepEqual(at("boundary", "UC1").sort(), ["UC1/1", "UC1/2a"])
+  // Шаг 2 — внутренний, он у своего владельца.
+  const mods = t.filter((x) => x.kind === "module").flatMap((x) => (x.steps || []).map((s) => s.step))
+  assert.ok(mods.includes("UC1/2"), "внутренний шаг потерялся")
+  assert.equal(mods.includes("UC1/1"), false, "внешний вход проверяется дважды")
+
+  // Каждый шаг требования покрыт РОВНО ОДИН раз — это и судит правило 2 гардрейла.
+  const all = [...t.filter((x) => x.kind === "boundary"), ...t.filter((x) => x.kind === "module")]
+    .flatMap((x) => (x.steps || []).map((s) => s.step))
+  assert.equal(all.length, new Set(all).size, `шаг покрыт дважды: ${all.join(" ")}`)
+})
+
+test("модуль и его тесты — один тикет, ворота — сборка и ТОЛЬКО свои тесты", () => {
+  const t = cut()
+  const store = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
+
+  assert.equal(t.some((x) => x.kind === "test"), false, "остался отдельный тестовый тикет — компиляция снова сломана")
+  assert.ok(store.outputs.includes("src/mongo/Store.java"))
+  assert.ok(store.outputs.some((p) => p.startsWith("src/test/java/")), "тест не в outputs — его пишет кто-то другой")
+
+  assert.match(store.verify, /-q -DskipTests package/, "ворота не включают сборку")
+  assert.match(store.verify, /-Dtest=StoreTest/, "ворота не включают свои тесты")
+  // И НИКОГДА чужие: наблюдатель реализуется позже, его тесты на этой волне зелёными быть не могут.
+  const alien = t.filter((x) => x.kind === "module" && x.module !== store.module).flatMap((x) => x.testClass ? [x.testClass] : [])
+  for (const a of alien) assert.doesNotMatch(store.verify, new RegExp(a), `в воротах чужой тест ${a}`)
+})
+
+test("модуль без своих шагов закрывается одной сборкой, и волна зовомого меньше волны зовущего", () => {
   const t = cut()
   const doc = t.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
-  assert.equal(t.some((x) => x.kind === "test" && x.module === "src/model/Doc.java"), false, "фикстура изменилась: у Doc появились свои тесты")
-
-  // Store зовёт Doc и владеет шагами двух use case — его тесты и есть наблюдение за Doc.
-  const storeTests = t.filter((x) => x.kind === "test" && x.module === "src/mongo/Store.java")
-  assert.match(doc.verify, /-Dtest=/, "модуль закрывается целым сьютом — проверка ни о чём")
-  for (const one of storeTests) assert.match(doc.verify, new RegExp(one.testClass), `тест зовущего не назван: ${one.testClass}`)
-
-  // И ждёт их: RED-first держится — тест зовущего, потом зовомый, потом зовущий.
-  for (const one of storeTests) assert.ok(doc.blocked_by.includes(one.id), `не ждёт тест ${one.id}`)
   const store = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
-  assert.ok(doc.wave < store.wave, "зовомый обязан быть готов раньше зовущего")
+
+  // Doc владеет UC1/2 и UC2/2 — у него ЕСТЬ шаги. Возьмём модуль без шагов отдельным раскладом.
+  const bare = SECTIONS.map((s) => (s.path === "src/model/Doc.java" ? { ...s, closes: [], body: s.body.replace("закрывает: UC1 шаг 2 · UC2 шаг 2", "закрывает: нет") } : s))
+  const t2 = ticketsOf({ sections: bare, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD })
+  const bareDoc = t2.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
+  assert.equal(bareDoc.verify, BUILD, "модуль без шагов закрывается не одной сборкой")
+  assert.deepEqual(bareDoc.outputs, ["src/model/Doc.java"], "у модуля без шагов появился тестовый файл")
+
+  assert.ok(doc.wave < store.wave, "зовомый обязан лежать волной раньше зовущего")
+  assert.ok(store.blocked_by.includes(doc.id), "модуль не ждёт того, кого зовёт")
+})
+
+test("гардрейл судит новую нарезку и называет каждую потерю", () => {
+  const t = cut()
+  const ok = (list) => checkTickets({ tickets: list, sections: SECTIONS, frd: FRD, known: KNOWN, outer: OUTER })
+  assert.deepEqual(ok(t), [], `зелёная нарезка признана красной: ${ok(t).join(" · ")}`)
+
+  // 4 — чужой тест в воротах модуля
+  const alienGate = t.map((x) => (x.kind === "module" && x.module === "src/model/Doc.java" ? { ...x, verify: "./mvnw test -Dtest=StoreTest" } : x))
+  assert.match(ok(alienGate).join("\n"), /чуж/)
+
+  // 5 — граница ссылается на класс, которого ещё нет
+  const leaky = t.map((x) => (x.kind === "boundary" ? { ...x, inputs: ["src/mongo/Store.java"] } : x))
+  assert.match(ok(leaky).join("\n"), /src\/mongo\/Store\.java/)
+
+  // 6 — зовомый оказался волной позже зовущего
+  const late = t.map((x) => (x.module === "src/model/Doc.java" ? { ...x, wave: 9 } : x))
+  assert.match(ok(late).join("\n"), /волн/)
+
+  // 8 — ОТОРВАННЫЙ модуль без шагов: его не проверит ничто. Связь считается в обе стороны: реализацию
+  // интерфейса никто не зовёт по имени, но она зовёт интерфейс — и её проверяет компилятор и граница.
+  // Оторванный модуль: шагов нет, никто не зовёт ЕГО и он не зовёт никого.
+  const orphan = [...SECTIONS.map((s) => (s.path === "src/model/Doc.java" ? { ...s, closes: [], calls: [] } : { ...s, calls: s.calls.filter((c) => c !== "src/model/Doc.java") }))]
+  const t3 = ticketsOf({ sections: orphan, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD })
+  assert.match(checkTickets({ tickets: t3, sections: orphan, frd: FRD, known: KNOWN, outer: OUTER }).join("\n"), /не связан с изменением/)
+})
+
+// Карта, снятая до того, как разведку стали спрашивать о команде сборки, команды не несёт. Запасной
+// путь обязан оставаться честным: сырая строка «проверка» раздела называет тест РЕАЛИЗАЦИИ, то есть
+// чужой класс, который позеленеет волнами позже. Живой прогон уперся ровно в это.
+test("без команды сборки модуль без шагов закрывается сьютом без флага, а не чужим тестом", () => {
+  const bare = SECTIONS.map((s) => (s.path === "src/model/Doc.java"
+    ? { ...s, closes: [], body: s.body.replace("закрывает: UC1 шаг 2 · UC2 шаг 2", "закрывает: нет").replace("-Dtest=DocTest · DocTest", "-Dtest=StoreTest · StoreTest") }
+    : s))
+  const t = ticketsOf({ sections: bare, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER })
+  const doc = t.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
+  assert.equal(doc.verify, "./mvnw test", `ворота несут чужое: ${doc.verify}`)
+  assert.deepEqual(checkTickets({ tickets: t, sections: bare, frd: FRD, known: KNOWN }), [])
 })
