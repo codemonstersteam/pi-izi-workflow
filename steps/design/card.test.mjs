@@ -202,31 +202,41 @@ const PART = {
   id: "src", slug: "src-rest",
   modules: ["src/rest/RestStore.java", "src/model/Doc.java"],
   ucs: ["UC1", "UC2"],
-  // Номера шагов приезжают в партию из FRD — по ним правило 3 судит, что «закрывает» ссылается
+  // Номера шагов приезжают в партию из FRD — по ним правило 3 судит, что «closes» ссылается
   // на существующий шаг, а не на выдуманный и не на тот же номер другой буквой.
   steps: ["UC1/1", "UC1/2a", "UC2/1"],
   neighbours: ["src/common/Base.java"],
 }
 const KNOWN = ["src/common/Base.java", "src/model/Doc.java", "src/rest/RestSnippets.java"]
+// Тексты шагов приезжают из FRD: по ним правило 6 судит, может ли владелец ПРОВЕРИТЬ то, что закрыл.
+const TEXTS = {
+  "UC1/1": "клиент отправляет POST /store с документом",
+  "UC1/2a": "дубль отклонён",
+  "UC2/1": "система читает запись и отдаёт её через Doc",
+}
 
-const GREEN_PART = `# src — хранилище
+// ПЛАН ПАРТИИ — АНГЛИЙСКИЙ АРТЕФАКТ. Граница языка полосы проходит по FRD: его дословную вырезку
+// исполняет слабая модель, пишущая код в английском репозитории (steps/tickets/tickets.mjs).
+const GREEN_PART = `# src — the store
 
-## src/rest/RestStore.java  (новый)
-что это: REST-точка хранилища
-сигнатуры: create(Doc doc) : IResourceId
-зовёт: src/model/Doc.java — принимает и отдаёт запись
-по образцу: src/rest/RestSnippets.java — @Path, @ApplicationScoped
-закрывает: UC1 шаг 1 · UC2 шаг 1
-проверка: ./mvnw test -Dtest=RestStoreTest · RestStoreTest
+## src/rest/RestStore.java  (new)
+what: the store's REST entry point
+signatures: create(Doc doc) : IResourceId
+declares: public class RestStore implements IRestStore
+calls: src/model/Doc.java — takes and returns the record
+sample: src/rest/RestSnippets.java — @Path, @ApplicationScoped
+closes: UC1 step 1 · UC2 step 1
+verify: ./mvnw test -Dtest=RestStoreTest · RestStoreTest
 
-## src/model/Doc.java  (новый)
-что это: запись хранилища
-поля: name: String — имя записи
-зовёт: нет
-закрывает: UC1 шаг 1
-проверка: ./mvnw test -Dtest=DocTest · DocTest
+## src/model/Doc.java  (new)
+what: the store's record
+fields: name: String — the record's name
+declares: public class Doc
+calls: none
+closes: UC1 step 1
+verify: ./mvnw test -Dtest=DocTest · DocTest
 `
-const part = (text) => checkPart({ text, part: PART, known: KNOWN })
+const part = (text, texts = TEXTS) => checkPart({ text, part: PART, known: KNOWN, texts })
 
 test("гардрейл партии: решён каждый модуль, чужих нет, use case закрыты, есть чем проверить и что звать", () => {
   assert.deepEqual(part(GREEN_PART), [])
@@ -236,37 +246,123 @@ test("гардрейл партии: решён каждый модуль, чу�
     /нет решения по модулям: src\/model\/Doc.java/)
 
   // 2 — чужой модуль: его решает свой вызов, и раздел по СОСЕДУ тоже чужой.
-  assert.match(part(`${GREEN_PART}\n## src/common/Base.java (правится)\nзовёт: нет\nзакрывает: UC1 шаг 1\nпроверка: x · Y\n`).join("\n"),
+  assert.match(part(`${GREEN_PART}\n## src/common/Base.java (edited)\ndeclares: public abstract class Base\ncalls: none\ncloses: UC1 step 1\nverify: x · Y\n`).join("\n"),
     /решены модули не из этой партии: src\/common\/Base.java/)
 
   // 3 — use case, который ничем не закрыт: требование потеряно молча.
-  assert.match(part(GREEN_PART.replace(" · UC2 шаг 1", "")).join("\n"),
+  assert.match(part(GREEN_PART.replace(" · UC2 step 1", "")).join("\n"),
     /use case UC2 не закрыт ни одним разделом/)
 
   // 4а — раздел без «проверки»: тикет нечем закрыть (прогон d8ef8c60).
-  assert.match(part(GREEN_PART.replace("проверка: ./mvnw test -Dtest=DocTest · DocTest", "")).join("\n"),
-    /у разделов src\/model\/Doc.java нет строки «проверка/)
+  assert.match(part(GREEN_PART.replace("verify: ./mvnw test -Dtest=DocTest · DocTest", "")).join("\n"),
+    /у разделов src\/model\/Doc.java нет строки «verify/)
 
-  // 4б — раздел без «зовёт»: порядок работ строить не из чего. Замер на живых контрактах: 8 разделов
+  // 4б — раздел без «calls»: порядок работ строить не из чего. Замер на живых контрактах: 8 разделов
   // дали 2 ребра, потому что строка была необязательной.
-  assert.match(part(GREEN_PART.replace("зовёт: нет\n", "")).join("\n"),
-    /у разделов src\/model\/Doc.java нет строки «зовёт/)
+  assert.match(part(GREEN_PART.replace("calls: none\n", "")).join("\n"),
+    /у разделов src\/model\/Doc.java нет строки «calls/)
 
-  // 5 — «зовёт» на файл, которого нет нигде: адрес, который никуда не ведёт.
-  assert.match(part(GREEN_PART.replace("зовёт: src/model/Doc.java — принимает и отдаёт запись", "зовёт: src/ghost/Nope.java — выдумка")).join("\n"),
+  // 5 — «calls» на файл, которого нет нигде: адрес, который никуда не ведёт.
+  assert.match(part(GREEN_PART.replace("calls: src/model/Doc.java — takes and returns the record", "calls: src/ghost/Nope.java — a fiction")).join("\n"),
     /ссылается на src\/ghost\/Nope.java/)
 
   // Проза разделом не считается — то же правило, что у контракта группы (прогон 17 авг, «## Сводка:»).
-  assert.deepEqual(part(`${GREEN_PART}\n## Итог:\nдва модуля`), [])
+  assert.deepEqual(part(`${GREEN_PART}\n## Summary:\ntwo modules`), [])
+})
+
+// ОБЪЯВЛЕНИЕ — ЧЕМ ОТКРЫВАЕТСЯ ФАЙЛ. До этой строки базовый класс и аннотации жили ПРОЗОЙ внутри
+// «sample», и слабая модель, читая наряд, выбирала, от чего наследовать, сама: живой счёт эмуляции —
+// файл на Spring Boot в проекте на Quarkus, дважды. Спрашивается со ВСЕХ разделов: у существующего
+// модуля объявление уже лежит в $START_NODES заказа.
+test("правило 4': раздел без «declares:» — исполнителю нечем открыть файл", () => {
+  const B = part(GREEN_PART.replace("declares: public class Doc\n", "")).join("\n")
+  assert.match(B, /у разделов src\/model\/Doc.java нет строки «declares:»/)
+  assert.match(B, /public class X extends Y implements Z/, "блокер обязан показать ФОРМУ строки, а не только её имя")
+})
+
+// ГРАНИЦА ЯЗЫКА ПОЛОСЫ ПРОХОДИТ ПО FRD. Выше него артефакт читает человек на языке заказа; ниже —
+// слабая модель, которой дословную вырезку из этого текста предстоит исполнить в английском
+// репозитории. Одного кириллического слова довольно: это заголовок или требование, на которое ей
+// нечем действовать.
+test("правило 8: план партии, написанный по-русски, не доезжает до исполнителя", () => {
+  const B = part(GREEN_PART.replace("what: the store's REST entry point", "what: REST-точка хранилища")).join("\n")
+  assert.match(B, /пишется ПО-АНГЛИЙСКИ/)
+  assert.match(B, /переведи: REST-точка, хранилища/, "блокер называет СЛОВА — иначе роль перепишет файл целиком")
 })
 
 test("разбор партии один на двоих: гардрейл и сборка PLAN.md читают одно и то же", () => {
   const s = sectionsOf(GREEN_PART)
   assert.deepEqual(s.map((x) => x.path), PART.modules)
-  // Рёбра порядка работ — из строки «зовёт», и «нет» даёт пустой список, а не отсутствие строки.
+  // Рёбра порядка работ — из строки «calls», и «нет» даёт пустой список, а не отсутствие строки.
   assert.deepEqual([...s[0].calls], ["src/model/Doc.java"])
   assert.deepEqual([...s[1].calls], [])
   assert.equal(s[1].says, true, "«нет» — это ответ")
   // Закрытые шаги — с номерами: по ним фаза ⑥ считает полноту.
   assert.deepEqual([...s[0].closes], ["UC1/1", "UC2/1"])
+})
+
+// ВЛАДЕЛЕЦ ШАГА ОБЯЗАН ВИДЕТЬ ТО, ЧТО ЗАКРЫВАЕТ. Живой прогон eddi: план объявил, что шаг «система
+// инвалидирует кэш GlossaryService» закрывает монго-хранилище, у которого в сигнатурах один CRUD и в
+// «calls» — один интерфейс. Проверить это честно исполнителю было нечем, и слабая модель написала
+// `assertTrue(true)`. Шаг объявил ровно ОДИН раздел, поэтому правило владения шага 14 не могло
+// вмешаться: отсеивать было некого.
+//
+// Правило смотрит на имена модулей САМОГО плана, целым словом: не разбор языка, а сверка с тем, что
+// роль написала в заголовках своих же разделов.
+test("правило 6: шаг не закрывают модулем, который не зовёт названного в шаге", () => {
+  // Шаг UC2/1 говорит о Doc, и RestStore его зовёт — молчим.
+  assert.deepEqual(part(GREEN_PART), [])
+
+  // Убрать ребро «calls» — и владельцу нечем проверить тот же шаг.
+  const cut = GREEN_PART.replace("calls: src/model/Doc.java — takes and returns the record", "calls: none")
+  const B = part(cut).join("\n")
+  assert.match(B, /UC2 step 1/)
+  assert.match(B, /Doc\.java/)
+  // Блокер называет ОБА выхода и КАНДИДАТА: без имени роль перебирает соседей наугад.
+  assert.match(B, /отдай шаг тому, кто зовёт/)
+  assert.match(B, /его не зовёт никто|его зовёт/)
+
+  // Текста шага нет — правило 6 молчит: судить не по чему (дисциплина F5 без источников). Правило 7
+  // на том же тексте говорит своё — его и не трогаем.
+  assert.deepEqual(part(cut, {}).filter((b) => /закрывает/.test(b)), [])
+
+  // Шаг называет СВОЙ модуль — это норма, а не слепота: раздел Doc закрывает UC1/1, и текст про Doc.
+  // RestStore закрывает тот же шаг и Doc зовёт — значит молчат оба.
+  assert.deepEqual(part(GREEN_PART, { ...TEXTS, "UC1/1": "клиент отправляет документ, система строит Doc" }), [])
+})
+
+// ОТОРВАННЫЙ МОДУЛЬ — ДЕФЕКТ ПЛАНА, А НЕ НАРЕЗКИ. Живой прогон: `IRestGlossaryStore` остался без
+// шагов (их забрала граница) и без единой связи — `RestGlossaryStore` не объявил, что его реализует,
+// хотя соседний `GlossaryStore` для своего интерфейса это объявил. Проверить такой модуль нечем: ни
+// компилятором потребителя, ни границей. Шаг 14 это ловит, но там нет круга починки — а здесь есть.
+test("правило 7: модуль партии связан с изменением — его зовут либо он зовёт", () => {
+  assert.deepEqual(part(GREEN_PART), [])
+
+  // Doc перестал быть зовомым и сам никого не зовёт — он оторван.
+  const cut = GREEN_PART.replace("calls: src/model/Doc.java — takes and returns the record", "calls: none")
+  assert.match(part(cut).join("\n"), /Doc\.java.*не связан|не связан.*Doc\.java/)
+
+  // Партия из одного модуля связывать не с кем — правило молчит.
+  const alone = checkPart({
+    text: "# one\n\n## src/model/Doc.java  (new)\nwhat: the record\ndeclares: public class Doc\ncalls: none\ncloses: UC1 step 1\nverify: ./mvnw test -Dtest=DocTest · DocTest\n",
+    part: { ...PART, modules: ["src/model/Doc.java"], ucs: ["UC1"], steps: ["UC1/1"] },
+    known: KNOWN,
+    texts: TEXTS,
+  })
+  assert.deepEqual(alone.filter((b) => /не связан/.test(b)), [])
+})
+
+// Роль пишет в «calls» то, что ВЫЗЫВАЕТ: `source.readGlossaries`. На отказ «такого файла нет» она
+// чинит его перебором имён файлов и снова промахивается — живой прогон потратил на это два круга.
+// Блокер обязан назвать выход: тут нужен ПУТЬ, а вызов пишется словами после тире.
+test("блокер отличает вызов от пути и говорит, что писать вместо него", () => {
+  const call = GREEN_PART.replace("calls: src/model/Doc.java — takes and returns the record", "calls: source.readGlossaries")
+  const B = part(call).join("\n")
+  assert.match(B, /вызовы, а не пути/)
+  assert.match(B, /source\.readGlossaries/)
+  assert.match(B, /напиши ПУТЬ/)
+
+  // А несуществующий ПУТЬ остаётся тем, чем был: файла нет.
+  const ghost = GREEN_PART.replace("calls: src/model/Doc.java — takes and returns the record", "calls: src/model/Nope.java — no such file")
+  assert.match(part(ghost).join("\n"), /такого файла нет/)
 })

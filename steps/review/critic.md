@@ -80,8 +80,10 @@ These hold on every run, whatever the order says.
 7. **A declared gap is not a blocker.** `gaps` says the repository has no such mechanism; introducing
    the first one is separate work with its own gate. The operator sees `gaps` on the plan itself —
    repeating it here buys nothing.
-8. **The artifact speaks the language of the ORDER.** A Russian plan and a Russian FRD get Russian
-   blocker texts. The tags, codes and attribute names stay as they are here.
+8. **The artifacts you judge are ENGLISH, and so are your blockers.** The band's language boundary
+   runs at the FRD: above it the artifact is read by a human in the language of the order, below it by
+   the small model that implements the tickets. The plan and the FRD are below. The tags, codes and
+   attribute names stay as they are here.
 $END_LAW
 
 $START_INPUT
@@ -154,7 +156,7 @@ The staging file, one artifact, nothing else in it:
   <blocker code="<a code from the order's vocabulary>"
            node="<an id from plan-index.json, verbatim>"
            evidence="<a plan node id for unreachable-antecedent, an FRD id for goal-not-delivered>">
-    <one line, in the language of the order: what does not compose>
+    <one line, in English: what does not compose>
   </blocker>
 </review>
 ```

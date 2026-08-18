@@ -14,11 +14,13 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs"
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync, renameSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, parts, part, plan, review, reviewForm, iziAnswer } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, parts, part, plan, review, reviewForm, iziAnswer, gate1, branch, runlogRead, runlogMark, runlogTicket, runlogPending } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
 // D23: the gate of step 6 — its question is a constant of the ripple slice, and the answer travels in
 // the format core/answers.mjs owns.
@@ -257,6 +259,251 @@ test("a number that stands in a requirement's verify is sourced — the BRD slic
   assert.equal(r.ok, false)
   assert.match(r.blockers, /418/)
   assert.match(r.blockers, /<question>/)
+})
+
+// ЧЬИ ОТВЕТЫ СЧИТАЮТСЯ ИСТОЧНИКОМ, ЗАВИСИТ ОТ ТОГО, ЧТО СУДЯТ. Артефакт на staging роль пишет СЕЙЧАС —
+// там ответ мёртвого прогона легализовал бы умолчание, ради чего newRun и существует (шов выше).
+// Промоученный .agent/frd.xml — обратный случай: резюме перепроверяет то, что написано РАНЬШЕ, и
+// уликами ему служат ровно те ответы, которые newRun только что унёс в .agent/prev/.
+//
+// Живой прогон c87db886: FRD зелен, план утверждён оператором, шаг 13 отказал по другому дефекту — а
+// следующий прогон не смог закрыть шаг 6, потому что девять ответов за его числами уехали в prev.
+// Полоса переиграла всё с шестого шага и задала те же вопросы заново.
+test("возобновление судит строение промоученного артефакта, а не происхождение его чисел", () => {
+  const root = tempRoot()
+  writeFileSync(join(root, "TASK.md"), "Кэшировать глоссарий агента.\n")
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  mkdirSync(join(root, ".agent", "prev"), { recursive: true })
+  writeFileSync(join(root, ".agent", "appgraph.xml"),
+    '<appgraph><module path="src/GlossaryResource.java" kind="rest"><api name="GET /glossary"/></module></appgraph>')
+  writeFileSync(join(root, ".agent", "brd.md"), [
+    "R1 Глоссарий кэшируется",
+    "   fit: кэш живёт ограниченное время",
+    "   verify: повторный GET /glossary не идёт в хранилище",
+    "subjects[]: глоссарий · кэш",
+    "analogue: PromptSnippet\nopen-questions: 0",
+  ].join("\n"))
+  const frd = `<frd grammar="1" goal="кэшировать глоссарий агента">
+  <actor name="admin-ui" kind="human" via="HTTP GET /glossary"/>
+  <usecase id="UC1" actor="admin-ui" goal="получить глоссарий">
+    <pre>агент существует</pre><post>вернулся глоссарий</post>
+    <step n="1">клиент шлёт GET /glossary</step>
+    <ext id="1a" error="none" outcome="глоссария нет — пустой список"/>
+  </usecase>
+  <failures found="no" why="изменение не вводит кодов отказа"/>
+  <delta op="GET /glossary" form="Changed" node="src/GlossaryResource.java" from="без кэша" to="из кэша"/>
+  <scenario id="S1" uc="UC1" before="каждый вызов идёт в хранилище" after="повторный вызов берётся из кэша" nodes="src/GlossaryResource.java"/>
+  <touched path="src/GlossaryResource.java" why="появляется чтение из кэша"/>
+  <nfr subject="glossary-cache" fit="кэш живёт 300000 мс" source="answers.md"/>
+</frd>`
+  writeFileSync(join(root, ".agent", "staging", "frd.xml"), frd)
+  writeFileSync(join(root, ".agent", "frd.xml"), frd)                    // тот же артефакт, промоученный
+
+  // Ответ ещё на месте — зелено; ровно так закрылся шаг 6 в самом прогоне.
+  writeFileSync(join(root, ".agent", "answers.md"),
+    newExchange([{ n: 1, question: "TTL кэша глоссария?", text: "как у сниппетов, 300000 мс" }]).value)
+  assert.equal(checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root)).ok, true)
+
+  // Ответ ушёл — и уже НЕ в prev: prev держит ровно один прогон и через шаг перезаписывается.
+  rmSync(join(root, ".agent", "answers.md"))
+
+  // РЕЗЮМЕ судит промоученный артефакт и остаётся зелёным: происхождение чисел проверено тогда,
+  // когда артефакт писали, и переустанавливать его по сегодняшним файлам — судить историю.
+  assert.equal(checkFrd.run({ path: ".agent/frd.xml" }, ctx(root)).ok, true,
+    "возобновление требует улик, которых прогон-автор уже не оставил")
+
+  // А НА STAGING — красный: там роль пишет СЕЙЧАС, и число без источника остаётся умолчанием.
+  const r = checkFrd.run({ path: ".agent/staging/frd.xml" }, ctx(root))
+  assert.equal(r.ok, false, "умолчание прошло в артефакте, который пишут сейчас")
+  assert.match(r.blockers, /300000/)
+
+  // Строение промоученного судится по-прежнему: узел вне карты — красный и на резюме.
+  writeFileSync(join(root, ".agent", "frd.xml"), frd.replace('node="src/GlossaryResource.java"', 'node="src/Nowhere.java"'))
+  assert.equal(checkFrd.run({ path: ".agent/frd.xml" }, ctx(root)).ok, false,
+    "резюме перестало судить строение — это уже не проверка, а печать")
+})
+
+
+// --- runlog: память полосы -------------------------------------------------------------------------
+//
+// Шов на то, ради чего механизм заведён: полоса перестаёт ВЫВОДИТЬ «что сделано», перепроверяя
+// артефакты, и начинает ЧИТАТЬ отметки. Живой прогон c87db886 — счёт по старой схеме: зелёный FRD,
+// утверждённый план и два переигранных шага 6 подряд с двумя десятками повторных вопросов.
+
+const RUNLOG = ".agent/run.yaml"
+
+test("runlogMark пишет отметку в cwd ПРОГОНА и запечатывает отпечаток артефакта", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "brd.md"), "R1 требование\n")
+
+  const r = runlogMark.run({ step: 2, name: "brd", status: "done", note: "требований 18", artifacts: [".agent/brd.md"] }, ctx(root))
+  assert.match(r.at, /^\d{4}-\d{2}-\d{2}T/)
+  assert.equal(r.sealed, 1)
+
+  const text = readFileSync(join(root, RUNLOG), "utf8")
+  assert.match(text, /steps:\n {2}- step: 2\n {4}name: brd\n {4}status: done\n/)
+  assert.match(text, /artifact: \.agent\/brd\.md/)
+  // Отпечаток берётся ЗДЕСЬ и сейчас — именно с ним сравнит следующий запуск.
+  assert.match(text, /sha256: [0-9a-f]{64}/)
+  // И ничего не написано в этот репозиторий: путь всегда от context.run.cwd.
+  assert.equal(existsSync(join(process.cwd(), RUNLOG)), false)
+})
+
+test("runlogRead: закрытые шаги позади, вход — в первый незакрытый, с причиной", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "brd.md"), "R1\n")
+  assert.equal(runlogRead.run({}, ctx(root)).from, 1, "журнала нет — с начала")
+
+  for (const step of [1, 2]) runlogMark.run({ step, name: `s${step}`, status: "done", artifacts: step === 2 ? [".agent/brd.md"] : [] }, ctx(root))
+  const ok_ = runlogRead.run({}, ctx(root))
+  assert.equal(ok_.from, 3)
+  assert.deepEqual(ok_.closed, [1, 2])
+
+  // Артефакт правили руками после отметки — шаг переигрывается, и отказ называет файл.
+  writeFileSync(join(root, ".agent", "brd.md"), "R1 другое\n")
+  const edited = runlogRead.run({}, ctx(root))
+  assert.equal(edited.from, 2)
+  assert.match(edited.why, /изменён после отметки: \.agent\/brd\.md/)
+
+  // Артефакт исчез — то же самое, но причина другая.
+  rmSync(join(root, ".agent", "brd.md"))
+  assert.match(runlogRead.run({}, ctx(root)).why, /исчез/)
+})
+
+// ЖУРНАЛ ПЕРЕЖИВАЕТ ГРАНИЦУ ПРОГОНА. Ровно в этом списке ротации однажды потерялись улики артефакта
+// (ответы оператора), и полоса дважды переиграла шаг 6. Журнал в него не входит — и это шов, а не
+// надежда: добавь его в newRun, и тест покраснеет.
+test("newRun не уносит журнал в prev — иначе память живёт один прогон", () => {
+  const root = tempRoot()
+  deadRun(root, { answer: "50" })
+  for (const step of [1, 2, 3, 4, 5, 6]) runlogMark.run({ step, name: `s${step}`, status: "done" }, ctx(root))
+
+  newRun.run({}, ctx(root))
+  assert.equal(existsSync(join(root, RUNLOG)), true, "journal был унесён вместе с состоянием прогона")
+  assert.equal(existsSync(join(root, ".agent", "prev", "run.yaml")), false)
+  assert.equal(runlogRead.run({}, ctx(root)).from, 7, "после ротации полоса забыла, что шаг 6 закрыт")
+})
+
+test("единицы шага: переснимаются только несделанные, порядок вызывающего сохранён", () => {
+  const root = tempRoot()
+  runlogMark.run({ step: 4, name: "scope", unit: "spine", status: "done" }, ctx(root))
+  const r = runlogPending.run({ step: 4, of: ["spine", "backup", "llm"] }, ctx(root))
+  assert.deepEqual(r.units, ["backup", "llm"])
+  assert.equal(r.done, 1)
+  // Шага в журнале нет вовсе — делать надо всё, и это не отказ.
+  assert.deepEqual(runlogPending.run({ step: 9, of: ["labs-eddi"] }, ctx(root)).units, ["labs-eddi"])
+})
+
+test("строка тикета заменяется по id — повтор не растит файл", () => {
+  const root = tempRoot()
+  runlogTicket.run({ id: "02", wave: 0, status: "running" }, ctx(root))
+  runlogTicket.run({ id: "02", wave: 0, status: "green" }, ctx(root))
+  runlogTicket.run({ id: "21", wave: 0, status: "failed", note: "verify красный" }, ctx(root))
+
+  const text = readFileSync(join(root, RUNLOG), "utf8")
+  assert.equal((text.match(/- id: "02"/g) || []).length, 1)
+  assert.match(text, /- id: "02"\n {4}wave: 0\n {4}status: green/)
+  assert.equal(runlogRead.run({}, ctx(root)).tickets, 2)
+})
+
+test("испорченный журнал — это «не знаем», а не «ничего не сделано молча»", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, RUNLOG), "steps:\n  - step: 2\n    stauts: done\n")
+  const r = runlogRead.run({}, ctx(root))
+  assert.equal(r.from, 1)
+  assert.equal(r.broken, true)
+  assert.match(r.why, /испорчен/)
+})
+
+
+// ГЕЙТ ПРИЗНАЁТ СВОЙ ТОКЕН. Живой прогон 08675093: план утверждён, .agent/gate1.json на диске, и
+// перезапуск всё равно спросил оператора — ответ гейт искал только в .agent/answers.md, унесённом
+// newRun в prev до первого шага. Один из повторов вернулся не словом `approve`, а описанием проекта,
+// и шаг умер терминально.
+test("гейт: валидный токен не спрашивает заново, разошедшийся план — спрашивает", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, "task", "DOS-1"), { recursive: true })
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\nСделать карточку.\n")
+  const plan = "# План\n## src/CardResource.java\n"
+  writeFileSync(join(root, "task", "DOS-1", "PLAN.md"), plan)
+
+  const hash = createHash("sha256").update(plan).digest("hex")
+  writeFileSync(join(root, ".agent", "gate1.json"), JSON.stringify({ key: "DOS-1", plan: hash, answer: "approve" }))
+
+  const kept = gate1.run({}, ctx(root))
+  assert.equal(kept.ok, true, "гейт не признал собственный токен")
+  assert.equal(kept.kept, true)
+  assert.equal(kept.at, ".agent/gate1.json")
+
+  // План переписали после акцепта — токен перестаёт годиться. Дальше гейт идёт своей обычной дорогой
+  // и упирается в отсутствующую карту, а не молча пропускает НЕутверждённую работу.
+  writeFileSync(join(root, "task", "DOS-1", "PLAN.md"), `${plan}## src/Other.java\n`)
+  const again = gate1.run({}, ctx(root))
+  assert.equal(again.ok, false, "токен признан для плана, которого оператор не читал")
+
+  // Чужой ключ — тоже не рецепт.
+  writeFileSync(join(root, "task", "DOS-1", "PLAN.md"), plan)
+  writeFileSync(join(root, ".agent", "gate1.json"), JSON.stringify({ key: "DOS-999", plan: hash, answer: "approve" }))
+  assert.equal(gate1.run({}, ctx(root)).ok, false)
+})
+
+
+// Молчаливая потеря — то, ради чего механизм и заведён. Отметка поверх нечитаемого журнала стёрла бы
+// память прогона; она обязана упасть, а чтение — по-прежнему честно сказать «не знаю».
+test("отметка не пишется поверх испорченного журнала", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, RUNLOG), "steps:\n  - step: 6\n    stauts: done\n")
+  assert.throws(() => runlogMark.run({ step: 7, name: "weight", status: "done" }, ctx(root)), /не разбирается/)
+  assert.match(readFileSync(join(root, RUNLOG), "utf8"), /stauts: done/, "журнал всё-таки перезаписан")
+  assert.equal(runlogRead.run({}, ctx(root)).broken, true)
+})
+
+
+// ХОСТ ВАЛИДИРУЕТ ВЫХОД, И ЭТО НЕ ФОРМАЛЬНОСТЬ: `null` в поле, объявленном строкой, роняет прогон на
+// «Invalid output from branch» — ровно так умер живой прогон, где шаг 13 впервые признал свою ветку.
+// Тот же класс дважды стоил прогона на budgets, поэтому проверяется РЕАЛЬНЫЙ ответ против РЕАЛЬНОЙ
+// схемы, а не форма объекта на глаз.
+test("шаг 13: признанная ветка — валидный выход, а не падение хоста", () => {
+  const root = tempRoot()
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: ["ignore", "pipe", "ignore"] })
+  git("init", "-q", "-b", "main")
+  git("config", "user.email", "t@t"); git("config", "user.name", "t")
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  mkdirSync(join(root, "task", "DOS-1"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\nСделать карточку.\n")
+  writeFileSync(join(root, ".gitignore"), ".agent/\n")   // как в любой форме: состояние прогона вне git
+  writeFileSync(join(root, ".agent", "appgraph.xml"), "<appgraph/>")
+  writeFileSync(join(root, ".agent", "mode"), "minor")
+  git("add", "-A"); git("commit", "-qm", "init")
+
+  const plan = "# План\n## src/A.java\n"
+  writeFileSync(join(root, "task", "DOS-1", "PLAN.md"), plan)
+  writeFileSync(join(root, ".agent", "gate1.json"), JSON.stringify({
+    key: "DOS-1", plan: createHash("sha256").update(plan).digest("hex"), answer: "approve",
+  }))
+
+  const schema = Compile(branch.output)
+  const first = branch.run({ baseline: false }, ctx(root))
+  assert.equal(schema.Check(first), true, JSON.stringify(first))
+  assert.equal(first.ok, true, first.why)
+  assert.equal(first.name, "feature/DOS-1")
+
+  // Второй заход по тому же рецепту: ветка на месте, HEAD на ней — это НЕ занятое имя.
+  const again = branch.run({ baseline: false }, ctx(root))
+  assert.equal(schema.Check(again), true, `выход не проходит схему хоста: ${JSON.stringify(again)}`)
+  assert.equal(again.ok, true, again.why)
+  assert.equal(again.kept, true)
+
+  // А без рецепта то же самое имя — по-прежнему терминальный отказ.
+  rmSync(join(root, ".agent", "branch.json"))
+  const clash = branch.run({ baseline: false }, ctx(root))
+  assert.equal(schema.Check(clash), true, JSON.stringify(clash))
+  assert.equal(clash.kind, "branch-exists")
 })
 
 // --- budgets: the host validates OUTPUT, so a budget missing from the schema crashes the run ----

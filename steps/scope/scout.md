@@ -199,7 +199,7 @@ A `spine` cell:
 <part cell="<cell id>" kind="spine">
   <artifact name="<what the build manifest names>" root="<directory of that manifest, or .>"/>
   <suite id="<kind, or kind-suffix>" kind="unit|component|contract|e2e" cmd="<whole-suite command>" one="<one-file form, or empty>" path="<test folder>" match="<file-name pattern, when two suites share a folder>"/>
-  <build cmd="<build command>"/>
+  <build cmd="<build command>" compile="<build WITHOUT running tests, empty if there is none>"/>
   <toggles mechanism="<how a RUNNING instance switches behaviour>" config="<the key it reads>"/>
   <branching branches="<naming convention>" commits="<message convention>"/>
   <contract spec="<path to openapi/asyncapi/other>" validator="<command that checks it>"/>
@@ -210,7 +210,10 @@ A `spine` cell:
 Any of the seven spine answers may instead be written as `<artifact found="no"/>`, `<build
 found="no"/>`, `<toggles found="no"/>`, `<branching found="no"/>`, `<contract found="no"/>`,
 `<suites found="no"/>`, `<integrations found="no"/>`. `one` may be empty — a suite with no one-file
-form is normal, and the pipeline then runs the whole suite. `match` is needed only where two suites
+form is normal, and the pipeline then runs the whole suite. `compile` may be empty too: it is the
+command that builds the project WITHOUT running its tests, and step 14 closes a module that carries
+no test of its own with exactly that — the full `cmd` would run the tests and they are red by design
+until the last wave. `match` is needed only where two suites
 share one folder.
 
 A raw `<` inside an attribute value must be written `&lt;` — `branches="feature/&lt;ticket&gt;"`.

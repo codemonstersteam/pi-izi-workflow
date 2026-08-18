@@ -11,7 +11,7 @@
 //               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
-//               parts · part · planbook · gate1 · plan · review · reviewForm. They are not
+//               parts · part · planbook · gate1 · branch · tickets · plan · review · reviewForm. They are not
 //               imported and cannot be: `X is not defined` on any of them means the extension
 //               loaded into this pi session is OLDER than this script (the extension is read at
 //               session start, this file at every run) — restart pi. The catch at the bottom says
@@ -59,7 +59,8 @@ let QUESTION_ROUNDS;    // trips to the operator allowed in one run — the roun
 let CHECKPOINT_RETRIES; // re-pauses on the SAME question when no matching answer showed up
 let MAX_PARALLEL;       // swarm batch size at step 4 — see scope() for why the sandbox needs one
 let REVIEW_ROUNDS;      // rewinds of steps 6-11 ordered by the critic — see band() at the bottom
-let ORDER_CAP;          // characters ONE assembled order may carry — core/budgets.mjs::ORDER_CAP_CHARS
+let ORDER_CAP;
+let BASELINE;          // шаг 13: гонять ли все сьюты после среза ветки — core/budgets.mjs          // characters ONE assembled order may carry — core/budgets.mjs::ORDER_CAP_CHARS
 
 // The two counters the operator's budgets are actually spent from. They are MODULE state, not phase
 // state, because since S30 a phase can run more than once in a run: the critic rewinds the band to
@@ -409,8 +410,12 @@ async function brd() {
   while (attempt < LOOPS) {
     const seen = await answers({});
     const ANSWERS = answersBlock(seen, FORM.absentDoc);
+    // Прошлый ответ роли едет в наряде: иначе она переписывает BRD с нуля каждый круг, ориентируясь
+    // на претензии к документу, которого не видит. Тот же приём, что у шагов 6 и 9.
+    const PREVIOUS = await readText({ path: STAGING });
     const order = sized("brd", orderTpl, {
       TASK,
+      PREVIOUS,
       ANSWERS,
       FEEDBACK: feedback,
       STAGING,
@@ -547,8 +552,10 @@ async function scout(cell, orderTpl, BRD) {
   if (!files.ok) return { ok: false, why: `${cell.id}: ${files.why}` };
 
   for (let attempt = 0; attempt < LOOPS; attempt++) {
+    const PREVIOUS = await readText({ path: STAGING });
     const order = sized(`scope/${cell.id}`, orderTpl, {
       CELL: cell.id,
+      PREVIOUS,
       BRD,
       STAGING,
       CHECK,
@@ -743,10 +750,19 @@ async function intake(fromCritic) {
   while (attempt < INTAKE_LOOPS) {
     const seen = await answers({});
     const ANSWERS = answersBlock(seen, "(no operator answers yet)");
+    // THE ROLE'S OWN LAST ANSWER TRAVELS IN THE ORDER, and is not left for it to fetch. `promote`
+    // MOVES, so a rejected FRD is still at the staging path — but READING it is an ACTION, and an
+    // action a 27b role at `thinking: low` can silently skip. Live run 7f3a8431 is what that costs:
+    // told only what was wrong, the role rewrote all 88 nodes from scratch every round and the
+    // blockers went 10 → 4 → 6, each round closing one class and breaking another. Same discipline as
+    // the question key of `.agent/pending.json`: what the next step needs is COPIED by the machine,
+    // never recalled by a model. Missing file reads as "" — the first attempt carries nothing.
+    const PREVIOUS = await readText({ path: STAGING });
     const order = sized("intake", orderTpl, {
       BRD,
       MAP: map.text,
       ANSWERS,
+      PREVIOUS,
       FEEDBACK: feedback,
       STAGING,
       CHECK,
@@ -992,7 +1008,9 @@ async function designing(from = 6) {
   if (!book.ok) exit(err("escalate", { subject: book.blockers || book.why, evidence: book.cycle ? `очередь работ: ${book.cycle}` : "полнота плана шага 9" }));
   log(`design/plan: PLAN.md собран — модулей ${book.modules}, разделов ${book.sections}, use case ${book.ucs}`);
 
-  return "PLAN.md";
+  // Путь поставки, а не голое имя: его называет отметка журнала, и по нему лестница узнаёт, что план
+  // снесли и шаг надо переиграть.
+  return book.at || "PLAN.md";
 
   return ".agent/data-flow.md";
 }
@@ -1024,8 +1042,18 @@ async function onePart(one, since = "(none — first attempt)") {
     if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `план партии ${one.slug}: цикл исчерпан за ${LOOPS} попыток` }));
     if (silent > LOOPS) exit(err("escalate", { subject: `роль ${silent} раз вернула track:"ok", не записав ${staging}`, evidence: `план партии ${one.slug}: артефакта нет` }));
 
+    // ПРОШЛЫЙ ОТВЕТ РОЛИ ЕДЕТ В НАРЯДЕ, как у шага 6 и у обоих проходов выше. Без него роль каждый
+    // круг переписывает все разделы партии с нуля, ориентируясь на претензии к документу, которого
+    // не видит: живой прогон дал 5 → 5 → 4 → 6 блокеров за пять кругов и эскалацию. Отсутствующий
+    // файл читается как "" — первая попытка ничего не несёт.
+    // ПРОШЛЫЙ ОТВЕТ ИЩЕТСЯ ТАМ, ГДЕ ОН ЕСТЬ. Зелёная партия ПРОМОУЧЕНА: staging пуст, а текст лежит в
+    // поставке. На кругах полноты (фаза ⑥ возвращает партию) чтение одного staging давало пустоту, и
+    // роль писала все разделы заново — живой прогон качался 4 → 1 → ЗЕЛЁНЫЙ → 4.
+    const key9 = (await checkTask({})).key || "";
+    const PREVIOUS = (await readText({ path: staging }))
+      || (key9 ? await readText({ path: `task/${key9}/design/${one.slug}.md` }) : "");
     const o = sized(`design/part/${one.slug}`, tpl, {
-      CARD, FEEDBACK: feedback, STAGING: staging,
+      CARD, PREVIOUS, FEEDBACK: feedback, STAGING: staging,
       CHECK: 'part({slug, path}) — раздел на каждый модуль партии, чужих нет, use case закрыты, у каждого «проверка» и «зовёт»',
     });
     if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд партии ${one.slug} не помещается в окно модели — роль не запускалась` }));
@@ -1069,7 +1097,9 @@ async function onePart(one, since = "(none — first attempt)") {
 async function gating() {
   for (let round = 1; round <= QUESTION_ROUNDS + 1; round++) {
     const g = await gate1({});
-    if (g.ok) { log(`gate1: план утверждён — модулей ${g.modules}, токен ${g.at}`); return ""; }
+    // `kept` — рецепт признан: оператора не спрашивали, потому что этот план он уже утвердил. Счёта
+    // модулей в этом ответе нет и быть не может: презентация не собиралась.
+    if (g.ok) { log(g.kept ? `gate1: план уже утверждён этим токеном — ${g.at}` : `gate1: план утверждён — модулей ${g.modules}, токен ${g.at}`); return ""; }
     if (g.rework) { log(`gate1: оператор вернул план на доработку — «${g.rework}»`); return g.rework; }
     if (g.stop) exit(err("stopped", { subject: g.why, evidence: "gate1" }));
     if (!g.ask) exit(err("blocked", { subject: g.blockers || g.why, evidence: ".agent/gate1.json не написан" }));
@@ -1228,7 +1258,8 @@ async function reviewing() {
   let feedback = "(none — first attempt)", attempt = 0, wasRed = [];
 
   while (attempt < LOOPS) {
-    const order = sized("review", orderTpl, { PLAN, FRD, CODES: FORM.codes, OWED: FORM.owed, UNCHECKED: FORM.unchecked, FEEDBACK: feedback, STAGING, CHECK });
+    const PREVIOUS = await readText({ path: STAGING });
+    const order = sized("review", orderTpl, { PLAN, FRD, PREVIOUS, CODES: FORM.codes, OWED: FORM.owed, UNCHECKED: FORM.unchecked, FEEDBACK: feedback, STAGING, CHECK });
     if (order.over) exit(err("blocked", { subject: order.why, evidence: "наряд шага 11 не помещается в окно модели — роль не запускалась" }));
     const env = await agent(order.text, { role: "critic", outputSchema: ENVELOPE });
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
@@ -1315,7 +1346,12 @@ async function bandStart() {
   // (a green pass B assembles the pair in the same breath), so there is nothing left to re-judge —
   // and the gate of the step erases the pair on every entry for exactly that reason. Its EXISTENCE is
   // therefore the whole signal, and a run resumed at step 11 keeps the design its plan was built from.
-  if (!skipped && !(graph && flow)) { log(`resume: шаг 6 закрыт — .agent/frd.xml зелен сейчас (дельт ${frd.deltas})`); return 9; }
+  // ПОСТАВКА ШАГА — PLAN.md, а не только его внутренние артефакты. Лестница, смотревшая на одну пару
+  // `design-graph.xml`+`data-flow.md`, объявляла шаг закрытым и после того, как разделы плана снесли:
+  // живая попытка переиграть шаг 9 дважды ушла мимо него, прямо к гейту.
+  const key9 = (await checkTask({})).key || "";
+  const book = key9 ? await readText({ path: `task/${key9}/PLAN.md` }) : "";
+  if (!skipped && !(graph && flow && book)) { log(`resume: шаг 6 закрыт — .agent/frd.xml зелен сейчас (дельт ${frd.deltas})`); return 9; }
 
   const verdict = await readText({ path: ".agent/review.xml" });
   if (!/verdict="Pass"/.test(verdict)) { log("resume: шаги 6 и 9 закрыты — их артефакты зелены сейчас"); return 11; }
@@ -1331,10 +1367,32 @@ async function band(from0) {
     // A LADDER, not one gate: everything from `from` onward runs, everything before it is already
     // green. With a single `from <= 6` a run resumed at step 9 skipped the designer too — the one
     // role it existed to re-run.
-    if (from <= 6) { phase("intake"); await intake(fromCritic); }
-    if (from <= 7) { phase("weight"); await weigh(); }
-    if (from <= 8) { phase("ripple"); await rippling(); }
-    if (from <= 9) { phase("design"); planned = await designing(from); }
+    // КАЖДЫЙ ШАГ КОНЧАЕТСЯ ОТМЕТКОЙ, И ОТМЕТКА — ЕДИНСТВЕННЫЙ ОТВЕТ НА ВОПРОС «ЭТО УЖЕ СДЕЛАНО?».
+    // Артефакты в ней названы не для красоты: их отпечатки снимаются в момент отметки, и следующий
+    // запуск сверяет их с диском — правленый руками артефакт переигрывает свой шаг.
+    if (from <= 6) {
+      phase("intake"); await intake(fromCritic);
+      await runlogMark({ step: 6, name: "intake", status: "done", artifacts: [".agent/frd.xml"] });
+    }
+    if (from <= 7) {
+      phase("weight"); await weigh();
+      await runlogMark({ step: 7, name: "weight", status: "done", artifacts: [".agent/mode"] });
+    }
+    if (from <= 8) {
+      phase("ripple"); await rippling();
+      await runlogMark({ step: 8, name: "ripple", status: "done", artifacts: [".agent/ripple.xml", ".agent/design"] });
+    }
+    if (from <= 9) {
+      phase("design"); planned = await designing(from);
+      // На рельсе `skip` роль шага 9 не звалась и графа с потоком нет — отметка несёт то, что есть.
+      // ПОСТАВКА ШАГА — ЭТО PLAN.md, а не только его внутренние артефакты. Отметка, называвшая один
+      // `.agent/design-graph.xml`, считала шаг закрытым и после того, как разделы плана снесли: живая
+      // попытка переиграть шаг 9 ушла прямо в шаг 14.
+      const made = (await readText({ path: ".agent/design" })).trim() === "skip"
+        ? [".agent/design"]
+        : [".agent/design-graph.xml", ".agent/data-flow.md", ...(planned && planned !== ".agent/design" ? [planned] : [])];
+      await runlogMark({ step: 9, name: "design", status: "done", artifacts: made, note: planned });
+    }
 
     // THE BAND ENDS AT STEP 9 WHILE STEP 9 IS BEING FINISHED, and it says so instead of walking on.
     // Steps 10 and 11 are not broken and are not deleted — they are DEFERRED: their input is the
@@ -1355,13 +1413,47 @@ async function band(from0) {
         from = 6;
         edges = [];
         fromCritic = `оператор на гейте 1: ${back}`;
+        // Перемотка СНИМАЕТ отметки всего, что теперь переписывается: требование, вес, ширина и план
+        // собираются заново, и журнал не должен утверждать обратное.
+        for (const step of [6, 7, 8, 9, 12]) await runlogMark({ step, name: "rework", status: "rework", note: back.slice(0, 80) });
         log("gate1: перемотка на шаг 6 — требование переписывается, план собирается заново");
         continue;
       }
+      await runlogMark({ step: 12, name: "gate1", status: "done", artifacts: [".agent/gate1.json"] });
     }
 
-    // The band stops HERE for now: step 13 (branch) and step 14 (tickets) are not written yet.
-    if (STOP_AFTER_GATE1) return "PLAN.md";
+    // STEP 13 — the branch. No role, no repair rail: every refusal is the state of a human's machine
+    // (a dirty worktree, a taken name) or a plan that moved after the gate, and both are fixed by a
+    // person in a minute. The band stops after it: step 14 (tickets) is not written yet.
+    if (from <= 13) {
+      phase("branch");
+      const cutted = await branch({ baseline: BASELINE });
+      if (!cutted.ok) exit(err("blocked", { subject: cutted.why, evidence: `шаг 13: ${cutted.kind}` }));
+      log(cutted.kept
+        ? `branch: ${cutted.name} уже срезана этим прогоном — работа продолжается в ней`
+        : `branch: ${cutted.name} от ${cutted.remote ? `${cutted.remote}/` : ""}${cutted.base} (${cutted.baseSha.slice(0, 7)}) — базлайн ${cutted.baseline} → ${cutted.at}`);
+      await runlogMark({ step: 13, name: "branch", status: "done", artifacts: [".agent/branch.json"], note: cutted.name });
+    }
+
+    // STEP 14 — наряды исполнителям. Роли нет: тест и модуль режутся из одной вырезки раздела, и
+    // модульный наряд ждёт свои тесты. Отказ терминальный — расхождение тикетов с планом означает,
+    // что разошлись артефакты, а чинить это некому.
+    if (from <= 14) {
+      phase("tickets");
+      const cut = await tickets({});
+      if (!cut.ok) exit(err("blocked", { subject: cut.blockers || cut.why, evidence: "шаг 14: тикеты не нарезаны" }));
+      log(`tickets: ${cut.total} нарядов — границ ${cut.tests}, модулей ${cut.modules}; волны ${cut.waves.join(" · ")}; крупнейший ${cut.chars} симв → ${cut.at}`);
+      await runlogMark({ step: 14, name: "tickets", status: "done", artifacts: cut.files, note: `нарядов ${cut.total}, волн ${cut.waves.length}` });
+    }
+
+    if (STOP_AFTER_TICKETS) {
+      // ОТЛОЖЕННЫЙ ШАГ ОТМЕЧАЕТСЯ ПРОПУЩЕННЫМ, А НЕ ОСТАЁТСЯ НЕМЫМ. Лестница входит в первый шаг без
+      // отметки: молчание про шаги 10 и 11 означало бы, что возобновление вечно встаёт на десятом и
+      // переигрывает гейт, ветку и тикеты, которые давно закрыты. Появится наряд на эти шаги — они
+      // начнут отмечаться по-настоящему, и `skipped` вытеснится сам.
+      for (const step of [10, 11]) await runlogMark({ step, name: "отложен", status: "skipped", note: "шага нет в полосе" });
+      return `task/<КЛЮЧ>/tickets`;
+    }
     if (STOP_AFTER_DESIGN) return from <= 9 ? planned : ".agent/data-flow.md";
 
     if (from <= 10) { phase("plan"); planned = await planning(edges); }
@@ -1428,15 +1520,14 @@ async function band(from0) {
 // Одна константа и одна строка в лестнице: вернуть шаг 10 — снять `true`.
 const STOP_AFTER_DESIGN = true;
 
-// STOP_AFTER_GATE1 — полоса кончается сразу после гейта 1: шаг 13 (ветка) и шаг 14 (тикеты) ещё не
-// написаны. Снимается, когда появится шаг 13.
-const STOP_AFTER_GATE1 = true;
+// STOP_AFTER_TICKETS — полоса кончается после нарезки тикетов: шаг 15 (исполнение) ещё не написан.
+const STOP_AFTER_TICKETS = true;
 
 function bandEnds(artifact) {
   // Где полоса кончилась — вопрос ФЛАГА, а не памяти: строка врала ровно один прогон, объявляя гейт 1
   // ненаписанным после того, как он отработал и положил токен (ffdc6844).
-  log(STOP_AFTER_GATE1
-    ? `izi: полоса кончилась на гейте 1 — шаги 13 и 14 ещё не написаны. Поставка — ${artifact}: план доработки по модулям и токен акцепта .agent/gate1.json`
+  log(STOP_AFTER_TICKETS
+    ? `izi: полоса кончилась на шаге 14 — шаг 15 ещё не написан. Поставка — ${artifact}: наряды исполнителям, ветка работы и утверждённый план`
     : STOP_AFTER_DESIGN
       ? `izi: полоса кончилась на шаге 9. Поставка — ${artifact}: план доработки по модулям, из которого режутся тикеты`
       : "izi: полоса кончилась на шаге 11. Поставка — артефакты .agent/; рабочее дерево проекта НЕ трогать: реализация это шаг 15, которого ещё нет");
@@ -1452,13 +1543,13 @@ try {
   if (!b.ok) exit(err("blocked", { subject: b.why })); // a broken config is a refusal, not a default
   LOOPS = b.loops; INTAKE_LOOPS = b.intakeLoops; QUESTION_ROUNDS = b.questionRounds;
   CHECKPOINT_RETRIES = b.checkpointRetries; MAX_PARALLEL = b.maxParallel; REVIEW_ROUNDS = b.reviewRounds;
-  ORDER_CAP = b.orderCap;
+  ORDER_CAP = b.orderCap; BASELINE = b.baseline;
   // An ABSENT ceiling is a refusal, not a default: `chars > undefined` is false in JavaScript, so an
   // extension older than this script would silently turn the size check off in all five places while
   // every log line still printed a number. The same class of fault as a host function that is not
   // defined — and it is silent, which the missing function is not.
   if (!ORDER_CAP) exit(err("blocked", { subject: "budgets() не вернул orderCap — расширение в этой сессии pi старше воркфлоу, перезапусти pi" }));
-  log(`budgets: loops=${LOOPS} intakeLoops=${INTAKE_LOOPS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} reviewRounds=${REVIEW_ROUNDS} orderCap=${ORDER_CAP} (${b.source})`);
+  log(`budgets: loops=${LOOPS} intakeLoops=${INTAKE_LOOPS} rounds=${QUESTION_ROUNDS} checkpointRetries=${CHECKPOINT_RETRIES} maxParallel=${MAX_PARALLEL} reviewRounds=${REVIEW_ROUNDS} orderCap=${ORDER_CAP} baseline=${BASELINE} (${b.source})`);
 
   // Observability is declared out loud, never assumed: with herdr unavailable the herdr extension
   // does not register at all and stays SILENT, so a run from an ordinary terminal looks exactly like
@@ -1482,24 +1573,70 @@ try {
   // run 9a8821a7, ext/index.mjs::dirtyCount). `-1` means git did not answer, which is not "clean".
   if (fresh.dirty > 0) log(`run: рабочее дерево грязное — ${fresh.dirty} файлов не в коммите; разведка отобразит их КАК ЕСТЬ`);
 
+  // WHERE THE BAND ENTERS IS READ, NOT DERIVED. Until this, every launch re-judged the artefacts with
+  // their own guardrails to find out what was already done — and that answer is not stable, because a
+  // guardrail judges against the evidence available NOW while a run's evidence (the operator's
+  // answers) is carried into .agent/prev/ by the run after it. Live run c87db886 is the receipt: a
+  // green FRD, an approved plan, and step 6 replayed twice with twenty questions asked again.
+  const memo = await runlogRead({});
+  log(`resume: вхожу с шага ${memo.from} — ${memo.why}${memo.closed && memo.closed.length ? `; позади ${memo.closed.join(" · ")}` : ""}`);
+  const from0 = memo.from;
+
+  // Step 1 runs on EVERY launch, closed or not, and costs nothing: the task key is what every later
+  // step addresses its deliverable by, and the answer that carries it lives in .agent/answers.md —
+  // the file newRun has just carried away. Skipping this step would resume a run that no longer knows
+  // whose plan it is writing.
   phase("task"); await task();
+  await runlogMark({ step: 1, name: "task", status: "done" });
 
-  // Step 2 is judged before anything downstream of it runs, and by its OWN guardrail — the same
-  // "green now, not green once" rule bandStart() applies to the band. It cannot wait for the map the
-  // way the FRD does: the BRD's subjects choose the focus, so re-running gilb would move the swarm,
-  // the map, and with them every artifact the band was about to reuse.
-  const brdNow = await checkBrd({ path: ".agent/brd.md" });
-  if (brdNow.ok) log(`resume: шаг 2 закрыт — .agent/brd.md зелен сейчас (требований ${brdNow.requirements})`);
-  else { phase("brd"); await brd(); }
+  if (from0 <= 2) {
+    // The BRD cannot wait for the map the way the FRD does: its subjects choose the focus, so
+    // re-running gilb would move the swarm, the map, and with them every artefact the band reuses.
+    const brdNow = await checkBrd({ path: ".agent/brd.md" });
+    if (brdNow.ok) log(`resume: шаг 2 закрыт — .agent/brd.md зелен сейчас (требований ${brdNow.requirements})`);
+    else { phase("brd"); await brd(); }
+    await runlogMark({ step: 2, name: "brd", status: "done", artifacts: [".agent/brd.md"] });
+  }
 
-  phase("survey-plan"); await surveyPlan();
-  phase("focus"); await focusing();
-  phase("scope"); await scope();
-  phase("graph"); await graph();
-  // Steps 6-11 are ONE statement now: the critic's verdict decides whether they run again, and which
-  // of them do (band(), above). Everything before them is a fact of the repository — the survey does
-  // not change because a plan was rejected.
-  bandEnds(await band(await bandStart()));      // always exits — the band's end is one statement,
+  if (from0 <= 3) {
+    phase("survey-plan"); await surveyPlan();
+    phase("focus"); await focusing();
+    await runlogMark({ step: 3, name: "survey-plan", status: "done", artifacts: [".agent/survey-plan.json", ".agent/focus.json"] });
+  }
+  if (from0 <= 4) {
+    phase("scope"); await scope();
+    await runlogMark({ step: 4, name: "scope", status: "done" });
+  }
+  if (from0 <= 5) {
+    phase("graph"); await graph();
+    await runlogMark({ step: 5, name: "graph", status: "done", artifacts: [".agent/appgraph.xml"] });
+  }
+
+  // МОСТИК ДЛЯ ФОРМЫ БЕЗ ЖУРНАЛА. Прогоны, начатые до этого механизма, оставили артефакты и ни одной
+  // отметки: спросить у них старую лестницу ОДИН раз дешевле, чем переиграть четырнадцать шагов.
+  // Снимается, когда форм со старым состоянием не останется.
+  //
+  // НАЙДЕННОЕ СРАЗУ ЗАПИСЫВАЕТСЯ. Мостик, который только СКАЗАЛ бы «шаг 6 закрыт», оставил бы журнал
+  // без отметки — и следующий запуск начал бы шестой шаг заново, потому что лестница входит в первый
+  // шаг без отметки. Ровно это и случилось на первом живом запуске журнала: `intake` пошёл по второму
+  // кругу над артефактом, который старая лестница только что признала зелёным.
+  const BRIDGE = [[6, "intake", [".agent/frd.xml"]], [7, "weight", [".agent/mode"]],
+                  [8, "ripple", [".agent/ripple.xml", ".agent/design"]],
+                  [9, "design", [".agent/design-graph.xml", ".agent/data-flow.md"]]];
+  // Мостик включается, пока журнал не знает про шаги 6-9 — а не «пока журнал пуст». Форма, где шаги
+  // разведки уже отмечены, а полоса ещё нет, это ровно тот случай: закрытых отметок много, знания о
+  // полосе нет ни одной.
+  // Мостик молчит, когда журнал про полосу УЖЕ знает: `closed` содержит шаг 6 ровно тогда, когда его
+  // отметка есть и цела. Иначе старая лестница перебивает вердикт журнала — а он точнее: это она
+  // отвечает «шаг 9 закрыт» на артефакт, который человек только что поправил руками.
+  let start = Math.max(from0, 6);
+  if (from0 <= 9 && !(memo.closed || []).includes(6)) {
+    start = await bandStart();
+    for (const [step, name, artifacts] of BRIDGE) {
+      if (step < start) await runlogMark({ step, name, status: "done", artifacts, note: "признан старой лестницей" });
+    }
+  }
+  bandEnds(await band(start));                  // always exits — the band's end is one statement,
   return ok({});                                // in one place; the return is the next phase's slot
 } catch (e) {
   if (e instanceof Exit) return e.result;

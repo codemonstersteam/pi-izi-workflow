@@ -278,7 +278,7 @@ export function newPlanIndex({ frd, map, mode, design, routes, trunk, answers, e
   // circle, and the role could not repair what it had not decided — three redelegations, escalation,
   // live run of 2026-08-17. Three green runs before it were luck over 23 chains, not proof.
   //
-  // The order now comes from DECLARATION: the `зовёт:` line the group's contract (9d) and the use
+  // The order now comes from DECLARATION: the `calls:` line the group's contract (9d) and the use
   // case's plan (9e) carry, written by whoever decides that file, assembled into this graph at 9g.
   // A circle among declared edges is a real contradiction and its author can repair it.
   //

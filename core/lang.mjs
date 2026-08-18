@@ -6,15 +6,23 @@
 //             (steps/brd/brd.mjs::newFit, `invented-default`). PROVENANCE is judged here, never
 //             connectedness and never taste.
 // io:         none
-// Invariants: EDGE_PUNCT, INSIDE_MARKS, MIN_LETTERS and FREE_WORDS_BLOCK are module constants fixed
-//             at load; cyrillicRatio, sourceGate, vocabOf, freeWords and languageDrifted are pure
-//             stateless functions whose result depends on their arguments alone.
+// Invariants: EDGE_PUNCT, INSIDE_MARKS, MIN_LETTERS, FREE_WORDS_BLOCK and CYRILLIC_CAP are module
+//             constants fixed at load; cyrillicRatio, sourceGate, vocabOf, freeWords,
+//             languageDrifted and cyrillicWords are pure stateless functions whose result depends on
+//             their arguments alone.
 // Interface:  cyrillicRatio(text) -> number
 //             sourceGate(source) -> "free-words" | "reverse" | "silent"
 //             vocabOf(sources) -> Set<string>
 //             freeWords(text, vocab) -> string[]
 //             FREE_WORDS_BLOCK — how many free words make a blocker
 //             languageDrifted(fit, source) -> boolean
+//             cyrillicWords(text, cap) -> string[]
+//             CYRILLIC_CAP — how many offenders a blocker names
+//
+// TWO DIRECTIONS, TWO MEASURES, AND THE DIFFERENCE IS THE READER. Everything above the plan is read by
+// a HUMAN in the language of the order, and there the unit is provenance: a Latin word must say where
+// it came from. From the FRD down the reader is a SMALL MODEL writing code in an English repository,
+// and there the unit is presence: one Cyrillic word is an order it cannot act on (cyrillicWords).
 //
 // WHY THE MEASURE IS PROVENANCE AND NOT A LETTER SHARE.
 //
@@ -252,4 +260,39 @@ export function languageDrifted(fit, source) {
   if (rs > 0.5) return rf < 0.1
   if (rs < 0.1) return rf > 0.5
   return false
+}
+
+// FUNCTION_CONTRACT: cyrillicWords — which words of an ENGLISH artifact are not English
+//   Input:        text — the artifact's text; coerced to a string, type unconstrained
+//                 cap  — how many offenders to name (default CYRILLIC_CAP)
+//   Dependencies: —
+//   Antecedent:   any value
+//   Consequent:   success: string[] — the distinct words carrying a Cyrillic letter, in the order
+//                          they appear, at most `cap` of them; empty means the text is clean
+//                 failure: none — total
+//   Purity:       pure
+//   Interface:    cyrillicWords(text: unknown, cap?: number) -> string[]
+//
+// THE MEASURE HERE IS PRESENCE, NOT A SHARE — and that is the OPPOSITE of cyrillicRatio above, on
+// purpose. That one judges a human's artifact, where one foreign term among a paragraph decides
+// nothing. This one judges an artifact whose reader is a SMALL MODEL writing code: it takes the
+// requirement in one language and the repository in another, and a single Cyrillic word in its order
+// is a word it cannot act on. There is no share below which that is acceptable, so the threshold is
+// one word — the same discipline as the number with no source.
+//
+// THE BLOCKER NAMES THE WORDS, never just the fact: a role told «there is Cyrillic in it» rewrites
+// the file; a role told «глоссарий, шаг» fixes two lines.
+export const CYRILLIC_CAP = 6
+
+export function cyrillicWords(text, cap = CYRILLIC_CAP) {
+  const out = []
+  for (const w of String(text || "").split(/\s+/)) {
+    if (!/[Ѐ-ӿ]/.test(w)) continue
+    // The edges are stripped for the same reason they are stripped for freeWords: `«шаг»,` and `шаг`
+    // are one offender, and naming both twice makes the blocker longer without making it truer.
+    const bare = w.replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "")
+    if (bare && !out.includes(bare)) out.push(bare)
+    if (out.length >= cap) break
+  }
+  return out
 }

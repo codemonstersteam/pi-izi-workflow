@@ -48,13 +48,13 @@ export function coverageOf({ frd = {}, modules = new Map(), sections = [] } = {}
   for (const u of (frd && frd.usecases) || []) {
     const id = String((u && u.id) || "").trim()
     if (!id) continue
-    if (!named.has(id)) { B.push(`use case ${id} не назван ни в одном «закрывает» — требование не закрыто ничем`); continue }
+    if (!named.has(id)) { B.push(`use case ${id} не назван ни в одном «closes» — требование не закрыто ничем`); continue }
     const want = [
       ...((u.steps || []).map((_, k) => String(k + 1))),
       ...((u.exts || []).map((e) => String((e && e.id) || "")).filter(Boolean)),
     ]
     const miss = want.filter((n) => !closes.has(`${id}/${n}`))
-    if (miss.length) B.push(`у ${id} не закрыты шаги: ${miss.join(", ")} — назови их в «закрывает» того раздела, который их делает`)
+    if (miss.length) B.push(`у ${id} не закрыты шаги: ${miss.join(", ")} — назови их в «closes» того раздела, который их делает`)
   }
   return B
 }
@@ -72,7 +72,7 @@ export function coverageOf({ frd = {}, modules = new Map(), sections = [] } = {}
 //
 // THE ORDER IS DECLARED, NOT DERIVED (D42). A chain of the flow says a value moved from A to B; this
 // asks what must be WRITTEN first, and on a data class the two are opposite. So the operand is the
-// `зовёт:` line, written by whoever decided the module — measured: making that line MANDATORY took
+// `calls:` line, written by whoever decided the module — measured: making that line MANDATORY took
 // `eddi` from 2 declared edges over 8 sections to 20 over 13.
 //
 // The map's edges join in for modules that already exist: what the repository statically calls is a
@@ -130,30 +130,34 @@ export function orderOf({ sections = [], modules = new Map(), edges = [] } = {})
 //   Interface:    planDoc({ frd, sections, order, modules }) -> string
 //
 // THE SECTIONS ARE COPIED, NOT REWRITTEN. What the role wrote is what the gate reads and what step 14
-// cuts a ticket from — `outputs` is the heading, `blocked_by` is «зовёт», the DoD is «проверка». A
+// cuts a ticket from — `outputs` is the heading, `blocked_by` is `calls`, the DoD is `verify`. A
 // document that paraphrased them would be a second source of truth about the same work.
+//
+// AND IT IS WRITTEN IN ENGLISH, like the sections it copies: from the FRD down the reader of every
+// artifact is the small model that implements the ticket, and a document half in one language and
+// half in another is the very context that makes it guess (core/lang.mjs, the two directions).
 export function planDoc({ frd = {}, sections = [], order = [], modules = new Map() } = {}) {
   const byPath = new Map(sections.map((s) => [s.path, s]))
   const ucs = ((frd && frd.usecases) || []).map((u) => String((u && u.id) || "").trim()).filter(Boolean)
   const out = [
-    `# План доработки — ${modules.size} модулей, ${ucs.length} use case`,
+    `# Change plan — ${modules.size} modules, ${ucs.length} use cases`,
     "",
-    `Цель изменения: ${(frd && frd.goal) || "—"}`,
+    `Goal of the change: ${(frd && frd.goal) || "—"}`,
     "",
     // ПОЧЕМУ ТАКОЙ ПОРЯДОК — одной строкой и из тех же рёбер, что дали сам порядок. Проза здесь была
     // и снята: она единственная на шаге не проверялась по существу, а человек, прочитавший уверенное
     // введение, перестаёт читать разделы. Число зовущих — факт, и его можно перепроверить глазами.
-    ...(order.length ? [`Первым идёт \`${order[0]}\`: его зовут ${
-      sections.filter((s) => (s.calls || []).includes(order[0])).length} из ${order.length} модулей.`, ""] : []),
-    "Порядок работ ниже — топологический: модуль стоит после всех, кого он зовёт. Один раздел = один",
-    "тикет: путь заголовка — что правим, «зовёт» — чего ждём, «проверка» — чем закрываем.",
+    ...(order.length ? [`First comes \`${order[0]}\`: ${
+      sections.filter((s) => (s.calls || []).includes(order[0])).length} of ${order.length} modules call it.`, ""] : []),
+    "The order below is topological: a module stands after everyone it calls. One section = one",
+    "ticket: the heading path is what we change, `calls` is what we wait for, `verify` is what closes it.",
     "",
-    "| # | модуль | новый | закрывает |",
+    "| # | module | new | closes |",
     "|---|---|---|---|",
     ...order.map((p, k) => {
       const s = byPath.get(p)
       const m = modules.get(p) || {}
-      return `| ${k + 1} | \`${p}\` | ${m.new ? "да" : "—"} | ${((s && s.closes) || []).join(" · ") || "—"} |`
+      return `| ${k + 1} | \`${p}\` | ${m.new ? "yes" : "—"} | ${((s && s.closes) || []).join(" · ") || "—"} |`
     }),
     "",
     "---",
@@ -178,7 +182,7 @@ export function planDoc({ frd = {}, sections = [], order = [], modules = new Map
 //
 // NOT ONE NEW WORD, and that is the whole design of this function. The goal is `<frd goal>` verbatim,
 // the branches are the partitions with their own use case ids, «новых» counts `modules.new`, «первым»
-// is the head of the order of phase ⑦, the commands are the «проверка» lines, the branch is the task
+// is the head of the order of phase ⑦, the commands are the `verify` lines, the branch is the task
 // key and the trunk. A role writing prose here was built and reverted: the gate is the one place
 // where an unverifiable sentence does the most damage — a human who reads a confident introduction
 // stops reading the sections, and everything else on this step is checked against the FRD, the map
@@ -216,7 +220,7 @@ export function gateView({ frd = {}, modules = new Map(), parts = [], sections =
   // fact about the work, and it is the operator's first question about cost.
   const cmds = new Map()
   for (const s of sections) {
-    const m = String(s.body || "").match(/^\s*проверка:\s*([^\n·]+)/m)
+    const m = String(s.body || "").match(/^\s*verify:\s*([^\n·]+)/m)
     if (!m) continue
     const cmd = m[1].trim().replace(/\s+-D\S+/g, "").trim()
     cmds.set(cmd, (cmds.get(cmd) || 0) + 1)

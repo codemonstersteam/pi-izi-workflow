@@ -10,7 +10,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { cyrillicRatio, sourceGate, vocabOf, freeWords, languageDrifted } from "./lang.mjs"
+import { cyrillicRatio, sourceGate, vocabOf, freeWords, languageDrifted, cyrillicWords, CYRILLIC_CAP } from "./lang.mjs"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = join(HERE, "..")
@@ -142,4 +142,36 @@ test("PROMPT_LANG is gone from the code and from standards/code.md", () => {
     if (e.status !== 1) throw e
   }
   assert.equal(found, "", `PROMPT_LANG still lives in: ${found}`)
+})
+
+// --- cyrillicWords: the OTHER direction — an artifact whose reader is a small model ------------------
+//
+// The formula: one happy path (a clean English ticket says nothing), plus every antecedent branch with
+// a distinguishable consequent — a word carrying Cyrillic, the edges it wears, the repetition of one
+// offender, and the cap. Presence, not a share: that is the whole difference from cyrillicRatio, and
+// it is the branch asserted first.
+
+test("a clean English artifact yields no offenders — and a single Cyrillic word yields one", () => {
+  assert.deepEqual(cyrillicWords("## Stack\nJava · Quarkus CDI · MongoDB · JUnit 5"), [],
+    "an English ticket is clean, and nothing but letters was judged")
+
+  // ONE word in a whole paragraph — exactly what cyrillicRatio cannot see: its share here is 0.06.
+  const one = "UC1 step 2: the system validates every ключ of the term against the pattern"
+  assert.ok(cyrillicRatio(one) < 0.1, "the share is far below every threshold cyrillicRatio uses")
+  assert.deepEqual(cyrillicWords(one), ["ключ"], "presence is the measure, so the one word is named")
+})
+
+test("edges are stripped, an offender is named once, and the cap holds", () => {
+  assert.deepEqual(cyrillicWords("write «глоссарий», then the глоссарий again"), ["глоссарий"],
+    "the quotes and the comma are not part of the word, and one offender is one entry")
+
+  const many = Array.from({ length: CYRILLIC_CAP + 4 }, (_, k) => `слово${k}`).join(" ")
+  assert.equal(cyrillicWords(many).length, CYRILLIC_CAP, "the blocker names at most CYRILLIC_CAP words")
+  assert.equal(cyrillicWords(many, 2).length, 2, "and the caller may ask for fewer")
+})
+
+test("nothing to judge — no text, no letters, no argument at all", () => {
+  for (const x of ["", "   ", "200 ms · ./mvnw test -Dtest=GlossaryStoreTest", null, undefined, 42]) {
+    assert.deepEqual(cyrillicWords(x), [], `nothing is an offender in ${JSON.stringify(x)}`)
+  }
 })

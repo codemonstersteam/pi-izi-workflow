@@ -30,26 +30,53 @@ $START_LAW
 4. **Класс без полей не заводится.** У нового класса данных перечисли поля с типами. У метода —
    сигнатуру: имя, параметры, возвращаемое значение.
 
-5. **Строка `зовёт:` обязательна у каждого раздела** — либо пути файлов, либо слово «нет».
-   Из неё машина строит очередь работ: кого зовут, того пишут раньше. Пропустишь — очереди не будет.
-   Путь обязан быть настоящим: модуль партии, сосед или файл из NODES.
+5. **Строка `calls:` обязательна у каждого раздела и несёт ПУТИ ФАЙЛОВ либо слово «none».**
+   Из неё машина строит очередь работ: кого зовут, того пишут раньше. Путь обязан быть настоящим —
+   модуль партии, сосед или файл из NODES. Метод, поле и имя класса путями не являются.
 
-6. **Строка `закрывает:` называет шаги по номерам, и номер КОПИРУЕТСЯ из заказа.**
-   Номера стоят в USECASES: `<step n="1">` даёт `шаг 1`, `<ext id="2a">` даёт `шаг 2a`.
-   Букву не переводи: в заказе латинская `a` — пиши латинскую `a`, не русскую `а`.
+   ```
+   верно:    calls: src/backup/IResourceSource.java — reads the sources
+   неверно:  calls: source.readGlossaries · IResourceSource.readGlossaries · SourceData.glossary
+   ```
+
+   Что именно вызываешь — пиши словами после тире.
+
+6. **Строка `closes:` — шаг берёт тот раздел, по которому ПИШЕТСЯ ТЕСТ этого шага.**
+   Тест зовёт твою сигнатуру и утверждает то, что сказано в тексте шага. Не сходится — шаг не твой.
+
+   ```
+   шаг UC5/3:  система инвалидирует кэш GlossaryService
+
+   раздел RestGlossaryStore                     раздел GlossaryStore
+   calls: IGlossaryStore · GlossaryService      calls: IGlossaryStore
+   ────────────────────────────────────────     ────────────────────────────────────
+   тест:                                        тест:
+     зови    deleteGlossary(id, version)          зови    delete(id, version)
+     проверь GlossaryService.invalidateCache()    проверь ???  ← GlossaryService не в «calls»
+   ✓ тест пишется — шаг закрывает он            ✗ проверять нечем — шаг не его
+   ```
+
+7. **Номер шага КОПИРУЕТСЯ из заказа знак в знак.** Номера стоят в USECASES: `<step n="1">` даёт
+   `step 1`, `<ext id="2a">` даёт `step 2a`. Каждый use case заказа назван хотя бы в одном разделе.
 
    ```
    в заказе: <step n="2">  <ext id="2a">  <ext id="3b">
-   в плане:  закрывает: UC1 шаг 2 · UC1 шаг 2a · UC1 шаг 3b
+   в плане:  closes: UC1 step 2 · UC1 step 2a · UC1 step 3b
    ```
 
-   Каждый use case из заказа должен быть назван хотя бы в одном разделе.
-
-7. **Строка `проверка:` обязательна** — команда из CHECK и имя тест-класса. Без неё работу нечем
+8. **Строка `verify:` обязательна** — команда из CHECK и имя тест-класса. Без неё работу нечем
    закрыть.
 
-8. Ничего не выдумывай сверх MODULES, NEIGHBOURS, SAMPLE и DRAFT: ни новых файлов, ни новых
-   зависимостей.
+9. **Строка `declares:` обязательна — это первое, что исполнитель напишет в файле.** Пакет, аннотации,
+   объявление типа. Существующий модуль: перепиши объявление из NODES. Новый: возьми форму у образца
+   из SAMPLE и подставь своё имя. Не угадывай базовый класс — он стоит в объявлении образца.
+
+   ```
+   declares: @ApplicationScoped · public class LoanStore extends ResourceStore<Loan> implements ILoanStore
+   ```
+
+10. Ничего не выдумывай сверх MODULES, NEIGHBOURS, SAMPLE и DRAFT: ни новых файлов, ни новых
+   зависимостей. В DRAFT бывают ярлыки вместо вызовов — заменяй их сигнатурами из образца.
 $END_LAW
 
 $START_INPUT
@@ -80,12 +107,13 @@ $START_STRATEGY
    возвращается, какая ветка отказа.
    Стоп: у каждого use case есть строка требований.
 
-4. На каждый модуль напиши раздел по OUTPUT_FORMAT: что это, поля, сигнатуры, кого зовёт, по какому
-   образцу, какие шаги закрывает, чем проверяется.
+4. На каждый модуль напиши раздел по OUTPUT_FORMAT (ПО-АНГЛИЙСКИ): what, fields, signatures,
+   declares, calls, sample, closes, verify.
    Стоп: разделов столько же, сколько путей в MODULES.
 
-5. Проверь: каждый use case назван в «закрывает», а каждый номер шага совпадает с заказом ЗНАК В
-   ЗНАК; у каждого раздела есть «зовёт» и «проверка»; разделов по соседям нет.
+5. Проверь: каждый use case назван в «closes», а каждый номер шага совпадает с заказом ЗНАК В
+   ЗНАК; у каждого раздела есть «calls», «verify» и «declares»; разделов по соседям нет; ни одного
+   кириллического слова в файле.
    Стоп: расхождений нет.
 
 6. Запиши файл инструментом `write` по staging-пути и только после этого вызови `workflow_result`.
@@ -95,29 +123,40 @@ $END_STRATEGY
 $START_FORBIDDEN
 - Не пропускай модуль партии — чек отвечает «нет решения по модулям …».
 - Не пиши раздел по соседу или по образцу — чек отвечает «решены модули не из этой партии …».
-- Не оставляй use case без «закрывает» — чек отвечает «use case … не закрыт ни одним разделом».
-- Не переписывай номер шага своей буквой — чек отвечает «в «закрывает» названы шаги, которых нет в
-  use case: UC1 шаг 2а» и печатает те номера, что есть в заказе.
-- Не оставляй раздел без «проверка» или без «зовёт» — чек называет оба.
-- Не пиши в «зовёт» имя класса или прозу: только путь файла либо слово «нет» — чек отвечает
+- Не оставляй use case без «closes» — чек отвечает «use case … не закрыт ни одним разделом».
+- Не переписывай номер шага своей буквой — чек отвечает «в «closes» названы шаги, которых нет в
+  use case: UC1 step 2а» и печатает те номера, что есть в заказе.
+- Не пиши раздел по-русски — чек отвечает «план партии пишется ПО-АНГЛИЙСКИ» и называет слова.
+- Не оставляй раздел без «verify», без «calls» или без «declares» — чек называет все три.
+- Не пиши в «calls» имя класса или прозу: только путь файла либо слово «none» — чек отвечает
   «ссылается на …, такого файла нет».
 - Не заводи класс без полей.
 - Bash, grep, glob, list тебе недоступны. Читать можно только пути, названные в заказе.
 $END_FORBIDDEN
 
 $START_OUTPUT_FORMAT
-Markdown, на языке заказа. Первая строка — имя партии. Дальше на каждый модуль:
+Markdown, **ПО-АНГЛИЙСКИ** — независимо от языка заказа. Из этого текста дословной вырезкой режется
+наряд, а исполняет наряд слабая модель, пишущая код в английском репозитории: требование на одном
+языке и репозиторий на другом — ровно тот контекст, в котором она угадывает. Гардрейл называет
+кириллические слова поимённо.
+
+Первая строка — имя партии. Дальше на каждый модуль:
 
 ```
-## <путь модуля>  (новый | правится)
-что это: одна фраза
-поля: <имя>: <тип> — <зачем>            (для класса данных; иначе «нет собственных»)
-сигнатуры: <имя>(<параметры>) : <тип>
-зовёт: <путь> — зачем                   (либо «нет»)
-по образцу: <путь> — что именно повторяем
-закрывает: UC1 шаг 1 · UC4 шаг 2a        (номер — копия из заказа, буква не переводится)
-проверка: <команда> · <имя тест-класса>
+## <module path>  (new | edited)
+what: one phrase
+fields: <name>: <type> — <what for>       (для класса данных; иначе «none of its own»)
+signatures: <name>(<params>) : <type>
+declares: <package · annotations · class X extends Y implements Z>
+calls: <path> — what for                  (либо «none»)
+sample: <path> — what exactly we repeat
+closes: UC1 step 1 · UC4 step 2a          (номер — копия из заказа, буква не переводится)
+verify: <command> · <test class name>
 ```
+
+`declares` — чем ОТКРЫВАЕТСЯ файл. Существующий модуль: перепиши объявление из `$START_NODES`.
+Новый: возьми форму у образца из `$START_SAMPLE` и подставь своё имя. Пакет писать не надо — его
+вычисляет скрипт по раскладке репозитория.
 
 После записи вызови `workflow_result` строго по `outputSchema`:
 - `track`: `"ok"` | `"err"`;
@@ -136,26 +175,28 @@ $START_EXAMPLE
 ```
 # src/loans
 
-## src/loans/ILoanStore.java  (новый)
-что это: интерфейс хранилища займов, единственная точка доступа к ним
-поля: нет собственных
-сигнатуры: read(String id, Integer version) : Loan
-           renew(String id, Instant until) : Integer
-зовёт: нет
-по образцу: src/rents/IRentStore.java — extends IResourceStore<T>, те же имена CRUD
-закрывает: UC1 шаг 1 · UC2 шаг 1
-проверка: ./mvnw test -Dtest=LoanStoreTest · LoanStoreTest
+## src/loans/ILoanStore.java  (new)
+what: the loan store interface, the single point of access to loans
+fields: none of its own
+signatures: read(String id, Integer version) : Loan
+            renew(String id, Instant until) : Integer
+declares: public interface ILoanStore extends IResourceStore<Loan>
+calls: none
+sample: src/rents/IRentStore.java — extends IResourceStore<T>, the same CRUD names
+closes: UC1 step 1 · UC2 step 1
+verify: ./mvnw test -Dtest=LoanStoreTest · LoanStoreTest
 
-## src/loans/mongo/LoanStore.java  (новый)
-что это: реализация хранилища на MongoDB, коллекция loans
-поля: нет собственных, всё унаследовано
-сигнатуры: LoanStore(IResourceStorageFactory f, IDocumentBuilder b)
-           read(String id, Integer version) : Loan
-           renew(String id, Instant until) : Integer
-зовёт: src/loans/ILoanStore.java — реализует · src/common/AbstractResourceStore.java — наследуется
-по образцу: src/rents/mongo/RentStore.java — @ApplicationScoped, super(f, "loans", b, Loan.class)
-закрывает: UC1 шаг 2 · UC1 шаг 2a · UC2 шаг 1
-проверка: ./mvnw test -Dtest=LoanStoreTest · LoanStoreTest
+## src/loans/mongo/LoanStore.java  (new)
+what: the MongoDB implementation of the store, collection loans
+fields: none of its own, everything inherited
+signatures: LoanStore(IResourceStorageFactory f, IDocumentBuilder b)
+            read(String id, Integer version) : Loan
+            renew(String id, Instant until) : Integer
+declares: @ApplicationScoped · public class LoanStore extends ResourceStore<Loan> implements ILoanStore
+calls: src/loans/ILoanStore.java — implements it · src/common/AbstractResourceStore.java — inherits from it
+sample: src/rents/mongo/RentStore.java — @ApplicationScoped, super(f, "loans", b, Loan.class)
+closes: UC1 step 2 · UC1 step 2a · UC2 step 1
+verify: ./mvnw test -Dtest=LoanStoreTest · LoanStoreTest
 ```
 
 После записи:
