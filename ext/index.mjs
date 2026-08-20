@@ -86,6 +86,10 @@ import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/de
 // PLAN.md из карточек удалены 21.08.2026. Пережили переделку три вещи, и каждая уехала туда, где
 // ей место: чтение формата плана, топологическая сортировка и вид гейта.
 import { SECTION_KEYS, sectionsOf } from "../steps/plan/sections.mjs"
+import { modulesOfChange, sampleOf, treeSkeleton, parseTree, checkTree } from "../steps/plan/tree/tree.mjs"
+import { flowsSkeleton, parseFlows, checkFlows } from "../steps/plan/flows/flows.mjs"
+import { wavesOf, planDoc, checkBook } from "../steps/plan/book/book.mjs"
+import { newDecision, renderDecisions, parseDecisions } from "../steps/plan/decisions/decisions.mjs"
 import { orderOf } from "../steps/plan/order.mjs"
 import { gateView, readGate } from "../steps/plan/gate.mjs"
 // EXTERNAL_DEPENDENCY: steps/plan/raises.mjs — кто ПОДНИМАЕТ отказ по развёрнутым цепочкам шага 9.
@@ -1688,20 +1692,6 @@ const taskDir = (root) => {
 
 // Everything this repository can resolve a path to: the map's own modules. Rule 5 of the guardrail
 // asks whether a declared call is an ADDRESS, and this is the address book.
-// МОДУЛИ ИЗМЕНЕНИЯ — ЭТО ДЕЛЬТЫ ТРЕБОВАНИЯ, и больше ничего. Раньше их считало разбиение на партии
-// (card.mjs::partsOf) вместе с нарезкой; разбиение удалено 21.08.2026, а вопрос «какие модули трогает
-// изменение» остался, и ответ на него всегда был один — `<delta node>`.
-const modulesOfFrd = (frd) => {
-  const out = new Map()
-  for (const d of frd.deltas || []) if (d && d.node) out.set(d.node, d)
-  // И УЗЛЫ СЦЕНАРИЕВ ТОЖЕ. Модуль попадает в работу двумя дорогами: своей дельтой («меняется вот
-  // это») и участием в сценарии («через него проходит изменение»). Вторую дорогу легко забыть —
-  // тогда план о модуле есть, а тикета на него нет: живой шов ext/index.test.mjs «шаг 14:
-  // нарезанные тикеты» держит ровно этот случай.
-  for (const sc of frd.scenarios || []) for (const n of tokens(sc.nodes)) if (n && !out.has(n)) out.set(n, { node: n })
-  return out
-}
-
 const knownPaths = (map) => [...String(map || "").matchAll(/<module\b[^>]*\bpath="([^"]+)"/g)].map((m) => m[1])
 
 // УДАЛЕНО 21.08.2026 вместе со старым шагом 9 (docs/plan.md): `parts`.
@@ -1733,6 +1723,201 @@ const knownPaths = (map) => [...String(map || "").matchAll(/<module\b[^>]*\bpath
 
 
 // УДАЛЕНО 21.08.2026 вместе со старым шагом 9 (docs/plan.md): `planbook`.
+
+// --- ШАГ 9: ДЕРЕВО МОДУЛЕЙ, ПОТОКИ И ПЛАН ---------------------------------------------------------
+//
+// Три функции на три подшага, и у всех троих одна форма: без аргументов — СКЕЛЕТ (скрипт считает
+// всё, что можно посчитать, и пишет его в staging), с `path` — СУД того, что роль записала, с
+// `composed` — суд ЦЕЛОГО и промоут. Роль не решает, что считать: она дописывает в размеченное.
+const TREE_PATH = ".agent/tree.xml"
+const FLOWS_PATH = ".agent/flows.xml"
+const DECISIONS_PATH = ".agent/decisions.md"
+const TREE_STAGING = `${STAGING_DIR}/tree.xml`
+const FLOWS_STAGING = `${STAGING_DIR}/flows.xml`
+
+// Порция дерева — четыре модуля. Замер: наряд на 12 модулей это 63 735 символов, 5-9 минут и обрывы;
+// четыре модуля держатся устойчиво (docs/plan-design.md §1).
+const TREE_CAP = 4
+const portionOf = (paths, slice) => paths.slice((slice - 1) * TREE_CAP, slice * TREE_CAP)
+
+const frdAt = (root) => parseFrd(readIfExists(root, FRD_PATH))
+
+export const tree = {
+  description: "Step 9B: the module tree. Without arguments — the SKELETON: one <module> per module of the change (the requirement's deltas UNION the nodes of its scenarios), with `path`, `delta`, the twin found by the form of the path and the declarations of .agent/ripple.xml already written in; the role fills `hides`, `io`, `owns`, `needs` and the contract, and nothing else. With `path` and `slice` — the CHECK of one portion (four modules): a section per module of the portion, no foreign one, a secret, an io from the vocabulary, a non-empty signature, and every `needs` an ADDRESS that resolves. With `composed` — the check of the WHOLE (composition against the requirement, one owner per type, one spelling per name, `needs` acyclic) and the promotion to .agent/tree.xml. Costs no tokens.",
+  input: {
+    type: "object",
+    properties: { path: { type: "string" }, slice: { type: "number" }, composed: { type: "boolean" } },
+    additionalProperties: false,
+  },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" }, why: { type: "string" }, blockers: { type: "string" }, missing: { type: "boolean" },
+      at: { type: "string" }, modules: { type: "number" }, portions: { type: "number" }, mine: { type: "array", items: { type: "string" } },
+      neighbours: { type: "string" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ path = "", slice = 0, composed = false } = {}, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, FRD_PATH))) return { ok: false, why: `${FRD_PATH} не существует — дерево строить не из чего` }
+    const frd = frdAt(root)
+    const map = readIfExists(root, GRAPH_PATH)
+    const all = [...modulesOfChange({ frd }).keys()]
+    const portions = Math.max(1, Math.ceil(all.length / TREE_CAP))
+
+    if (!path) {
+      const sk = treeSkeleton({ frd, ripple: readIfExists(root, RIPPLE_PATH), map })
+      mkdirSync(at(root, STAGING_DIR), { recursive: true })
+      writeFileSync(at(root, TREE_STAGING), sk.xml)
+      return { ok: true, at: TREE_STAGING, modules: sk.modules, portions }
+    }
+
+    if (!existsSync(at(root, path))) {
+      return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
+    }
+    const staged = readFileSync(at(root, path), "utf8")
+    const bad = checkTree({
+      text: staged, frd, known: knownPaths(map), family: all,
+      mine: slice ? portionOf(all, slice) : all,
+      portion: !composed, whole: composed,
+    })
+    if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
+    if (!composed) return { ok: true, modules: parseTree(staged).modules.length, mine: slice ? portionOf(all, slice) : all }
+
+    writeFileSync(at(root, TREE_PATH), staged.endsWith("\n") ? staged : `${staged}\n`)
+    return { ok: true, at: TREE_PATH, modules: parseTree(staged).modules.length, portions }
+  },
+}
+
+// СОСЕДИ — ВЫЧИСЛЯЕМЫЙ БЛОК, А НЕ ДИСЦИПЛИНА АВТОРА. Роль видит только свою порцию, и узнать имена и
+// сигнатуры соседей ей больше неоткуда: приём взят у superpowers (блок `Interfaces: Consumes /
+// Produces` тикета), но там его пишет человек, а здесь считает скрипт из уже зелёных порций. Пока
+// этого блока не было, гардрейл считал соседа по `needs` призраком — живой дефект 20.08.2026.
+export const neighbours = {
+  description: "Step 9B: the NEIGHBOURS block of one portion's order — what the modules OUTSIDE this portion own and declare, as the already-written portions say it. Computed from the staged tree, never authored: the role sees only its own four modules and has no other way to learn a sibling's type names and signatures. Costs no tokens.",
+  input: { type: "object", properties: { slice: { type: "number" } }, required: ["slice"], additionalProperties: false },
+  output: { type: "object", properties: { ok: { type: "boolean" }, text: { type: "string" }, count: { type: "number" } }, required: ["ok"], additionalProperties: false },
+  run({ slice }, context) {
+    const root = runRoot(context)
+    const frd = frdAt(root)
+    const all = [...modulesOfChange({ frd }).keys()]
+    const mine = new Set(portionOf(all, slice))
+    const written = parseTree(readIfExists(root, TREE_STAGING)).modules.filter((m) => !mine.has(m.path) && (m.owns || m.contract.sig))
+    const text = written.map((m) => [
+      `${m.path}`,
+      m.owns ? `  владеет типом: ${m.owns}` : "",
+      m.contract.sig ? `  объявление: ${m.contract.sig}` : "",
+      m.contract.post ? `  отдаёт: ${m.contract.post}` : "",
+    ].filter(Boolean).join("\n")).join("\n")
+    return { ok: true, text, count: written.length }
+  },
+}
+
+export const flows = {
+  description: "Step 9C: the data flows. Without arguments — the SKELETON: one <flow> per use case and one per failure branch, with a row per step of the requirement whose `closes` is ALREADY written by the script (a role that typed the number by hand once produced a Cyrillic «2а» where the FRD had a Latin «2a», and the coverage became a lie). With `path` and `uc` — the CHECK of one portion: every step and branch of THAT use case closed, the module named by the tree, the role from the vocabulary. With `composed` — the check of the WHOLE (one producing module per value, every input produced or external, every failure born and delivered to its status, every module of the tree working in a flow or reachable by `needs`) and the promotion to .agent/flows.xml. Costs no tokens.",
+  input: {
+    type: "object",
+    properties: { path: { type: "string" }, uc: { type: "string" }, composed: { type: "boolean" } },
+    additionalProperties: false,
+  },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" }, why: { type: "string" }, blockers: { type: "string" }, missing: { type: "boolean" },
+      at: { type: "string" }, flows: { type: "number" }, steps: { type: "number" }, ucs: { type: "array", items: { type: "string" } },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ path = "", uc = "", composed = false } = {}, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, TREE_PATH))) return { ok: false, why: `${TREE_PATH} не существует — потоки судить не по чему, шаг 9B не закрыт` }
+    const frd = frdAt(root)
+    const tree_ = readIfExists(root, TREE_PATH)
+    const ucs = (frd.usecases || []).map((u) => u.id)
+
+    if (!path) {
+      const sk = flowsSkeleton({ frd })
+      mkdirSync(at(root, STAGING_DIR), { recursive: true })
+      writeFileSync(at(root, FLOWS_STAGING), sk.xml)
+      return { ok: true, at: FLOWS_STAGING, flows: sk.flows, steps: sk.steps, ucs }
+    }
+    if (!existsSync(at(root, path))) {
+      return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
+    }
+    const staged = readFileSync(at(root, path), "utf8")
+    const bad = checkFlows({ text: staged, frd, tree: tree_, only: uc, portion: !composed, whole: composed })
+    if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
+    const parsed = parseFlows(staged)
+    if (!composed) return { ok: true, flows: parsed.flows.length, steps: parsed.flows.reduce((n, f) => n + f.steps.length, 0) }
+
+    writeFileSync(at(root, FLOWS_PATH), staged.endsWith("\n") ? staged : `${staged}\n`)
+    return { ok: true, at: FLOWS_PATH, flows: parsed.flows.length, steps: parsed.flows.reduce((n, f) => n + f.steps.length, 0), ucs }
+  },
+}
+
+// ПЛАН СОБИРАЕТСЯ СКРИПТОМ И НЕ СТОИТ НИ ОДНОГО ТОКЕНА. Отказ сборки не пишет план И СНОСИТ
+// предыдущий: план, переживший дыру, — это гейт, утверждающий работу, которой уже нет.
+export const planbook = {
+  description: "Step 9D: assemble task/<KEY>/PLAN.md from the tree, the flows, the requirement and the decisions log. A SCRIPT, not a role: the plan holds no decision that is not already in the tree or the flows — it indexes them. Waves come from `needs` (never from the flows: a data flow is a round trip and therefore a circle). Refuses when the tree is circular, when a module or a `fit` value did not reach the document, or when a placeholder was left in it — and REMOVES the previous PLAN.md on any refusal. Costs no tokens.",
+  input: { type: "object", properties: {}, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" }, why: { type: "string" }, blockers: { type: "string" }, cycle: { type: "string" },
+      at: { type: "string" }, modules: { type: "number" }, waves: { type: "array", items: { type: "number" } }, ucs: { type: "number" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run(_ = {}, context) {
+    const root = runRoot(context)
+    const dir = taskDir(root)
+    if (!dir) return { ok: false, why: "ключ задачи не отвечен — класть план некуда" }
+    const out = `${dir}/PLAN.md`
+    const drop = () => { if (existsSync(at(root, out))) rmSync(at(root, out), { force: true }) }
+    for (const p of [TREE_PATH, FLOWS_PATH]) {
+      if (!existsSync(at(root, p))) { drop(); return { ok: false, why: `${p} не существует — план собирать не из чего` } }
+    }
+    const frd = frdAt(root)
+    const tree_ = readIfExists(root, TREE_PATH)
+    const flows_ = readIfExists(root, FLOWS_PATH)
+    const { waves, cycle } = wavesOf({ tree: tree_ })
+    if (cycle.length) { drop(); return { ok: false, cycle: cycle.join(" → "), blockers: `очередь работ замкнута: ${cycle.join(" → ")} — отношение «без чего меня не написать» кругов не имеет: одно из рёбер описывает вызов, а не объявление` } }
+
+    const text = planDoc({ frd, tree: tree_, flows: flows_, decisions: readIfExists(root, DECISIONS_PATH), key: taskKey(root) })
+    const bad = checkBook({ plan: text, frd, tree: tree_ })
+    if (bad.length) { drop(); return { ok: false, blockers: bad.join("\n  ") } }
+    mkdirSync(at(root, dir), { recursive: true })
+    writeFileSync(at(root, out), text.endsWith("\n") ? text : `${text}\n`)
+    return { ok: true, at: out, modules: parseTree(tree_).modules.length, waves: waves.map((w) => w.length), ucs: (frd.usecases || []).length }
+  },
+}
+
+// ЖУРНАЛ РЕШЕНИЙ ПЕРЕЖИВАЕТ ПЕРЕСБОРКУ ПЛАНА. Ответ, найденный у соседа в репозитории, живёт здесь, а
+// не в тексте плана: план собирается заново каждый круг, и решение вместе с ним исчезало.
+export const decision = {
+  description: "Write one decision into .agent/decisions.md — the question the requirement left silent, the answer, the `file:line` that backs it and the route (repo | frd | operator). A decision taken from the repository WITHOUT a `file:line` is refused: «that is how it is done here» with no address is a guess, not an answer. Reading with no arguments returns the log. Costs no tokens.",
+  input: {
+    type: "object",
+    properties: { question: { type: "string" }, answer: { type: "string" }, source: { type: "string" }, route: { type: "string" }, why: { type: "string" } },
+    additionalProperties: false,
+  },
+  output: { type: "object", properties: { ok: { type: "boolean" }, why: { type: "string" }, count: { type: "number" }, text: { type: "string" } }, required: ["ok"], additionalProperties: false },
+  run({ question = "", answer = "", source = "", route = "", why = "" } = {}, context) {
+    const root = runRoot(context)
+    const had = parseDecisions(readIfExists(root, DECISIONS_PATH))
+    if (!question) return { ok: true, count: had.length, text: readIfExists(root, DECISIONS_PATH) }
+    const one = newDecision({ question, answer, source, route, why })
+    if (one.error) return { ok: false, why: one.error }
+    const kept = [...had.filter((d) => d.question !== one.question), one]
+    mkdirSync(at(root, ".agent"), { recursive: true })
+    writeFileSync(at(root, DECISIONS_PATH), renderDecisions(kept))
+    return { ok: true, count: kept.length }
+  },
+}
 
 // --- gate1: the operator approves the plan --------------------------------------------------------
 // Step 12. The presentation is assembled by SCRIPT — every line a cut or a count — for the same
@@ -1796,7 +1981,7 @@ export const gate1 = {
     // ОДИН ДОКУМЕНТ, А НЕ ПАПКА КАРТОЧЕК. Разбиение на партии удалено вместе со старым шагом 9
     // (docs/plan.md): гейт читает собранный PLAN.md, а модули изменения берёт из дельт требования —
     // из того же места, откуда их брало разбиение.
-    const modules = modulesOfFrd(frd)
+    const modules = modulesOfChange({ frd })
     const planDocPath = `task/${key}/PLAN.md`
     const sections = sectionsOf(readIfExists(root, planDocPath))
     const { order } = orderOf({ sections, modules, edges: parseMap(map).edges })
@@ -2172,7 +2357,7 @@ export const tickets = {
 
     const frd = parseFrd(readFileSync(at(root, FRD_PATH), "utf8"))
     const map = readFileSync(at(root, GRAPH_PATH), "utf8")
-    const modules = modulesOfFrd(frd)
+    const modules = modulesOfChange({ frd })
     const planDocPath = `task/${key}/PLAN.md`
     const sections = sectionsOf(readIfExists(root, planDocPath))
     if (!sections.length) return { ok: false, why: `в ${planDocPath} нет ни одного раздела — шаг 9 не отработал` }
@@ -2901,8 +3086,8 @@ export default function extension(pi) {
   registerWorkflowExtension({
     version: "1.25.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
-    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/orderLine/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/design/parts/part/planbook/planReview/planFix/planRoute/planFeedback/clearStaged/nodeFacts/frdAdopt/planCard/partJoin/chainsJoin/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/, steps/planreview/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, orderLine, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, planReview, planFix, planRoute, planFeedback, clearStaged, nodeFacts, frdAdopt, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
+    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/orderLine/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/tree/neighbours/flows/planbook/decision/planReview/planFix/planRoute/planFeedback/clearStaged/nodeFacts/frdAdopt/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/, steps/planreview/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, orderLine, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, tree, neighbours, flows, planbook, decision, planReview, planFix, planRoute, planFeedback, clearStaged, nodeFacts, frdAdopt, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

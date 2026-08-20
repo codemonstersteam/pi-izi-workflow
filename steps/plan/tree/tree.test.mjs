@@ -30,6 +30,7 @@ const mod = (path, over = {}) => {
     `  <module path="${path}" delta="Added" io="${o.io}">`,
     `    <hides>${o.hides}</hides>`,
     `    <owns type="${o.owns}"/>`,
+    `    <twin kind="twin" path="src/model/Old.java" candidates="src/model/Old.java"></twin>`,
     `    <needs>${o.needs.map((n) => `<need path="${n[0]}" why="${n[1] ?? "нужен тип"}"/>`).join("")}</needs>`,
     `    <contract><sig>${o.sig}</sig><pre>${o.pre}</pre><post>${o.post}</post><fail>${o.fail}</fail></contract>`,
     `  </module>`,
@@ -70,7 +71,11 @@ test("скелет: модуль на каждый узел работы, фак
   const { modules } = parseTree(s.xml)
   assert.deepEqual(modules.map((m) => m.path), [...modulesOfChange({ frd: FRD }).keys()])
   assert.equal(modules.every((m) => m.hides === "" && m.contract.sig === ""), true, "скелет решил за роль")
-  assert.match(s.xml, /<twin kind="neighbour" path="src\/mongo\/OldStore.java">/, "близнец не подставлен")
+  // ОБРАЗЕЦ ВЫБИРАЕТ РОЛЬ. Скрипт кладёт кандидатов: всякая формула выбора («первый попавшийся»,
+  // «большинство», «слово из требования») дала на eddi РАЗНЫЙ ответ, а это суждение, а не вычисление.
+  assert.match(s.xml, /<twin kind="neighbour" path="" candidates="src\/mongo\/OldStore.java"/, "кандидаты не предложены либо образец выбран за роль")
+  assert.match(treeSkeleton({ frd: FRD, map: `<map><module path="src/model/Doc.java"/></map>` }).xml,
+    /<twin kind="self" path="src\/model\/Doc.java"/, "существующий модуль сам себе образец, и это не выбор")
   assert.match(s.xml, /<decl kind="method" name="create"\/>/, "факты ряби не доехали — роль пойдёт читать файлы")
 })
 
@@ -83,6 +88,7 @@ test("порция: состав, секрет, io из словаря, конт
   assert.match(portion(GREEN.replace("<hides>секрет</hides>", "<hides></hides>")).join("\n"), /пуст <hides>/)
   assert.match(portion(GREEN.replace('io="none"', 'io="database"')).join("\n"), new RegExp(IO_KINDS.join(" · ").replace(/\|/g, "\\|")))
   assert.match(portion(GREEN.replace("<sig>public class Doc { String getName(); }</sig>", "<sig></sig>")).join("\n"), /пуста <sig>/)
+  assert.match(portion(GREEN.replace('path="src/model/Old.java" candidates', 'path="" candidates')).join("\n"), /не назван образец/)
 
   // ИМЯ КЛАССА ВМЕСТО ПУТИ — ГЛАВНЫЙ ПРОМАХ РОЛИ, и блокер обязан показать выход образцом.
   const named = GREEN.replace('path="src/model/Doc.java" why', 'path="Doc" why')
@@ -103,7 +109,8 @@ test("целое: состав против требования, один вл�
   assert.match(whole(tree(mod("src/model/Doc.java"), mod("src/mongo/Store.java"))).join("\n"), /требование трогает модули, которых в дереве нет/)
   assert.match(whole(GREEN + tree(mod("src/extra/Y.java"))).join("\n"), /которых требование не трогает/)
 
-  const twoOwners = GREEN.replace('<owns type=""/>\n    <needs><need path="src/model/Doc.java"', '<owns type="Doc"/>\n    <needs><need path="src/model/Doc.java"')
+  const twoOwners = GREEN.replace('<owns type=""/>', '<owns type="Doc"/>')
+    .replace("public class Store implements IStore", "public class Store implements IStore { Doc read(); }")
   assert.match(whole(twoOwners).join("\n"), /объявлен собственностью 2 модулей/)
 
   // КРУГ. `needs` описывает объявления, и круга в нём быть не может: он означает, что одно из рёбер

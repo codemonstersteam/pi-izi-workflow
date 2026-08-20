@@ -71,27 +71,45 @@ export function modulesOfChange({ frd = {} } = {}) {
 // `glossary/mongo/GlossaryStore` против `snippets/mongo/PromptSnippetStore` различаются дважды, — и
 // строгое правило «одно различие» находит на eddi НОЛЬ близнецов. Правило: столько же сегментов,
 // ровно один различающийся КАТАЛОГ, и дальше либо тот же род (`Store`), либо тот же последний каталог.
-export function sampleOf(path, map) {
+// Кандидаты в близнецы: столько же сегментов, ровно один различающийся каталог, и дальше либо тот же
+// род, либо тот же последний каталог. Один разрез на двоих — `sampleOf` выбирает из этого списка,
+// `treeSkeleton` по нему же считает семью.
+function candidatesOf(path, map) {
+  const p = String(path || "")
+  const seg = p.split("/")
+  const kind = kindOf(p)
+  return [...String(map || "").matchAll(elem("module"))].map((m) => attrs(m[1]).path).filter(Boolean).filter((q) => {
+    const s = q.split("/")
+    if (s.length !== seg.length || q === p) return false
+    let diff = 0
+    for (let i = 0; i < seg.length - 1; i++) if (s[i] !== seg[i]) diff++
+    return diff === 1 && (kindOf(q) === kind || tailOf(q) === tailOf(p))
+  })
+}
+
+export function sampleOf(path, map, prefer = "") {
   const p = String(path || "")
   const paths = [...String(map || "").matchAll(elem("module"))].map((m) => attrs(m[1]).path).filter(Boolean)
   if (!p) return Object.freeze({ kind: "none", path: "" })
   if (paths.includes(p)) return Object.freeze({ kind: "self", path: p })
 
-  const seg = p.split("/")
   const kind = kindOf(p)
-  const twins = paths.filter((q) => {
-    const s = q.split("/")
-    if (s.length !== seg.length) return false
-    let diff = 0
-    for (let i = 0; i < seg.length - 1; i++) if (s[i] !== seg[i]) diff++
-    if (diff !== 1) return false
-    return kindOf(q) === kind || tailOf(q) === tailOf(p)
-  })
+  const twins = candidatesOf(p, map)
   const near = paths.filter((q) => dirOf(q) === dirOf(p) && q !== p)
 
   // РОД ПЕРЕВЕШИВАЕТ ЗЕРКАЛО, и этот порядок измерен. Близнец того же рода учит больше всего:
   // `PromptSnippetStore` показывает `GlossaryStore` его базовый класс, коллекцию и аннотации. С
   // зеркалом впереди eddi выдал `GlossaryService` резолвер из чужого пакета — образцы разъехались.
+  // СЕМЬЯ БЛИЗНЕЦОВ ВЫБИРАЕТСЯ ОДНА НА ВСЁ ИЗМЕНЕНИЕ. У новой сущности рода нет: `Glossary` не
+  // совпадает по роду ни с `PromptSnippet`, ни с `AgentConfiguration`, и «первый попавшийся» отдал
+  // eddi модель агента вместо модели сниппета — образцы разъехались бы по разным пакетам. `prefer` —
+  // каталог, который набрал большинство по всем модулям работы (treeSkeleton), и он перевешивает.
+  if (prefer) {
+    const mine = twins.filter((q) => q.split("/").includes(prefer))
+    if (mine.length) return Object.freeze({ kind: "twin", path: mine.find((q) => kindOf(q) === kind) || mine[0] })
+    const nearPrefer = near.filter((q) => q.split("/").includes(prefer))
+    if (nearPrefer.length) return Object.freeze({ kind: "neighbour", path: nearPrefer[0] })
+  }
   const twinSame = twins.find((q) => kindOf(q) === kind)
   if (twinSame) return Object.freeze({ kind: "twin", path: twinSame })
   const nearSame = near.find((q) => kindOf(q) === kind)
@@ -121,8 +139,32 @@ export function treeSkeleton({ frd = {}, ripple = "", map = "" } = {}) {
     const a = attrs(m[1])
     if (a.path) facts.set(a.path, m[2])
   }
+  // СЕМЬЮ БЛИЗНЕЦОВ НАЗЫВАЕТ ТРЕБОВАНИЕ, А ЕСЛИ МОЛЧИТ — ПОКРЫТИЕ. Голосование по уже сделанному
+  // выбору бесполезно: оно голосует за произвольного первого. Поэтому считаются ВСЕ кандидаты
+  // каждого модуля, и семья, которую требование называет своими словами («по образцу snippets»),
+  // перевешивает: это ответ автора требования, а не догадка формы пути.
+  const said = [String(frd.goal || ""), ...(frd.deltas || []).map((d) => `${d.op} ${d.to}`), ...(frd.usecases || []).map((u) => u.goal)].join(" ").toLowerCase()
+  const score = new Map()
+  for (const m of mods) {
+    const seg = m.node.split("/")
+    for (const q of candidatesOf(m.node, map)) {
+      const s2 = q.split("/")
+      for (let i = 0; i < s2.length - 1; i++) if (s2[i] !== seg[i]) score.set(s2[i], (score.get(s2[i]) || 0) + 1)
+    }
+  }
+  for (const [seg, n] of score) if (said.includes(seg.replace(/s$/, ""))) score.set(seg, n + 100)
+  const top = [...score].sort((a, b) => b[1] - a[1])[0]
+  const family = top && top[1] > 1 ? top[0] : ""
+
   const body = mods.map((m) => {
     const twin = sampleOf(m.node, map)
+    // ОБРАЗЕЦ ВЫБИРАЕТ РОЛЬ, А СКРИПТ ПРЕДЛАГАЕТ. У новой сущности рода нет: `Glossary` не совпадает
+    // ни с `PromptSnippet`, ни с `AgentConfiguration`. Три формулы выбора — «первый попавшийся»,
+    // «большинство по кандидатам» и «слово из требования» — дали на eddi ТРИ РАЗНЫХ ответа
+    // (agents, descriptors, snippets), причём третья поймала слово «descriptor», стоявшее в
+    // требовании по другому поводу. Это суждение, а не вычисление: кандидатов кладёт скрипт,
+    // одного из них называет роль, и гардрейл требует, чтобы имя было названо.
+    const offer = [...new Set([twin.path, ...candidatesOf(m.node, map)])].filter(Boolean).slice(0, 5)
     const own = facts.get(m.node) || ""
     const decls = [...own.matchAll(elem("decl"))].map((d) => d[0]).slice(0, 12)
     const apis = [...own.matchAll(elem("api"))].map((d) => d[0]).slice(0, 8)
@@ -130,7 +172,7 @@ export function treeSkeleton({ frd = {}, ripple = "", map = "" } = {}) {
       `  <module path="${m.node}" delta="${m.delta || "Changed"}" io="">`,
       `    <hides></hides>`,
       `    <owns type=""/>`,
-      `    <twin kind="${twin.kind}" path="${twin.path}"></twin>`,
+      `    <twin kind="${twin.kind}" path="${twin.kind === "self" ? twin.path : ""}" candidates="${offer.join(" ")}"></twin>`,
       `    <needs></needs>`,
       `    <contract><sig></sig><pre></pre><post></post><fail></fail></contract>`,
       ...(decls.length || apis.length ? [`    <facts>`, ...[...decls, ...apis].map((x) => `      ${x}`), `    </facts>`] : []),
@@ -162,6 +204,7 @@ export function parseTree(xml) {
       hides: text(body, "hides"),
       owns: (body.match(/<owns\b[^>]*\btype="([^"]*)"/) || ["", ""])[1],
       twin: (body.match(/<twin\b[^>]*\bpath="([^"]*)"/) || ["", ""])[1],
+      candidates: Object.freeze(((body.match(/<twin\b[^>]*\bcandidates="([^"]*)"/) || ["", ""])[1] || "").split(/\s+/).filter(Boolean)),
       needs: Object.freeze([...body.matchAll(/<need\b([^>]*)\/>/g)].map((n) => {
         const na = attrs(n[1])
         return Object.freeze({ path: na.path || "", why: na.why || "" })
@@ -237,6 +280,7 @@ export function checkTree({ text = "", mine = [], family = [], known = [], frd =
   for (const m of modules) {
     if (!m.hides) B.push(`T5 у модуля ${m.path} пуст <hides> — назови ОДНО решение, которое он прячет: «как глоссарий хранится: коллекция, версионирование, где проверяется ключ»`)
     if (!IO_KINDS.includes(m.io)) B.push(`T5 у модуля ${m.path} io="${m.io}" — слово вне словаря; поставь одно из: ${IO_KINDS.join(" · ")}`)
+    if (!m.twin) B.push(`T5 у модуля ${m.path} не назван образец — выбери ОДИН путь из candidates и впиши его в <twin path="…">: по нему исполнитель узнаёт базовый класс, аннотации и стиль`)
     if (!m.contract.sig) B.push(`T5 у модуля ${m.path} пуста <sig> — выпиши объявление так, как его напишет исполнитель: «public interface IGlossaryStore extends IResourceStore&lt;Glossary&gt;»`)
     if (!m.contract.pre) B.push(`T5 у модуля ${m.path} пуст <pre> — что обязано быть верным на входе; предусловия нет — так и напиши: «нет — это объявление»`)
     if (!m.contract.post) B.push(`T5 у модуля ${m.path} пуст <post> — что он гарантирует, со ссылкой на шаг требования: «create → id и version 1 (UC2/3)»`)
