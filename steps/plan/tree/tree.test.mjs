@@ -133,4 +133,8 @@ test("целое: тип пишется везде одним написание
 
   const mute = GREEN.replace('<owns type="Doc"/>', '<owns type="Document"/>')
   assert.match(whole(mute).join("\n"), /владеет типом «Document», но его сигнатура этого типа не называет/)
+
+  // …но у ИЗМЕНЯЕМОГО файла объявление уже в репозитории, а <sig> показывает дельту: требовать там
+  // имени класса значит требовать переписать чужой файл целиком.
+  assert.deepEqual(whole(mute.replace('path="src/model/Doc.java" delta="Added"', 'path="src/model/Doc.java" delta="Changed"')), [])
 })
