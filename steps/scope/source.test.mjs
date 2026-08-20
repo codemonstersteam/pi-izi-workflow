@@ -45,6 +45,47 @@ test("java: visibility from the modifier, route annotations, a driver from an im
   assert.equal(s.drivers[0].spec, "jakarta.persistence.EntityManager")
 })
 
+// ВИДИМОСТЬ ЧЛЕНА ИНТЕРФЕЙСА — ГРАММАТИКА ЯЗЫКА, А НЕ НАЛИЧИЕ СЛОВА (наряд J1).
+// Живой прогон eddi: IConversationMemory объявляет 20 методов, а карта несла ОДНО объявление — сам
+// интерфейс, потому что `public` в теле интерфейса не пишут. Шов ловит ровно это: сними
+// interfaceBodies/inInterface в source.mjs — и три метода ниже станут internal, то есть исчезнут из
+// карты на шаге 3 (computed.mjs оставляет только публичное).
+test("java: члены интерфейса публичны без ключевого слова, а явный private — нет", () => {
+  const s = readSource({
+    path: "src/main/java/ai/labs/eddi/memory/IConversationMemory.java",
+    text: `
+      package ai.labs.eddi.memory;
+
+      public interface IConversationMemory {
+        String CACHE_KEY = "conversation";
+
+        String getAgentId();
+        void setAgentId(String agentId);
+        default int size() { return 0; }
+        private void seal() { }
+        <T> IResourceStorage<T> create(String name, Class<T> type);
+      }
+
+      class Helper {
+        void hidden() { }
+      }`,
+  })
+
+  const by = (n) => s.decls.find((d) => d.name.startsWith(n))
+  assert.equal(by("getAgentId(").visibility, "public")
+  assert.equal(by("setAgentId(").visibility, "public")
+  assert.equal(by("size(").visibility, "public")
+  // Java 9+ разрешает приватный метод интерфейса — единственное исключение из неявной публичности.
+  assert.equal(by("seal(").visibility, "internal")
+  // Константа интерфейса — public static final по грамматике, модификаторов у неё не пишут.
+  assert.equal(s.decls.find((d) => d.kind === "field" && d.name === "CACHE_KEY").visibility, "public")
+  // Тело интерфейса кончается на своей закрывающей скобке: метод соседнего класса не публичен.
+  assert.equal(by("hidden(").visibility, "internal")
+  // Метод с параметром типа впереди возвращаемого — тоже член интерфейса, и он тоже публичен.
+  assert.equal(by("create(").visibility, "public")
+  assert.equal(s.decls.filter((d) => d.kind === "method" && d.visibility === "public").length, 4)
+})
+
 test("go and ts: visibility is the leading case and the word export; a commented-out line is no fact", () => {
   const go = readSource({
     path: "internal/store/store.go",

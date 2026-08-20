@@ -4,6 +4,11 @@ $START_TASK
 В скелете ниже {BLANK} строк с `text=""`. Впиши в каждую короткое имя того, что там передаётся.
 Остальные строки скопируй буква в букву.
 Файл запиши целиком по staging-пути.
+
+ГЛАВНОЕ ПРАВИЛО ЭТОГО НАРЯДА: строка копируется СИМВОЛ В СИМВОЛ, вместе с `&lt;` `&gt;` `&amp;`.
+Скелет уже экранирован. Раскодируешь — строка перестанет читаться, и файл вернётся тебе.
+верно:   text="create(List&lt;T&gt; configs)"
+неверно: text="create(List<T> configs)"
 $END_TASK
 
 $START_DATA
@@ -61,8 +66,9 @@ schema:
   <values grammar="2" form="skeleton">
     <value id="v1" closes="UC1/in" side="in" text="…" end="…"/>
     <value id="v2" closes="UC1/post" side="out" text="…" end="…"/>
-    <value id="v3" text="…" src="…"/>
+    <value id="v3" text="create(List&lt;T&gt; configs)" src="…"/>
   </values>
 check: {CHECK}
+ПЕРЕД ОТПРАВКОЙ: найди в своём файле «<» и «&» внутри `text="…"` — их там быть не должно.
 return: вызови workflow_result по OUTPUT_FORMAT своей ROLE
 $END_OUTPUT

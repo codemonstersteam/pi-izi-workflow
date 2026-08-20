@@ -22,7 +22,7 @@
 
 // reaches — зовёт ли `from` модуль `to`, прямо или через цепочку. Круга здесь быть не может: его
 // отверг гардрейл фазы ⑦ шага 9, но `seen` стоит всё равно — тотальность важнее веры в соседа.
-import { SECTION_KEYS } from "../design/card.mjs"
+import { SECTION_KEYS, fitsMatch } from "../plan/sections.mjs"
 import { cyrillicWords } from "../../core/lang.mjs"
 
 const reaches = (from, to, calls, seen = new Set()) => {
@@ -215,10 +215,40 @@ export function layersOf({ sections = [], order = [] } = {}) {
   return out.filter(Boolean)
 }
 
+// ТИП, КОТОРЫЙ ОБЪЯВЛЯЕТ ДРУГОЙ РАЗДЕЛ ПЛАНА, — ТАКОЕ ЖЕ РЕБРО, КАК ВЫЗОВ. Роль пишет его в «calls»,
+// только когда догадается: на живом плане eddi `IGlossaryStore` объявил `Glossary` в «зовёт», а
+// `IRestGlossaryStore` и `IResourceSource` — нет, хотя тип стоит в каждой их сигнатуре. Все трое
+// встали на ОДНУ волну, и параллельный подъём волны 1 не собирается: 08 компилируется до того, как
+// 09 написан. Тот же дефект у донора несёт имя и номер (wirth-ticketer, live-finding 17-07:
+// «blocked_by MUST include TYPE dependencies»). Здесь он вычисляется, а не просится у роли:
+// объявление типа читается из «declares» соседа, потребление — из своих «signatures»/«fields»/
+// «declares»; оба факта уже лежат в разделах.
+const TYPE_DECL = /\b(?:class|interface|enum|record|struct|type|trait)\s+([A-Z][A-Za-z0-9_]*)/g
+const declaredTypesOf = (sections) => {
+  const out = new Map()
+  for (const s of sections || []) {
+    for (const m of block(s && s.body, "declares").matchAll(TYPE_DECL)) {
+      if (!out.has(m[1])) out.set(m[1], s.path)
+    }
+  }
+  return out
+}
+const typeDepsOf = (s, declared) => {
+  const text = ["signatures", "fields", "declares"].map((k) => block(s && s.body, k)).join("\n")
+  return [...new Set((text.match(/\b[A-Z][A-Za-z0-9_]*\b/g) || [])
+    .map((n) => declared.get(n))
+    .filter((p) => p && p !== (s && s.path)))]
+}
+
 // via — как актёр входит в программу, словами самого FRD. Путь в нём означает ВНЕШНИЙ канал: актёр
 // зовёт систему через её границу, а не через класс. Это не догадка о протоколе, а то, что роль
 // написала в `<actor via>`, и единственное место, где полоса вообще узнаёт о границе.
-const viaOf = (frd, name) => String((((frd || {}).actors || []).find((a) => String(a.name || "") === String(name || "")) || {}).via || "")
+// КАНАЛ USE CASE ПЕРЕКРЫВАЕТ АКТЁРСКИЙ. `via` актёра — свойство актёра: на живом прогоне eddi восемь
+// use case одного `api-client` получили один CRUD-эндпоинт, включая экспорт и импорт агента, которые
+// входят через backup-эндпоинты. Шаг 6 теперь умеет назвать канал у самого use case (F10), и здесь
+// он ПЕРВЫЙ; пусто — берётся актёрский, как раньше.
+const viaOf = (frd, name, uc = null) => String(
+  (uc && uc.via) || (((frd || {}).actors || []).find((a) => String(a.name || "") === String(name || "")) || {}).via || "")
 
 // Ветка отказа проверяема снаружи, когда у её кода есть статус: `<failure status>` и есть то, что
 // граничный тест утверждает. Ветка без статуса живёт внутри и достаётся владельцу шага.
@@ -247,13 +277,17 @@ const coded = (frd, code) => Boolean((((frd || {}).failures || []).find((f) => f
 //
 //   boundary  один на use case, чей актёр входит через путь · волна 0 · обязан быть КРАСНЫМ
 //   module    один на раздел плана · волна = слой графа «зовёт» · ворота: сборка + ТОЛЬКО свои тесты
-export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branch = "", match = "*", testDir = "", known = new Set(), outer = null, build = "", samples = [], facts = null } = {}) {
+export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branch = "", match = "*", testDir = "", known = new Set(), outer = null, build = "", samples = [], facts = null, unit = null } = {}) {
   // ФАКТЫ РЕПОЗИТОРИЯ — steps/tickets/facts.mjs, 0 токенов. Нет карты — нет и фактов: наряд тогда
   // выходит без стека и без пакета, как выходил до этой правки, вместо стека, взятого из головы.
   const F = facts || { stack: "", pkgOf: () => "", declOf: () => null, systemsOf: () => [] }
   const byPath = new Map(sections.map((s) => [s.path, s]))
   const owner = ownerOf({ sections, order })
-  const layers = layersOf({ sections, order })
+  // Слои считаются по рёбрам «зовёт» И «пользуюсь типом»: второе ребро так же требует, чтобы
+  // поставщик лег раньше потребителя, иначе волна не собирается (см. declaredTypesOf выше).
+  const declared = declaredTypesOf(sections)
+  const withTypes = sections.map((s) => ({ ...s, calls: [...new Set([...(s.calls || []), ...typeDepsOf(s, declared)])] }))
+  const layers = layersOf({ sections: withTypes, order })
   const level = new Map()
   layers.forEach((one, k) => one.forEach((p) => level.set(p, k)))
 
@@ -284,12 +318,53 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
   }
   // Словарь величин изменения: ветка отказа даёт КОД, а поле — правило, которое она нарушает. Без
   // него исполнителю нечем вызвать отказ, и он его выдумывает.
-  const fields = (frd.fields || []).filter((f) => f && f.name && f.domain)
-    .map((f) => `${f.name}${f.in ? ` (${f.in})` : ""}: ${f.domain}${f.required ? ` · required: ${f.required}` : ""}`)
+  const fieldRows = (frd.fields || []).filter((f) => f && f.name && f.domain)
+  const fieldLine = (f) => `${f.name}${f.in ? ` (${f.in})` : ""}: ${f.domain}${f.required ? ` · required: ${f.required}` : ""}`
+  const fields = fieldRows.map(fieldLine)
+  // СЛОВАРЬ ГРАНИЦЫ — ЕЁ СОБСТВЕННЫЙ. Живой наряд 05 формы eddi (выгрузка агента) нёс ВЕСЬ словарь
+  // FRD, включая `key (Term)` и `value (Term)`, которых в экспорте нет: слабая модель заполняет шум
+  // изобретательностью. Поле остаётся, если его имя или его сущность встречаются в текстах САМОГО
+  // use case; не совпало ничего — блок опускается, а не вываливается целиком.
+  // Отказы, принадлежащие шагам этого наряда: ветка `<ext>` даёт код, строка `<failure>` — статус и
+  // слова, которые видит клиент. Оба факта уже лежат в FRD; наряду они не доезжали.
+  const failuresFor = (steps) => {
+    const out = []
+    for (const token of steps || []) {
+      const [uc, n] = String(token).split("/")
+      const u = (frd.usecases || []).find((x) => x.id === uc)
+      if (!u) continue
+      // Ветка ПРИНАДЛЕЖИТ шагу: `2a` и `2b` — это отказы шага 2. Владелец шага их и пишет, даже
+      // когда сам токен ветки достался границе: граница УТВЕРЖДАЕТ статус, а поднимает его модуль.
+      // Живой наряд 19 формы eddi владеет «UC4 step 2 — validates version and marks deleted», а 409
+      // и 404 стояли только в граничном наряде 04.
+      const base = String(n).replace(/\D+$/, "")
+      for (const e of u.exts || []) {
+        if (String(e.id).replace(/\D+$/, "") !== base) continue
+        if (!e.error || e.error === "none") continue
+        const f = (frd.failures || []).find((x) => x.code === e.error) || {}
+        const row = [`${uc}/${e.id}: ${e.error}`, f.status ? `HTTP ${f.status}` : "", f.client ? `client sees: ${f.client}` : "", e.outcome || ""]
+          .filter(Boolean).join(" · ")
+        if (!out.includes(row)) out.push(row)
+      }
+    }
+    return out
+  }
+  const fieldsOf = (u) => {
+    const said = [String(u.goal || ""), String(u.pre || ""), String(u.post || ""), ...(u.steps || []),
+      ...(u.exts || []).map((e) => `${e.error || ""} ${e.outcome || ""}`)].join(" ").toLowerCase()
+    // Поле связано с use case двумя способами: он НАЗЫВАЕТ его (имя поля или его сущность в текстах)
+    // или его ветка поднимает КОД, который это поле и охраняет — тогда поле есть то самое правило,
+    // которое ветка нарушает, и без него отказ нечем вызвать.
+    const codes = new Set((u.exts || []).map((e) => String(e.error || "")).filter((c) => c && c !== "none"))
+    const mine = fieldRows.filter((f) => said.includes(String(f.name).toLowerCase())
+      || (f.in && said.includes(String(f.in).toLowerCase()))
+      || codes.has(String(f.error || "")))
+    return mine.length ? mine.map(fieldLine) : []
+  }
 
   if (outer && outer.cmd && (samples || []).filter(Boolean).length) {
     for (const u of ucs) {
-      const via = viaOf(frd, u.actor)
+      const via = viaOf(frd, u.actor, u)
       if (!via.includes("/")) continue                      // канал не путь — снаружи не позвать
       const mine = [`${u.id}/1`, ...(u.exts || []).filter((e) => coded(frd, e.error)).map((e) => `${u.id}/${e.id}`)]
         .filter((x) => stepText(frd, x.split("/")[0], x.split("/")[1]))
@@ -310,6 +385,11 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
         name: `boundary-${u.id.toLowerCase()}`,
         via,
         goal: String(u.goal || ""),
+        // ПРЕДУСЛОВИЕ — ЧАСТЬ ПРОВЕРКИ, А НЕ УКРАШЕНИЕ. Живые наряды eddi не несли `<pre>` НИ ОДИН
+        // (0 совпадений на 22 файла), и исполнитель граничного теста не знал, какое состояние
+        // готовить: «agent exists with glossary references» — это фикстура, без которой тест
+        // проверяет не то.
+        pre: String(u.pre || ""),
         post: String(u.post || ""),
         steps: mine.map((x) => ({ step: x, text: stepText(frd, x.split("/")[0], x.split("/")[1]) })),
         // Файл ложится ТУДА, ГДЕ ЖИВУТ такие тесты — в каталог образца. Пакет и каталог сходятся по
@@ -319,7 +399,7 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
         sample,
         stack: F.stack,
         pkg: F.pkgOf(`${sample.split("/").slice(0, -1).join("/")}/${cls}.java`),
-        fields,
+        fields: fieldsOf(u),
         verify: String(outer.one || "").includes("{class}")
           ? `${outer.cmd} ${String(outer.one).replace("{class}", cls)}`
           : String(outer.cmd),
@@ -343,7 +423,7 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
     const cmd = check.split("·")[0].trim()
     const named = namedTest(check)
     const steps = mine.get(path) || []
-    const deps = (s.calls || []).filter((c) => byPath.has(c) && c !== path)
+    const deps = [...new Set([...(s.calls || []).filter((c) => byPath.has(c) && c !== path), ...typeDepsOf(s, declared)])]
     const sample = paths(block(s.body, "sample")).filter((p) => known.has(p) || byPath.has(p))
     const file = steps.length && named ? testPath(path, `${named}.java`, testDir) : ""
     // Образец ТЕСТА — только тот, что реально лежит в репозитории; зеркало, которого нет, в наряд
@@ -364,13 +444,35 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
     // требовать его зелени значит требовать невозможного (дефект ① эмуляции). Модуль, за которым не
     // осталось шагов, закрывается ОДНОЙ СБОРКОЙ: его сигнатуру проверит компилятор потребителя уже
     // на следующей волне, а форму данных наружу — граничный тест в конце.
-    const own = file ? cmd.replace(/-D(it\.)?test=\S+/, (m) => m.replace(/=.*/, `=${named}`)) : ""
+    //
+    // ВОРОТА СТРОЯТСЯ ИЗ КАРТЫ, А НЕ ИЗ СТРОКИ РОЛИ. Строка «verify» раздела даёт только ИМЯ теста:
+    // живой план eddi писал `./mvnw test · GlossaryStoreTest` — класс есть, флага нет, и ворота
+    // гоняли ВЕСЬ юнитовый сьют, так что красный чужого теста валил волну, которой он не
+    // принадлежит; а `RestImportService` закрывался `./mvnw verify -Dit.test=…` — всей программой
+    // на третьей волне. Сьют модуля — юнитовый сьют КАРТЫ, и форма флага — её же шаблон `one`
+    // (`-Dtest={class}`): репозиторий уже объявил, как гонять один тест, выдумывать нечего.
+    const unitGate = (name) => {
+      if (!unit || !unit.cmd) return ""
+      if (!name) return unit.cmd
+      if (String(unit.one || "").includes("{class}")) return `${unit.cmd} ${String(unit.one).replace("{class}", name)}`
+      if (/-D(it\.)?test=\S+/.test(unit.cmd)) return unit.cmd.replace(/-D(it\.)?test=\S+/, (m) => m.replace(/=.*/, `=${name}`))
+      return unit.cmd // шаблона нет — ворота на всём сьюте, и тикет несёт эту отметку (wholeSuite)
+    }
+    const own = file
+      ? unitGate(named) || cmd.replace(/-D(it\.)?test=\S+/, (m) => m.replace(/=.*/, `=${named}`))
+      : ""
     list.push({
       kind: "module",
       module: path,
       name: slug(path),
       body: s.body,
       steps: steps.map((x) => ({ step: x, text: stepText(frd, x.split("/")[0], x.split("/")[1]) })),
+      // КОД И СТАТУС ОТКАЗА ЕДУТ ТУДА, ГДЕ ОТКАЗ ПИШУТ. Живые наряды eddi держали коды ТОЛЬКО в
+      // граничных: `409`, `404`, `GLOSSARY_INVALID_TERM_KEY` встречались в 01-04, а наряд 19,
+      // который эти проверки и реализует, получал одну строку «system validates version and marks
+      // glossary as deleted» — ни кода, ни статуса. Граничный тест утверждает 409, модуль волен
+      // вернуть 400, и оба наряда «выполнены».
+      failures: failuresFor(steps),
       // Сигнатуры тех, кого он ЗОВЁТ: без них тест на шаг, проверяемый через соседа, писать не по чему.
       uses: [
         ...deps.map((d) => ({ path: d, signatures: block((byPath.get(d) || {}).body, "signatures"), mine: true })).filter((x) => x.signatures),
@@ -383,12 +485,18 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
       samples: sample,
       sampleTests,
       outputs: [path, ...(file ? [file] : [])],
-      inputs: [...new Set([...sample, ...sampleTests, ...deps])],
+      // Тип, названный в сигнатуре и УЖЕ существующий в репозитории, — вход наряда: исполнитель
+      // открывает его и читает объявление, а не выдумывает (живой счёт eddi: конструкторы с
+      // IDocumentDescriptorStore и MeterRegistry без единой подсказки).
+      inputs: [...new Set([...sample, ...sampleTests, ...deps, ...repoTypes.map((x) => x.path)])],
       // Команды сборки в карте может не быть (карта снята до того, как разведку стали о ней спрашивать).
       // Тогда модуль без шагов закрывается сьютом БЕЗ флага — «собирается и не ломает существующее».
       // Сырую строку роли брать нельзя: в ней стоит имя теста её РЕАЛИЗАЦИИ, то есть чужой класс,
       // который позеленеет волнами позже.
       verify: [build, own].filter(Boolean).join(" && ") || cmd.replace(/\s*-D(it\.)?test=\S+/, ""),
+      // Ворота на ВСЁМ сьюте — отметка, а не молчание: шаблона одного теста у репозитория нет, и
+      // шаг 14 говорит об этом в лог, а не выдумывает флаг (ext/index.mjs печатает список).
+      wholeSuite: Boolean(file && own && !/-D(it\.)?test=/.test(own)),
       testClass: file ? named : "",
       layer: level.get(path) ?? 0,
       waitsFor: [...deps],
@@ -422,7 +530,33 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
 
   // ③ ВОЛНЫ. Граница — нулевая, модуль — свой слой плюс один. Слой считается по рёбрам «зовёт», а не
   // по blocked_by, поэтому волна зовомого строго меньше волны зовущего по построению.
-  return Object.freeze(withDeps.map((t) => Object.freeze({ ...t, wave: t.kind === "boundary" ? 0 : (t.layer || 0) + 1 })))
+  const waved = withDeps.map((t) => ({ ...t, wave: t.kind === "boundary" ? 0 : (t.layer || 0) + 1 }))
+
+  // ④ ЗАКРЫВАЮЩИЙ НАРЯД. Граница пишется красной и «позеленеет сама, когда все модули на месте» — но
+  // в живой нарезке eddi НИКТО её потом не прогонял: модульные наряды закрываются своими юнитами и
+  // внешний сьют гонять не имеют права (правило 14), а после последней волны наряда не было вовсе.
+  // Набор кончался зелёными юнитами и ни разу не прогнанной приёмкой. Здесь у неё появляется
+  // владелец: последняя волна, ворота — весь внешний сьют, выходов нет (он ничего не пишет).
+  const bounds = waved.filter((t) => t.kind === "boundary")
+  if (bounds.length && outer && outer.cmd) {
+    const last = Math.max(...waved.map((t) => t.wave))
+    waved.push({
+      kind: "acceptance",
+      name: "acceptance",
+      id: String(waved.length + 1).padStart(2, "0"),
+      key,
+      branch,
+      wave: last + 1,
+      blocked_by: waved.map((t) => t.id).filter(Boolean).sort(),
+      inputs: bounds.flatMap((t) => t.outputs || []),
+      outputs: [],
+      steps: [],
+      stack: F.stack,
+      verify: String(outer.cmd),
+      boundaries: bounds.map((t) => ({ id: t.id, uc: t.uc, testClass: t.testClass })),
+    })
+  }
+  return Object.freeze(waved.map((t) => Object.freeze(t)))
 }
 
 // FUNCTION_CONTRACT: checkTickets — судить РАСКЛАДКУ, а не смысл
@@ -437,12 +571,15 @@ export function ticketsOf({ sections = [], order = [], frd = {}, key = "", branc
 // работы, и тест, который не скомпилируется до кода, — оба выглядят нормально в тексте наряда и оба
 // делают его неисполнимым. Правила 9-12 куплены чтением наряда ГЛАЗАМИ ИСПОЛНИТЕЛЯ: наряд говорит,
 // ЧТО сделать и ГДЕ, и молчит о том, В ЧЁМ это пишется.
-export function checkTickets({ tickets = [], sections = [], frd = {}, known = new Set(), stack = "", match = "*", testDir = "" } = {}) {
+export function checkTickets({ tickets = [], sections = [], frd = {}, known = new Set(), stack = "", match = "*", testDir = "", outer = null } = {}) {
   const B = []
   const mods = tickets.filter((t) => t.kind === "module")
   const bounds = tickets.filter((t) => t.kind === "boundary")
   const planned = sections.map((s) => s.path)
   const ours = new Set(planned)
+  // Типовые рёбра считаются ОДИН раз на всю нарезку: по ним судит и связность (правило 8), и
+  // порядок волн (правило 13).
+  const declared = declaredTypesOf(sections)
 
   // 1 — модульный тикет на каждый раздел плана, и ни одного лишнего
   const have = new Set(mods.map((t) => t.module))
@@ -467,7 +604,9 @@ export function checkTickets({ tickets = [], sections = [], frd = {}, known = ne
   if (unchecked.length) B.push(`шаги требования без единой проверки: ${unchecked.sort().join(", ")}`)
 
   // 3 — outputs непуст, и ни один путь не назван в двух тикетах
-  const mute = tickets.filter((t) => !(t.outputs || []).length)
+  // Приёмочный наряд файлов не пишет по определению: его работа — прогнать сьют и доложить. Немым
+  // считается тот, кто должен был что-то написать.
+  const mute = tickets.filter((t) => t.kind !== "acceptance" && !(t.outputs || []).length)
   if (mute.length) B.push(`тикеты без outputs: ${mute.map((t) => t.name).join(", ")}`)
   const owners = new Map()
   for (const t of tickets) for (const o of t.outputs || []) owners.set(o, [...(owners.get(o) || []), t.name])
@@ -514,7 +653,9 @@ export function checkTickets({ tickets = [], sections = [], frd = {}, known = ne
   // выбирает контейнер, а зовут интерфейс; на живом плане eddi так живут ZipResourceSource и
   // RemoteApiResourceSource. Их проверяет компилятор (реализация обязана сойтись с интерфейсом) и
   // граничный тест того use case, который через них проходит.
-  const calls = new Map(sections.map((s) => [s.path, (s.calls || []).filter((c) => ours.has(c))]))
+  // Связь — это «зовёт» ИЛИ «пользуется типом»: поставщик типа связан с изменением так же, как
+  // зовомый, — его проверяет компилятор потребителя на следующей волне.
+  const calls = new Map(sections.map((s) => [s.path, [...new Set([...(s.calls || []).filter((c) => ours.has(c)), ...typeDepsOf(s, declared)])]]))
   for (const t of mods) {
     if ((t.steps || []).length) continue
     // Вход программы шагов не держит по построению — они ушли границе, которая его и проверяет.
@@ -557,6 +698,45 @@ export function checkTickets({ tickets = [], sections = [], frd = {}, known = ne
       ...(t.steps || []).map((x) => x.text), ...(t.uses || []).map((u) => u.signatures), ...(t.fields || [])]
     const foreign = cyrillicWords(cuts.filter(Boolean).join("\n"))
     if (foreign.length) B.push(`${t.name} несёт кириллицу из артефактов выше: ${foreign.join(", ")} — наряд исполняет слабая модель в английском репозитории, и полоса ниже FRD пишется по-английски`)
+  }
+
+  // 13 — ТИП ОТ СОСЕДА ПО ПЛАНУ ЭТО РЕБРО blocked_by, И ВОЛНА ПОСТАВЩИКА СТРОГО НИЖЕ. Нарезка строит
+  // эти рёбра сама (declaredTypesOf), так что красный здесь означает разошедшиеся артефакты — или
+  // тикет, собранный в обход ticketsOf. Живой план eddi: `IRestGlossaryStore` и `Glossary` на одной
+  // волне без ребра — параллельный подъём волны 1 не собирался.
+  const byModulePath = new Map(mods.map((t) => [t.module, t]))
+  for (const t of mods) {
+    const s = sections.find((x) => x.path === t.module)
+    if (!s) continue
+    for (const p of typeDepsOf(s, declared)) {
+      const pt = byModulePath.get(p)
+      if (pt && (!(t.blocked_by || []).includes(pt.id) || pt.wave >= t.wave)) {
+        B.push(`${t.name} пользуется типом, который создаёт ${pt.name}, но не ждёт его (волна ${t.wave} против ${pt.wave}) — тип от соседа по плану это ребро blocked_by, иначе параллельная волна не собирается`)
+      }
+    }
+  }
+
+  // 14 — ВОРОТА МОДУЛЯ НЕ ГОНЯЮТ СЬЮТ ДРУГОГО ВИДА. Программу снаружи проверяет граница; модуль,
+  // закрывающийся внешним сьютом, требует на своей волне всю программу — а она ещё не собрана
+  // (живой план eddi: `RestImportService` на волне 3 с `./mvnw verify -Dit.test=…`).
+  if (outer && outer.cmd) {
+    for (const t of mods) {
+      if (String(t.verify || "").includes(outer.cmd)) {
+        B.push(`ворота ${t.name} гоняют внешний сьют («${outer.cmd}») — программу снаружи проверяет граница, а модуль закрывается сборкой и своими юнитовыми тестами`)
+      }
+    }
+  }
+
+  // 15 — КЛАСС ТЕСТА НАРЯДА ПРИНАДЛЕЖИТ ЮНИТОВОМУ СЬЮТУ КАРТЫ. Имя приезжает из строки «verify»
+  // раздела плана, и до этого правила бралось не глядя: живой наряд 22 формы eddi несёт
+  // `RestImportServiceIT` под сьютом `*Test.java` — ворота `-Dtest=RestImportServiceIT` либо не
+  // гоняют ничего и зелены, либо падают по причине, которая наряду не принадлежит; образец в том же
+  // тексте зовётся `RestImportServiceTest`. Шаблон и его сравнение — steps/design/card.mjs::fitsMatch,
+  // тот же, каким судит шаг 9: одно правило, одно место.
+  for (const t of mods) {
+    if (!t.testClass || !match || match === "*") continue
+    if (fitsMatch(t.testClass, match)) continue
+    B.push(`${t.name}: тест «${t.testClass}» не совпадает с шаблоном юнитового сьюта «${match}» — этим сьютом класс не гоняется, и ворота наряда не позеленеют никогда; имя приходит из строки «verify» раздела плана`)
   }
 
   return B
@@ -611,6 +791,9 @@ export function ticketText(t = {}) {
       ...stack,
       `## What to check — ${t.uc} from the outside, ${steps.length} checks`, "",
       t.goal ? `goal: ${t.goal}` : "",
+      // Предусловие — состояние, которое тест обязан СОЗДАТЬ прежде, чем звать границу. Без него
+      // «выгрузить агента с глоссариями» проверяется на агенте без глоссариев и зеленеет впустую.
+      t.pre ? `before you call: ${t.pre}` : "",
       t.post ? `after success: ${t.post}` : "", "",
       steps.join("\n"), "",
       "## How to call it — ONLY through the program boundary", "",
@@ -635,6 +818,26 @@ export function ticketText(t = {}) {
     ].filter((x) => x !== "").join("\n")
   }
 
+  // ПРИЁМКА. Наряд без единого файла на выходе: он гоняет внешний сьют и докладывает. Ему не нужен
+  // ни стек-праймер, ни образец — он ничего не пишет; ему нужен СПИСОК граничных тестов, которые
+  // обязаны позеленеть, и запрет чинить их подгонкой.
+  if (t.kind === "acceptance") {
+    const rows = (t.boundaries || []).map((b) => `- ${b.testClass}${b.uc ? ` (${b.uc}, ticket ${b.id})` : ""}`)
+    return [
+      head, "",
+      "## Goal — the change is done when the program says so from the outside", "",
+      "Every boundary test of this change was written RED before the first line of code. This ticket",
+      "is where they are read back: run the outer suite and report.", "",
+      rows.length ? "## The tests that must be green" : "", rows.length ? "" : "",
+      rows.join("\n"), rows.length ? "" : "",
+      "## Rule", "",
+      "You may not edit a single one of them, and you may not weaken an assertion. A test that is",
+      "still red is a MODULE that is not done: name the ticket whose module fails it and stop.",
+      "Green here — and only here — means the requirement is delivered.", "",
+      "## How to run", "", String(t.verify || ""),
+    ].filter((x) => x !== "").join("\n")
+  }
+
   // МОДУЛЬ. Тело режется ПО КЛЮЧАМ карточки, а не сваливается целиком: `declares` и `sample` стоят
   // своими блоками, и второй раз внутри «цели» они были бы тем же текстом, прочитанным дважды.
   const cut = (key) => block(String(t.body || ""), key)
@@ -652,6 +855,8 @@ export function ticketText(t = {}) {
     uses ? "## What you call — their signatures" : "", uses ? "" : "", uses, uses ? "" : "",
     steps.length ? "## What you must prove — the requirement steps this module owns" : "",
     steps.length ? "" : "", steps.join("\n"), steps.length ? "" : "",
+    (t.failures || []).length ? "## How it refuses — the code and the status are the requirement's, not yours" : "",
+    (t.failures || []).length ? "" : "", (t.failures || []).join("\n"), (t.failures || []).length ? "" : "",
     "## Order of work", "",
     steps.length
       ? ["Write the TEST first, against the TEXT of the steps above — not against whatever is convenient",

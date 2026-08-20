@@ -31,6 +31,11 @@ for that reader, and nothing else decides how much comment is enough.
 
 Every module carries `MODULE_CONTRACT`; every exported function carries `FUNCTION_CONTRACT`.
 
+Как пишется ГАРДРЕЙЛ и его блокер — `standards/guardrail.md`. Как вести живой прогон и по каким
+признакам искать ошибку В ТЕКСТЕ, а не в модели — `standards/live-run.md`. Коротко: блокер это
+наряд на правку — код правила, элемент и ОБРАЗЕЦ строки, которую надо написать; блокер без выхода
+запрещён.
+
 ```js
 // MODULE_CONTRACT: <name> — one line, what it is
 // Purpose:    the single decision hidden here

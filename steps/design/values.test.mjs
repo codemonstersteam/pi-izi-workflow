@@ -159,3 +159,30 @@ test("промоут снимает леса: наружу уходят id, text
   assert.deepEqual(v.closes.get("v3"), ["UC1/1a"])
   assert.equal(v.get("v1"), "POST /bookings {slotId,userId}")
 })
+
+// СТРОКА, КОТОРУЮ ПОТЕРЯЛ ПАРСЕР, И СТРОКА, КОТОРОЙ НЕТ, — РАЗНЫЕ ДЕФЕКТЫ, и роль чинит их
+// по-разному. Сырой «<» внутри значения атрибута заканчивает элемент на себе: строка исчезает для
+// читателя, оставаясь в файле. Сказать роли «строки нет», когда она видит её своими глазами, —
+// отправить её переписывать написанное, круг за кругом.
+//
+// BUG_FIX_CONTEXT: живой прогон 00d07e75 (20.08.2026), проход A шага 9. Скелет нёс
+// `text="create(List&lt;T&gt; configs, …)"`, роль вернула `List<T>` — раскодировала при копировании.
+// Четыре строки «пропали», и блокер звал их отсутствующими.
+test("checkValues: нечитаемая строка названа нечитаемой, а не пропавшей", () => {
+  const xml = skeleton().xml
+  const rows = [...xml.matchAll(/<value id="(v\d+)"/g)].map((m) => m[1])
+  assert.ok(rows.length >= 2, "фикстура скелета пуста — шов смотрит не туда")
+  const id = rows[1]
+
+  // ① строка стёрта целиком — «нет в файле»
+  const без = xml.replace(new RegExp(`\\s*<value id="${id}"[^>]*/>`), "")
+  const b1 = checkValues({ staged: без, frd: FRD, ripple: RIPPLE }).join("\n")
+  assert.match(b1, new RegExp(`строки ${id}[^\\n]*нет в файле`))
+
+  // ② строка НА МЕСТЕ, но с сырым «<»: элемент кончается на нём, и читатель её теряет
+  const битая = xml.replace(new RegExp(`(<value id="${id}"[^>]*text=")([^"]*)`), "$1create(List<T> configs)")
+  const b2 = checkValues({ staged: битая, frd: FRD, ripple: RIPPLE }).join("\n")
+  assert.match(b2, new RegExp(`строки ${id}[^\\n]*ЕСТЬ, но не читаются`))
+  assert.match(b2, /&lt;/, "роли не сказано, чем заменить")
+  assert.doesNotMatch(b2, new RegExp(`строки ${id}[^\\n]*нет в файле`), "один id назван и пропавшим, и нечитаемым")
+})

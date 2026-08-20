@@ -102,6 +102,34 @@ export function newAnswers(text) {
   return ok(Object.freeze(out))
 }
 
+// FUNCTION_CONTRACT: hardTokens — ТВЁРДЫЕ ЗНАКИ ответа: то, чему нет синонимов
+//   Input:        text — ответ оператора; тип не ограничен
+//   Dependencies: —
+//   Antecedent:   любое значение
+//   Consequent:   success: string[] знаков, по которым в артефакте можно УЗНАТЬ этот ответ:
+//                          путь с методом (`GET /parcels/{id}`), код в верхнем регистре
+//                          (`TERM_KEY_INVALID`), трёхзначный статус (`422`), имя с точкой
+//                          (`ai.labs.glossary`). Пусто — у ответа знаков нет, и судить его нечем
+//                 failure: none — тотальна
+//   Purity:       pure
+//
+// ПОЧЕМУ НЕ СЛОВА. «Замена набора терминов целиком» и «замена терминов полностью» — один ответ двумя
+// текстами, и сверять их с артефактом по словам значит судить синонимию, чего скрипт не умеет.
+// Твёрдый знак тем и хорош, что переписать его нельзя: путь эндпоинта либо есть в файле, либо нет.
+//
+// ЗАМЕР, НАЗЫВАЮЩИЙ ПОТОЛОК: из пяти обменов живого прогона eddi 19.08.2026 знаки нашлись у ДВУХ.
+// Значит правило над этой функцией закрывает ~40% ответов, остальное судит критик, читая прозу
+// (docs/ask.md §6). Потолок назван вслух, потому что правило, притворяющееся полным, хуже честного.
+export function hardTokens(text) {
+  const t = String(text == null ? "" : text)
+  const out = new Set()
+  for (const m of t.matchAll(/\b(?:GET|POST|PUT|PATCH|DELETE)\s+\/\S+/g)) out.add(m[0])
+  for (const m of t.matchAll(/\b[A-Z][A-Z0-9_]{3,}\b/g)) out.add(m[0])
+  for (const m of t.matchAll(/\b\d{3}\b/g)) out.add(m[0])
+  for (const m of t.matchAll(/\b[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*){1,}\b/g)) out.add(m[0])
+  return Object.freeze([...out])
+}
+
 // FUNCTION_CONTRACT: looksLikeTemplate — an answer indistinguishable from a template copied verbatim
 //   Input:        text — a candidate for the operator's answer; type unconstrained
 //   Dependencies: —

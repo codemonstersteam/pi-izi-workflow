@@ -176,16 +176,59 @@ const annotationsBefore = (text, at) => {
 
 const decl = (kind, name, visibility, line, annotations = []) => ({ kind, name, visibility, line, annotations })
 
+// ТЕЛА ИНТЕРФЕЙСОВ — ДИАПАЗОНЫ СИМВОЛОВ, В КОТОРЫХ ВИДИМОСТЬ НЕ ПИШУТ.
+//
+// BUG_FIX_CONTEXT: живой прогон eddi/DOS-535. `IConversationMemory.java` объявляет 20 методов, и
+//   `.agent/graph-computed.xml` нёс по этому файлу ОДНО объявление — сам интерфейс. Причина ниже по
+//   тексту: метод считался публичным только при литеральном слове `public`, а в теле интерфейса
+//   Java его НЕ ПИШУТ НИКОГДА (JLS 9.4: члены интерфейса неявно public). Наряд 20, обязанный звать
+//   `getAllByAgentId(agentId)`, получал под «What you call» одну строку без единого метода; тем же
+//   пусты IResourceStorageFactory, IDocumentBuilder, IRestExportService, IRestImportService — а
+//   репозиторий интерфейсный насквозь.
+//
+// Чинится ЗДЕСЬ, где видимость вычисляется, а не фильтром ниже по полосе (steps/scope/computed.mjs
+// оставляет только публичное — и это принцип, а не порог): правильной становится ВИДИМОСТЬ.
+// Границы тела считаются скобками, а не парсером; строки, символы и оба вида комментариев
+// пропускаются, иначе `{` внутри литерала сдвинет конец тела.
+const interfaceBodies = (text) => {
+  const out = []
+  for (const m of text.matchAll(/\b(?:@interface|interface)[ \t]+\w+[^{;]*\{/g)) {
+    let depth = 0, i = m.index + m[0].length - 1, mode = ""
+    for (; i < text.length; i++) {
+      const c = text[i], n = text[i + 1]
+      if (mode === "//") { if (c === "\n") mode = ""; continue }
+      if (mode === "/*") { if (c === "*" && n === "/") { mode = ""; i++ } continue }
+      if (mode === "\"" || mode === "'") { if (c === "\\") i++; else if (c === mode) mode = ""; continue }
+      if (c === "/" && n === "/") { mode = "//"; i++; continue }
+      if (c === "/" && n === "*") { mode = "/*"; i++; continue }
+      if (c === "\"" || c === "'") { mode = c; continue }
+      if (c === "{") depth++
+      else if (c === "}") { depth--; if (!depth) break }
+    }
+    out.push([m.index + m[0].length, i])
+  }
+  return out
+}
+// Член интерфейса публичен, если он не объявлен `private` явно (Java 9+ разрешает приватные методы
+// интерфейса — единственное исключение из неявной публичности).
+const inInterface = (ranges, at) => ranges.some(([from, to]) => at >= from && at <= to)
+
 const javaDecls = (text) => {
   const out = []
   for (const m of text.matchAll(/^[ \t]*((?:public|protected|private|static|final|abstract|sealed|default|synchronized|native|\s)*)\b(class|interface|enum|record|@interface)[ \t]+(\w+)/gm)) {
     out.push(decl(m[2], m[3], /\bpublic\b/.test(m[1]) ? "public" : "internal", m[0].trim(), annotationsBefore(text, m.index)))
   }
-  for (const m of text.matchAll(/^[ \t]*((?:public|protected|private|static|final|abstract|default|synchronized|\s)*)\b([\w<>\[\],. ]+?)[ \t]+(\w+)[ \t]*\(([^)\n]*)\)/gm)) {
+  const bodies = interfaceBodies(text)
+  // Параметр типа перед возвращаемым типом (`<T> IResourceStorage<T> create(...)`) — та же причина,
+  // по которой карта молчала об интерфейсах: `\b` не встаёт перед `<`, и весь метод не совпадал.
+  // Живой счёт eddi: IResourceStorageFactory объявляет ровно один метод, и он был именно такой.
+  for (const m of text.matchAll(/^[ \t]*((?:public|protected|private|static|final|abstract|default|synchronized|\s)*)(?:<[^<>\n]+>[ \t]*)?\b([\w<>\[\],. ]+?)[ \t]+(\w+)[ \t]*\(([^)\n]*)\)/gm)) {
     if (/\b(class|interface|enum|record|new|return|if|for|while|switch|catch)\b/.test(m[2])) continue
     // A constructor has no return type, so the modifier lands in m[2] instead of m[1]; testing both
     // is what keeps `public Fruit()` from being reported as internal.
-    out.push(decl("method", `${m[3]}(${m[4].trim()})`, /\bpublic\b/.test(`${m[1]} ${m[2]}`) ? "public" : "internal", m[0].trim(), annotationsBefore(text, m.index)))
+    const said = `${m[1]} ${m[2]}`
+    const open = /\bpublic\b/.test(said) || (inInterface(bodies, m.index) && !/\bprivate\b/.test(said))
+    out.push(decl("method", `${m[3]}(${m[4].trim()})`, open ? "public" : "internal", m[0].trim(), annotationsBefore(text, m.index)))
   }
   // FIELDS. A public field IS an entry point of its module — for a POJO it is the whole contract.
   //
@@ -201,6 +244,12 @@ const javaDecls = (text) => {
   // fruits = Collections.newSetFromMap(…)` is read as a field and dropped later as internal.
   for (const m of text.matchAll(/^[ \t]*((?:public|protected|private)(?:[ \t]+(?:static|final|volatile|transient))*)[ \t]+([\w<>\[\],. ]+?)[ \t]+(\w+)[ \t]*(?:=[^\n;]*)?;/gm)) {
     out.push(decl("field", m[3], /\bpublic\b/.test(m[1]) ? "public" : "internal", m[0].trim().replace(/;$/, ""), annotationsBefore(text, m.index)))
+  }
+  // Поле интерфейса — константа, и модификаторов у неё тоже не пишут (JLS 9.3: public static final).
+  for (const m of text.matchAll(/^[ \t]*([\w<>\[\],. ]+?)[ \t]+([A-Z_][A-Z0-9_]*)[ \t]*=[^\n;]*;/gm)) {
+    if (!inInterface(bodies, m.index)) continue
+    if (/\b(public|protected|private|return|new)\b/.test(m[1])) continue
+    out.push(decl("field", m[2], "public", m[0].trim().replace(/;$/, ""), annotationsBefore(text, m.index)))
   }
   return out
 }

@@ -60,6 +60,9 @@ const BUILD = "./mvnw -q -DskipTests package"
 const SAMPLES = ["src/test/java/app/integration/OldStoreCrudIT.java", "src/test/java/app/integration/HealthIT.java"]
 const KNOWN = new Set(["src/model/Doc.java", "src/mongo/Store.java", "src/rest/RestStore.java",
   "src/model/Old.java", "src/mongo/OldStore.java", "src/rest/OldRest.java",
+  // Узел карты из FACTS ниже: в прогоне `known` строится из ВСЕХ узлов карты, и тип, названный в
+  // сигнатуре, едет во входы наряда (исполнитель читает его объявление, а не выдумывает).
+  "src/db/BaseStore.java",
   // Тест образца лежит ЗЕРКАЛЬНО образцу модуля — по нему исполнитель берёт фреймворк и базовый класс.
   "src/test/java/mongo/OldStoreTest.java"])
 
@@ -273,8 +276,12 @@ test("гардрейл судит новую нарезку и называет 
 
   // 8 — ОТОРВАННЫЙ модуль без шагов: его не проверит ничто. Связь считается в обе стороны: реализацию
   // интерфейса никто не зовёт по имени, но она зовёт интерфейс — и её проверяет компилятор и граница.
-  // Оторванный модуль: шагов нет, никто не зовёт ЕГО и он не зовёт никого.
-  const orphan = [...SECTIONS.map((s) => (s.path === "src/model/Doc.java" ? { ...s, closes: [], calls: [] } : { ...s, calls: s.calls.filter((c) => c !== "src/model/Doc.java") }))]
+  // Оторванный модуль: шагов нет, никто не зовёт ЕГО и он не зовёт никого. Связью считается и ТИП
+  // (правило 13): чтобы Doc стал сиротой, из сигнатур соседей убирается и его имя — иначе он связан
+  // с изменением как поставщик типа, и правило молчит правильно.
+  const orphan = [...SECTIONS.map((s) => (s.path === "src/model/Doc.java"
+    ? { ...s, closes: [], calls: [] }
+    : { ...s, calls: s.calls.filter((c) => c !== "src/model/Doc.java"), body: s.body.replace(/\bDoc\b/g, "String") }))]
   const t3 = ticketsOf({ sections: orphan, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES })
   assert.match(checkTickets({ tickets: t3, sections: orphan, frd: FRD, known: KNOWN, outer: OUTER }).join("\n"), /не связан с изменением/)
 })
@@ -444,4 +451,152 @@ test("правило 12: кириллица из артефактов выше �
   const B = judge({ tickets: cut({ sections: ru }), sections: ru }).join("\n")
   assert.match(B, /store несёт кириллицу из артефактов выше: монго-хранилище/)
   assert.match(B, /полоса ниже FRD пишется по-английски/)
+})
+
+// --- швы правил 13-14 и ворот из карты: каждое краснеет возвращением своего дефекта --------------
+
+// Живой план eddi, задача DOS-535: `IRestGlossaryStore` (calls: none) пользуется типом `Glossary` в
+// каждой сигнатуре, а `Glossary` — соседний раздел того же плана. Ребра «calls» нет, и оба встали на
+// волну 1: параллельный подъём волны не собирается — 08 компилируется до того, как 09 написан.
+// У донора это правило с номером (wirth-ticketer, live-finding 17-07): blocked_by включает ТИПОВЫЕ
+// зависимости. Здесь оно вычисляется из разделов, а не просится у роли.
+const GLOSSARY = {
+  path: "src/model/Glossary.java", calls: [], checks: true, closes: [],
+  body: "what: the glossary record\nfields: terms: List — term pairs\ndeclares: public class Glossary\ncalls: none\ncloses: none\nverify: ./mvnw test · GlossaryTest\n",
+}
+const IREST = {
+  path: "src/rest/IRestGlossaryStore.java", calls: [], checks: true, closes: [],
+  body: "what: the REST interface\nsignatures: create(Glossary g) : Response · read(String id) : Glossary\ndeclares: public interface IRestGlossaryStore extends IRestVersionInfo\ncalls: none\ncloses: none\nverify: ./mvnw test · IRestGlossaryStoreTest\n",
+}
+const TORDER = ["src/model/Glossary.java", "src/rest/IRestGlossaryStore.java"]
+
+test("тип от соседа по плану — ребро: поставщик ложится волной ниже, потребитель ждёт", () => {
+  const t = ticketsOf({ sections: [GLOSSARY, IREST], order: TORDER, frd: {}, key: "DOS-535", match: "*Test.java", testDir: "src/test/java", build: BUILD })
+  const model = t.find((x) => x.module === "src/model/Glossary.java")
+  const iface = t.find((x) => x.module === "src/rest/IRestGlossaryStore.java")
+  assert.ok(model.wave < iface.wave, `поставщик типа на волне ${model.wave}, потребитель на ${iface.wave} — волна не соберётся`)
+  assert.ok(iface.blocked_by.includes(model.id), "потребитель типа не ждёт поставщика")
+  // И сигнатуры поставщика доезжают до потребителя — по этому ребру, а не по «calls».
+  assert.ok(iface.inputs.includes("src/model/Glossary.java"))
+
+  // Тип, которого не объявляет ни один раздел (JDK, репозиторий), ребра не создаёт.
+  const withJdk = { ...IREST, body: IREST.body.replace("create(Glossary g) : Response", "create(Glossary g) : Response · list() : List") }
+  const t2 = ticketsOf({ sections: [GLOSSARY, withJdk], order: TORDER, frd: {}, key: "K", match: "*Test.java", testDir: "src/test/java", build: BUILD })
+  assert.equal(t2.find((x) => x.module === IREST.path).blocked_by.length, 1, "List из JDK стал ребром")
+
+  // Правило 13 — шов: посаженная пара на одной волне краснеет.
+  const bad = t.map((x) => (x.module === IREST.path ? { ...x, wave: model.wave, blocked_by: [] } : x))
+  const B = checkTickets({ tickets: bad, sections: [GLOSSARY, IREST], frd: {} }).join("\n")
+  assert.match(B, /irestglossarystore пользуется типом, который создаёт glossary/)
+  assert.match(B, /ребро blocked_by/)
+  // Исправная нарезка зелена — и поставщик типа НЕ «оторван от изменения» (правило 8 считает типы).
+  assert.deepEqual(checkTickets({ tickets: t, sections: [GLOSSARY, IREST], frd: {} }), [])
+})
+
+// Живой план eddi: строка «verify: ./mvnw test · GlossaryStoreTest» — класс назван, флага нет.
+// Нарезка флаг только ПЕРЕПИСЫВАЛА, когда он уже стоит в команде, и все 15 модульных тикетов
+// закрывались ВСЕМ юнитовым сьютом: красный чужого теста валил волну, которой он не принадлежит.
+test("ворота модуля — юнитовый сьют КАРТЫ с флагом своего теста, строка роли даёт только имя", () => {
+  const UNIT = { cmd: "./mvnw test", one: "-Dtest={class}" }
+  const lost = SECTIONS.map((s) => (s.path === "src/mongo/Store.java"
+    ? { ...s, body: s.body.replace("verify: ./mvnw test -Dtest=StoreTest · StoreTest", "verify: ./mvnw test · StoreTest") }
+    : s))
+  const t = ticketsOf({ sections: lost, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES, unit: UNIT })
+  const store = t.find((x) => x.module === "src/mongo/Store.java")
+  assert.equal(store.verify, `${BUILD} && ./mvnw test -Dtest=StoreTest`, "флаг своего теста не введён по шаблону сьюта")
+  assert.equal(store.wholeSuite, false)
+
+  // Шаблона одного теста у репозитория нет — ворота на всём сьюте, и это ОТМЕЧЕНО, а не скрыто.
+  const t2 = ticketsOf({ sections: lost, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES, unit: { cmd: "./mvnw test" } })
+  const store2 = t2.find((x) => x.module === "src/mongo/Store.java")
+  assert.equal(store2.verify, `${BUILD} && ./mvnw test`)
+  assert.equal(store2.wholeSuite, true, "ворота на всём сьюте обязаны быть отмечены для лога")
+})
+
+// Живой план eddi: модульный `RestImportService` закрывался `./mvnw verify -Dit.test=…` — всей
+// программой на третьей волне, когда она ещё не собрана. Внешний сьют — воротам границы; модуль
+// закрывается сборкой и своими юнитовыми тестами.
+test("модуль не закрывается внешним сьютом: ворота — юнитовый сьют карты (правило 14)", () => {
+  const UNIT = { cmd: "./mvnw test", one: "-Dtest={class}" }
+  const it = SECTIONS.map((s) => (s.path === "src/mongo/Store.java"
+    ? { ...s, body: s.body.replace("verify: ./mvnw test -Dtest=StoreTest · StoreTest", "verify: ./mvnw verify -Dit.test=StoreIT · StoreIT") }
+    : s))
+  const t = ticketsOf({ sections: it, order: ORDER, frd: FRD, key: "DOS-1", match: "*Test.java", testDir: "src/test/java", known: KNOWN, outer: OUTER, build: BUILD, samples: SAMPLES, unit: UNIT })
+  const store = t.find((x) => x.module === "src/mongo/Store.java")
+  assert.equal(store.verify, `${BUILD} && ./mvnw test -Dtest=StoreIT`, `модуль унаследовал внешний сьют: ${store.verify}`)
+
+  // Правило 14 — шов: посаженный внешний сьют в воротах модуля краснеет.
+  const bad = t.map((x) => (x.module === "src/mongo/Store.java" ? { ...x, verify: "./mvnw verify -Dit.test=StoreIT" } : x))
+  const B = checkTickets({ tickets: bad, sections: it, frd: FRD, known: KNOWN, outer: OUTER }).join("\n")
+  assert.match(B, /ворота store гоняют внешний сьют/)
+  // Без карты внешнего сьюта судить не по чему — правило молчит.
+  assert.deepEqual(checkTickets({ tickets: bad, sections: it, frd: FRD, known: KNOWN }).filter((b) => /внешний сьют/.test(b)), [])
+})
+
+// ПРАВИЛО 15 — КЛАСС ТЕСТА НАРЯДА ПРИНАДЛЕЖИТ ЮНИТОВОМУ СЬЮТУ КАРТЫ.
+// Живой наряд 22 формы eddi: `outputs` несёт `RestImportServiceIT.java`, ворота гоняют
+// `-Dtest=RestImportServiceIT`, а образец в том же тексте зовётся `RestImportServiceTest`. Под
+// сьютом `*Test.java` такой класс не гоняется вовсе: ворота либо зелены впустую, либо падают по
+// чужой причине. Шаблон сравнивается тем же примитивом, каким судит шаг 9 (card.mjs::fitsMatch).
+test("правило 15: тест наряда вне шаблона юнитового сьюта — блокер нарезки", () => {
+  const legal = [{ kind: "module", name: "store", module: "src/mongo/Store.java", testClass: "StoreTest", wave: 1, blocked_by: [], steps: [], outputs: [], inputs: [], samples: [] }]
+  assert.deepEqual(checkTickets({ tickets: legal, match: "*Test.java" }).filter((b) => /шаблон/.test(b)), [])
+
+  const alien = [{ ...legal[0], name: "restimportservice", testClass: "RestImportServiceIT" }]
+  const b = checkTickets({ tickets: alien, match: "*Test.java" }).filter((x) => /шаблон/.test(x))
+  assert.equal(b.length, 1, b.join("\n"))
+  assert.match(b[0], /RestImportServiceIT/)
+  assert.match(b[0], /\*Test\.java/)
+
+  // Шаблона у карты нет — судить не по чему, правило молчит.
+  assert.deepEqual(checkTickets({ tickets: alien, match: "*" }).filter((x) => /шаблон/.test(x)), [])
+  // Наряд без своего теста (модуль без шагов) правилу не подсуден.
+  assert.deepEqual(checkTickets({ tickets: [{ ...legal[0], testClass: "" }], match: "*Test.java" }).filter((x) => /шаблон/.test(x)), [])
+})
+
+// ПОЛНОТА НАРЯДА — ТО, ЧТО FRD УЖЕ ЗНАЕТ, А НАРЯД НЕ ВЁЗ (наряд J9).
+// Живые наряды eddi: `<pre>` не доехало НИ В ОДИН из 22; коды и статусы отказа жили только в
+// граничных, и наряд 19, который валидацию и пишет, получал шаг без кода; словарь величин
+// сваливался в границу целиком — `key (Term)` стоял в наряде про выгрузку агента.
+test("наряд везёт предусловие, свой словарь и код отказа того шага, которым владеет", () => {
+  const t = cut()
+  const b1 = t.find((x) => x.kind === "boundary" && x.uc === "UC1")
+  assert.equal(b1.pre !== undefined, true)
+
+  // Словарь границы — её собственный: поле остаётся, если use case его называет ИЛИ его ветка
+  // поднимает код, который это поле охраняет.
+  const b2 = t.find((x) => x.kind === "boundary" && x.uc === "UC2")
+  assert.deepEqual(b2.fields, [], "UC2 не называет ни поля, ни его кода — словарь ему не нужен")
+  assert.ok(b1.fields.some((f) => f.startsWith("key")), "UC1 поднимает CONFLICT, который охраняет key")
+
+  // Код и статус едут владельцу шага-ветки: UC1/2a принадлежит стору.
+  const store = t.find((x) => x.kind === "module" && x.module === "src/mongo/Store.java")
+  assert.ok((store.failures || []).some((f) => f.includes("CONFLICT") && f.includes("409")),
+    `наряд владельца ветки не несёт кода и статуса: ${JSON.stringify(store.failures)}`)
+  assert.match(ticketText(store), /How it refuses/)
+  // Модуль без веток отказа блока не получает — пустой заголовок это шум.
+  const doc = t.find((x) => x.kind === "module" && x.module === "src/model/Doc.java")
+  assert.deepEqual(doc.failures, [])
+  assert.doesNotMatch(ticketText(doc), /How it refuses/)
+})
+
+// ЗАКРЫВАЮЩИЙ НАРЯД. Граница пишется красной и «зеленеет сама, когда все модули на месте» — но в
+// живой нарезке eddi её потом не прогонял НИКТО: модуль закрывается своими юнитами и внешний сьют
+// гонять не имеет права (правило 14), а после последней волны наряда не было вовсе. Набор кончался
+// зелёными юнитами и ни разу не прогнанной приёмкой.
+test("приёмка: последняя волна прогоняет внешний сьют и называет тесты, которые обязаны позеленеть", () => {
+  const t = cut()
+  const acc = t.find((x) => x.kind === "acceptance")
+  assert.ok(acc, "закрывающего наряда нет — приёмку никто не прогонит")
+  assert.equal(acc.wave, Math.max(...t.filter((x) => x.kind !== "acceptance").map((x) => x.wave)) + 1)
+  assert.deepEqual(acc.outputs, [], "приёмка ничего не пишет")
+  assert.equal(acc.verify, "./mvnw verify")
+  // Ждёт ВСЕХ: пока хоть один модуль не сделан, приёмка бессмысленна.
+  assert.equal(acc.blocked_by.length, t.length - 1)
+  const text = ticketText(acc)
+  for (const b of t.filter((x) => x.kind === "boundary")) assert.match(text, new RegExp(b.testClass))
+  assert.match(text, /may not edit a single one of them/)
+
+  // Границ нет (у репозитория нет внешнего сьюта) — приёмке неоткуда взяться, и её нет.
+  assert.equal(cut({ outer: null }).some((x) => x.kind === "acceptance"), false)
 })

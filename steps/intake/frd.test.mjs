@@ -6,7 +6,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { newFrd, parseFrd, checkFrd, FRD_FORM } from "./frd.mjs"
+import { newFrd, parseFrd, checkFrd, unreadable, spentAnswers, FRD_FORM, RULE_PASS, forPass, passOfBlocker, entryPass } from "./frd.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
 
 // Fixture: a DIFFERENT domain from any live input (parcels, not fruits) — the same reason the role's
@@ -114,7 +114,7 @@ test("F2b: a touched with no delta of its own and no scenario through it is not 
 test("F3: an invented form, an Unknown without why, a node outside the map and outside touched", () => {
   assert.match(blockersOf(FRD.replace('form="Added"', 'form="Modified"')).join("\n"), /F3 findByTrack: form="Modified"/)
   assert.match(blockersOf(FRD.replace('form="Added" node="src/ParcelRepo.java"', 'form="Unknown"')).join("\n"), /F3 findByTrack: Unknown без why/)
-  assert.match(blockersOf(FRD.replace('node="src/ParcelRepo.java"', 'node="src/Invented.java"')).join("\n"), /F3 findByTrack: узла «src\/Invented\.java» нет в карте/)
+  assert.match(blockersOf(FRD.replace('node="src/ParcelRepo.java"', 'node="src/Invented.java"')).join("\n"), /F3 findByTrack: файла «src\/Invented\.java» нет ни в карте роя, ни в репозитории/)
   // In the map and NOT declared touched — green, and this is a seam, not an omission.
   //
   // BUG_FIX_CONTEXT run a3597dd3 (eddi): the rule that demanded it cost eleven blockers of the
@@ -211,7 +211,7 @@ test("F4: a scenario that does not distinguish, and an FRD with no scenario at a
   // step 8 — a script with no role — could only stop the band. It is cheap here and terminal there.
   assert.match(blockersOf(FRD.replace(S1_NODES, 'nodes=""')).join("\n"), /F4 S1: nodes пуст/)
   assert.match(blockersOf(FRD.replace(S1_NODES, 'nodes="src/Invented.java"')).join("\n"),
-    /F4 S1: узла «src\/Invented.java» нет ни в карте, ни среди создаваемых/)
+    /F4 S1: узла «src\/Invented.java» нет ни в репозитории, ни среди создаваемых/)
   // A route of several nodes is the ordinary case — whitespace-separated, every one resolved.
   assert.deepEqual(blockersOf(FRD.replace(S1_NODES, 'nodes="src/ParcelResource.java src/ParcelRepo.java src/Parcel.java"')), [])
 })
@@ -238,13 +238,13 @@ test("F3n: a module the change CREATES is a legal delta — the map cannot know 
 test("F3n: the claim is checked in the opposite direction, and the form is pinned", () => {
   // The path IS in the map: then it is not a new module, whatever the role wrote.
   assert.match(blockersOf(WITH_NEW.replaceAll(NEW_PAGE, "src/ui/parcels.html")).join("\n"),
-    /F3 parcel card page: new="yes", но узел «src\/ui\/parcels.html» ЕСТЬ в карте/)
+    /F3 parcel card page: new="yes", но файл «src\/ui\/parcels.html» в репозитории ЕСТЬ/)
   // A module that does not exist yet has no contract to move.
   assert.match(blockersOf(WITH_NEW.replace('form="Added" node="' + NEW_PAGE + '" new="yes"', `form="Changed" node="${NEW_PAGE}" new="yes" from="одна колонка" to="две колонки"`)).join("\n"),
     /F3 parcel card page: new="yes" с формой Changed/)
   // Without the declaration the path is what it has always been: invented.
   assert.match(blockersOf(WITH_NEW.replace(' new="yes"', "")).join("\n"),
-    /F3 parcel card page: узла «src\/ui\/parcel-card.html» нет в карте — либо это Unknown, либо путь выдуман, либо модуль создаётся/)
+    /F3 parcel card page: файла «src\/ui\/parcel-card.html» нет ни в карте роя, ни в репозитории — либо это Unknown, либо путь выдуман, либо модуль создаётся/)
 })
 
 // The blocker's TEXT is the whole repair instruction: it rides in the FEEDBACK and nothing else does.
@@ -451,7 +451,8 @@ test("role: intake.md names the machine check behind each of its prohibitions", 
 // inherited from gilb ("ONE closed question") forbade exactly the batch, so its absence is the seam.
 test("role and order: questions travel in a BATCH, not one per exchange", () => {
   const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
-  const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const tpl = ["a", "b", "c", "d"].map(TPL).join("\n")
   assert.match(role, /"items"/)             // the questions travel as a LIST, unnumbered
   // Live run 6350f09b: the role sent one question in `items` and `questions: 3` — the number copied
   // off this very example. The size of a batch is the length of the list and lives nowhere else, so
@@ -473,7 +474,8 @@ test("role and order: questions travel in a BATCH, not one per exchange", () => 
 })
 
 test("the form the order substitutes is the SAME data the guardrail judges by", () => {
-  const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const tpl = ["a", "b", "c", "d"].map(TPL).join("\n")
   assert.doesNotMatch(tpl, /Added \| Changed \| Removed/)              // substituted, never retyped
   assert.deepEqual([...FRD_FORM.deltaForms], ["Added", "Changed", "Removed", "Fixed", "Unknown"])
   assert.ok(FRD_FORM.sources.includes("appgraph.xml"))
@@ -487,11 +489,17 @@ test("the form the order substitutes is the SAME data the guardrail judges by", 
   // the order as a constraint plus a SELFCHECK the role counts before writing the file, the role as a
   // prohibition naming its check. Drop either and the guardrail is the first thing the role hears
   // about the rule, one redelegation later.
-  assert.match(tpl, /На каждый `<usecase>` — свой `<scenario uc="…">`/)
-  const selfcheck = tpl.match(/\$START_SELFCHECK[\s\S]*?\$END_SELFCHECK/)
-  assert.ok(selfcheck, "наряд обязан нести блок $START_SELFCHECK")
-  assert.equal((selfcheck[0].match(/^\d\. /gm) || []).length, 5)
-  assert.match(role, /Не оставляй `<usecase>` без сценария.*`F4b`/)
+  // Наряд и роль переведены на английский (правка вне этого набора) — шов пинает то же ПРАВИЛО.
+  assert.match(tpl, /Every `<usecase>` gets its own `<scenario uc="…">`/)
+  // Самоповерка есть у КАЖДОГО прохода — это то, что роль считает перед записью файла, и пункты
+  // разошлись по пластам вместе с правилами (steps/intake/passes-data-flow.md). Пусто хоть в одном
+  // проходе — и его роль впервые слышит о правиле от гардрейла, кругом позже.
+  for (const x of ["a", "b", "c", "d"]) {
+    const block = TPL(x).match(/\$START_SELFCHECK[\s\S]*?\$END_SELFCHECK/)
+    assert.ok(block, `наряд ${x.toUpperCase()} обязан нести блок $START_SELFCHECK`)
+    assert.ok((block[0].match(/^\d\. /gm) || []).length >= 1, `самоповерка наряда ${x.toUpperCase()} пуста`)
+  }
+  assert.match(role, /Do not leave a `<usecase>` without a scenario.*`F4b`/)
 })
 
 // S30g seam: since step 11 exists, a FEEDBACK line can come from TWO places, and they are not
@@ -501,10 +509,16 @@ test("the form the order substitutes is the SAME data the guardrail judges by", 
 // and this goes red.
 test("role and order: a FEEDBACK line names its source, and the two are repaired differently", () => {
   const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
-  const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
-  for (const [what, text] of [["role", role], ["order", tpl]]) {
-    assert.match(text, /guardrail:/, `${what} must name the guardrail as a source of feedback`)
-    assert.match(text, /critic:/, `${what} must name the critic as a source of feedback`)
+  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const tpl = ["a", "b", "c", "d"].map(TPL).join("\n")
+  // Роль несёт таблицу целиком — она одна на все четыре прохода, и второй её копии быть не должно.
+  assert.match(role, /guardrail:/, "role must name the guardrail as a source of feedback")
+  assert.match(role, /critic:/, "role must name the critic as a source of feedback")
+  // Наряд каждого прохода, куда критик умеет адресовать находку (A, B, C — см.
+  // steps/review/review.mjs::passOf), обязан назвать этот источник и отослать к роли за ремонтом.
+  for (const x of ["a", "b", "c"]) {
+    assert.match(TPL(x), /`critic:`/, `наряд ${x.toUpperCase()} не называет критика источником замечания`)
+    assert.match(TPL(x), /THE CODE DECIDES THE REPAIR/, `наряд ${x.toUpperCase()} не отсылает к ремонту по коду`)
   }
 })
 
@@ -846,15 +860,66 @@ test("F6d молчит там, где судит F6: код вне карты о
   assert.match(b[0], /F6 код «PARCEL_NOT_FOUND» из <ext> не описан/)
 })
 
+// ПОЧИНКА ЗА ОДИН КРУГ. Живой прогон 19.08.2026: гардрейл вернул 8 блокеров, роль чинила их по
+// одному и сожгла три круга из шести. Ни роль, ни наряд НИКОГДА не говорили «закрой все» — оба
+// говорили «правь ровно названные места» (это про «не трогай остальное»), а пример показывал ОДИН
+// блокер, и слабая модель читала его буквально. Снять счёт строк — дефект вернётся.
+// ПЕТЛЯ «КРИТИК → РОЛЬ»: КОД РЕШАЕТ, КАКОЙ РЕМОНТ. Найдено чтением петли после переезда критика
+// (наряд J6e): оба текста говорили роли, что критик «оценил ПЛАН, построенный из твоего FRD» — плана
+// на шаге 11 больше нет вовсе, — и оба несли ОДНО правило ремонта на все коды: «требование не чинится
+// удалением элемента». Для `invented-value` это прямо наоборот: элемент, которого не просит ни одно
+// требование, чинится именно удалением. Роль, поверившая старому тексту, не могла закрыть блокер
+// вообще: удалять запрещено, а других способов у неё нет.
+//
+// Гардрейл при этом прав и трогать его не надо: F9 судит ТОЛЬКО `goal-not-delivered`
+// (`frd.mjs`, `if (!r || r.code !== "goal-not-delivered") continue`), то есть тупика в коде нет — он
+// был в словах.
+test("роль и наряд: у каждого кода критика свой ремонт, и удаление разрешено ровно одному", () => {
+  const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const tpl = ["a", "b", "c", "d"].map(TPL).join("\n")
+  // Таблица «код → ремонт» живёт В РОЛИ и только там: она одна на четыре прохода, а наряд прохода
+  // отсылает к ней строкой `critic:` (шов выше). Копия таблицы в четырёх нарядах разошлась бы с ролью
+  // на первой же правке — ровно то, что запрещает CLAUDE.md.
+  for (const text of [role]) {
+    // Предмет критика — требование, а не план: плана на шаге 11 не существует.
+    assert.match(text, /step 11 read (your|this) FRD against `TASK\.md` and `brd\.md`/)
+    assert.equal(/evaluated the (PLAN|plan) built from/.test(text), false, "текст всё ещё обещает роли план")
+    // Каждый код назван вместе со своим ремонтом.
+    for (const code of ["requirement-not-carried", "invented-value", "goal-not-delivered", "open-question"]) {
+      assert.match(text, new RegExp(code), code)
+    }
+    // Удаление — ремонт РОВНО для invented-value, и для goal-not-delivered прямо запрещено (F9).
+    assert.match(text, /invented-value[\s\S]{0,400}(REMOVE|removal|Удали|remove)/i)
+    assert.match(text, /goal-not-delivered[\s\S]{0,400}F9/)
+  }
+})
+
+test("роль и наряд велят закрыть ВСЕ строки FEEDBACK за один круг", () => {
+  const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const tpl = ["a", "b", "c", "d"].map(TPL).join("\n")
+  assert.match(role, /CLOSE EVERY LINE OF THE FEEDBACK IN THIS ONE ANSWER/)
+  assert.match(tpl, /COUNT THE LINES AND CLOSE THEM ALL IN THIS ANSWER/)
+  // Пример в роли показывает НЕСКОЛЬКО блокеров и столько же правок: один блокер в примере и есть
+  // инструкция «чини один».
+  const example = (role.match(/FEEDBACK: F2b[\s\S]*?```/) || [""])[0]
+  assert.ok((example.match(/^\s+F\d/gm) || []).length >= 2, "пример почин­ки показывает один блокер")
+  assert.match(example, /3 lines, so 3 edits/)
+})
+
 test("роль и наряд несут свои строки про F6c/F6d", () => {
   const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
-  const tpl = readFileSync(new URL("order.tpl", import.meta.url), "utf8")
-  assert.match(role, /`outcome` ветки — отрицание `<post>` СВОЕГО use case/)
-  assert.match(role, /Не описывай отказ одного слоя словами другого[\s\S]*?`F6c`/)
-  assert.match(role, /Не оставляй ветку с кодом вне `from` строки её кода[\s\S]*?`F6d`/)
-  assert.match(tpl, /from="UC1\/1a UC2\/2a"/)
-  assert.match(tpl, /Два конца разных use case с одним текстом → F6c/)
-  assert.match(tpl, /Ветка с кодом, не названная в `from` строки этого кода → F6d/)
+  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const tpl = ["a", "b", "c", "d"].map(TPL).join("\n")
+  assert.match(role, /Branch `outcome` is the negation of that use case’s own `<post>`/)
+  assert.match(role, /Do not describe one layer’s failure in the words of another layer[\s\S]*?`F6c`/)
+  assert.match(role, /Do not leave a branch whose code is absent from the `from` of that code’s line[\s\S]*?`F6d`/)
+  // F6c судит КОНЦЫ — пласт A; F6d судит карту отказов — пласт C. Каждое правило названо в наряде
+  // своего прохода, и ни в каком другом (steps/intake/frd.mjs::RULE_PASS).
+  assert.match(TPL("a"), /Two ends of different use cases with identical text → F6c/)
+  assert.match(TPL("c"), /from="UC1\/1a UC2\/2a"/)
+  assert.match(TPL("c"), /A branch whose code is not listed in the `from` of that code’s failure line → F6d/)
 })
 
 // --- F3c: a delta no scenario answers for — the guard against runs 300c545b and 9ae1c092 ----------
@@ -881,8 +946,12 @@ test("F3c: узел с дельтой, которого не называет н
   assert.match(b[1], /^F3c дельта на «src\/main\/java\/ai\/labs\/eddi\/backup\/impl\/RemoteApiResourceSource\.java» без сценария/)
   // All three exits, one command each: without the third the role invents a use case for a service
   // module instead of admitting the node moves behind its neighbour (`.agent.bak-20260815`).
-  assert.match(b[0], /Впиши src\/main\/java\/ai\/labs\/eddi\/configs\/glossaries\/IRestGlossaryStore\.java в nodes сценария, который через него работает/)
-  assert.match(b[0], /нет такого сценария — у изменения не хватает use case, напиши его/)
+  // Блокер НАЗЫВАЕТ кандидатов: слабая модель выбирает из списка и не выводит из описания. Убери
+  // список — и вернётся живой дефект 19.08.2026: три круга подряд шесть F3c на РАЗНЫХ узлах, потому
+  // что роль переписывала дельты вместо того, чтобы дописать узел в сценарий.
+  assert.match(b[0], /в nodes ОДНОГО из этих сценариев: S1 \(UC1\) · S10 \(UC10\)/)
+  assert.match(b[0], /напиши новый <scenario id="…" uc="…" before="…" after="…" nodes="src\/main\/java\/ai\/labs\/eddi\/configs\/glossaries\/IRestGlossaryStore\.java"\/>/)
+  assert.match(b[0], /ни один из них через узел не идёт — напиши новый <scenario/)
   assert.match(b[0], /узел меняется лишь вслед за соседней дельтой — сними эту дельту$/)
 
   // The repair the first exit names: the same two deltas, their nodes written into the routes that
@@ -901,4 +970,427 @@ test("F3c: узел с дельтой, которого не называет н
   assert.deepEqual(rule(unknown, "F3c"), [])
   const noNode = FRD_300.replace(D_IREST, '  <delta op="readGlossaries()" form="Added"/>').replace(D_REMOTE + "\n", "")
   assert.deepEqual(rule(noNode, "F3c"), [])
+})
+
+// F8 — ПОЛЕ, КОТОРОЕ НИКТО НЕ НАПИШЕТ. Формулировка правила куплена ПРОИГРЫШЕМ по четырём
+// сохранённым формам: наивная («сущность резолвится и дельты нет») краснела на `Fruit.name` формы
+// t2, где изменение поле только ЧИТАЕТ. Здесь те же четыре случая, но фикстурами.
+const AGENT_CFG = "src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"
+const FRUIT = "src/main/java/org/acme/rest/json/Fruit.java"
+const TYPES = new Map([["AgentConfiguration", AGENT_CFG], ["Fruit", FRUIT]])
+const MEMBERS = new Map([[AGENT_CFG, new Set(["AgentConfiguration"])], [FRUIT, new Set(["Fruit", "name", "description"])]])
+const frd8 = (fields, extra = "") => `<frd grammar="1" goal="Глоссарии как ресурс">
+  <delta op="Glossary model" form="Added" node="src/main/java/ai/labs/eddi/configs/glossaries/model/Glossary.java" new="yes"/>
+${extra}
+${fields}
+</frd>`
+const F_GLOSSARIES = '  <field name="glossaries" in="AgentConfiguration" type="array[string]" domain="ordered list" required="no" error="none" source="answers.md"/>'
+const f8 = (xml, types = TYPES, members = MEMBERS) => checkFrd({ frd: parseFrd(xml), types, members }).filter((b) => b.startsWith("F8"))
+
+test("F8: поле в чужой сущности без дельты — дефект прогона eddi/DOS-535", () => {
+  const b = f8(frd8(F_GLOSSARIES))
+  assert.equal(b.length, 1, b.join("\n"))
+  assert.match(b[0], /поле «glossaries» объявлено в «AgentConfiguration»/)
+  assert.match(b[0], new RegExp(AGENT_CFG.replace(/[/.]/g, "\\$&")))
+
+  // Ремонт, который правило и называет: дельта на этот модуль — блокер снят.
+  const withDelta = frd8(F_GLOSSARIES, `  <delta op="glossaries field" form="Added" node="${AGENT_CFG}" from="нет поля" to="список ссылок"/>`)
+  assert.deepEqual(f8(withDelta), [])
+  // Второй законный способ заявить модуль работой — touched.
+  const withTouched = frd8(F_GLOSSARIES, `  <touched path="${AGENT_CFG}" why="читаем список ссылок"/>`)
+  assert.deepEqual(f8(withTouched), [])
+  // Дельта на СОСЕДНИЙ модуль не гасит: правило судит путь, а не пакет.
+  const wrongDelta = frd8(F_GLOSSARIES, '  <delta op="x" form="Added" node="src/main/java/ai/labs/eddi/configs/agents/model/AgentIdentity.java"/>')
+  assert.equal(f8(wrongDelta).length, 1)
+})
+
+test("F8 молчит там, где молчать обязано: новая сущность, существующее поле, пустая карта", () => {
+  // Сущность, которой нет нигде, создаётся ЭТИМ изменением — требовать от неё дельту не по чему.
+  const newEntity = '  <field name="terms" in="Glossary" type="array[Term]" domain="список пар" required="yes" error="none" source="brd.md"/>'
+  assert.deepEqual(f8(frd8(newEntity)), [])
+  // Поле, которое у сущности УЖЕ есть: изменение его читает, а не пишет (форма t2, поля Fruit).
+  const existing = '  <field name="name" in="Fruit" type="string" domain="строка" required="yes" error="none" source="appgraph.xml"/>'
+  assert.deepEqual(f8(frd8(existing)), [])
+  // Без вычисленного графа таблицы пусты — правило молчит целиком, как F5 без sources.
+  assert.deepEqual(f8(frd8(F_GLOSSARIES), new Map(), new Map()), [])
+})
+
+// F10 — КАНАЛ USE CASE ПРИНАДЛЕЖИТ ЕГО СОБСТВЕННЫМ УЗЛАМ. Живой прогон eddi: один актёрский
+// `via="HTTP /glossarystore/glossaries"` достался всем восьми use case, включая экспорт и импорт
+// агента; граничные наряды 05-07 велели проверять экспорт через CRUD словарей. Проигрыш правила по
+// сохранённому FRD eddi даёт РОВНО три блокера — UC6, UC7, UC8.
+const F10_XML = `<frd grammar="1" goal="глоссарии">
+  <actor name="api-client" kind="system" via="HTTP /glossarystore/glossaries"/>
+  <usecase id="UC1" actor="api-client" goal="создать глоссарий">
+    <post>создан</post><step n="1">клиент шлёт POST</step>
+  </usecase>
+  <usecase id="UC6" actor="api-client" goal="выгрузить агента с глоссариями">
+    <post>в архиве лежат глоссарии</post><step n="1">клиент просит выгрузку агента</step>
+  </usecase>
+  <delta op="POST /glossarystore/glossaries" form="Added" node="src/rest/RestGlossaryStore.java" new="yes"/>
+  <delta op="exportAgent()" form="Changed" node="src/backup/RestExportService.java" from="без глоссариев" to="с глоссариями"/>
+  <scenario id="S1" uc="UC1" before="404" after="201" nodes="src/rest/RestGlossaryStore.java"/>
+  <scenario id="S6" uc="UC6" before="архив без глоссариев" after="архив с глоссариями" nodes="src/backup/RestExportService.java"/>
+</frd>`
+const f10 = (xml, routes = []) => checkFrd({ frd: parseFrd(xml), routes }).filter((b) => b.startsWith("F10"))
+
+test("F10: канал актёра, доставшийся use case чужого узла — дефект прогона eddi/DOS-535", () => {
+  const b = f10(F10_XML)
+  assert.equal(b.length, 1, b.join("\n"))
+  assert.match(b[0], /^F10 UC6 объявлен входящим через «HTTP \/glossarystore\/glossaries»/)
+  assert.match(b[0], /src\/rest\/RestGlossaryStore\.java/)
+
+  // Ремонт, который правило и называет: у use case появляется СВОЙ канал, и он принадлежит его узлу.
+  const fixed = F10_XML.replace('<usecase id="UC6" actor="api-client"', '<usecase id="UC6" actor="api-client" via="HTTP POST /backup/export/{agentId}"')
+  assert.deepEqual(f10(fixed, [{ at: "src/backup/RestExportService.java", name: "POST /backup/export/{agentId}" }]), [])
+  // Владелец пути неизвестен — утверждать нечего, правило молчит.
+  assert.deepEqual(f10(F10_XML.replace('<delta op="POST /glossarystore/glossaries" form="Added" node="src/rest/RestGlossaryStore.java" new="yes"/>', "")), [])
+  // Канал без пути (`template data map injection` живого UC5) не судится вовсе.
+  assert.deepEqual(f10(F10_XML.replace('via="HTTP /glossarystore/glossaries"', 'via="внедрение в карту данных шаблона"')), [])
+})
+
+// F11 — ПОКРЫТИЕ ТРЕБОВАНИЙ BRD, ПРЕДЪЯВЛЕННОЕ СТРОКОЙ. Форма t2, два прогона: требование
+// нерегрессии не доехало до FRD ни одним элементом и не поймано никем — BRD входил в шаг 6 только
+// словарём чисел. Роль проходит требования по одному и называет носителя; строку судит скрипт.
+const F11_XML = `<frd grammar="1" goal="глоссарии">
+  <usecase id="UC1" actor="api" goal="создать"><post>создан</post><step n="1">клиент шлёт POST</step></usecase>
+  <delta op="POST /store" form="Added" node="src/rest/Store.java" new="yes"/>
+  <scenario id="S1" uc="UC1" before="404" after="201" nodes="src/rest/Store.java"/>
+  <carried req="R1" by="UC1/1"/>
+</frd>`
+const f11 = (xml, requirements) => checkFrd({ frd: parseFrd(xml), requirements }).filter((b) => b.startsWith("F11"))
+
+test("F11: требование BRD, по которому роль не прошла, — блокер, называющий его номер", () => {
+  // Правило — РАЗНОСТЬ ДВУХ СПИСКОВ НОМЕРОВ. Атрибут `by` не читается: живой прогон 4c8f26eb умер
+  // на шаге 6, потому что правило судило ещё и адрес, а его словарь был уже языка требования —
+  // роль шесть кругов называла верных носителей (`field:id` для «поля ресурса только id + version
+  // + terms») и получала «такого элемента нет».
+  assert.deepEqual(f11(F11_XML, ["R1"]), [])
+  const b = f11(F11_XML, ["R1", "R2"])
+  assert.equal(b.length, 1, b.join("\n"))
+  assert.match(b[0], /требование R2 не пройдено/)
+  assert.match(b[0], /<carried req="R2"/)
+
+  // Любой носитель законен — судить его существование дальше не наше дело: кривой адрес всплывёт у
+  // критика обратным списком, а пропавшая строка не всплывёт нигде.
+  for (const by of ["S1", "src/rest/Store.java", "UC1", "field:id", "nfr:cache-ttl", "покрыто целиком"]) {
+    assert.deepEqual(f11(F11_XML.replace('by="UC1/1"', `by="${by}"`), ["R1"]), [], by)
+  }
+
+  // Требований не дали (промоутнутый артефакт, resume) — правило молчит целиком.
+  assert.deepEqual(f11(F11_XML, []), [])
+})
+
+// УЗЕЛ ИЗМЕНЕНИЯ — ФАЙЛ РЕПОЗИТОРИЯ, А НЕ ТОЛЬКО КЛЕТКА ФОКУСА (наряд J15).
+//
+// Живой прогон 19.08.2026: роль получила от оператора путь `AgentConfiguration.java` и упёрлась в
+// тупик — F2 требовал ключ узла `appgraph.xml`, а рой этот файл не читал (86 узлов фокуса против 6890
+// объявлений вычисленного графа). Выхода в грамматике не было, и роль написала `form="Unknown"`: факт
+// был, а места для него нет. Рой читает клетки фокуса — это решение БЮДЖЕТА, и оно не должно решать,
+// что существует.
+const OUTSIDE = "src/main/java/app/configs/AgentConfiguration.java"
+const J15_XML = `<frd grammar="1" goal="привязать глоссарии к агенту">
+  <usecase id="UC1" actor="api" goal="привязать глоссарий"><post>ссылка сохранена</post><step n="1">клиент шлёт PUT</step></usecase>
+  <delta op="glossaries field" form="Changed" node="${OUTSIDE}" from="нет поля" to="список ссылок"/>
+  <touched path="${OUTSIDE}" why="появляется список ссылок на глоссарии"/>
+  <scenario id="S1" uc="UC1" before="поля нет" after="поле есть" nodes="${OUTSIDE}"/>
+</frd>`
+const j15 = (xml, members) => checkFrd({ frd: parseFrd(xml), nodes: new Set(["src/rest/Store.java"]), members })
+
+test("F2/F3/F4: путь, известный вычисленному графу, — законный узел изменения", () => {
+  // Файл есть в репозитории (его знает graph-computed), но рой его не читал — блокеров нет.
+  const known = new Map([[OUTSIDE, new Set(["AgentConfiguration"])]])
+  assert.deepEqual(j15(J15_XML, known).filter((b) => /^F[234] /.test(b)), [])
+
+  // Того же артефакта БЕЗ вычисленного графа хватает, чтобы правило вело себя как раньше: путь вне
+  // карты роя — выдумка. Сними `computedPaths` из checkFrd — этот случай перестанет отличаться от
+  // предыдущего, и тупик прогона вернётся.
+  const blind = j15(J15_XML, new Map()).filter((b) => /^F[234] /.test(b))
+  assert.ok(blind.length >= 2, blind.join("\n"))
+  assert.match(blind.join("\n"), /F2 touched «[^»]*AgentConfiguration\.java» не резолвится ни в узел карты роя/)
+
+  // И выдуманный путь остаётся выдумкой при любом графе: судится РЕПОЗИТОРИЙ, а не доверчивость.
+  const invented = J15_XML.replace(new RegExp(OUTSIDE, "g"), "src/main/java/app/Nowhere.java")
+  assert.ok(j15(invented, known).some((b) => b.startsWith("F2 ")), "выдуманный путь принят")
+})
+
+// EDIT ИЛИ WRITE РЕШАЕТ PREVIOUS, А НЕ FEEDBACK.
+//
+// Рельса lookup создала состояние, которого раньше не было: FEEDBACK НЕ ПУСТ (в нём ответ
+// репозитория), а файла ещё нет — роль спросила справку, ничего не написав. Прежняя инструкция
+// («write когда FEEDBACK пуст, edit когда есть») в этом состоянии требовала править несуществующее.
+// Расхождение инструкции с состоянием — наша ошибка формулировки, и ловится она здесь.
+test("роль и наряд: пустой PREVIOUS означает write, даже когда FEEDBACK не пуст", () => {
+  const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const tpl = ["a", "b", "c", "d"].map(TPL).join("\n")
+  assert.match(role, /THE PREVIOUS BLOCK DECIDES/)
+  assert.match(role, /`write` when PREVIOUS is empty/)
+  assert.match(role, /`edit` when PREVIOUS carries your file/)
+  assert.match(role, /you asked for a `lookup` and wrote nothing yet/)
+  assert.match(tpl, /Empty here means NOTHING IS WRITTEN YET/)
+  // Блок PREVIOUS не смеет утверждать, что файл ЧТО-ТО провалил: после круга `lookup` он ничего не
+  // проваливал, и роль, поверившая заголовку, пойдёт искать в своём тексте несуществующий дефект.
+  assert.equal(/the exact file that failed validation/.test(tpl), false)
+  assert.match(tpl, /Do not hunt this text for a fault nobody reported/)
+  // Прежнее правило, привязанное к FEEDBACK, в текстах остаться не должно.
+  assert.equal(/`write` when FEEDBACK is empty/.test(role), false, "старое правило edit/write ещё в роли")
+})
+
+// ИНТЕРФЕЙС И РЕАЛИЗАЦИЯ — ОДНА РАБОТА, И ПРАВИЛА ОБЯЗАНЫ ЭТО ВИДЕТЬ.
+//
+// Живой прогон eddi 19.08.2026, два круга подряд: F10 объявлял канал чужим, потому что эндпоинт
+// объявлен ИНТЕРФЕЙСОМ (`IRestImportService`), а в узлах сценария стоит реализация; F3 объявлял
+// «ломаться нечему», потому что у класса, подключаемого контейнером, входящего ребра в карте РОЯ
+// нет. Оба ребра лежат в вычисленном графе шага 3. Сними `links` — оба ложных блокера вернутся.
+const LINKS = [{ from: "src/rest/RestStore.java", to: "src/rest/IRestStore.java" }]
+const IFACE_XML = `<frd grammar="1" goal="выгрузка">
+  <actor name="api" kind="system" via="HTTP POST /store/export"/>
+  <usecase id="UC1" actor="api" goal="выгрузить"><post>архив собран</post><step n="1">клиент шлёт POST /store/export</step></usecase>
+  <delta op="export()" form="Changed" node="src/rest/RestStore.java" from="без архива" to="с архивом"/>
+  <scenario id="S1" uc="UC1" before="нет архива" after="есть архив" nodes="src/rest/RestStore.java"/>
+</frd>`
+const iface = (links) => checkFrd({
+  frd: parseFrd(IFACE_XML),
+  nodes: new Set(["src/rest/RestStore.java", "src/rest/IRestStore.java"]),
+  entries: new Set(["src/rest/IRestStore.java"]),
+  edges: [{ from: "src/x.java", to: "src/rest/IRestStore.java" }],
+  routes: [{ at: "src/rest/IRestStore.java", name: "POST /store/export" }],
+  links,
+}).filter((b) => /^F(3|10) /.test(b))
+
+test("F10/F3: владелец эндпоинта — интерфейс, работа — у реализации; ребро связывает их", () => {
+  assert.deepEqual(iface(LINKS), [], "правила не видят связки интерфейс → реализация")
+  const blind = iface([])
+  assert.ok(blind.length >= 1, "без рёбер вычисленного графа ложные блокеры обязаны вернуться")
+  assert.match(blind.join("\n"), /F(3|10) /)
+})
+
+// ПЛАСТЫ ПРОХОДОВ (P1). Шов один и тот же с двух сторон: правило будущего пласта молчит, правило
+// закрытого — нет.
+test("пласт — у каждого кода, который checkFrd умеет напечатать, объявлен пласт", () => {
+  const src = readFileSync(new URL("./frd.mjs", import.meta.url), "utf8")
+  // коды берутся из ИСХОДНИКА, а не из списка в тесте: правило, добавленное без записи в
+  // RULE_PASS, обязано ронять этот тест, а не тихо звучать во всех проходах
+  const emitted = new Set(
+    [...src.matchAll(/(?:B\.push\(|provenance\()[`'"]?(F\d+[a-z]*)\b/g)].map((m) => m[1]),
+  )
+  const bare = [...src.matchAll(/push\(`(F\d+[a-z]*)\b/g)].map((m) => m[1])
+  for (const c of bare) emitted.add(c)
+  assert.ok(emitted.size >= 15, `коды не нашлись в исходнике: ${emitted.size}`)
+  const orphan = [...emitted].filter((c) => !RULE_PASS[c])
+  assert.deepEqual(orphan, [], `коды без пласта: ${orphan.join(", ")}`)
+})
+
+test("пласт — артефакт из одних use case зелен в проходе A и красен без пласта", () => {
+  const xml = `<frd goal="глоссарий подставляется в промпт">
+    <actor name="оператор" kind="human" via="REST"/>
+    <usecase id="UC1" actor="оператор" goal="завести термин">
+      <pre>агент существует</pre><post>термин доступен подстановке</post>
+      <step n="1">оператор шлёт термин</step>
+    </usecase>
+  </frd>`
+  const frd = parseFrd(xml)
+  assert.deepEqual(checkFrd({ frd, pass: "A" }), [])
+  const full = checkFrd({ frd })
+  assert.ok(full.length > 0, "полный суд обязан назвать недостающие пласты")
+  assert.ok(full.some((b) => b.startsWith("F7")), "полный суд не заметил отсутствия дельт")
+})
+
+test("пласт — правило будущего пласта молчит, правило закрытого — звучит", () => {
+  // дельта есть, сценария нет: F3c и F4 — пласт B; F6 (карта отказов) — пласт C
+  const frd = parseFrd(`<frd goal="цель">
+    <usecase id="UC1" actor="оператор" goal="g"><post>p</post><step n="1">s</step></usecase>
+    <delta node="a/b/C.java" form="Added" op="POST /x" from="нет" to="есть"/>
+  </frd>`)
+  const nodes = new Set(["a/b/C.java"])
+  const b = checkFrd({ frd, nodes, pass: "B" })
+  assert.ok(b.some((x) => x.startsWith("F4")), "проход B обязан требовать сценарий")
+  assert.ok(!b.some((x) => x.startsWith("F6 ")), "карта отказов — пласт C, в B её судить нечем")
+  // тот же артефакт в проходе C: пласт B уже закрыт, но роль его сломала — блокер обязан остаться
+  const c = checkFrd({ frd, nodes, pass: "C" })
+  assert.ok(c.some((x) => x.startsWith("F4")), "порча закрытого пласта не должна ждать конца прохода D")
+  assert.ok(c.some((x) => x.startsWith("F6 ")), "проход C обязан требовать карту отказов")
+})
+
+test("пласт — F9 стоит в любом проходе: перемотку сторожат все", () => {
+  const frd = parseFrd(`<frd goal="цель">
+    <usecase id="UC1" actor="оператор" goal="g"><post>p</post><step n="1">s</step></usecase>
+  </frd>`)
+  const rewind = [{ code: "goal-not-delivered", node: "UC2", evidence: "UC2" }]
+  for (const pass of ["A", "B", "C", "D"]) {
+    assert.ok(
+      checkFrd({ frd, rewind, pass }).some((b) => b.startsWith("F9")),
+      `проход ${pass} потерял сторожа перемотки`,
+    )
+  }
+})
+
+test("пласт — неизвестное имя прохода судит всем, а не ничем", () => {
+  const blockers = ["F1 a", "F7 b", "F11 c"]
+  assert.deepEqual(forPass(blockers, "Z"), blockers)
+  assert.deepEqual(forPass(blockers, ""), blockers)
+})
+
+test("пласт — код, которого нет в таблице, звучит во ВСЕХ проходах, а не тонет в одном", () => {
+  // правило, добавленное завтра и забытое в RULE_PASS, обязано быть шумным: молчание спрятало бы его
+  // от всех четырёх проходов разом, и никто бы не заметил пропажи
+  const fresh = "F42 новое правило: элемент X — напиши <x/>"
+  for (const pass of ["A", "B", "C", "D"]) {
+    assert.deepEqual(forPass([fresh], pass), [fresh], `проход ${pass} проглотил незнакомое правило`)
+  }
+})
+
+test("пласт — правило-мост чинится РАНЬШЕ, чем видится: F8 виден в D, а закрывается дельтой пласта B", () => {
+  const blocker = "F8 поле «terms» объявлено в «Glossary» (src/Glossary.java), но этот модуль не заявлен изменением"
+  assert.equal(passOfBlocker(blocker), "D", "виден в пласте, где есть оба операнда")
+  assert.equal(passOfBlocker(blocker, true), "B", "чинится там, где пишут дельты")
+  // у остальных правил вопрос один и тот же
+  assert.equal(passOfBlocker("F1 нет actor", true), "A")
+  assert.equal(passOfBlocker("F5 число без источника", true), "C")
+})
+
+test("пласт — блокер F8 называет строку, которую надо написать", () => {
+  const frd = parseFrd(`<frd goal="g">
+    <usecase id="UC1" actor="оператор" goal="g"><post>p</post><step n="1">s</step></usecase>
+    <delta op="POST /x" form="Added" node="src/Other.java" from="нет" to="есть"/>
+    <scenario id="S1" uc="UC1" before="нет" after="есть" nodes="src/Other.java"/>
+    <field name="terms" in="Glossary" type="map" domain="1..64" required="yes" source="brd.md"/>
+  </frd>`)
+  const types = new Map([["Glossary", "src/Glossary.java"]])
+  const members = new Map([["src/Glossary.java", new Set(["id"])], ["src/Other.java", new Set()]])
+  const f8 = checkFrd({ frd, nodes: new Set(["src/Other.java"]), types, members, pass: "D" }).filter((b) => b.startsWith("F8"))
+  assert.equal(f8.length, 1)
+  assert.match(f8[0], /<delta op="поле terms" form="Changed" node="src\/Glossary\.java"/, "нет образца строки — роль не знает, что писать")
+  assert.match(f8[0], /сними строку <field name="terms">/, "не назван второй выход")
+})
+
+test("пласт — вход после красного полного суда: ранний из ЧИНЯЩИХ, а не из видящих", () => {
+  // F8 виден в D, чинится в B — вход обязан быть B, иначе роль пласта D получит блокер, который её
+  // наряд запрещает ей закрывать
+  assert.equal(entryPass("F8 поле «terms» …"), "B")
+  assert.equal(entryPass(["F11 требование R3 не пройдено"]), "D")
+  assert.equal(entryPass("F5 число без источника\n  F1 нет actor"), "A")
+  assert.equal(entryPass("F6 карта отказов пуста\n  F3 узла нет"), "B")
+  assert.equal(entryPass(""), "A")
+  assert.equal(entryPass(), "A")
+})
+
+// F0 — ЧИТАЕМОСТЬ РАНЬШЕ СУЖДЕНИЯ, и правило ходит парой с текстом, который его предупреждает.
+test("F0: сырой < внутри значения атрибута — блокер, а не тихая потеря элемента", () => {
+  const bad = `<frd goal="g">
+  <usecase id="UC1" actor="оператор" goal="g"><post>p</post><step n="1">s</step></usecase>
+  <scenario id="S1" uc="UC1" before="нет подстановки; <code>{{glossary.<term>}}</code> не раскрыт" after="раскрыт" nodes="a/B.java"/>
+</frd>`
+  const found = unreadable(bad)
+  assert.equal(found.length, 1, "элемент пропал из разбора молча")
+  assert.match(found[0], /^F0 строка 3, атрибут before/)
+  assert.match(found[0], /&lt;/, "не назван выход — как писать вместо этого")
+  // и разбор действительно теряет элемент: это и есть цена молчания
+  assert.equal(parseFrd(bad).scenarios.length, 0)
+
+  // чистый артефакт молчит
+  assert.deepEqual(unreadable(bad.replace(/<code>|<\/code>/g, "").replace("{{glossary.<term>}}", "{{glossary.TERM}}")), [])
+  assert.deepEqual(unreadable(""), [])
+  assert.deepEqual(unreadable(), [])
+})
+
+test("F0: роль и наряд пласта B предупреждают о значении атрибута ДО того, как оно стоит круга", () => {
+  const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
+  // Пара «WRONG → RIGHT» стоит в наряде КАЖДОГО прохода, а не только в роли. Замер живого прогона
+  // 19.08.2026: пласт B, у которого пара была, прошёл с первого круга; пласты A и C, у которых её не
+  // было, встали на F0 — при том что закон 7a в роли действовал для всех троих. Правило рядом с
+  // местом письма работает, правило в общем тексте — нет.
+  const orders = ["a", "b", "c", "d"].map((x) => [`наряд ${x.toUpperCase()}`, readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")])
+  for (const [what, text] of [["роль", role], ...orders]) {
+    assert.match(text, /ATTRIBUTE VALUES ARE PLAIN WORDS/, `${what} не несёт правила о значении атрибута`)
+    assert.match(text, /WRONG\s+\w+="/, `${what} не показывает НЕВЕРНУЮ строку`)
+    assert.match(text, /RIGHT\s+\w+="/, `${what} не показывает верную строку`)
+  }
+})
+
+// F13 — ОТВЕТ ОПЕРАТОРА ОБЯЗАН БЫТЬ ПОТРАЧЕН. Фикстура — не выдумка: это пять обменов живого прогона
+// eddi 19.08.2026 и то, что роль из них применила. Пауза человека самое дорогое в полосе, и ответ,
+// не доехавший до артефакта, тратит её дважды.
+test("F13: ответ с твёрдыми знаками, не встреченными в артефакте, — блокер", () => {
+  const said = [
+    { n: 1, question: "GET single glossary by id — not required, list only?", text: "да, нужен GET /glossarystore/glossaries/{id}" },
+    { n: 2, question: "код ошибки при рендеринге?", text: "код ошибки 422 Unprocessable Entity" },
+    { n: 3, question: "уровень слияния при импорте?", text: "замена набора терминов целиком, новая версия побеждает" },
+  ]
+  const xml = `<frd goal="g">
+    <usecase id="UC1" actor="api" goal="list"><post>p</post><step n="1">GET /glossarystore/glossaries</step></usecase>
+    <failure code="GLOSSARY_GONE" status="422" client="ссылка на удалённый глоссарий" from="UC1/1a"/>
+  </frd>`
+  const b = spentAnswers({ xml, said })
+  assert.equal(b.length, 1, "поймано не ровно одно: " + b.map((x) => x.slice(0, 40)).join(" | "))
+  assert.match(b[0], /GET \/glossarystore\/glossaries\/\{id\}/, "блокер не называет знак, которого нет")
+  assert.match(b[0], /вернись к оператору вопросом/, "не назван второй выход — ответ мог устареть")
+
+  // 422 потрачен — о нём молчим; «замена целиком» твёрдых знаков не имеет — о ней молчим тоже
+  assert.equal(b[0].includes("422"), false)
+  assert.equal(b.some((x) => x.includes("замена набора")), false, "правило судит то, чего судить нечем")
+})
+
+test("F13: тотальна и молчит, когда судить нечего", () => {
+  assert.deepEqual(spentAnswers(), [])
+  assert.deepEqual(spentAnswers({ xml: "<frd/>", said: [] }), [])
+  assert.deepEqual(spentAnswers({ xml: "", said: [{ n: 1, question: "q", text: "просто слова без знаков" }] }), [])
+  // ответ, чей знак В артефакте — молчание
+  assert.deepEqual(spentAnswers({ xml: "<frd>TERM_KEY_INVALID</frd>", said: [{ n: 1, question: "q", text: "код TERM_KEY_INVALID" }] }), [])
+})
+
+// F14 — предмет требования со своим пакетом обязан иметь модуль в изменении. Один случай на каждую
+// ветку антецедента: пакет есть и модуля нет · пакета нет · модуль есть · это аналог.
+test("F14: предмет со своим пакетом и без модуля изменения — блокер; остальные ветки молчат", () => {
+  const frd = parseFrd(`<frd goal="g">
+    <usecase id="UC1" actor="оператор" goal="g"><post>p</post><step n="1">s</step></usecase>
+    <delta op="POST /parcels" form="Added" node="src/parcels/ParcelResource.java" from="нет" to="есть"/>
+    <scenario id="S1" uc="UC1" before="нет" after="есть" nodes="src/parcels/ParcelResource.java"/>
+  </frd>`)
+  const dirs = new Set(["src/parcels", "src/carriers", "src/snippets"])
+  const args = { frd, dirs, analogue: "Snippet", pass: "B" }
+
+  // `carrier` — свой пакет в репозитории есть, модуля изменения в нём нет
+  const b = checkFrd({ ...args, subjects: ["parcel", "carrier", "glossary", "snippet"] }).filter((x) => x.startsWith("F14"))
+  assert.equal(b.length, 1, "поймано не ровно одно: " + b.map((x) => x.slice(0, 50)).join(" | "))
+  assert.match(b[0], /«carrier»/)
+  assert.match(b[0], /<delta node=/, "не назван первый выход")
+  assert.match(b[0], /<question subject="carrier"/, "не назван выход «предмет не о работе»")
+  // parcel — модуль есть · glossary — пакета нет, создаётся · snippet — аналог, его копируют
+})
+
+// Отговорка в комментарии — это не потраченный ответ: `<!-- … -->` не читает ни один потребитель
+// артефакта, и до исполнителя из него не доезжает ничего.
+test("F13: знак ответа в КОММЕНТАРИИ не засчитывается", () => {
+  const said = [{ n: 1, question: "одиночное чтение?", text: "да, нужен GET /glossarystore/glossaries/{id}" }]
+  const hidden = `<frd><uc id="UC1"/></frd>\n<!-- PENDING: GET /glossarystore/glossaries/{id} requested but out of scope -->`
+  assert.equal(spentAnswers({ xml: hidden, said }).length, 1, "комментарий закрыл правило — ответ потерян молча")
+  const spent = `<frd><step n="1">GET /glossarystore/glossaries/{id}</step></frd>`
+  assert.deepEqual(spentAnswers({ xml: spent, said }), [], "ответ, вписанный в шаг, потрачен")
+})
+
+// ВХОД, КОТОРЫЙ НЕ ДОЕХАЛ ДО СУДА, ВЫКЛЮЧАЕТ ПРАВИЛО МОЛЧА. Правило без входа неотличимо от правила,
+// которому нечего сказать: тесты среза зелены (они зовут `checkFrd` напрямую), а в продакшене оно
+// не срабатывает никогда.
+//
+// BUG_FIX_CONTEXT: разбор 20.08.2026. F14 написан, испытан и объявлен ценой прогона 19.08.2026, где
+// требование R11 («глоссарий подключён к агенту ссылкой в agent config») закрылось строкой
+// `<carried req="R11" by="UC5/1"/>` — шаг ЧИТАЕТ ссылку, а не создаёт её. Хост считал `subjects`,
+// `analogue` и `dirs` и передавал их в `newFrd`; `newFrd` вызывал `checkFrd` БЕЗ них. На артефакте
+// того прогона правило даёт блокер про `agent` — то есть дыру ловило, но голоса не имело.
+test("newFrd: предметы, аналог и каталоги доезжают до суда — F14 имеет голос", () => {
+  assert.equal(build().ok, true, "фикстура должна быть зелёной без предметов")
+
+  // Предмет требования, у которого в репозитории СВОЙ пакет, а изменение не трогает оттуда ничего.
+  const dirs = new Set(["src/couriers"])
+  const withSubject = newFrd({ xml: FRD, nodes: NODES, tests: TESTS, entries: ENTRIES, edges: EDGES,
+    sources: SOURCES, subjects: ["courier"], dirs })
+  assert.equal(withSubject.ok, false, "предмет со своим пакетом, которого не трогает ни одна дельта, прошёл")
+  assert.match(withSubject.error.detail, /F14 предмет требования «courier»/)
+
+  // Аналог копируют, а не меняют: он гасит правило — и этот вход тоже обязан доехать.
+  assert.equal(newFrd({ xml: FRD, nodes: NODES, tests: TESTS, entries: ENTRIES, edges: EDGES,
+    sources: SOURCES, subjects: ["courier"], dirs, analogue: "couriers — по образцу" }).ok,
+    true, "аналог не гасит F14 — вход `analogue` до суда не доехал")
 })

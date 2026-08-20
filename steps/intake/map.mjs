@@ -50,7 +50,7 @@ export function mapIndex(xml) {
   const head = (lines[0] || "").match(/^<appgraph[^>]*>/)
   const out = [head ? `${head[0].slice(0, -1)} form="index" without="decl role io edge">` : '<appgraph form="index" without="decl role io edge">']
 
-  const KEEP = /^\s*<(paths|lang|suite|suites|artifact|build|toggles|branching|contract|integrations|subject|component|focus|cycle|systems|system|surface|gap|isolated)\b/
+  const KEEP = /^\s*<(paths|lang|suite|suites|test|artifact|build|toggles|branching|contract|integrations|subject|component|focus|cycle|systems|system|surface|gap|isolated)\b/
   let node = null            // the open module: its header and the api rows it carries
   const flush = () => {
     if (!node) return
@@ -132,6 +132,12 @@ export const MAP_PRICE = Object.freeze({
   decl: 121,        // one <decl kind name sig/>
   api: 115,         // one <api …/>
   edge: 67,         // <edge from to via by/> without its two paths
+  // ТЕСТ СТОИТ СТРОКУ, А НЕ УЗЕЛ (M1). С 19.08.2026 тестовый файл выходит в карту как
+  // `<test path suite/>` — заголовка, преамбулы, роли, объявлений и api у него нет
+  // (steps/graph/graph.mjs::graphXml). Замер на живой карте eddi: 34 теста стоили 19 189 Б блоками и
+  // 3 230 Б строками. Если оценка фокуса продолжит считать их узлами, освободившееся место не дойдёт
+  // до якорей: на том же прогоне 35 файлов из 91 в фокусе — тесты.
+  test: 95,         // <test path suite/> without its path
 })
 
 // MAP_EST_SLACK — what is left of "the estimate may be wrong" once the elements are priced.
@@ -225,6 +231,17 @@ export function parseMap(xml) {
       .filter((t) => t.path)
       .map((t) => Object.freeze({ path: full(t.path), suite: t.suite || "" }))
     if (own.length) nodeTests.set(path, Object.freeze(own))
+  }
+
+  // ТЕСТ, НАЗВАННЫЙ СТРОКОЙ. С 19.08.2026 тестовый файл в карте не модуль, а `<test path suite>` —
+  // либо внутри модуля, который он проверяет, либо строкой верхнего уровня, если такого модуля в
+  // карте нет (steps/graph/graph.mjs::graphXml). Множество `tests` собирается из ОБОИХ источников:
+  // из старой формы `kind="test"` — карты прошлых прогонов читаются по-прежнему — и из этих строк.
+  // Правило, ради которого множество существует, от формы записи не зависит: тест не бывает
+  // изменением (F2/F3, docs/intake.md §4).
+  for (const t of s.matchAll(tag("test"))) {
+    const a = attrs(t[1])
+    if (a.path) tests.add(full(a.path))
   }
 
   const suites = [...s.matchAll(tag("suite"))]

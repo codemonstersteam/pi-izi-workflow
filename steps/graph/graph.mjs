@@ -464,10 +464,28 @@ export function graphXml(graph) {
   //   dictionary saved on that map, 7 911 were in edge ends and only 1 593 in node paths.
   const prefix = bestPrefix(edgesAll.flatMap((e) => [e.from, e.to]))
   const P = (p) => (prefix && String(p).startsWith(prefix) ? `~${String(p).slice(prefix.length)}` : String(p))
-  L.push(`<appgraph grammar="${esc(g.grammar || "")}" modules="${modules.length}" components="${(g.components || []).length}" isolated="${(g.isolated || []).length}" levels="${modules.reduce((n, m) => Math.max(n, m.level), 0)}">`)
+  // ТЕСТ — СТРОКА КАРТЫ, А НЕ БЛОК. О тестовом файле карте нужно сказать ровно два факта: что он тест
+  // и каким сьютом гоняется. Полный блок несёт к ним объявления, api, io и роль — то, чего никто не
+  // спрашивает: `parseMap` кладёт такой путь в `tests`, и единственное правило над этим множеством
+  // (F2/F3: «тест это <dod> изменения, а не изменение») смотрит на ПРИНАДЛЕЖНОСТЬ, не на содержимое.
+  //
+  // BUG_FIX_CONTEXT: карта живого прогона eddi 19.08.2026 (prev-runs/eddi-passA-green). 34 модуля из
+  //   85 — тестовые, и они стоили 19 189 Б, 18% файла, при свободных 10 118 Б до потолка. Из-за них
+  //   не влезла клетка `configs/agents` (13 файлов) — носитель требования R6, — и предмет `agent`
+  //   уехал в прогон с двумя случайными клетками из 52. Строкой те же 34 теста стоят ≈3.2 КБ.
+  //   Замер того же файла: строк `<test>` в нём НОЛЬ — привязки «модуль → его тест» скаут не дал ни
+  //   одной, то есть полные блоки не несли даже её.
+  const written = modules.filter((m) => m.kind !== "test")
+  const testMods = modules.filter((m) => m.kind === "test")
+  L.push(`<appgraph grammar="${esc(g.grammar || "")}" modules="${written.length}" tests="${testMods.length}" components="${(g.components || []).length}" isolated="${(g.isolated || []).length}" levels="${written.reduce((n, m) => Math.max(n, m.level), 0)}">`)
 
   // The boundary, declared in ONE line and only when there is one. A per-edge `<outside path why
-  // via>` was the first shape and it is deferred with a trigger (docs/big-projects-solution.md §11):
+  // via>` was the first shape and it is now DROPPED for good, not deferred
+  // (docs/big-projects-solution.md §11, 19.08.2026): the live run it waited for happened, and the
+  // role's question turned out to be «what does this file DECLARE», not «which edge left the map».
+  // That answer never belonged in a file fighting a 115 KB cap — it comes from the computed graph
+  // through the TYPES table and the `lookup` rail (steps/tickets/facts.mjs::namedTypes), and a node
+  // outside the map is legal by core/node.mjs::nodeKind. The original argument stands as written:
   // it repeats a single statement dozens of times in a file that is fighting a 115 KB cap, while a
   // dangling edge end is already legal grammar here. What this line says is what no reader can work
   // out for itself — the map covers `nodes` of `repo`, and that is a DECISION, not an omission.
@@ -496,7 +514,7 @@ export function graphXml(graph) {
   for (const s of g.subjects || []) L.push(`  <subject name="${esc(s.name)}"${s.found ? attr("found", s.found) : ""}/>`)
   for (const c of g.components || []) L.push(`  <component id="${esc(c.id)}" modules="${c.modules}" heads="${esc(c.heads.join(" "))}"/>`)
 
-  for (const m of modules) {
+  for (const m of written) {
     const head = `  <module path="${esc(m.path)}"${m.pkg ? attr("pkg", m.pkg) : ""}${m.kind ? attr("kind", m.kind) : ""}${m.kind === "test" ? attr("suite", m.suite) : ""}` +
       `${m.component ? attr("component", m.component) : ""} level="${m.level}" fanin="${m.fanin}" fanout="${m.fanout}">`
     L.push(head)
@@ -510,6 +528,15 @@ export function graphXml(graph) {
     for (const p of m.io) L.push(`    <io${Object.entries(p).map(([k, v]) => attr(k, v)).join("")}/>`)
     for (const t of m.tests) L.push(`    <test path="${esc(t.path)}" suite="${esc(t.suite)}"/>`)
     L.push("  </module>")
+  }
+
+  // Тест, которого не назвал СВОЙ модуль, всё равно обязан остаться в карте: иначе `parseMap.tests`
+  // беднеет молча и F2/F3 перестают отличать тест от изменения на живом артефакте. Тест, названный
+  // строкой `<test>` своего модуля, второй раз не пишется — один факт, одно место.
+  const named = new Set(written.flatMap((m) => (m.tests || []).map((t) => t.path)))
+  for (const m of testMods) {
+    if (named.has(m.path)) continue
+    L.push(`  <test path="${esc(m.path)}" suite="${esc(m.suite)}"/>`)
   }
 
   // `via` is the EVIDENCE of an edge — and half of it says nothing the edge does not already say.

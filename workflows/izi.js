@@ -1,4 +1,5 @@
-// MODULE_CONTRACT: workflows/izi.js — the program: task → brd → survey-plan → scope → graph → (intake → weight → ripple → design → plan → review)⟳
+// MODULE_CONTRACT: workflows/izi.js — программа: task → brd → survey-plan → scope → graph →
+//             (intake → review → weight → ripple → design → нарезаемость)⟳ → gate1 → branch → tickets
 // Purpose:      one decision — the ORDER of the pipeline, and it lives here as CODE. A phase is a
 //               named function, not a manifest entry: with ten steps, ten hand-written calls are
 //               cheaper than a pipeline.json plus a dispatcher plus their tests (docs/workflow.md
@@ -8,7 +9,7 @@
 //               NO timers (pi-extensible-workflows/packages/core/src/execution.ts) — every byte it
 //               reads or writes goes through a host function listed below.
 // EXTERNAL_DEPENDENCY: ext/index.mjs (installed by `pi install ./ext`) injects these as sandbox
-//               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · herdrStatus · newRun · checkTask ·
+//               GLOBALS — readText · answers · brdForm · frdForm · carried · budgets · orderLine · herdrStatus · newRun · checkTask ·
 //               checkBrd · promote · setPending · clearPending · survey · focus · cells · digest · reuse ·
 //               remember · checkPart · buildGraph · graphMap · checkFrd · weight · ripple · design ·
 //               parts · part · planbook · gate1 · branch · tickets · plan · review · reviewForm. They are not
@@ -29,7 +30,8 @@
 //               from the extension's roleDirectories BY FILENAME (validation.js scanRoleFiles).
 //               Renaming a role file breaks agent({role}) with no other symptom.
 // EXTERNAL_DEPENDENCY: order templates read from disk at run time — steps/brd/order.tpl,
-//               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl, steps/intake/order.tpl,
+//               steps/scope/order.survey.tpl, steps/scope/order.spine.tpl, steps/intake/order-a.tpl,
+//               steps/intake/order-b.tpl, steps/intake/order-c.tpl, steps/intake/order-d.tpl,
 //               steps/design/order-values.tpl and steps/design/order-chains.tpl (one per pass of the
 //               dictionary and the chains) and steps/design/order-part.tpl (ONE partition),
 //               steps/review/order.tpl.
@@ -98,7 +100,11 @@ const ENVELOPE = {
     deltas: { type: "number" },
     scenarios: { type: "number" },
     unknown: { type: "number" },
-    kind: { type: "string", enum: ["blocked", "invalid", "question", "escalate", "crashed"] },
+    // `lookup` — НЕ вопрос человеку, а вопрос ДИСКУ: «где лежит тип X». Отвечает скрипт по
+    // .agent/graph-computed.xml за 0 токенов, и ответ уезжает роли тем же каналом, каким едет
+    // FEEDBACK. Живой прогон 19.08.2026: роль разбудила оператора ради пути AgentConfiguration,
+    // который лежал в вычисленном графе, — ход человека за факт с диска.
+    kind: { type: "string", enum: ["blocked", "invalid", "question", "lookup", "escalate", "crashed"] },
     subject: { type: "string" },
     // items — the questions of a BATCH as a LIST. The machine numbers them (setPending) and the
     // answer is addressed per number, so nothing has to parse "1) … 2) …" out of prose. A role that
@@ -183,10 +189,22 @@ function byteLen(s) { return unescape(encodeURIComponent(String(s == null ? "" :
 // A resizer cutting by bytes would cut an FRD in the middle of a use case; the unit of a cut belongs to
 // the slice that owns the artifact, and three of the five orders have no unit at all.
 //
+// HOW MUCH OF THE MEASUREMENT IS SPOKEN IS NOT DECIDED HERE. This band runs in a vm sandbox and no
+// test may import it, so a decision written inside it is testable only by a regular expression over
+// this source — a seam that sees structure and never logic. The wording of the line and the refusal
+// therefore lives in core/orderline.mjs (unit: core/orderline.test.mjs) and arrives through the host,
+// the same bargain steps/intake/lookup.mjs::lookupAnswer struck for the lookup rail. The MEASURE
+// stays here: only this side knows how long the assembled text turned out.
+//
+// A KIND, NOT A NAME, counts the rounds. `scope/<cell>` and `design/part/<slug>` are one order
+// composed again and again with different contents — the composition is worth seeing once, not once
+// per cell — while `design/values` and `design/chains` are different orders and count apart.
+//
 // FUNCTION_CONTRACT: sized — one assembled order, measured before it is sent
 //   Input:        step — the step's name, for the log and the refusal; tpl — the order template's text;
-//                 keys — the values prompt() substitutes, by placeholder name
-//   Dependencies: EXTERNAL — prompt, log (sandbox globals); ORDER_CAP
+//                 keys — the values prompt() substitutes, by placeholder name; kind — what counts as
+//                 "the same order assembled again", defaulting to the step's own name
+//   Dependencies: EXTERNAL — prompt, log, orderLine (sandbox globals); ORDER_CAP, ORDER_ROUNDS
 //   Antecedent:   `keys` matches the template's placeholders exactly, both ways — prompt() throws
 //                 otherwise, and that throw is the launch's own seam, not this function's business
 //   Consequent:   success: { text, chars, over, why } — the order and its size. `over` says the request
@@ -196,22 +214,24 @@ function byteLen(s) { return unescape(encodeURIComponent(String(s == null ? "" :
 //                 failure: none — every caller decides what a refusal is: an exit at steps 2, 6, 9 and
 //                          11, a returned value inside the swarm of step 4, where parallel() swallows
 //                          a throw and rethrows its own (see scout's BUG_FIX_CONTEXT)
-//   Purity:       io (log)
-function sized(step, tpl, keys) {
+//   Purity:       io (log, host)
+const ORDER_ROUNDS = {};   // kind → orders of that kind assembled so far, over the whole run
+async function sized(step, tpl, keys, kind) {
   const text = prompt(tpl, keys);
-  const addends = Object.keys(keys)
-    .map((k) => ({ k, n: String(keys[k] == null ? "" : keys[k]).length }))
-    .sort((a, b) => b.n - a.n)
-    .map((x) => `${x.k} ${x.n}`)
-    .join(" · ");
-  const parts = `шаблон ${String(tpl == null ? "" : tpl).length} · ${addends}`;
-  log(`${step}: наряд ${text.length} симв из ${ORDER_CAP} — ${parts}`);
-  return {
-    text,
+  const family = kind || step;
+  const round = ORDER_ROUNDS[family] = (ORDER_ROUNDS[family] || 0) + 1;
+  const over = text.length > ORDER_CAP;
+  const said = await orderLine({
+    step,
     chars: text.length,
-    over: text.length > ORDER_CAP,
-    why: `наряд ${step} — ${text.length} симв при потолке ${ORDER_CAP}: ${parts}`,
-  };
+    cap: ORDER_CAP,
+    round,
+    over,
+    tplChars: String(tpl == null ? "" : tpl).length,
+    addends: Object.keys(keys).map((k) => ({ name: k, chars: String(keys[k] == null ? "" : keys[k]).length })),
+  });
+  log(said.line);
+  return { text, chars: text.length, over, why: said.why };
 }
 // $END_ORDER
 
@@ -241,8 +261,35 @@ function answersBlock(seen, absent) {
 // (pi-extensible-workflows/src/validation.ts:17-22, validateCheckpoint); past that it throws
 // INVALID_METADATA and the run CRASHES rather than degrades. gilb's subject is natural-language
 // operator prose with no length contract of its own, so the prompt cannot simply interpolate it.
+// FUNCTION_CONTRACT: answeredBlock — ПОСЛЕДНИЙ обмен отдельно от накопленной истории
+//   Input:        seen — все ответы прогона ({n, question, text}[]); asked — вопросы последнего
+//                 обмена ДОСЛОВНО, как их задала роль (env.items)
+//   Dependencies: —
+//   Antecedent:   любые значения; обмена нет — пустая строка, и слот в наряд НЕ уезжает вовсе
+//   Consequent:   success: блок с парой «вопрос → ответ» на каждый вопрос обмена и с приказом
+//                          применить: это единственное новое знание с прошлого черновика
+//                 failure: none — тотальна
+//   Purity:       pure
+//
+// ПОЧЕМУ ОТДЕЛЬНО ОТ {ANSWERS}. Тот блок несёт ВСЮ историю прогона: к пятому обмену это 1 466
+// символов, где три новых ответа ничем не выделены, и роль читает их как справочный документ.
+//
+// BUG_FIX_CONTEXT: живой прогон eddi 19.08.2026, шаг 6, пласт A. Роль спросила три вопроса, получила
+//   три ответа и применила ОДИН: «нужен GET по id» и «замена терминов целиком» не доехали до
+//   артефакта, а пласт закрылся зелёным. Пауза оператора — самое дорогое, что есть у полосы, и
+//   потратить её впустую дороже любого лишнего круга (docs/ask.md §3б).
+function answeredBlock(seen, asked) {
+  const want = (asked || []).map((x) => String(x).trim()).filter(Boolean);
+  if (!want.length) return "";
+  const rows = want.map((q, i) => {
+    const hit = (seen || []).find((a) => String(a.question).trim() === q);
+    return `  ${i + 1}. ВОПРОС: ${q}\n     ОТВЕТ ОПЕРАТОРА: ${hit ? hit.text : "(ответа нет)"}`;
+  }).join("\n");
+  return `Оператор ответил на твои вопросы. ЭТО ЕДИНСТВЕННОЕ НОВОЕ ЗНАНИЕ с твоего прошлого черновика.\nПримени КАЖДЫЙ ответ: то, что назвал оператор, обязано появиться в файле — путь в шаге, код в ветке и в карте отказов, поле в его строке.\nОтвет, который ты не применишь, будет назван блокером F13.\n\n${rows}`;
+}
+
 const ASK_HEAD = (role) => `Роль ${role} ждёт ответа оператора в этом чате. `;
-const ASK_TAIL = " Получив ответ — вызови tool izi_answer({exchange}) со ВСЕМИ ответами разом: блок <exchange><question_N>вопрос</question_N><answer_N>ответ</answer_N>…</exchange>, номера и вопросы возьми из .agent/pending.json (поле items), не придумывай. ПОКАЖИ оператору разложение, которое вернёт тул. Затем workflow_respond({runId: <runId запуска>, name: <name из заголовка этого сообщения>, approved: true}). Отказ оператора — approved: false.";
+const ASK_TAIL = " Получив ответ — вызови tool izi_answer({exchange}) со ВСЕМИ ответами разом: блок <exchange><question_N>вопрос</question_N><answer_N>ответ</answer_N>…</exchange>, номера и вопросы возьми из .agent/pending.json (поле items), не придумывай. ПОКАЖИ оператору разложение, которое вернёт тул. Затем workflow_respond({runId: <runId запуска>, name: <name из заголовка этого сообщения>, approved: true}).\n\nВНИМАНИЕ: approved:true значит «ОТВЕТ ПОЛУЧЕН И ЗАПИСАН», а НЕ «оператор согласен». Решение оператора живёт в ТЕКСТЕ ответа — approve, rework, stop, — и читает его полоса, не ты. Ответил «rework» или «stop»? Всё равно approved:true: ты доставил ответ.\napproved:false — ТОЛЬКО когда оператор отказался отвечать вовсе. Это гасит прогон терминально.";
 // The long form is the NORMAL path for intake, not an emergency one: a grilling batch of 25-30
 // questions cannot fit 1024 bytes and never will. The questions are not shortened — a clipped
 // question changes its meaning — they travel in .agent/pending.json, a file with no length limit.
@@ -304,7 +351,7 @@ function askPrompt(subject, retryNote, role) {
 //             cannot express "four of six answered".
 //   Fix:      the format carries a question per element (core/answers.mjs), and the check is per
 //             ITEM: what is missing is named by number, in the re-ask and in the final diagnosis.
-async function askOperator(env, n, step, role) {
+async function askOperator(env, n, step, role, draft) {
   // Trimmed here, once: the parser trims what it reads back (core/answers.mjs), so a role's stray
   // leading space would otherwise make an answered question look unanswered forever.
   const items = (env.items && env.items.length ? env.items : [env.subject]).map((q) => String(q).trim());
@@ -321,8 +368,12 @@ async function askOperator(env, n, step, role) {
   // a question every item of which is already answered costs a round trip and buys nothing. This
   // fires only on a verbatim match of the question: a role that rewords its question asks anew, and
   // that border is the honest one — nothing here can tell two wordings apart.
+  // ЗАКРЫТЫЙ ОБМЕН — АРТЕФАКТ ШАГА. Полоса называет только то, чего нет на диске: шаг, проход и путь
+  // к черновику; вопросы и ответы хост берёт из pending.json и answers.md (docs/ask.md §3а).
+  const [name, pass] = String(step).split("-");
+  const record = { step: name, pass: pass || "", draft: draft || "" };
   let missing = await unanswered();
-  if (!missing.length) { await clearPending({}); return; }
+  if (!missing.length) { await clearPending(record); return; }
 
   for (let retry = 1; retry <= CHECKPOINT_RETRIES; retry++) {
     const note = retry === 1 ? "" : `${RETRY_NOTE}\n(Без ответа: ${missing.join(", ")} из ${items.length}.)`;
@@ -336,7 +387,7 @@ async function askOperator(env, n, step, role) {
     // The answer is judged by the QUESTION's text, which now round-trips verbatim however many lines
     // it takes; the number is what the operator and the diagnosis speak in.
     missing = await unanswered();
-    if (!missing.length) { await clearPending({}); return; }
+    if (!missing.length) { await clearPending(record); return; }
   }
   exit(err("question", {
     subject: env.subject,
@@ -413,7 +464,7 @@ async function brd() {
     // Прошлый ответ роли едет в наряде: иначе она переписывает BRD с нуля каждый круг, ориентируясь
     // на претензии к документу, которого не видит. Тот же приём, что у шагов 6 и 9.
     const PREVIOUS = await readText({ path: STAGING });
-    const order = sized("brd", orderTpl, {
+    const order = await sized("brd", orderTpl, {
       TASK,
       PREVIOUS,
       ANSWERS,
@@ -507,6 +558,15 @@ async function focusing() {
   log(`focus: ${f.why} — срезов ${f.slices}, выбрано ${f.chosen}, клеток ${f.cells} из плана, файлов ${f.files} ≈ ${Math.round(f.estBytes / 1024)} КБ`);
   // What the ceiling left out is printed where the operator reads it. A narrowing that stays inside
   // the artifact is indistinguishable from a repository that had nothing more in it.
+  // ПРЕДМЕТ ТРЕБОВАНИЯ, КОТОРЫЙ НЕ ПРОЧИТАН, НАЗЫВАЕТСЯ ВСЛУХ — и это не то же самое, что счёт
+  // отброшенных клеток. Живой прогон eddi 19.08.2026: `dropped: 30 срезов, 66 клеток` полоса
+  // напечатала, а того, что среди них лежал предмет `agent` — названный BRD и требованием R3, — не
+  // сказал никто. Дальше роль спрашивала у оператора путь, правила краснели на существующем файле,
+  // шаг 8 встал. Молчание стоило трёх остановок.
+  if (f.uncovered) log(`focus: предметы требования НЕ прочитаны — ${f.uncovered}. Модули этих предметов рой не открывал: в карте не будет ни контрактов, ни io`);
+  // Частичное чтение опаснее полного пропуска: предмет числится покрытым, а модуль требования лежит
+  // среди отброшенных (на том же прогоне `agent`: взято 2 клетки из 52).
+  if (f.partial) log(`focus: предметы прочитаны ЧАСТИЧНО — ${f.partial}`);
   if (f.droppedSlices || f.droppedCells) {
     log(`focus: не влезло — срезов ${f.droppedSlices}, клеток-сирот ${f.droppedCells}; их якоря приедут в карту как found="outside"`);
   }
@@ -553,7 +613,7 @@ async function scout(cell, orderTpl, BRD) {
 
   for (let attempt = 0; attempt < LOOPS; attempt++) {
     const PREVIOUS = await readText({ path: STAGING });
-    const order = sized(`scope/${cell.id}`, orderTpl, {
+    const order = await sized(`scope/${cell.id}`, orderTpl, {
       CELL: cell.id,
       PREVIOUS,
       BRD,
@@ -562,7 +622,7 @@ async function scout(cell, orderTpl, BRD) {
       FEEDBACK: feedback,
       SUBJECTS: cell.subjects.length ? cell.subjects.join(" · ") : "(no anchors matched this cell)",
       FILES: files.files,
-    });
+    }, "scope");
     // A VALUE, never an exit — the rule of this whole function: parallel() catches every throw and
     // rethrows its own, so a cell that legitimately refuses would surface as `crashed`.
     if (order.over) return { ok: false, why: order.why };
@@ -702,11 +762,12 @@ async function graph() {
 }
 
 // FUNCTION_CONTRACT: intake — step 6: the requirement fried against the map, by role `intake`
-//   Input:        —
+//   Input:        fromCritic — вердикт шага 11 в форме FEEDBACK, "" если это не перемотка
+//                 fromPass — проход, с которого начинать (steps/review/review.mjs::passOf); пусто = A
 //   Dependencies: EXTERNAL — graphMap, readText, answers, frdForm, agent(role "intake"), checkFrd,
 //                 promote, prompt; askOperator
-//   Antecedent:   step 5 wrote .agent/appgraph.xml; steps/intake/order.tpl exists in the run's cwd;
-//                 LOOPS ≥ 1
+//   Antecedent:   step 5 wrote .agent/appgraph.xml; steps/intake/order-{a,b,c,d}.tpl exist in the
+//                 run's cwd; LOOPS ≥ 1
 //   Consequent:   success: RETURNS with .agent/frd.xml promoted from staging after a GREEN checkFrd
 //                          and a passed GATE — every node of the change that no suite executes either
 //                          does not exist or was answered `accept` by the operator
@@ -724,7 +785,32 @@ async function graph() {
 // role hands over the whole batch at once (docs/intake.md §2). Three budgets, three meanings: LOOPS
 // (red checks) and QUESTION_ROUNDS (trips to the operator). `Unknown` stays
 // for what even an answer cannot fix: an operation that does not land on the map at all.
-async function intake(fromCritic) {
+// LOOKUP_ROUNDS — сколько раз роль шага 6 может спросить у РЕПОЗИТОРИЯ, прежде чем решать сама.
+// Это не бюджет починки: справка не провал, роль ничего не сломала. Но и вечно спрашивать нельзя —
+// каждый круг стоит полного наряда (133 КБ на живом прогоне), а фактов в графе конечное число.
+const LOOKUP_ROUNDS = 3;
+
+// $START_INTAKE
+// ЧЕТЫРЕ ПЛАСТА ОДНОГО АРТЕФАКТА. Шаг 6 идёт проходами A → B → C → D
+// (steps/intake/passes-data-flow.md): требование · изменение · величины и отказы · покрытие. Пласт
+// пишется своим нарядом и судится своими правилами (steps/intake/frd.mjs::RULE_PASS), а промоут один
+// — после ПОЛНОГО суда, где правила-мосты видят все пласты сразу.
+const PASS_LAYERS = ["A", "B", "C", "D"];
+// Сколько раз полоса согласна пройти круг «пласты → полный суд → расхождение → снова пласты».
+// Расхождение пластов между собой — это не починка одного из них, а перезаход, и он ограничен: без
+// потолка два правила-моста могли бы гонять роль по кругу до конца прогона.
+const FULL_SWEEPS = 2;
+
+async function intake(fromCritic, fromPass) {
+  // Что не прочитано — факт ШАГА 3б, и он лежит в его артефакте: полоса не пересчитывает его здесь,
+  // а читает (одно правило — одно место).
+  const focusDoc = await readText({ path: ".agent/focus.json" });
+  const uncovered = (() => {
+    const m = String(focusDoc).match(/"uncovered"\s*:\s*\[([\s\S]*?)\]/);
+    if (!m) return "";
+    return [...m[1].matchAll(/"subject"\s*:\s*"([^"]+)"[\s\S]*?"why"\s*:\s*"([^"]+)"/g)]
+      .filter((x) => x[2] === "cap").map((x) => x[1]).join(" · ");
+  })();
   const map = await graphMap({});
   if (!map.ok) exit(err("blocked", { subject: map.why }));
   // The map may arrive DEGRADED — its index form, without declarations, prose or edges — and that is
@@ -733,89 +819,169 @@ async function intake(fromCritic) {
   log(map.form === "index"
     ? `intake: карта ${map.fullBytes} Б выше потолка ${map.cap} Б — роли едет ИНДЕКС ${map.bytes} Б на ${map.nodes} узлов: узлы и их <api>, без объявлений, прозы и рёбер`
     : `intake: карта ${map.bytes} Б на ${map.nodes} узлов, потолок ${map.cap} Б — едет роли целиком`);
+  // ВТОРАЯ КАРТА: имена, которые называют задача, BRD и ответы оператора, уже разрешённые в пути по
+  // вычисленному графу шага 3 (ext/index.mjs::graphMap). Роль не ищет того, что подставлено — а
+  // имени, которого в графе нет, здесь нет строки, и спросить о нём оператора по-прежнему законно.
+  log(`intake: таблица типов — ${map.typeRows || 0} имён из вычисленного графа`);
 
-  const orderTpl = await readText({ path: "steps/intake/order.tpl" });
+  // Четыре наряда, по одному на пласт. Карта едет ТОЛЬКО в B: пласты A и C о репозитории не
+  // рассуждают, а в D о нём судит скрипт (F8 читает вычисленный граф сам), и роли там нечего с ней
+  // делать. Это и есть главная экономия прохода: наряд A — единицы килобайт против 137 КБ, которые
+  // стоил один общий наряд на живом прогоне 19.08.2026.
+  const tplA = await readText({ path: "steps/intake/order-a.tpl" });
+  const tplB = await readText({ path: "steps/intake/order-b.tpl" });
+  const tplC = await readText({ path: "steps/intake/order-c.tpl" });
+  const tplD = await readText({ path: "steps/intake/order-d.tpl" });
   const BRD = await readText({ path: ".agent/brd.md" });
   const STAGING = ".agent/staging/frd.xml";
-  const CHECK = "checkFrd({path}) — steps/intake/frd.mjs::newFrd, узлы из .agent/appgraph.xml, числа из TASK.md + значений ответов + fit BRD + карты";
   // The vocabularies the guardrail judges by are SUBSTITUTED from steps/intake/frd.mjs, never retyped
   // in the template: two texts of one rule drift apart in silence (ext/index.mjs::brdForm, G9e).
   const FORM = await frdForm({});
+
+  // ПРЕДМЕТ ПОЧИНКИ ВОЗВРАЩАЕТСЯ НА СТОЛ. `promote` ПЕРЕМЕЩАЕТ файл, поэтому после закрытия шага по
+  // staging-пути пусто. На возврате от критика роль получала бы `PREVIOUS = ""`, а наряд говорит
+  // прямо: «пусто значит ты ещё ничего не писал — пиши». Промоутнутый артефакт при этом лежит рядом
+  // целым, со всеми четырьмя пластами.
+  //
+  // BUG_FIX_CONTEXT: живой прогон eddi 19.08.2026, четвёртый запуск. Критик вернул Reject (2 находки
+  //   + 3 открытых вопроса), полоса вошла в проход A — и роль ПЕРЕПИСАЛА артефакт с нуля: было
+  //   8 use case · 15 дельт · 9 полей · 17 строк <carried>, стало 7 · 0 · 0 · 0. Пласты B, C и D
+  //   исчезли, и перезаход стоил не одного прохода, а всех четырёх — ровно того, что пласты должны
+  //   были предотвратить. Роль поступила по инструкции; ей не отдали её же файл.
+  //
+  // Возврат именно ПЕРЕМЕЩЕНИЕМ, а не копией: артефакт, который переписывают, перестаёт быть выходом
+  // шага. Останься он на месте — лестница следующего запуска сочла бы шаг закрытым (core/runlog.mjs).
+  if (fromCritic) {
+    const promoted = await readText({ path: ".agent/frd.xml" });
+    if (promoted) {
+      await promote({ from: ".agent/frd.xml", to: STAGING });
+      log(`intake: артефакт возвращён на правку — ${promoted.length} симв, пласты на месте`);
+    }
+  }
+
+  let entry = Math.max(0, PASS_LAYERS.indexOf(String(fromPass || "A")));
   // On a REWIND the first order is not a first attempt: it carries the critic's blockers, and they
   // are marked as such. A blocker of the guardrail is numbered by a RULE and repaired pointwise; a
   // blocker of the critic names a code and a node and asks for the CONTENT to be reconsidered. The
   // role reacts to the two differently, so it is told which it is holding (docs/review.md §6).
-  let feedback = fromCritic || "(none — first attempt)", attempt = 0, wasRed = [];
+  let feedback = fromCritic || "(none — first attempt)";
+  // Вопросы ПОСЛЕДНЕГО обмена — то, что роль спросила и что ей сейчас ответили. Живут в шаге, а не в
+  // проходе: спросил один пласт, а перечитывать ответ может и следующий (docs/ask.md §3б).
+  let asked = [];
 
-  while (attempt < INTAKE_LOOPS) {
-    const seen = await answers({});
-    const ANSWERS = answersBlock(seen, "(no operator answers yet)");
-    // THE ROLE'S OWN LAST ANSWER TRAVELS IN THE ORDER, and is not left for it to fetch. `promote`
-    // MOVES, so a rejected FRD is still at the staging path — but READING it is an ACTION, and an
-    // action a 27b role at `thinking: low` can silently skip. Live run 7f3a8431 is what that costs:
-    // told only what was wrong, the role rewrote all 88 nodes from scratch every round and the
-    // blockers went 10 → 4 → 6, each round closing one class and breaking another. Same discipline as
-    // the question key of `.agent/pending.json`: what the next step needs is COPIED by the machine,
-    // never recalled by a model. Missing file reads as "" — the first attempt carries nothing.
-    const PREVIOUS = await readText({ path: STAGING });
-    const order = sized("intake", orderTpl, {
-      BRD,
-      MAP: map.text,
-      ANSWERS,
-      PREVIOUS,
-      FEEDBACK: feedback,
-      STAGING,
-      CHECK,
-      DELTA_FORMS: FORM.deltaForms,
-      SOURCES: FORM.sources,
-    });
-    // The map's own ceiling is NOT this check and cannot stand in for it: it sees one addend of five
-    // (steps/intake/map.mjs, the comment over MAP_CAP_BYTES; live run 162e8b02).
-    if (order.over) exit(err("blocked", { subject: order.why, evidence: "наряд шага 6 не помещается в окно модели — роль не запускалась" }));
-    const env = await agent(order.text, { role: "intake", outputSchema: ENVELOPE });
+  for (let sweep = 1; sweep <= FULL_SWEEPS; sweep++) {
+    for (let p = entry; p < PASS_LAYERS.length; p++) {
+      const pass = PASS_LAYERS[p];
+      const CLOSED = p ? PASS_LAYERS.slice(0, p).join(", ") : "нет — этот проход первый";
+      const CHECK = `checkFrd({path, pass:"${pass}"}) — steps/intake/frd.mjs::newFrd, правила пласта ${pass}`;
+      let attempt = 0, lookups = 0, wasRed = [];
 
-    // A BATCH, not one question (S21, the operator's decision): grilling a requirement on a real
-    // project takes 25-30 questions, and the ROUND is what costs context — the role re-reads the BRD
-    // and the whole map on every trip. Two budgets, two meanings: `round` is trips to the operator,
-    // `spent` is questions asked.
-    //
-    // BUG_FIX_CONTEXT: live run 6350f09b.
-    //   Previous: the batch size came from the envelope's `questions` field.
-    //   Problem:  the role sent `items` with ONE question and `questions: 3` — the number copied off
-    //             the role's own example. The size of a batch then lived in two places at once, they
-    //             disagreed on the first run, and the operator got three pauses for three questions
-    //             while the budget was charged nine.
-    //   Fix:      the size IS the list. `questions` is not read here at all — nothing can disagree
-    //             with a length.
-    if (env.track === "err" && env.kind === "question") {
-      const q = charge(env);
-      // The ceiling refuses instead of killing: the role is redelegated and writes what it can, with
-      // every unresolved gap standing in the FRD as <question>. It costs one attempt, so it is bounded.
-      if (q.spent) {
-        const carry = await carried({ blockers: "", seen: wasRed, outOfRounds: true });
-        feedback = carry.text; wasRed = carry.seen;
-        log(`intake: кругов к оператору больше нет (${QUESTION_ROUNDS}) — остаток пойдёт в артефакт как <question>`);
+      while (attempt < INTAKE_LOOPS) {
+        const seen = await answers({});
+        const ANSWERS = answersBlock(seen, "(no operator answers yet)");
+        // THE ROLE'S OWN LAST ANSWER TRAVELS IN THE ORDER, and is not left for it to fetch. `promote`
+        // MOVES, so a rejected FRD is still at the staging path — but READING it is an ACTION, and an
+        // action a 27b role at `thinking: low` can silently skip. Live run 7f3a8431 is what that costs:
+        // told only what was wrong, the role rewrote all 88 nodes from scratch every round and the
+        // blockers went 10 → 4 → 6, each round closing one class and breaking another. Same discipline
+        // as the question key of `.agent/pending.json`: what the next step needs is COPIED by the
+        // machine, never recalled by a model. Missing file reads as "" — the first attempt carries
+        // nothing.
+        const PREVIOUS = await readText({ path: STAGING });
+        // TYPES — the second map, already resolved into paths (ext/index.mjs::graphMap). "There is no
+        // table" is worded HERE and not in the host: the same discipline as answersBlock's second
+        // argument — the host returns "", the absence is the workflow's own sentence. And it is said in
+        // ONE expression next to the key, because a comment BETWEEN the keys of this object breaks the
+        // seam that holds the template's slots and these keys to one set (ext/index.test.mjs).
+        const NO_TYPES = "(no name of the task, the BRD or the answers resolves in .agent/graph-computed.xml)";
+        // Предметы, чьи модули рой НЕ читал: роль обязана знать, о чём у неё нет фактов. Пусто
+        // говорится словами — молчание она прочтёт как «всё прочитано». Комментарий стоит ЗДЕСЬ, а не
+        // между ключами объекта: шов, держащий слоты шаблона и ключи полосы одним множеством,
+        // сканирует ключи построчно, и строка-комментарий между ними его рвёт (ext/index.test.mjs).
+        const NO_GAP = uncovered || "(нет: все предметы требования прочитаны)";
+        // Последний обмен — отдельным блоком; обмена не было — блок ПУСТ, и роль не читает пустоту
+        // как «ответов не было»: об этом говорит сам текст блока (workflows/izi.js::answeredBlock).
+        const ANSWERED = answeredBlock(seen, asked) || "(вопросов ты ещё не задавал)";
+        // Четыре вызова, а не один с подменой ключей: слоты у нарядов РАЗНЫЕ, и шов, который держит
+        // слоты шаблона и ключи полосы одним множеством, проверяет каждую пару отдельно
+        // (core/orders.test.mjs). Один вызов с общим объектом ключей этот шов бы ослепил.
+        let order;
+        if (pass === "A") {
+          order = await sized("intake/A", tplA, { ANSWERED, BRD, ANSWERS, PREVIOUS, FEEDBACK: feedback, STAGING, CHECK });
+        } else if (pass === "B") {
+          order = await sized("intake/B", tplB, { ANSWERED, MAP: map.text, TYPES: map.types || NO_TYPES, UNCOVERED: NO_GAP, DELTA_FORMS: FORM.deltaForms, CLOSED, PREVIOUS, FEEDBACK: feedback, STAGING, CHECK });
+        } else if (pass === "C") {
+          order = await sized("intake/C", tplC, { ANSWERED, BRD, ANSWERS, SOURCES: FORM.sources, CLOSED, PREVIOUS, FEEDBACK: feedback, STAGING, CHECK });
+        } else {
+          // Долг перед требованиями считается ЗДЕСЬ, а не в начале шага: тот же список, что видит
+          // критик на шаге 11 (ext/index.mjs::reviewForm, steps/review/review.mjs::owedItems), и в
+          // начале шага 6 его ещё не из чего собрать — FRD не существует.
+          const CHECKLIST = await reviewForm({});
+          order = await sized("intake/D", tplD, { ANSWERED, OWED: CHECKLIST.owed, CLOSED, PREVIOUS, FEEDBACK: feedback, STAGING, CHECK });
+        }
+        // The map's own ceiling is NOT this check and cannot stand in for it: it sees one addend of five
+        // (steps/intake/map.mjs, the comment over MAP_CAP_BYTES; live run 162e8b02).
+        if (order.over) exit(err("blocked", { subject: order.why, evidence: `наряд прохода ${pass} шага 6 не помещается в окно модели — роль не запускалась` }));
+        const env = await agent(order.text, { role: "intake", outputSchema: ENVELOPE });
+
+        // РЕЛЬСА lookup: роль просит ФАКТ, отвечает скрипт. Круг тратится тот же, что на починку —
+        // иначе роль, спрашивающая по имени за раз, крутила бы полосу вечно; и ответ приезжает в
+        // FEEDBACK, потому что второго канала «сказать роли» в полосе нет.
+        if (env.track === "err" && env.kind === "lookup") {
+          const want = (env.items && env.items.length ? env.items : [env.subject]).map((x) => String(x).trim()).filter(Boolean);
+          // Счётчик кругов справок едет ВМЕСТЕ с вопросом: «справок больше нет» — часть ОТВЕТА, и живёт
+          // она там же, где остальной его текст (steps/intake/lookup.mjs). Копии этой фразы в полосе
+          // быть не должно: одно правило — одно место (CLAUDE.md).
+          const found = await graphMap({ resolve: want, spent: ++lookups, cap: LOOKUP_ROUNDS, pending: feedback });
+          feedback = String(found.answer || "");
+          log(`intake/${pass}: lookup ${want.join(", ")} — ${found.typeRows ? `${found.typeRows} строк из вычисленного графа` : "не резолвится ничем"}${lookups >= LOOKUP_ROUNDS ? "; круги справок исчерпаны" : ""}`);
+          continue;
+        }
+
+        if (env.track === "err" && env.kind === "question") {
+          const q = charge(env);
+          // The ceiling refuses instead of killing: the role is redelegated and writes what it can, with
+          // every unresolved gap standing in the FRD as <question>. It costs one attempt, so it is bounded.
+          if (q.spent) {
+            const carry = await carried({ blockers: "", seen: wasRed, outOfRounds: true });
+            feedback = carry.text; wasRed = carry.seen;
+            log(`intake/${pass}: кругов к оператору больше нет (${QUESTION_ROUNDS}) — остаток пойдёт в артефакт как <question>`);
+            attempt++;
+            continue;
+          }
+          // ВОПРОС ЗАДАЁТ ЛЮБОЙ ПРОХОД, и в этом весь смысл пластов. Незнание рождается там, где
+          // пишется пласт: A не знает, кто актёр; B — в каком модуле работа; C — какое значение. На
+          // прогоне 19.08.2026 все три вопроса пришли ПОСЛЕ того, как роль написала FRD целиком, и
+          // ответ обесценил уже написанные дельты, сценарии и поля. Проход не идёт дальше, пока его
+          // собственный вопрос без ответа — askOperator ждёт ответа на месте.
+          log(`intake/${pass}: круг ${q.n} — вопросов в пакете ${(env.items && env.items.length) || 1}, всего задано ${ASKED_N}`);
+          asked = (env.items && env.items.length ? env.items : [env.subject]).map((x) => String(x).trim()).filter(Boolean);
+          await askOperator(env, q.n, `intake-${pass}`, "intake", STAGING);
+          continue; // a question does not spend the redelegation budget
+        }
+        if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
+
+        // Проверка идёт ПО СВОЕМУ ПЛАСТУ и по всем закрытым до него: правило будущего пласта молчит —
+        // судить нечего, — а испорченный закрытый краснеет в том же круге, в котором его испортили
+        // (steps/intake/frd.mjs::forPass). Гейт сьютов здесь не стоит: он про ширину изменения
+        // целиком и живёт на полном суде ниже.
+        const check = await checkFrd({ path: STAGING, pass });
+        if (check.ok) {
+          log(`intake/${pass}: пласт зелен за ${attempt + 1} ${attempt ? "круга" : "круг"}`);
+          break;
+        }
+        const carry = await carried({ blockers: check.blockers, seen: wasRed });
+        feedback = carry.text; wasRed = carry.seen;   // the loop's memory is the RUN, not the round
         attempt++;
-        continue;
       }
-      log(`intake: круг ${q.n} — вопросов в пакете ${(env.items && env.items.length) || 1}, всего задано ${ASKED_N}`);
-      await askOperator(env, q.n, "intake", "intake");
-      continue; // a question does not spend the redelegation budget
+      if (attempt >= INTAKE_LOOPS) exit(err("escalate", { subject: feedback, evidence: `проход ${pass} шага 6: цикл исчерпан за ${INTAKE_LOOPS} попыток` }));
+      feedback = "(none — first attempt at this layer)";
     }
-    if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
 
-    // The check runs ON STAGING, before any promote — and it carries a SECOND rail now: after a green
-    // FRD the gate asks the OPERATOR about every node of the change no suite of this repository
-    // executes (ext/index.mjs::checkFrd, steps/ripple/ripple.mjs::blindNodes). The loop is copied from
-    // planning(): there is no role to re-delegate to — the artifact is green, the REPOSITORY is what
-    // lacks a suite — so the answer is applied by calling the same host function again over the same
-    // disk. It spends QUESTION_ROUNDS and never LOOPS: a round costs the operator's time.
-    //
-    // WHY THE GATE IS HERE AND NOT AT STEP 8 OR 11: live run 21dd9b34 escalated at step 11 on exactly
-    // this fact, 167 805 tokens and five role launches after it was computable. Steps 7 and 8 are
-    // scripts and cost nothing, so the price of asking here and asking at step 8 is identical — and
-    // the change is first expressed HERE, which is the honest place to stop with an unanswered
-    // question about it.
+    // ПОЛНЫЙ СУД — без пласта. Правила-мосты (F3c дельта и сценарий, F10 канал и узлы, F8 поле и
+    // модуль) в проходном режиме видят половину картины, и пласты могут разойтись между собой.
+    // Здесь же стоит гейт сьютов: он спрашивает оператора о ширине изменения, а ширина известна
+    // только теперь.
     let check = await checkFrd({ path: STAGING });
     for (let round = 1; check.ask && round <= QUESTION_ROUNDS + 1; round++) {
       const q = charge({ subject: check.subject, items: check.items });
@@ -838,12 +1004,17 @@ async function intake(fromCritic) {
       if (check.questions) log(`intake: открытых вопросов в артефакте — ${check.questions}`);
       return; // S22: intake is no longer the end of the run — the weight is weighed next
     }
-    const carry = await carried({ blockers: check.blockers, seen: wasRed });
-    feedback = carry.text; wasRed = carry.seen;   // the loop's memory is the RUN, not the round
-    attempt++;
+    // Пласты разошлись между собой. Вход — РАННИЙ из названных пластов (ext/index.mjs::checkFrd,
+    // steps/intake/frd.mjs::passOfBlocker), и полоса идёт от него ВПЕРЁД до D: правка нижнего пласта
+    // снимает находки верхних, обратное неверно.
+    entry = Math.max(0, PASS_LAYERS.indexOf(String(check.pass || "A")));
+    const carry = await carried({ blockers: check.blockers, seen: [] });
+    feedback = carry.text;
+    log(`intake: полный суд красен — пласты разошлись; заход ${sweep + 1} с прохода ${PASS_LAYERS[entry]}`);
   }
-  exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${INTAKE_LOOPS} попыток` }));
+  exit(err("escalate", { subject: feedback, evidence: `полный суд шага 6 не сошёлся за ${FULL_SWEEPS} захода` }));
 }
+// $END_INTAKE
 
 // FUNCTION_CONTRACT: weigh — step 7: the forms of the FRD's deltas → one word of SemVer
 //   Input:        —
@@ -891,195 +1062,50 @@ async function rippling() {
   log(`ripple: design=${r.design} узлов ${r.nodes} из ${r.total} (затравок ${r.seeds}, mode=${r.mode})`);
 }
 
-// FUNCTION_CONTRACT: designing — step 9: the change's dictionary, then the change played out
-//   Input:        from — the step the BAND started at (workflows/izi.js::bandStart). `from <= 6`
-//                 means the FRD was rewritten, and then nothing extracted from the old one is reused
-//   Dependencies: EXTERNAL — design (the gate, the two skeletons, the two guardrails), readText,
-//                 promote, agent(roles "valuer" | "router"); askOperator, charge, sized
-//   Antecedent:   step 8 left .agent/design and .agent/ripple.xml; step 7 left .agent/mode; LOOPS ≥ 1
-//   Consequent:   success: RETURNS ".agent/data-flow.md" with the pair assembled, or ".agent/design"
-//                          when step 8 said `skip` and no role was called at all
-//                 failure: exits — err("escalate") when one pass spent its LOOPS
-//   Purity:       io (host functions, roles)
+// FUNCTION_CONTRACT: rework — mark every step the band is about to replay, and hear the journal out
+//   Input:        steps — the step numbers to reopen; note — free text: a guardrail's blocker or the
+//                 operator's own words
+//   Dependencies: EXTERNAL — runlogMark (ext/index.mjs); log
+//   Antecedent:   any values; the note is folded to one line by core/runlog.mjs::mark, so its shape
+//                 is not this caller's business
+//   Consequent:   success: undefined — every step marked `rework`
+//                 failure: none; a journal that refused the value is REPORTED, not swallowed and not
+//                          thrown: an unwritten mark means the next launch enters the wrong step
+//   Purity:       io
 //
-// EVERY PASS IS A FILL-IN-THE-BLANK, AND THAT IS THE WHOLE DESIGN OF THE STEP.
-//
-// Step 9 used to be three passes, three roles and three swarms, and every one of them wrote its
-// artifact whole. Measured on the two live dictionaries, the defects were defects of COMPOSITION —
-// `eddi`'s role wrote 38 rows carrying a `closes` where the FRD has 35 ends, six groups of duplicate
-// texts and seven holes in the numbering. Composition is computable, so it is computed, twice: a
-// script writes the artifact with every row and every id already in place, the role fills what a
-// script honestly cannot, and the guardrail recomputes the composition and asks exactly one question
-// of the answer — is this the skeleton with the blanks filled, or is it something else.
-//
-// WHAT THE SECOND PASS DOES NOT ASK. Not the contract of a node: on the single finished deliverable
-// this pipeline ever produced (`t3`), all five `in` alternatives are recoverable — three are verbatim
-// another node's `out`, two are the entries of their scenarios. `in`, `<dep>` and the flow are
-// assembled, so the rule «consequent of step N ⊆ antecedent of step N+1» — 33 and 49 blocker lines in
-// run 0bbf7054 — is not a rule any more, it is a property of the derivation.
-// THE TWO PASSES OF STEP 9, AND WHAT EACH OF THEM ASKS. Both have the same shape — a script composes
-// the artifact, the role fills the blanks, the guardrail recomputes the composition and judges only
-// the filling — and the shape is why the loop below is written once:
-//   values — NAME the end of every use case. 24 blanks on `eddi`, 6 on `t2`
-//   chains — WALK each end: through which nodes, carrying which value. 23 chains on `eddi`, 4 on `t2`,
-//            every one of them ≤ 4 nodes long, with its start and its finish already given
-const PASSES = {
-  values: {
-    role: "valuer",
-    tpl: "steps/design/order-values.tpl",
-    skeleton: ".agent/staging/values-skeleton.xml",
-    staging: ".agent/staging/values.xml",
-    made: ".agent/values.xml",
-  },
-  chains: {
-    role: "router",
-    tpl: "steps/design/order-chains.tpl",
-    skeleton: ".agent/staging/chains-skeleton.xml",
-    staging: ".agent/staging/chains.xml",
-    made: ".agent/design-graph.xml + .agent/data-flow.md",
-  },
+// BUG_FIX_CONTEXT: live run 5b52f76d, 20.08.2026. Four call sites wrote this mark by hand, each with
+// its own `note: <text>.slice(0, 80)` — a slice that cuts the length and keeps the line break. The
+// dry slicing refused with a two-line blocker, the journal could not carry it, ext threw, and the run
+// died as `crashed` seconds after PLAN.md was assembled. One helper, one place to hear the refusal.
+const rework = async (steps, note) => {
+  for (const step of steps) {
+    // 80 символов — потолок ОДНОЙ заметки журнала, и он стоит здесь один раз на все четыре места.
+    // Резать можно смело: перенос строки внутри среза сворачивает фабрика (core/runlog.mjs::mark),
+    // а вся правда лежит в артефакте, на который ссылается отметка.
+    const m = await runlogMark({ step, name: "rework", status: "rework", note: String(note ?? "").slice(0, 80) });
+    if (m.why) log(`журнал: отметка шага ${step} НЕ записана — ${m.why}; следующий запуск войдёт не в тот шаг`);
+  }
 };
 
-async function designing(from = 6) {
-  const gate = await design({});
-  if (!gate.ok) exit(err("blocked", { subject: gate.why, evidence: ".agent/values.xml не написан" }));
-  if (gate.design === "skip") {
-    log("design: skip — шаг 8 решил, что синхронизировать нечего (patch на одном узле); роли не зовутся, 0 токенов");
-    return ".agent/design"; // the flag file IS the receipt of the skip — there is no second artifact
-  }
-
-  const FRD = await readText({ path: ".agent/frd.xml" });
-
-  // A rewind to step 6 rewrote the FRD, so a dictionary extracted from the old one is structurally
-  // green and about another change. Otherwise the gate's own verdict stands: green NOW, not green once.
-  if (from > 6 && (gate.reused || []).includes("values")) {
-    log("design/values: .agent/values.xml зелен сейчас — проход A закрыт без роли, 0 токенов");
-  } else {
-    await onePass("values", () => ({ FRD }));
-  }
-
-  // Pass B is never reused: its own working file is not promoted (the deliverable is), so reaching
-  // this line means the pair has to be built again — the gate erased yesterday's.
-  const VALUES = await readText({ path: ".agent/values.xml" });
-  await onePass("chains", () => ({ FRD, VALUES }));
-
-  // PHASES ①②③, and they cost nothing: the tree of modules the change works on, cut into partitions,
-  // and one card per partition. It runs AFTER pass B because a card carries the draft contract that
-  // pass assembles. The numbers are printed because they decide the shape of the work — and because
-  // the invariant behind them is what makes a duplicate impossible: every module sits in exactly ONE
-  // partition, so no two calls can decide one file (steps/design-data-flow.md ②).
-  // The task key is asked HERE, before the first role call, because every deliverable of this step
-  // lands under `task/<КЛЮЧ>/` — the same key the branch is named after. It is the SAME verbatim
-  // question step 10 asks, so the answer serves both and the operator is never asked twice.
-  let cut = await parts({});
-  for (let round = 1; !cut.ok && cut.ask && round <= QUESTION_ROUNDS + 1; round++) {
-    const q = charge({ subject: cut.subject });
-    if (q.spent) exit(noRoundsLeft({ subject: cut.subject, evidence: "" }, "design/parts"));
-    await askOperator({ subject: cut.subject, evidence: "" }, q.n, "design-key", "design");
-    cut = await parts({});
-  }
-  if (!cut.ok) exit(err("blocked", { subject: cut.why || cut.subject, evidence: "дерево модулей шага 9 не посчитано" }));
-  log(`design/parts: ${cut.at} — модулей ${cut.modules} (создаётся ${cut.created}) — партий ${cut.parts.length}: ${cut.parts.map((x) => `${x.slug} (модулей ${x.modules}, use case ${x.ucs}, соседей ${x.neighbours})`).join(" · ")}; крупнейшая карточка ${cut.chars} симв`);
-
-  // PHASE ④, the ONLY place a role is called on this step: how does each module of this partition
-  // change. Everything it needs was decided by the script above — what to touch, which use cases can
-  // break, where the sample is — so the role answers one question and nothing else.
-  const done = [];
-  for (const one of cut.parts) done.push(await onePart(one));
-  log(`design/parts: планов ${done.length}, разделов ${done.reduce((n, x) => n + x.modules, 0)}, объявленных вызовов ${done.reduce((n, x) => n + x.calls, 0)}`);
-
-  // PHASES ⑥⑦⑧, and none of them costs a token: is the requirement covered whole, in what order is
-  // the work done, and the ONE document a human reads at the gate. A hole here is a REFUSAL and not a
-  // warning — a plan missing a step of a use case is a requirement that quietly did not ship, and the
-  // role that wrote the section is the one who can name what closes it.
-  // The assembly REFUSES on a hole or a circle, and both are repaired where they were written: the
-  // guardrail of a partition cannot see the whole (a step closed by another partition's section is
-  // not its business), so the check is here — but the repair is still the role's, with the blocker as
-  // feedback and the same LOOPS budget. Live measurement: the first assembly of `eddi` found six use
-  // cases whose failure branches nobody closed and one circle `RestImportService ↔ UpgradeExecutor`.
-  let book = await planbook({});
-  for (let round = 0; !book.ok && round < LOOPS; round++) {
-    const guilty = (book.guilty || []).map((slug) => cut.parts.find((x) => x.slug === slug)).filter(Boolean);
-    if (!guilty.length) break;
-    log(`design/plan: круг ${round + 1} из ${LOOPS} — ${book.cycle ? "очередь работ замкнута" : "план неполон"}; переписывают партии: ${guilty.map((x) => x.slug).join(" ")}`);
-    for (const one of guilty) await onePart(one, book.blockers);
-    book = await planbook({});
-  }
-  if (!book.ok) exit(err("escalate", { subject: book.blockers || book.why, evidence: book.cycle ? `очередь работ: ${book.cycle}` : "полнота плана шага 9" }));
-  log(`design/plan: PLAN.md собран — модулей ${book.modules}, разделов ${book.sections}, use case ${book.ucs}`);
-
-  // Путь поставки, а не голое имя: его называет отметка журнала, и по нему лестница узнаёт, что план
-  // снесли и шаг надо переиграть.
-  return book.at || "PLAN.md";
-
-  return ".agent/data-flow.md";
-}
-
-// FUNCTION_CONTRACT: onePart — how every module of ONE partition changes, decided in one call
-//   Input:        one — an element of parts' `parts`: { slug, modules, ucs, neighbours };
-//                 since — blockers of the ASSEMBLY (phases ⑥⑦) this partition answers for, or the
-//                 first-attempt marker. A hole in the coverage is repaired where the section was
-//                 written, not escalated to a human
-//   Dependencies: EXTERNAL — readText, agent(role "core-designer"), part; sized, charge, askOperator
-//   Antecedent:   parts({}) wrote `.agent/staging/parts/<slug>.txt`; LOOPS ≥ 1
-//   Consequent:   success: returns { slug, modules, calls } when `docs/design/<slug>.md` is written
-//                 failure: exits — err("escalate") when this partition spent its LOOPS
-//   Purity:       io (host functions, roles)
+// FUNCTION_CONTRACT: designing — шаг 9: ПЕРЕПИСЫВАЕТСЯ
+//   Input:        from — с какого шага вошла полоса; fromCut — блокеры сухой нарезки
+//   Dependencies: EXTERNAL — exit, err
+//   Antecedent:   любые значения
+//   Consequent:   failure: blocked — шаг не существует, пока не написаны дерево модулей и потоки
+//   Purity:       io
 //
-// THE PARTITION IS THE UNIT OF THE CALL, and that is the whole answer to the duplicate: a module
-// belongs to exactly one partition, so the file it names cannot be decided twice. The card was
-// composed by phase ③ and is only READ here — the four beats are the same as any pass of this step:
-// a script composes, the role decides, a guardrail judges by five structural rules, green is promoted.
-async function onePart(one, since = "(none — first attempt)") {
-  const CARD = await readText({ path: `.agent/staging/parts/${one.slug}.txt` });
-  if (!CARD) exit(err("blocked", { subject: `карточки партии ${one.slug} нет на диске`, evidence: `.agent/staging/parts/${one.slug}.txt` }));
-
-  const staging = `.agent/staging/parts/${one.slug}.md`;
-  const tpl = await readText({ path: "steps/design/order-part.tpl" });
-  let feedback = since;
-  let attempt = 0, silent = 0;
-  for (;;) {
-    if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `план партии ${one.slug}: цикл исчерпан за ${LOOPS} попыток` }));
-    if (silent > LOOPS) exit(err("escalate", { subject: `роль ${silent} раз вернула track:"ok", не записав ${staging}`, evidence: `план партии ${one.slug}: артефакта нет` }));
-
-    // ПРОШЛЫЙ ОТВЕТ РОЛИ ЕДЕТ В НАРЯДЕ, как у шага 6 и у обоих проходов выше. Без него роль каждый
-    // круг переписывает все разделы партии с нуля, ориентируясь на претензии к документу, которого
-    // не видит: живой прогон дал 5 → 5 → 4 → 6 блокеров за пять кругов и эскалацию. Отсутствующий
-    // файл читается как "" — первая попытка ничего не несёт.
-    // ПРОШЛЫЙ ОТВЕТ ИЩЕТСЯ ТАМ, ГДЕ ОН ЕСТЬ. Зелёная партия ПРОМОУЧЕНА: staging пуст, а текст лежит в
-    // поставке. На кругах полноты (фаза ⑥ возвращает партию) чтение одного staging давало пустоту, и
-    // роль писала все разделы заново — живой прогон качался 4 → 1 → ЗЕЛЁНЫЙ → 4.
-    const key9 = (await checkTask({})).key || "";
-    const PREVIOUS = (await readText({ path: staging }))
-      || (key9 ? await readText({ path: `task/${key9}/design/${one.slug}.md` }) : "");
-    const o = sized(`design/part/${one.slug}`, tpl, {
-      CARD, PREVIOUS, FEEDBACK: feedback, STAGING: staging,
-      CHECK: 'part({slug, path}) — раздел на каждый модуль партии, чужих нет, use case закрыты, у каждого «проверка» и «зовёт»',
-    });
-    if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд партии ${one.slug} не помещается в окно модели — роль не запускалась` }));
-    const env = await agent(o.text, { role: "core-designer", outputSchema: ENVELOPE });
-
-    if (env.track === "err" && env.kind === "question") {
-      const q = charge(env);
-      if (q.spent) exit(noRoundsLeft(env, `design/part/${one.slug}`));
-      log(`design/part/${one.slug}: вопрос ${q.n} — «${env.subject}»`);
-      await askOperator(env, q.n, `design-part-${one.slug}`, "core-designer");
-      continue;
-    }
-    if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
-
-    const check = await part({ slug: one.slug, path: staging });
-    if (check.ok) {
-      log(`design/part ${one.slug}: зелен — разделов ${check.modules} для ${check.ucs} use case, объявленных вызовов ${check.calls} → ${check.at}`);
-      return { slug: one.slug, modules: check.modules, calls: check.calls };
-    }
-    feedback = check.blockers;
-    if (check.missing) { silent++; log(`design/part/${one.slug}: роль не записала ${staging} — попытка ${silent}, бюджет починки не тратится`); continue; }
-    attempt++;
-    log(`design/part/${one.slug}: красный — попытка ${attempt} из ${LOOPS}`);
-  }
+// 21.08.2026 старый шаг 9 удалён целиком: карточка партии, её гардрейл, цепочки и сборка PLAN.md из
+// карточек. Причина измерена и записана в docs/plan.md §0: очередь работ выводили из потока данных,
+// а поток цикличен по природе — запрос идёт вниз, ответ вверх. Новый шаг пишет ДВА артефакта с
+// разными отношениями: дерево модулей с «без чего меня не написать» (порядок работ) и потоки
+// (покрытие). Полоса намеренно останавливается здесь, а не делает вид, что план собран.
+async function designing(from = 6, fromCut = "") {
+  void from; void fromCut;
+  exit(err("blocked", {
+    subject: "шаг 9 переписывается: дерево модулей и потоки ещё не реализованы (docs/plan.md)",
+    evidence: "steps/design/: карточка партии, цепочки и сборка PLAN.md удалены 21.08.2026",
+  }));
 }
-
 
 // FUNCTION_CONTRACT: gating — step 12: the operator approves the plan, or sends it back
 //   Input:        —
@@ -1094,13 +1120,278 @@ async function onePart(one, since = "(none — first attempt)") {
 // THE PRESENTATION IS THE QUESTION, and that is what binds the decision to the plan: an answer is
 // recognised by the question's TEXT (core/answers.mjs), so a plan that changed after the operator
 // looked at it asks anew instead of inheriting an approval it never got.
+// FUNCTION_CONTRACT: planLoop — шаг 10в: второй судья над планом и починка его находок
+//   Input:        note — слова оператора, когда луп включён ПОСЛЕ гейта; "" перед гейтом
+//   Dependencies: EXTERNAL — planReview, planRoute, planFix, checkFrd, tickets(dry),
+//                 agent(role "plan-critic"), agent(role "plan-fixer"), sized; log, err, exit
+//   Antecedent:   шаг 10 собрал PLAN.md
+//   Consequent:   success: возврата НЕТ — луп либо доводит план до состояния «находок нет», либо
+//                          исчерпывает круги и отдаёт последний план гейту. Отмоток конвейера у него
+//                          не бывает: шаги 6-9 к этому моменту закрыты, их артефакты — материал
+//                 failure: exits — err("blocked"), когда судить план нечем ИЛИ наряд выше окна
+//   Purity:       io (через хост)
+//
+// ЗАЧЕМ ВТОРОЙ СУДЬЯ. Критик шага 11 судит ТРЕБОВАНИЕ и на прогоне 19.08.2026 написал `Pass`; план
+// против требований не судил никто — шаг 10б проверяет лишь, режется ли он. Гейт 1 забраковал работу
+// человеком, и разбор показал: три требования план потерял (кэш, отказ 422, фильтр привязки), два не
+// написаны в FRD (поле ресурса, ссылка в конфиге агента).
+//
+// ЭКСПЕРИМЕНТ, КУПИВШИЙ ЭТОТ ШАГ: тот же qwen на тех же артефактах за ОДИН вызов нашёл 4 находки и
+// САМ их промаршрутизировал — 4 из 4 верно; фиксер закрыл их за два круга, и его единственный промах
+// поймал наш же гардрейл (F3c). Пять вызовов, шесть минут.
+//
+// БЮДЖЕТ ПЯТЬ КРУГОВ, и это решение оператора. Замер даёт нижнюю границу: полнота растёт от круга к
+// кругу — отказ 422 всплыл только на втором, когда первые находки были закрыты, — а верхней границы
+// эксперимент не назвал, третий круг не гоняли. Круг стоит два вызова роли на артефакт, который
+// человек утверждает своей подписью, и это дешевле, чем план, забракованный на гейте.
+const PLAN_ROUNDS = 5;
+// Сколько раз ЗА ПРОГОН луп вправе попросить переигрывание плана. Каждое стоит двух вызовов ролей
+// (`valuer`+`router` при изменившемся требовании, `core-designer` всегда) и около восьми минут, а
+// счётчик кругов лупа при новом заходе обнуляется — без этого предела «критик нашёл модуль →
+// усыновили → пересобрали → критик нашёл ещё один» крутится, пока не кончится терпение человека.
+// Исчерпан — план идёт к гейту, и НЕ ЗАКРЫТОЕ названо поимённо: решает дальше оператор.
+// ТРИ, и это решение оператора: первое переигрывание — не «ещё одна попытка», а ПЕРВЫЙ проход по
+// пересборке (план собирался до того, как критик вообще высказался). Значит на исправления
+// остаётся два, а не один.
+const PLAN_REPLAYS = 3;
+// Заходов на ОДИН вызов роли, когда её `write` оборвался провайдером: файл пуст, а роль уверена, что
+// сдала работу. Два — потому что круг лупа стоит вызова КРИТИКА сверху, а этот заход стоит только
+// себя (standards/runbox.md: обрывы идут подряд на длинных нарядах).
+const WRITE_TAKES = 2;
+const FRD_PATH_LOOP = ".agent/frd.xml";
+// FUNCTION_CONTRACT: fixOne — один заход фиксера по одному артефакту
+//   Input:        ОДИН объект с ИМЕНАМИ полей: target — путь артефакта; findings — строки находок;
+//                 tpl — шаблон наряда; rejected — отказ гардрейла прошлого круга; nfrs — просить ли
+//                 величины; known — адресная книга карты; judge — чем судить правку до записи
+//   Dependencies: EXTERNAL — readText, sized, agent(role "plan-fixer"), planFix; exit, err
+//   Antecedent:   артефакт существует; находок хотя бы одна
+//   Consequent:   success: { ok: true, bytes } — правка применена машиной по якорю
+//                          { ok: false, why } — фиксер промахнулся якорем ЛИБО вернул не правку.
+//                          Это ЗНАЧЕНИЕ, а не выход: вызывающий решает, чинить иначе или отступить
+//                 failure: exits — наряд выше окна модели, роль ушла на рельсу ошибки
+//   Purity:       io (через хост)
+//
+// ОДИН ФИКСЕР НА ДВА АРТЕФАКТА. План и требование правятся ОДИНАКОВО — якорем, — и разводить их по
+// двум ролям значило бы держать две копии одного договора о форме правки.
+// ИМЕНОВАННЫЕ ПОЛЯ, А НЕ ПОРЯДОК. Семь позиционных аргументов — это семь мест, где сдвиг на один
+// не виден ни глазами, ни регуляркой, и виден только прогоном.
+//
+// BUG_FIX_CONTEXT: прогон c972e5c2 (20.08.2026) упал на `Invalid input for planFeedback`. Добавляя
+//   адресную книгу, я дописал `src.known` шестым аргументом в вызовы, где шестого не было: книга
+//   села в слот `nfrs`, и в хост уехала строка вместо булева. Шов на книгу это пропустил — он
+//   проверял НАЛИЧИЕ `src.known` в вызове, а не его МЕСТО. Прогон стоил 301 487 токенов и умер
+//   ровно там, куда шёл: на первой правке требования.
+async function fixOne({ target, findings = "", tpl, rejected = "", nfrs = false, known = "", judge = "", facts = "" }) {
+  const previous = await readText({ path: target });
+  // ОДИН БЛОК FEEDBACK, строки помечены источником — тот же протокол, что у шага 6. Форму строки
+  // собирает СРЕЗ (steps/planreview/planreview.mjs::feedbackFor), полоса возит готовое поле: собери
+  // её здесь — и проверить будет нечем, кроме регулярки по этому же файлу (шов шага 11).
+  const marked = await planFeedback({ findings, rejected: rejected || "", nfrs });
+  // РОЛЬ ПИШЕТ ФАЙЛ, ПОЛОСА ЕГО ЧИТАЕТ. Конверт несёт только рельсу (`ok`/`err`) — поля `text` в нём
+  // нет и быть не может (ENVELOPE, additionalProperties: false). Тот же договор, что у всех ролей
+  // конвейера: артефакт живёт на staging-пути, и полоса берёт его оттуда.
+  const STAGED_FIX = ".agent/staging/planfix.txt";
+  const FLOW = await readText({ path: ".agent/data-flow.md" });
+  const fix = await sized("planreview/fix", tpl, { TARGET: target, PREVIOUS: previous, FEEDBACK: marked.text, FACTS: facts || "(находки не назвали ни одного файла репозитория)", FLOW, KNOWN: known || "", STAGING: STAGED_FIX });
+  if (fix.over) exit(err("blocked", { subject: fix.why, evidence: `наряд фиксера для ${target} не помещается в окно модели` }));
+  // ПУТЬ ДОСТАВКИ ПУСТ ДО ВЫЗОВА. Иначе файл прошлого круга читается как ответ этого (ext::clearStaged).
+  // ЗАПИСЬ МОГЛА НЕ ДОЕХАТЬ, И РОЛЬ ЭТОГО НЕ ЗНАЕТ. Провайдер обрывает вызовы инструментов так же,
+  // как обрывает вызовы роли (standards/runbox.md): `write` возвращает «Operation aborted», роль
+  // считает работу сданной и зовёт workflow_result. Снаружи это неотличимо от «роль промолчала»,
+  // и стоит это КРУГА лупа — то есть лишнего вызова критика. Дешевле повторить сам вызов.
+  //
+  // BUG_FIX_CONTEXT: прогон da99bbae (20.08.2026), круг 1. Фиксер написал шесть правок на четыре
+  //   находки; `write` оборвался; `.agent/staging/planfix.txt` остался пуст, и круг был потрачен.
+  let patch = "";
+  for (let take = 1; take <= WRITE_TAKES && !patch; take++) {
+    await clearStaged({ path: STAGED_FIX });
+    const fixed = await agent(fix.text, { role: "plan-fixer", outputSchema: ENVELOPE });
+    if (fixed.track === "err") exit(err(fixed.kind, { subject: fixed.subject, evidence: fixed.evidence }));
+    patch = String(await readText({ path: STAGED_FIX }) || "").trim();
+    if (!patch && take < WRITE_TAKES) log(`planreview/fix: файл ${STAGED_FIX} пуст — запись роли не доехала, заход ${take + 1} из ${WRITE_TAKES}`);
+  }
+  // «Роль промолчала» — это ОТДЕЛЬНЫЙ отказ, а не «правка не применилась»: чинится он тоже иначе —
+  // роли говорят, что файл обязателен, а не что её якорь не найден.
+  if (!patch) return { ok: false, why: `роль ничего не записала по ${STAGED_FIX} за ${WRITE_TAKES} захода — правки нет` };
+  return planFix({ target, patch, judge: judge || "" });
+}
+
+// УДАЛЕНО 21.08.2026: `placeValues` — расстановка величин по карточкам партий. Карточек больше нет;
+// величина требования едет в новый план тем же гардрейлом, что и всё остальное.
+
+// FUNCTION_CONTRACT: withPlan — что уезжает в пересборку вместе с её собственной причиной
+//   Input:        routed — ответ planRoute
+//   Dependencies: —
+//   Antecedent:   маршрут выбран, пересборка решена
+//   Consequent:   success: строки ВСЕХ находок круга — сперва причина пересборки, следом находки плана
+//   Purity:       pure
+//
+// НАХОДКИ ПЛАНА НЕ ВЫБРАСЫВАЮТСЯ, КОГДА ПОБЕЖДАЕТ ДРУГОЙ МАРШРУТ. Правкой их закрывать здесь нечем:
+// план сейчас пересоберётся из карточек, и патч по якорю будет затёрт той же минутой. Но и потерять
+// их нельзя — иначе они всплывут только следующим кругом критика, то есть ещё одним вызовом роли на
+// то, что уже найдено и названо.
+//
+// Поэтому они едут ДИЗАЙНЕРУ блоком FEEDBACK: он пишет карточку, из которой план и собирают, и
+// закрывает их в источнике, а не в производном документе.
+//
+// BUG_FIX_CONTEXT: прогон c972e5c2 (20.08.2026). Критик нашёл пять дефектов: R11 (нет модуля
+//   конфигурации агента) уехал в требование, а R1 (нет константы resource URI), R16 (ключ шаблона
+//   `glossaries` вместо `glossary` — промпт молча не подставится), R17 (Map вместо Caffeine) и
+//   R18 (нет исключения для 422) были ПРОСТО ОТБРОШЕНЫ вместе с ответом маршрутизатора.
+const withPlan = (routed) => [...routed.frd, ...routed.design, ...routed.plan].join("\n");
+
+async function planLoop(note) {
+  // ЦЕЛЬ ЭТОГО ШАГА — РАБОЧИЙ ПЛАН, И БОЛЬШЕ НИЧЕГО. Конвейер выше (шаги 6-9) к этому моменту
+  // ЗАКРЫТ: его артефакты — материал, из которого план собран, и переигрывать их здесь нельзя.
+  // Остаются трое: критик находит, фиксер правит, гардрейлы не дают сломать. Отмоток нет.
+  //
+  // BUG_FIX_CONTEXT: прогон c972e5c2 (20.08.2026). Пять настоящих находок; полоса починила
+  //   требование и ушла на пересборку шагов 7-9, ОТБРОСИВ четыре находки плана (константа resource
+  //   URI, ключ шаблона `glossary`, Caffeine вместо Map, исключение под 422) — их предстояло найти
+  //   заново новым кругом критика после двух вызовов ролей. Повторная работа не бесплатна.
+  let missed = "";
+  // Находки, чья правка НЕ ЛЕГЛА: они переживают круг и едут фиксеру снова, пока не лягут.
+  let owed = [];
+  // Находки, которые НЕ ЧИНЯТСЯ ни правкой карточки, ни скриптом: модуль, которого требование не
+  // знает и усыновить которое не по чему. Фиксеру плана они не едут — он закрыл бы их сиротой.
+  let stuck = [];
+  const criticTpl = await readText({ path: "steps/planreview/order.tpl" });
+  const fixTpl = await readText({ path: "steps/planreview/order.fix.tpl" });
+
+  for (let round = 1; round <= PLAN_ROUNDS; round++) {
+    const src = await planReview({});
+    if (!src.ok) exit(err("blocked", { subject: src.why, evidence: "шаг 10в: судить план нечем" }));
+
+    // Слова оператора едут КРИТИКУ ВХОДОМ, а не вторым разборщиком прозы: он и так читает три
+    // документа, и его дело — превратить замечание человека в находку своей формы.
+    const STAGED_VERDICT = ".agent/staging/planreview.txt";
+    await clearStaged({ path: STAGED_VERDICT });
+    const order = await sized("planreview", criticTpl, {
+      BRD: src.brd, FRD: src.frd, PLAN: src.plan, PLANPATH: src.at, STAGING: STAGED_VERDICT, KNOWN: src.known,
+      OPERATOR: note || "(оператор пока не высказывался — суди сам)",
+    });
+    if (order.over) exit(err("blocked", { subject: order.why, evidence: "наряд шага 10в не помещается в окно модели" }));
+    const env = await agent(order.text, { role: "plan-critic", outputSchema: ENVELOPE });
+    if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
+
+    const routed = await planRoute({ verdict: await readText({ path: STAGED_VERDICT }) });
+    // НАЙДЕНО И НЕ ЗАКРЫТО — ЗНАЧИТ ОТКРЫТО. Критик недетерминирован: «в этот раз не назвал» не
+    // означает «починено», и пустой вердикт не отменяет находку, правка которой НЕ ЛЕГЛА.
+    //
+    // BUG_FIX_CONTEXT: прогон e1f7b5c8 (20.08.2026). Круг 2 нашёл R11 («нет модуля конфигурации
+    //   агента» — ту самую дыру, из-за которой оператор забраковал план 19.08); правка не легла;
+    //   круг 3 критик назвал ноль находок, и полоса объявила план чистым и понесла его на гейт с
+    //   открытой R11.
+    const open = [...new Set([...owed, ...routed.plan])];
+    if (stuck.length) log(`planreview: не чинится точечно ${stuck.length}: ${stuck.map((x) => x.split("|")[0].trim()).join(" ")} — оператор увидит это на гейте`);
+    if (!open.length && !routed.frd.length && !routed.design.length) {
+      log(`planreview: круг ${round} — находок нет и долгов нет, план идёт к гейту`);
+      return;
+    }
+    log(`planreview: круг ${round} из ${PLAN_ROUNDS} — находок ${routed.plan.length}${owed.length ? `, долг прошлых кругов ${owed.length}` : ""}`);
+
+    // ВСЕ НАХОДКИ КРУГА ЗАКРЫВАЮТСЯ ОДНОЙ ПРАВКОЙ. Раздела нет — фиксер его пишет: нарезка читает
+    // разделы, и дописанный режется в наряд наравне с рождённым сборкой.
+    // ФАКТЫ НАЗВАННЫХ ФАЙЛОВ — вход роли: объявления и вызовы с диска, а не память (ext::nodeFacts).
+    const facts = await nodeFacts({ paths: routed.paths || [] });
+    // ПРАВИМ ИСТОЧНИК, А НЕ ДОКУМЕНТ. `PLAN.md` собирает `planbook` из карточек партий: правка,
+    // положенная в документ, живёт до первой пересборки — а пересборка случается всякий раз, когда
+    // требование получает новый модуль. Поэтому фиксер правит КАРТОЧКУ, а план пересобирается
+    // скриптом тут же и судится нарезкой (ext::planFix judge:"card").
+    //
+    // BUG_FIX_CONTEXT: 20.08.2026. Четыре правки лупа — константа resource URI, ключ шаблона
+    //   `glossary`, Caffeine вместо Map, исключение под 422 — легли в PLAN.md, а карточка осталась
+    //   прежней. Первое же переигрывание плана вернуло бы документ к её тексту.
+    // КАЖДАЯ НАХОДКА — В КАРТОЧКУ СВОЕГО МОДУЛЯ. Партий бывает несколько, и якорь чужой карточки не
+    // найдётся: круг был бы потрачен на промах, которого можно не делать. Строка без пути идёт в
+    // карточку, названную первой, — другой связи у неё нет.
+    // ПРАВКА ИДЁТ В САМ ПЛАН. Раньше находка ехала в карточку своей партии, чтобы пережить
+    // пересборку документа из карточек; карточек больше нет (шаг 9 переписывается, docs/plan.md), и
+    // единственный артефакт, который правит фиксер, — тот же, что судил критик.
+    const byCard = new Map([[src.at, [...open]]]);
+
+    let broke = "";
+    for (const [target, lines] of byCard) {
+      const put = await fixOne({ target, findings: lines.join("\n"), tpl: fixTpl, rejected: missed, known: src.known, judge: "card", facts: facts.text });
+      // Промах якорем и отказ гардрейла — один класс: замечание о СОБСТВЕННОМ ответе роли. Ни
+      // карточка, ни план на диске не тронуты, и замечание едет ей блоком `{REJECTED}` следующим кругом.
+      if (!put.ok) { broke = put.blockers || put.why; break; }
+      log(`planreview: ${target.split("/").pop()} правлена — ${lines.length} находок, ${put.bytes} симв`);
+    }
+    if (broke) {
+      owed = open;
+      missed = broke;
+      log(`planreview: правка не легла (${String(broke).split("\n")[0].slice(0, 90)}) — круг ${round} из ${PLAN_ROUNDS}`);
+      continue;
+    }
+    missed = "";
+    // Правка ЛЕГЛА — долг снят: закрыта она или нет, скажет следующий круг критика, а не эта строка.
+    owed = [];
+
+    // ОТМЕТКА ПЕРЕСТАВЛЯЕТСЯ НА ПРАВЛЕНЫЙ ПЛАН. Журнал держит sha256 поставки шага 9, и правка лупа
+    // её меняет — законно: артефакт тот же, он стал лучше, и нарезка это только что подтвердила.
+    // Не переставить — значит сказать лестнице «шаг 9 сломан», и следующий запуск пересоберёт план
+    // ролями поверх работы критика и фиксера.
+    //
+    // BUG_FIX_CONTEXT: 20.08.2026, перед четвёртым запуском. Величина `5 minutes`, поставленная
+    //   лупом, изменила PLAN.md — и лестница сказала «артефакт шага 9 изменён после отметки»,
+    //   предлагая переиграть шаг 9 целиком: два вызова ролей ради того, что уже сделано.
+    if (byCard.size) {
+      await runlogMark({ step: 9, name: "design", status: "done",
+        artifacts: [".agent/design-graph.xml", ".agent/data-flow.md", src.at], note: src.at });
+    }
+
+    // ПОТЕРЯННЫЙ МОДУЛЬ ПАТЧЕМ НЕ ДОПИСЫВАЕТСЯ. Модули изменения берутся из `nodes` СЦЕНАРИЕВ
+    // требования (steps/design/card.mjs::partsOf): раздел, вписанный в PLAN.md, не получит ни партии,
+    // ни уровня, ни зависимостей, и первый же вход в шаг 9 сотрёт его вместе с работой. Поэтому
+    // такая находка — это работа над ТРЕБОВАНИЕМ и переигрывание плана.
+    //
+    // Находки плана к этому моменту УЖЕ закрыты (выше по кругу) — переигрывание их не теряет.
+    if (routed.frd.length) {
+      // ТРЕБОВАНИЕ ПРАВИТ СКРИПТ, А НЕ РОЛЬ (ext::frdAdopt): путь назвал разборщик, use case назван
+      // строкой `<carried>`, сценарий у него один, текст дельты — сама находка. Решать нечего —
+      // значит нечем и ошибиться, а правка всё равно идёт через полный суд.
+      let adopted = 0;
+      for (const line of routed.frd) {
+        const f = line.split("|").map((x) => x.trim());
+        const node = (line.match(/[\w./-]+\/[\w.-]+\.\w+/) || [""])[0];
+        const put = await frdAdopt({ path: node, req: f[0] || "", what: f[3] || "" });
+        if (put.ok) { adopted++; continue; }
+        log(`planreview: ${f[0] || "находка"} — требование не правится скриптом: ${String(put.blockers || put.why).split("\n")[0].slice(0, 100)}`);
+        // НЕ УСЫНОВЛЁННОЕ НЕ ЕДЕТ ФИКСЕРУ ПЛАНА. Модуль, которого нет в требовании, патчем плана не
+        // создаётся: положить эту строку в общий долг значило бы отправить её туда, где её закроют
+        // разделом-сиротой — без партии, без уровня, без зависимостей и без наряда.
+        stuck = [...new Set([...stuck, line])];
+      }
+      if (!adopted) { missed = ""; continue; }
+      log(`planreview: требование получило ${adopted} узел(ов) скриптом, полный суд зелен; план переигрывается`);
+      return { replay: routed.frd.join("\n") };
+    }
+    if (routed.design.length) {
+      log(`planreview: ${routed.design.length} находок про модуль, которого нет в плане, — план переигрывается`);
+      return { replay: routed.design.join("\n") };
+    }
+
+    // Здесь стояла перестановка величины в карточку партии: правка могла унести `5 minutes` вместе
+    // со строкой. Карточек больше нет (шаг 9 переписывается) — величина возвращается в план тем же
+    // гардрейлом, что и остальное содержание, и это решается в новом шаге, а не тут.
+  }
+  const left = [...owed, ...stuck];
+  log(left.length
+    ? `planreview: круги исчерпаны (${PLAN_ROUNDS}) — план идёт к гейту, НЕ ЗАКРЫТО ${left.length}: ${left.map((x) => x.split("|")[0].trim()).join(" ")}`
+    : `planreview: круги исчерпаны (${PLAN_ROUNDS}) — план идёт к гейту с последними находками`);
+}
+
 async function gating() {
   for (let round = 1; round <= QUESTION_ROUNDS + 1; round++) {
     const g = await gate1({});
     // `kept` — рецепт признан: оператора не спрашивали, потому что этот план он уже утвердил. Счёта
     // модулей в этом ответе нет и быть не может: презентация не собиралась.
-    if (g.ok) { log(g.kept ? `gate1: план уже утверждён этим токеном — ${g.at}` : `gate1: план утверждён — модулей ${g.modules}, токен ${g.at}`); return ""; }
-    if (g.rework) { log(`gate1: оператор вернул план на доработку — «${g.rework}»`); return g.rework; }
+    if (g.ok) { log(g.kept ? `gate1: план уже утверждён этим токеном — ${g.at}` : `gate1: план утверждён — модулей ${g.modules}, токен ${g.at}`); return {}; }
+    if (g.rework) { log(`gate1: оператор вернул план на доработку — «${g.rework}»`); return { note: g.rework }; }
+    // ЕДИНСТВЕННАЯ ОТМОТКА ПОЛОСЫ, и объявляет её человек: требования не хватает вовсе, а не план
+    // его потерял. Правкой плана это не чинится — работы нет в источнике.
+    if (g.requirements) { log(`gate1: оператор назвал упущенное требование — «${g.requirements}»`); return { requirements: g.requirements }; }
     if (g.stop) exit(err("stopped", { subject: g.why, evidence: "gate1" }));
     if (!g.ask) exit(err("blocked", { subject: g.blockers || g.why, evidence: ".agent/gate1.json не написан" }));
 
@@ -1108,89 +1399,11 @@ async function gating() {
     if (q.spent) exit(noRoundsLeft({ subject: g.subject, evidence: "" }, "gate1"));
     await askOperator({ subject: g.subject, evidence: "" }, q.n, "gate1", "gate1");
   }
-  exit(err("blocked", { subject: "гейт 1 не получил разбираемого ответа", evidence: "approve · rework: <что не так> · stop" }));
+  exit(err("blocked", { subject: "гейт 1 не получил разбираемого ответа", evidence: "approve · rework: <что не так в плане> · requirements: <какое требование упущено> · stop" }));
 }
 
-// FUNCTION_CONTRACT: onePass — one pass of step 9: compose, delegate, judge, promote
-//   Input:        id — "values" | "chains"; extra — the keys of THIS pass's order, as a thunk
-//   Dependencies: EXTERNAL — design, readText, promote, agent, sized; askOperator, charge
-//   Antecedent:   the gate said `needed`; LOOPS ≥ 1
-//   Consequent:   success: returns when the pass is green and promoted
-//                 failure: exits — err("escalate") when the pass spent its LOOPS
-//   Purity:       io (host functions, roles)
-//
-// THE SKELETON IS RECOMPUTED EVERY ROUND, and it is written to its OWN path. The role's file and the
-// composition it must follow are two documents on purpose: a repair round hands the role the
-// authoritative skeleton next to the blockers about the file it wrote, so «строки v41 нет в файле» is
-// a line the role can act on without reconstructing anything from memory.
-async function onePass(id, extra) {
-  const p = PASSES[id];
-  const s = await design({ pass: id, skeleton: p.skeleton });
-  if (!s.ok) exit(err("blocked", { subject: s.blockers, evidence: `скелет прохода ${id} не посчитан — звать роль не на что` }));
-  log(id === "values"
-    ? `design/values: скелет — строк ${s.rows}, из них заполнено скриптом ${s.filled}, роли назвать ${s.blank}`
-    : `design/chains: скелет — цепочек ${s.chains}, у каждой известны начало, конец и узлы`);
-
-  const SKELETON = await readText({ path: p.skeleton });
-  // A CHANGE WHOSE EVERY BLANK THE SCRIPT COULD FILL COSTS NO ROLE AT ALL. It is not a hypothetical:
-  // a change with no use cases has no value left to name and no end left to walk, and calling a model
-  // to hand back a file it was given is a call that can only make it worse.
-  if (!s.blank) {
-    await promote({ from: p.skeleton, to: p.staging });
-    const check = await design({ pass: id, path: p.staging });
-    if (check.ok) { log(`design/${id}: зелен без роли — заполнять было нечего, 0 токенов → ${p.made}`); return; }
-    exit(err("blocked", { subject: check.blockers, evidence: `скелет прохода ${id} не проходит собственный гардрейл — дефект скрипта, не роли` }));
-  }
-
-  const tpl = await readText({ path: p.tpl });
-  let feedback = "(none — first attempt)";
-  // TWO COUNTERS, TWO MEANINGS. `attempt` is the repair budget: a red artifact was written and must be
-  // rewritten. `silent` bounds the case where the role returns track:"ok" and writes no file at all —
-  // there is nothing to repair, so no round of the repair budget is charged, but the loop still has to
-  // end (live run a900de7b).
-  let attempt = 0, silent = 0;
-  for (;;) {
-    if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `проход ${id} шага 9: цикл исчерпан за ${LOOPS} попыток` }));
-    if (silent > LOOPS) exit(err("escalate", { subject: `роль ${silent} раз вернула track:"ok", не записав ${p.staging}`, evidence: `проход ${id} шага 9: артефакта нет` }));
-
-    // The role's own file from the previous round, when there was one: the blockers name its rows, and
-    // a report about an artifact the role cannot see is a word for «напиши всё заново» (D13).
-    const PREVIOUS = (await readText({ path: p.staging })).trim() || "(none — first attempt)";
-    const o = sized(`design/${id}`, tpl, {
-      ...extra(), SKELETON, PREVIOUS, BLANK: String(s.blank), FEEDBACK: feedback, STAGING: p.staging,
-      CHECK: `design({pass:"${id}", path}) — гардрейл прохода по staging`,
-    });
-    if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд прохода ${id} шага 9 не помещается в окно модели — роль не запускалась` }));
-    const env = await agent(o.text, { role: p.role, outputSchema: ENVELOPE });
-
-    if (env.track === "err" && env.kind === "question") {
-      const q = charge(env);
-      if (q.spent) exit(noRoundsLeft(env, `design/${id}`));
-      log(`design/${id}: вопрос ${q.n} — «${env.subject}»`);
-      await askOperator(env, q.n, `design-${id}`, p.role);
-      continue; // a question does not spend the redelegation budget
-    }
-    if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
-
-    const check = await design({ pass: id, path: p.staging }); // the check runs ON STAGING, before promote
-    if (check.ok) {
-      if (id === "values") log(`design/values: зелен — значений ${check.values} (роль назвала ${s.blank}) → ${p.made}`);
-      else {
-        log(`design/chains: зелен — узлов ${check.nodes}, юнитов ${check.units} → ${p.made}`);
-        // A node of the change no chain walks through has an EMPTY unit list, so its ticket arrives
-        // with no definition of done and its check command is green before a line is written (live run
-        // d8ef8c60). No rule refuses it yet — the number is printed so the next run's measurement, not
-        // a guess, decides whether one is needed.
-        if ((check.unstepped || []).length) log(`design/chains: узлов изменения без единой цепочки — ${check.unstepped.length}: ${check.unstepped.join(", ")}`);
-      }
-      return;
-    }
-    feedback = check.blockers;
-    if (check.missing) { silent++; log(`design/${id}: роль не записала ${p.staging} — попытка ${silent}, бюджет починки не тратится`); continue; }
-    attempt++;
-    log(`design/${id}: красный — попытка ${attempt} из ${LOOPS}`);
-  }
-}
+// УДАЛЕНО 21.08.2026: `onePass` — один проход старого шага 9 (словарь и цепочки порциями).
+// Порционность и её суды переезжают в новый шаг вместе с деревом и потоками (docs/plan.md §3).
 
 // FUNCTION_CONTRACT: planning — step 10: the accepted change as an ordered DAG of work
 //   Input:        —
@@ -1231,46 +1444,53 @@ async function planning(edges) {
   }
 }
 
-// FUNCTION_CONTRACT: reviewing — step 11: the plan judged as a program, by role `critic`
+// FUNCTION_CONTRACT: reviewing — шаг 11: ТРЕБОВАНИЕ, судимое ролью `critic`
 //   Input:        —
-//   Dependencies: EXTERNAL — readText, reviewForm, agent(role "critic"), review (the host function;
-//                 the local name differs because a sandbox global cannot be shadowed by its caller),
-//                 prompt
-//   Antecedent:   step 10 left .agent/plan-index.json; step 6 left .agent/frd.xml; LOOPS ≥ 1
-//   Consequent:   success: RETURNS { verdict, findings[] } — a Reject is a SUCCESSFUL run of this
-//                          step, and .agent/review.xml carries its blockers either way
-//                 failure: exits — err(kind) on a role error rail, err("escalate") when LOOPS
-//                          redelegations were spent on a MALFORMED verdict (R1..R4)
-//   Purity:       io (through the host)
+//   Dependencies: EXTERNAL — readText, reviewForm, agent(role "critic"), review (host-функция; имя
+//                 локальной переменной другое, потому что глобал песочницы нельзя затенить),
+//                 carried, sized
+//   Antecedent:   шаг 6 оставил `.agent/staging/frd.xml` (или промоутнутый `.agent/frd.xml`), шаг 2 —
+//                 `.agent/brd.md`; LOOPS ≥ 1
+//   Consequent:   success: ВОЗВРАЩАЕТ { verdict, findings[] } — Reject это УСПЕШНЫЙ прогон шага, и
+//                          `.agent/review.xml` несёт блокеры в обоих случаях
+//                 failure: exits — err(kind) на рельсе ошибки роли, err("escalate"), когда LOOPS
+//                          переделегирований потрачены на МАЛФОРМИРОВАННЫЙ вердикт (R1..R5)
+//   Purity:       io (через хост)
 //
-// There is no question rail here and no operator: what the critic does not understand in the plan IS
-// a blocker, not a gap in a requirement. The verdict is not acted on here either — band() owns that,
-// because the repair belongs to whichever step owns the artifact the blocker blamed.
+// Вопросов оператору здесь нет: то, чего критик не понимает в требовании, ЕСТЬ блокер, а не пробел.
+// Вердикт здесь же и не применяется — этим владеет band(): починку пишет роль шага 6, чей артефакт
+// блокер и обвинил.
+//
+// ЦИКЛ ЗДЕСЬ — ПРО ФОРМУ, А НЕ ПРО СУЖДЕНИЕ. Переделегирование случается только тогда, когда файл
+// роли красен по форме (неизвестный код, адрес, который никуда не резолвится); её ВЫВОД не судится
+// никем и не оспаривается. Сам критик зовётся ровно один раз на артефакт — это решает band().
 async function reviewing() {
   const orderTpl = await readText({ path: "steps/review/order.tpl" });
-  const PLAN = await readText({ path: ".agent/plan-index.json" });
-  const FRD = await readText({ path: ".agent/frd.xml" });
+  const TASK = await readText({ path: "TASK.md" });
+  const BRD = await readText({ path: ".agent/brd.md" });
+  const staged = await readText({ path: ".agent/staging/frd.xml" });
+  const FRD = staged.trim() ? staged : await readText({ path: ".agent/frd.xml" });
   const STAGING = ".agent/staging/review.xml";
-  const CHECK = "review({path}) — steps/review/review.mjs::newReview по staging: node из .agent/plan-index.json, evidence по коду (узел плана для unreachable-antecedent, id FRD для goal-not-delivered)";
-  // The vocabulary is SUBSTITUTED from steps/review/review.mjs, never retyped in the template — the
-  // same device the intake and design orders use (ext/index.mjs::reviewForm).
+  const CHECK = "review({path}) — steps/review/review.mjs::newReview по staging: node — id элемента FRD, evidence по коду (номер требования BRD для requirement-not-carried, цитата источника для invented-value, id FRD для goal-not-delivered)";
+  // Словарь и ОБА чек-листа ПОДСТАВЛЯЮТСЯ из steps/review/review.mjs, а не перепечатываются в
+  // шаблоне: то, о чём наряд спрашивает, и то, что считает правило, — одно выражение.
   const FORM = await reviewForm({});
   let feedback = "(none — first attempt)", attempt = 0, wasRed = [];
 
   while (attempt < LOOPS) {
     const PREVIOUS = await readText({ path: STAGING });
-    const order = sized("review", orderTpl, { PLAN, FRD, PREVIOUS, CODES: FORM.codes, OWED: FORM.owed, UNCHECKED: FORM.unchecked, FEEDBACK: feedback, STAGING, CHECK });
+    const order = await sized("review", orderTpl, { TASK, BRD, FRD, PREVIOUS, CODES: FORM.codes, OWED: FORM.owed, UNBACKED: FORM.unbacked, FEEDBACK: feedback, STAGING, CHECK });
     if (order.over) exit(err("blocked", { subject: order.why, evidence: "наряд шага 11 не помещается в окно модели — роль не запускалась" }));
     const env = await agent(order.text, { role: "critic", outputSchema: ENVELOPE });
     if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
 
-    const check = await review({ path: STAGING }); // the check runs ON STAGING, before any promote
+    const check = await review({ path: STAGING }); // проверка идёт ПО STAGING, до всякого промоута
     if (check.ok) {
       log(`review: ${check.verdict}${(check.findings || []).length ? ` — блокеров ${check.findings.length}` : ""}`);
-      return { verdict: check.verdict, findings: check.findings || [] };
+      return { verdict: check.verdict, findings: check.findings || [], feedback: check.feedback || "" };
     }
     const carry = await carried({ blockers: check.blockers, seen: wasRed });
-    feedback = carry.text; wasRed = carry.seen;   // the FORM was wrong, not the judgement — the finding is kept, its address is fixed
+    feedback = carry.text; wasRed = carry.seen;   // красной была ФОРМА, а не суждение: находка остаётся, чинится её адрес
     attempt++;
   }
   exit(err("escalate", { subject: feedback, evidence: `цикл исчерпан за ${LOOPS} попыток` }));
@@ -1360,7 +1580,18 @@ async function bandStart() {
 }
 
 async function band(from0) {
-  let from = from0, edges = [], fromCritic = "", planned = ".agent/plan-index.json";
+  // Наряд фиксера читается ОДИН раз на полосу: он же служит расстановке величин и лупу.
+  const fixTplTop = await readText({ path: "steps/planreview/order.fix.tpl" });
+  // fromPass — проход шага 6, с которого полоса переигрывает требование после Reject критика. Считает
+  // его модуль (steps/review/review.mjs::passOf) по ЭЛЕМЕНТУ находки, а не по её коду; полоса входит в
+  // названный проход и идёт от него вперёд до D.
+  let from = from0, edges = [], fromCritic = "", fromPass = "", fromCut = "", fromGate = "", planned = ".agent/plan-index.json";
+  // Критик высказывается один раз за прогон полосы. Флаг живёт здесь, а не на диске: `rework`
+  // оператора с гейта 1 — это НОВОЕ решение человека и новый артефакт, и он получает свой один вызов
+  // (ниже, в ветке gate1).
+  let criticSpoke = false;
+  // Переигрываний плана по просьбе лупа — не больше PLAN_REPLAYS за прогон.
+  let replays = 0;
   const repaired = new Set();
 
   for (let round = 0; ; round++) {
@@ -1371,8 +1602,35 @@ async function band(from0) {
     // Артефакты в ней названы не для красоты: их отпечатки снимаются в момент отметки, и следующий
     // запуск сверяет их с диском — правленый руками артефакт переигрывает свой шаг.
     if (from <= 6) {
-      phase("intake"); await intake(fromCritic);
+      phase("intake"); await intake(fromCritic, fromPass);
       await runlogMark({ step: 6, name: "intake", status: "done", artifacts: [".agent/frd.xml"] });
+    }
+    // ШАГ 11 — КРИТИК ТРЕБОВАНИЯ, И ЗОВЁТСЯ ОН РОВНО ОДИН РАЗ НА АРТЕФАКТ.
+    //
+    // Место: сразу после зелёного `checkFrd` и до веса. Раньше нельзя — роль судила бы артефакт,
+    // который машина ещё не признала разобранным; позже незачем — весь смысл в том, чтобы отказы
+    // МАШИНЫ ниже по полосе (шаг 9, сухой прогон, `rework` на гейте) не случились вовсе, а каждый из
+    // них стоит роли.
+    //
+    // ОДИН ВЫЗОВ — ПРАВИЛО, А НЕ НАСТРОЙКА: критик не судит починку собственной критики, иначе на
+    // каждое замечание приходит новое и полоса критикует себя вечно. Его `Reject` даёт роли шага 6
+    // РОВНО ОДИН круг, после чего судит только машина, а спорить с вердиктом дальше некому — на
+    // гейте 1 сидит человек.
+    if (from <= 6 && !criticSpoke) {
+      criticSpoke = true;
+      phase("review");
+      const verdict = await reviewing();
+      await runlogMark({ step: 11, name: "review", status: "done", artifacts: [".agent/review.xml"], note: verdict.verdict });
+      if (verdict.verdict === "Reject") {
+        from = 6;
+        // Форму строки задаёт срез критика (steps/review/review.mjs::feedbackLines) — по её префиксу
+        // и коду роль шага 6 выбирает ремонт, то есть это КОНТРАКТ между двумя ролями, а не печать.
+        fromCritic = verdict.feedback;
+        fromPass = verdict.pass || "A";
+        log(`review: Reject — блокеров ${verdict.findings.length}; шаг 6 переигрывается с прохода ${fromPass} и вперёд, второго вызова критика не будет`);
+        await rework([6], `критик: блокеров ${verdict.findings.length}`);
+        continue;
+      }
     }
     if (from <= 7) {
       phase("weight"); await weigh();
@@ -1383,7 +1641,7 @@ async function band(from0) {
       await runlogMark({ step: 8, name: "ripple", status: "done", artifacts: [".agent/ripple.xml", ".agent/design"] });
     }
     if (from <= 9) {
-      phase("design"); planned = await designing(from);
+      phase("design"); planned = await designing(from, fromCut);
       // На рельсе `skip` роль шага 9 не звалась и графа с потоком нет — отметка несёт то, что есть.
       // ПОСТАВКА ШАГА — ЭТО PLAN.md, а не только его внутренние артефакты. Отметка, называвшая один
       // `.agent/design-graph.xml`, считала шаг закрытым и после того, как разделы плана снесли: живая
@@ -1406,17 +1664,89 @@ async function band(from0) {
     // step 6 and carries the operator's own words into the intake order: a plan cannot be edited
     // around the FRD, because the only thing that checks plan against requirement is phase ⑥, and it
     // reads the FRD.
+    // ШАГ 10б — СУХОЙ ПРОГОН НАРЕЗКИ. Наряды режутся ДО гейта и НЕ ПИШУТСЯ: `ticketsOf` и
+    // `checkTickets` — чистые функции, а всё, что они читают, лежит на диске уже здесь (разделы шага
+    // 9, frd.xml шага 6, appgraph.xml шага 5, ripple.xml шага 8). Из шагов 12-13 нарезке нужны только
+    // РАЗРЕШЕНИЕ писать и имя ветки в заголовок — ни одного ФАКТА после гейта не появляется.
+    //
+    // Смысл шага: оператор утверждает план, про который ДОКАЗАНО, что по нему нарезается исполнимый
+    // набор. Красный — дефект ПЛАНА, и чинит его дизайнер шага 9, а не человек на гейте. Судит и
+    // режет один и тот же код, поэтому «проверено одно, нарезано другое» невозможно.
+    if (from <= 12) {
+      const dry = await tickets({ dry: true });
+      if (!dry.ok) {
+        const why = dry.blockers || dry.why || "";
+        // Та же жалоба во второй раз означает, что роль её не понимает: круги тратить не на что.
+        if (fromCut && fromCut.includes(why.slice(0, 80))) {
+          exit(err("escalate", { subject: why, evidence: "шаг 10б: сухой прогон нарезки вернул ту же жалобу после переписывания плана" }));
+        }
+        fromCut = `нарезка отказывается резать этот план:\n  ${why}`;
+        from = 9;
+        await rework([9], why);
+        log(`нарезаемость: план НЕ режется — ${why.split("\n")[0]}; перемотка на шаг 9`);
+        continue;
+      }
+      fromCut = "";
+      log(`нарезаемость: план режется — ${dry.total} нарядов (границ ${dry.tests}, модулей ${dry.modules}), волны ${dry.waves.join(" · ")}`);
+    }
+
+    // ВЕЛИЧИНЫ РАССТАВЛЯЕТ МОДЕЛЬ, ОДИН РАЗ И ДО КРИТИКА. У `<nfr>` нет адреса: связь
+    // «glossary-cache-ttl → GlossaryService» видна только по смыслу цепочки, вычислить её нечем.
+    // Поэтому роли дают величины и `data-flow.md`, а она находит модуль и правит по якорю.
+    // Лупа здесь нет: не сработало — величина придёт находкой к критику, который стоит следом.
+    //
+    // BUG_FIX_CONTEXT: прогон 19.08.2026. FRD нёс `<nfr subject="glossary-cache-ttl" fit="5 minutes">`,
+    //   план — `glossaryCache: Map<String, Glossary>`. Величина умирала на шаге 6: её не читает ни
+    //   дизайн, ни план, ни тикеты, и до исполнителя она не доезжала ничем.
+    // (перестановка величины в план ждёт нового шага 9 — docs/plan.md)
+
+    // ШАГ 10в — ВТОРОЙ СУДЬЯ НАД ПЛАНОМ. Включается ДВАЖДЫ: здесь сам по себе, до того как план
+    // увидит человек, и ниже — со словами оператора, если он вернул работу с гейта.
+    if (from <= 12) {
+      phase("planreview");
+      const verdict = (await planLoop(fromGate)) || {};
+      fromGate = "";
+      // ПЕРЕИГРЫВАНИЕ ПЛАНА — ЕДИНСТВЕННОЕ, ЧТО ЛУП МОЖЕТ ПОПРОСИТЬ У ПОЛОСЫ, и просит он его только
+      // за потерянный модуль: модули изменения берутся из `nodes` сценариев требования, и патчем
+      // документа модуль в план не попадает (steps/design/card.mjs::partsOf). Всё остальное луп
+      // закрывает сам, на месте, и к этой строке приходит уже закрытым.
+      if (verdict.replay && replays >= PLAN_REPLAYS) {
+        log(`planreview: переигрывания исчерпаны (${PLAN_REPLAYS}) — план идёт к гейту, НЕ ЗАКРЫТО: ${verdict.replay.split("\n").map((x) => x.split("|")[0].trim()).join(" ")}`);
+      } else if (verdict.replay) {
+        replays++;
+        from = 9;
+        fromCut = `критик плана: ${verdict.replay}`;
+        await rework([9], verdict.replay);
+        log("planreview: план переигрывается — требование получило модуль, которого в плане не было");
+        continue;
+      }
+      // Отметки у лупа НЕТ: он не шаг журнала, а вход в шаг 12. Отметить 12 здесь значило бы сказать
+      // «гейт пройден» до того, как его увидел человек, — и обрыв между ними проскочил бы гейт.
+    }
+
     if (from <= 12) {
       phase("gate1");
       const back = await gating();
-      if (back) {
-        from = 6;
+      // СЛОВА ОПЕРАТОРА ИДУТ В ЛУП, А НЕ НА ШАГ 6. Реворк не означает «переписать всё»: замечание
+      // вроде «добавь кэш» закрывается правкой плана за один вызов критика и фиксера.
+      if (back.note) {
+        from = 12;
+        fromGate = back.note;
+        log(`gate1: оператор вернул план — «${back.note.slice(0, 60)}»; слова уходят критику плана`);
+        continue;
+      }
+      // ЕДИНСТВЕННАЯ ОТМОТКА КОНВЕЙЕРА, И ЕЁ ОБЪЯВЛЯЕТ ЧЕЛОВЕК. Требование упущено — значит работы
+      // нет в источнике, и правкой плана её не создать: полоса идёт в начало, к доработке
+      // требований, и интейк переигрывает FRD с этими словами. Ни один гардрейл и ни одна роль
+      // такого решения не принимают: отличить «план потерял требование» от «требования не было»
+      // может только тот, чья это работа.
+      if (back.requirements) {
+        from = 2;
         edges = [];
-        fromCritic = `оператор на гейте 1: ${back}`;
-        // Перемотка СНИМАЕТ отметки всего, что теперь переписывается: требование, вес, ширина и план
-        // собираются заново, и журнал не должен утверждать обратное.
-        for (const step of [6, 7, 8, 9, 12]) await runlogMark({ step, name: "rework", status: "rework", note: back.slice(0, 80) });
-        log("gate1: перемотка на шаг 6 — требование переписывается, план собирается заново");
+        fromCritic = `оператор на гейте: упущено требование — ${back.requirements}`;
+        criticSpoke = false;
+        await rework([2, 6, 7, 8, 9, 12], back.requirements);
+        log(`gate1: упущено требование — полоса возвращается к доработке требований`);
         continue;
       }
       await runlogMark({ step: 12, name: "gate1", status: "done", artifacts: [".agent/gate1.json"] });
@@ -1443,6 +1773,9 @@ async function band(from0) {
       const cut = await tickets({});
       if (!cut.ok) exit(err("blocked", { subject: cut.blockers || cut.why, evidence: "шаг 14: тикеты не нарезаны" }));
       log(`tickets: ${cut.total} нарядов — границ ${cut.tests}, модулей ${cut.modules}; волны ${cut.waves.join(" · ")}; крупнейший ${cut.chars} симв → ${cut.at}`);
+      // Ворота на всём сьюте — не молчание: у репозитория нет шаблона одного теста, и такой наряд
+      // гоняет весь сьют. Дороже и чувствительно к чужим тестам, но это факт репозитория.
+      if ((cut.wholeSuite || []).length) log(`tickets: ворота на ВСЁМ сьюте (в карте нет шаблона одного теста): ${cut.wholeSuite.join(", ")}`);
       await runlogMark({ step: 14, name: "tickets", status: "done", artifacts: cut.files, note: `нарядов ${cut.total}, волн ${cut.waves.length}` });
     }
 
@@ -1451,60 +1784,14 @@ async function band(from0) {
       // отметки: молчание про шаги 10 и 11 означало бы, что возобновление вечно встаёт на десятом и
       // переигрывает гейт, ветку и тикеты, которые давно закрыты. Появится наряд на эти шаги — они
       // начнут отмечаться по-настоящему, и `skipped` вытеснится сам.
-      for (const step of [10, 11]) await runlogMark({ step, name: "отложен", status: "skipped", note: "шага нет в полосе" });
+      // Шаг 11 теперь СТОИТ в полосе — выше, сразу за интейком; пропущенным отмечается только шаг 10.
+      for (const step of [10]) await runlogMark({ step, name: "отложен", status: "skipped", note: "шага нет в полосе" });
       return `task/<КЛЮЧ>/tickets`;
     }
     if (STOP_AFTER_DESIGN) return from <= 9 ? planned : ".agent/data-flow.md";
 
     if (from <= 10) { phase("plan"); planned = await planning(edges); }
-    if (from >= 12) return planned;
-    phase("review"); const verdict = await reviewing();
-    if (verdict.verdict === "Pass") return planned;
-
-    const blockers = verdict.findings;
-    const again = blockers.filter((b) => repaired.has(blockerKey(b)));
-    if (again.length) {
-      exit(err("escalate", {
-        subject: again.map((b) => `${b.code} · ${b.node} — ${b.text}`).join("\n  "),
-        evidence: `починка не взялась: та же находка вернулась после круга ${round + 1}`,
-      }));
-    }
-    if (round >= REVIEW_ROUNDS) {
-      exit(err("escalate", {
-        subject: blockers.map((b) => `${b.code} · ${b.node} (${b.culprit}) — ${b.text}`).join("\n  "),
-        evidence: `перемоток полосы больше ${REVIEW_ROUNDS}`,
-      }));
-    }
-    for (const b of blockers) repaired.add(blockerKey(b));
-
-    // OWNER `operator` — the third address, and the only one with no machine repair behind it. A node
-    // the plan built out of a SPINE answer is wrong because the MAP is wrong, and rewinding to step 6
-    // rewrites the FRD, which cannot touch the map: the band would loop until REVIEW_ROUNDS ran out
-    // and then escalate anyway, having spent every role of steps 6-11 on it. So it stops here and
-    // says what it found (live run c64dbd32 — `toggle` из профиля сборки, D21).
-    const mine = blockers.filter((b) => b.owner === "operator");
-    if (mine.length) {
-      // The words are the code's, not this call site's: steps/review/review.mjs::OPERATOR_NOTE is a
-      // function OF the code, exactly as `culprit`/`owner` are (docs/review.md §4). Two `operator`
-      // codes can print different honest ends here — `node-not-required` and, since live run 508d74fa,
-      // `unverifiable-node` — so `note` travels per finding and this branch prints each ONCE.
-      exit(err("escalate", {
-        subject: mine.map((b) => `${b.code} · ${b.node} — ${b.text}`).join("\n  "),
-        evidence: [...new Set(mine.map((b) => b.note))].filter(Boolean).join("\n  "),
-      }));
-    }
-
-    if (blockers.every((b) => b.owner === 10)) {
-      from = 10;
-      edges = blockers.map((b) => ({ from: b.node, to: b.evidence }));
-      fromCritic = "";
-      log(`review: круг ${round + 1} — ${edges.length} рёбер от критика, план пересчитывается, роли не зовутся`);
-    } else {
-      from = 6;
-      edges = [];   // the FRD is being rewritten: an edge computed for the previous one addresses nodes that may not survive it
-      fromCritic = blockers.map((b) => `critic: ${b.code} · узел ${b.node} · улика ${b.evidence} — ${b.text}`).join("\n  ");
-      log(`review: круг ${round + 1} — перемотка на шаг 6, блокеров ${blockers.length}`);
-    }
+    return planned;
   }
 }
 
@@ -1564,7 +1851,12 @@ try {
   // that fell over is diagnosed from disk. Logged out loud: an operator asked the same question
   // twice must be able to see WHY, and where their earlier answer went.
   const fresh = await newRun({});
-  log(fresh.answers || fresh.pending || fresh.staged
+  // ПРОДОЛЖЕНИЕ И ПРОГОН С НУЛЯ — РАЗНЫЕ ФАКТЫ, и лог обязан их различать: оператор, у которого
+  // спросили дважды, должен видеть, куда делся его прошлый ответ, а оператор продолжения — что его
+  // ответы на месте и второй раз его не спросят.
+  log(fresh.kept
+    ? `run: продолжение — ответы и разговор оставлены на месте, staging убран (${fresh.staged})`
+    : fresh.answers || fresh.pending || fresh.staged
     ? `run: состояние прошлого прогона убрано в .agent/prev — ответов ${fresh.answers}, staging ${fresh.staged}${fresh.pending ? ", открытый вопрос" : ""}`
     : "run: .agent чист — состояния прошлого прогона нет");
   // The working tree is DECLARED, never blocked on: uncommitted files are normal in a live repository.

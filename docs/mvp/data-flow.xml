@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Потоки данных DOS-535 — фиксация контрактов в РАНТАЙМЕ. Построено по .agent/frd.xml (use case,
+     шаги, ветвления, коды отказов) и по module-tree.xml (кто что умеет).
+
+     ЭТОТ ФАЙЛ НЕ ЗАДАЁТ ПОРЯДОК РАБОТ. Он отвечает на другой вопрос: что происходит с данными, когда
+     система работает. Порядок работ — в module-tree.xml, отношение <needs>: «без чего меня не написать».
+     Поток цикличен по природе (запрос вниз, ответ вверх) и очередь сборки из него не выводится —
+     измерено трижды на этих же артефактах 21.08.2026.
+
+     role — что модуль делает со значением на этом шаге:
+       порождаю — значение появляется здесь; у каждого значения ровно ОДИН порождающий МОДУЛЬ
+                  (он может порождать его в нескольких потоках — это то же самое место в коде)
+       проношу  — значение проходит сквозь без изменения (слой, делегирование)
+       отвергаю — здесь поток обрывается кодом отказа
+     Разные данные обязаны называться РАЗНО: «Glossary (черновик создания)» и «Glossary (импортированный)»
+     — не одно значение, и порождают их разные модули.
+     closes — какой шаг требования закрыт этим шагом потока (UC/N или UC/Na для ветвления). -->
+<flows task="DOS-535">
+
+  <flow id="S1" uc="UC1" goal="list all glossaries">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/IRestGlossaryStore.java" in="GET /glossarystore/glossaries" out="GET /glossarystore/glossaries" role="проношу" closes="UC1/1"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="GET /glossarystore/glossaries" out="GET /glossarystore/glossaries" role="проношу" closes="UC1/1"/>
+    <step n="3" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="GET /glossarystore/glossaries" out="список Glossary" role="порождаю" closes="UC1/2"/>
+    <step n="4" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="список Glossary" out="200 (glossaries)" role="порождаю" closes="UC1/3"/>
+  </flow>
+
+  <flow id="S2" uc="UC2" goal="create a new glossary">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/IRestGlossaryStore.java" in="POST /glossarystore/glossaries (terms)" out="POST /glossarystore/glossaries (terms)" role="проношу" closes="UC2/1"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="POST /glossarystore/glossaries (terms)" out="Glossary (черновик создания)" role="порождаю" closes="UC2/1"/>
+    <step n="3" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="Glossary (черновик создания)" out="ключи термина проверены" role="порождаю" closes="UC2/2"/>
+    <step n="4" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="ключи термина проверены" out="Glossary (создан, version 1)" role="порождаю" closes="UC2/3"/>
+    <step n="5" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="Glossary (создан, version 1)" out="кэш глоссариев сброшен" role="порождаю" closes="UC2/3"/>
+    <step n="6" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="кэш глоссариев сброшен" out="201 (id, version, terms)" role="порождаю" closes="UC2/4"/>
+  </flow>
+
+  <flow id="S2a" uc="UC2" branch="2a" goal="term key rejected on create">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="Glossary (черновик создания)" out="TERM_KEY_INVALID" role="отвергаю" closes="UC2/2a"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="TERM_KEY_INVALID" out="400 TERM_KEY_INVALID" role="порождаю" closes="UC2/2a"/>
+  </flow>
+
+  <flow id="S3" uc="UC3" goal="update an existing glossary">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/IRestGlossaryStore.java" in="PUT /glossarystore/glossaries/{id} (terms)" out="PUT /glossarystore/glossaries/{id} (terms)" role="проношу" closes="UC3/1"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="PUT /glossarystore/glossaries/{id} (terms)" out="Glossary (черновик обновления)" role="порождаю" closes="UC3/1"/>
+    <step n="3" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="Glossary (черновик обновления)" out="ключи термина проверены" role="порождаю" closes="UC3/2"/>
+    <step n="4" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="ключи термина проверены" out="Glossary (обновлён, version+1)" role="порождаю" closes="UC3/3"/>
+    <step n="5" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="Glossary (обновлён, version+1)" out="кэш глоссариев сброшен" role="проношу" closes="UC3/3"/>
+    <step n="6" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="кэш глоссариев сброшен" out="200 (terms, version)" role="порождаю" closes="UC3/4"/>
+  </flow>
+
+  <flow id="S3a" uc="UC3" branch="2a" goal="term key rejected on update">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="Glossary (черновик обновления)" out="TERM_KEY_INVALID" role="отвергаю" closes="UC3/2a"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="TERM_KEY_INVALID" out="400 TERM_KEY_INVALID" role="проношу" closes="UC3/2a"/>
+  </flow>
+
+  <flow id="S3b" uc="UC3" branch="3a" goal="glossary to update does not exist">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="ключи термина проверены" out="GLOSSARY_NOT_FOUND" role="отвергаю" closes="UC3/3a"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="GLOSSARY_NOT_FOUND" out="404 GLOSSARY_NOT_FOUND" role="порождаю" closes="UC3/3a"/>
+  </flow>
+
+  <flow id="S4" uc="UC4" goal="delete a glossary">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/IRestGlossaryStore.java" in="DELETE /glossarystore/glossaries/{id}" out="DELETE /glossarystore/glossaries/{id}" role="проношу" closes="UC4/1"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="DELETE /glossarystore/glossaries/{id}" out="DELETE /glossarystore/glossaries/{id}" role="проношу" closes="UC4/1"/>
+    <step n="3" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="DELETE /glossarystore/glossaries/{id}" out="ресурс удалён" role="порождаю" closes="UC4/2"/>
+    <step n="4" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="ресурс удалён" out="кэш глоссариев сброшен" role="проношу" closes="UC4/2"/>
+    <step n="5" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="кэш глоссариев сброшен" out="204" role="порождаю" closes="UC4/3"/>
+  </flow>
+
+  <flow id="S4a" uc="UC4" branch="2a" goal="glossary to delete does not exist">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="DELETE /glossarystore/glossaries/{id}" out="GLOSSARY_NOT_FOUND" role="отвергаю" closes="UC4/2a"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="GLOSSARY_NOT_FOUND" out="404 GLOSSARY_NOT_FOUND" role="проношу" closes="UC4/2a"/>
+  </flow>
+
+  <flow id="S5" uc="UC5" goal="resolve glossary terms in prompt template">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java" in="конфигурация агента" out="ссылки на глоссарии (порядок значим)" role="порождаю" closes="UC5/1"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" in="ссылки на глоссарии (порядок значим)" out="ссылки на глоссарии (порядок значим)" role="проношу" closes="UC5/1"/>
+    <step n="3" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="ссылки на глоссарии (порядок значим)" out="Glossary (по ссылке)" role="порождаю" closes="UC5/2"/>
+    <step n="4" module="src/main/java/ai/labs/eddi/modules/glossaries/GlossaryService.java" in="Glossary (по ссылке)" out="карта терминов (поздний побеждает)" role="порождаю" closes="UC5/3"/>
+    <step n="5" module="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" in="карта терминов (поздний побеждает)" out="промпт с подставленными терминами" role="порождаю" closes="UC5/4"/>
+    <step n="6" module="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" in="промпт с подставленными терминами" out="отрендеренный промпт" role="порождаю" closes="UC5/5"/>
+  </flow>
+
+  <flow id="S5a" uc="UC5" branch="2a" goal="bound glossary was deleted">
+    <step n="1" module="src/main/java/ai/labs/eddi/modules/glossaries/GlossaryService.java" in="Glossary (по ссылке)" out="GLOSSARY_DELETED" role="отвергаю" closes="UC5/2a"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" in="GLOSSARY_DELETED" out="422 GLOSSARY_DELETED" role="порождаю" closes="UC5/2a"/>
+  </flow>
+
+  <flow id="S5b" uc="UC5" branch="4a" goal="placeholder key exists in no bound glossary">
+    <step n="1" module="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" in="карта терминов (поздний побеждает)" out="промпт с нерезолвленными плейсхолдерами" role="порождаю" closes="UC5/4a"/>
+  </flow>
+
+  <flow id="S6" uc="UC6" goal="include glossaries in agent export archive">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java" in="конфигурация агента" out="ссылки на глоссарии (порядок значим)" role="порождаю" closes="UC6/1"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="ссылки на глоссарии (порядок значим)" out="Glossary (по ссылке)" role="порождаю" closes="UC6/1"/>
+    <step n="3" module="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" in="Glossary (по ссылке)" out="файлы id.glossary.json и id.descriptor.json" role="порождаю" closes="UC6/2"/>
+    <step n="4" module="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" in="файлы id.glossary.json и id.descriptor.json" out="ZIP агента" role="порождаю" closes="UC6/3"/>
+  </flow>
+
+  <flow id="S7" uc="UC7" goal="import glossaries with agent and merge by resource URI">
+    <step n="1" module="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java" in="ZIP агента" out="данные глоссария из архива" role="порождаю" closes="UC7/1"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="данные глоссария из архива" out="список Glossary" role="порождаю" closes="UC7/2"/>
+    <step n="3" module="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" in="список Glossary" out="вердикт слияния по resourceUri" role="порождаю" closes="UC7/2"/>
+    <step n="4" module="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" in="вердикт слияния по resourceUri" out="Glossary (импортированный)" role="порождаю" closes="UC7/3"/>
+    <step n="5" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="Glossary (импортированный)" out="глоссарии созданы или обновлены" role="порождаю" closes="UC7/3"/>
+    <step n="6" module="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" in="глоссарии созданы или обновлены" out="привязки глоссариев к агенту" role="порождаю" closes="UC7/4"/>
+  </flow>
+
+</flows>

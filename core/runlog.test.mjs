@@ -45,14 +45,40 @@ test("несколько артефактов у одного шага — сп�
 
 // ГРАНИЦА ФОРМАТА ОБЪЯВЛЕНА, А НЕ ЗАКОДИРОВАНА (приём core/answers.mjs): писатель ОТКАЗЫВАЕТ, вместо
 // того чтобы записать строку, которая разберётся обратно как что-то другое.
+//
+// Судится СТРУКТУРНОЕ поле и лог, собранный руками: `note` фабрика сворачивает сама (тест ниже), и
+// проверять на нём границу писателя значит проверять фабрику, а не писателя.
 test("писатель отказывает значению, которого формат не выдержит", () => {
-  const nl = render(step(begin(null, {}), 2, { note: "требований 18\nsteps:\n  - step: 99" }))
+  const nl = render(step(begin(null, {}), 2, { name: "design\nsteps:\n  - step: 99" }))
   assert.equal(nl.ok, false)
   assert.equal(nl.error.cls, "unwritable")
-  assert.match(nl.error.detail, /note/)
+  assert.match(nl.error.detail, /name/)
 
-  const dash = render(step(begin(null, {}), 2, { note: "- это открыло бы новый элемент списка" }))
+  // Писатель судит ТО, ЧТО ЕМУ ДАЛИ: лог мимо фабрики с сырым переносом в заметке — отказ.
+  const raw = render({ key: "K", started: "T", steps: [{ step: 2, name: "s2", status: "done", at: "T", note: "a\nb" }] })
+  assert.equal(raw.ok, false)
+  assert.match(raw.error.detail, /note/)
+
+  const dash = render(step(begin(null, {}), 2, { name: "- это открыло бы новый элемент списка" }))
   assert.equal(dash.ok, false)
+})
+
+// ЗАМЕТКА ОДНОСТРОЧНА ПО ПОСТРОЕНИЮ, И ЭТО РЕШАЕТ ФАБРИКА.
+//
+// BUG_FIX_CONTEXT: прогон 5b52f76d (20.08.2026). Сухая нарезка отказала двумя строками, полоса
+// отметила шаг 9 на переигрывание с `note: why.slice(0, 80)` — срез режет ДЛИНУ, а не перенос, —
+// писатель отказал, ext бросил исключение, и прогон умер как `crashed` через секунды после того, как
+// PLAN.md был собран. Заметку кормят блокеры гардрейлов и проза оператора: сворачивать её обязан код.
+test("заметка многострочна на входе и однострочна на диске — и возвращается целой", () => {
+  const many = "iglossarystore (волна 2) ждёт то, что лежит не раньше: glossarystore волна 3\n  irestglossarystore (волна 2) ждёт restglossarystore волна 3"
+  const text = render(step(begin(null, { key: "K", at: "T" }), 9, { note: many }))
+  assert.equal(text.ok, true, "многострочная заметка обязана записаться, а не убить прогон")
+  const back = newLog(text.value)
+  assert.equal(back.ok, true)
+  assert.equal(back.value.steps[0].note, "iglossarystore (волна 2) ждёт то, что лежит не раньше: glossarystore волна 3 · irestglossarystore (волна 2) ждёт restglossarystore волна 3")
+
+  // Ведущий дефис открыл бы новый элемент списка — фабрика снимает и его.
+  assert.equal(render(step(begin(null, {}), 2, { note: "- заметка с дефиса" })).ok, true)
 })
 
 test("читатель отказывает неизвестному ключу — опечатка не становится тихой потерей", () => {

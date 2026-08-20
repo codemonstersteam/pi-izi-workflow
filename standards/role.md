@@ -29,9 +29,17 @@ value with no slash is resolved against `modelAliases` of the workflow settings
 `routing`, `execution`, `judgment`. A provider id — what every role here carries today — pins the
 repository to one vendor's one model, and the machine's settings then have no say at all.
 
-Which of the two this pipeline should use is an OPEN DECISION, deliberately not taken here. What is
-not open is the trap, and it cost two runs on 2026-08-13: with an id in the frontmatter, editing
-`modelAliases` changes NOTHING, silently — and the status line shows the CHAT model, so the screen
+**РЕШЕНО 21.08.2026 оператором: роли этого репозитория несут АЛИАС, а не идентификатор.** Кто
+судит — `judgment` (критик требования, критик плана), кто пишет артефакт — `execution` (все
+остальные). Третий алиас, `routing`, ОСТАВЛЕН ПУСТЫМ намеренно: маршрут находки (план · дизайн ·
+требование) разводит скрипт `planRoute`, и роли с этим смыслом в конвейере нет — модель здесь не
+нужна. Под обоими занятыми алиасами сегодня лежит один и тот же `qwen3.6-27b`; смысл перевода в том, что
+модель кругов починки 4-5 поднимается тиром выше ОДНОЙ строкой в машинных настройках, а не правкой
+семи файлов ролей (`docs/plan-design.md` §6). Шов держит это за язык: роль с идентификатором в
+`model:` краснит тест.
+
+Ловушка, которая и заставила решать, стоила двух прогонов 2026-08-13: с идентификатором во
+frontmatter правка `modelAliases` не делает НИЧЕГО, молча — and the status line shows the CHAT model, so the screen
 does not contradict the assumption either. The same silence follows an alias pointing at a model the
 session does not have: execution falls back with no message. **The only honest check is the run's own
 `state.json`** (`"model":…`) against `snapshot.json`'s `models` — both are on disk after every run. **There is no per-path permission map in pi** — "writes only to staging" is

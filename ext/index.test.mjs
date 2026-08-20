@@ -14,21 +14,21 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, rmSync, renameSync } from "node:fs"
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync, existsSync, rmSync, renameSync, utimesSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Compile } from "typebox/compile"
-import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, setPending, clearPending, promote, newRun, focus, cells, buildGraph, weight, ripple, design, parts, part, plan, review, reviewForm, iziAnswer, gate1, branch, runlogRead, runlogMark, runlogTicket, runlogPending } from "./index.mjs"
+import { readText, answers, checkTask, checkBrd, checkFrd, carried, budgets, orderLine, setPending, clearPending, promote, newRun, focus, cells, buildGraph, graphMap, weight, ripple, plan, review, reviewForm, iziAnswer, gate1, branch, tickets, runlogRead, runlogMark, runlogTicket, runlogPending, planReview, planFix, planRoute, planFeedback, nodeFacts, clearStaged, frdAdopt } from "./index.mjs"
 import { KEY_QUESTION } from "../steps/plan/plan.mjs"
 // D23: the gate of step 6 — its question is a constant of the ripple slice, and the answer travels in
 // the format core/answers.mjs owns.
 import { BLIND_STEM, BLIND_TAIL } from "../steps/ripple/ripple.mjs"
 import { newExchange } from "../core/answers.mjs"
 // D23-11: наряд и правило шага 11 читают ОДНО выражение — тест держит их за одно и то же.
-import { askedNodes } from "../steps/review/review.mjs"
 import { parseFrd } from "../steps/intake/frd.mjs"
+import { owedItems, unbackedItems, frdIds } from "../steps/review/review.mjs"
 import { DEFAULT_BUDGETS, ORDER_CAP_CHARS } from "../core/budgets.mjs"
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "izi-s14-"))
@@ -156,7 +156,7 @@ test("newRun carries the dead run's answers, question and staging into .agent/pr
   deadRun(root)
   const r = newRun.run({}, ctx(root))
 
-  assert.deepEqual(r, { answers: 1, pending: true, staged: 1, dirty: -1 })   // a temp dir is no git repo: -1, never 0
+  assert.deepEqual(r, { answers: 1, pending: true, staged: 1, dirty: -1, kept: false })   // a temp dir is no git repo: -1, never 0
   assert.deepEqual(answers.run({}, ctx(root)), [])                                   // the new run starts with no answers
   assert.equal(existsSync(join(root, ".agent", "pending.json")), false)
   assert.equal(existsSync(join(root, ".agent", "staging", "graph-parts", "root.xml")), false)
@@ -176,7 +176,7 @@ test("newRun does not touch artifacts or the .izi/parts cache — that cache out
 
 test("newRun on a clean root: nothing to carry, nothing created", () => {
   const root = tempRoot()
-  assert.deepEqual(newRun.run({}, ctx(root)), { answers: 0, pending: false, staged: 0, dirty: -1 })
+  assert.deepEqual(newRun.run({}, ctx(root)), { answers: 0, pending: false, staged: 0, dirty: -1, kept: false })
   assert.equal(existsSync(join(root, ".agent", "prev")), false)
 })
 
@@ -186,7 +186,7 @@ test("newRun twice: .agent/prev holds the PREVIOUS run, not a growing pile", () 
   newRun.run({}, ctx(root))
   writeFileSync(join(root, ".agent", "answers.md"), EXCHANGE("предел?", "10"))       // the run that just ended
   const r = newRun.run({}, ctx(root))
-  assert.deepEqual(r, { answers: 1, pending: false, staged: 0, dirty: -1 })
+  assert.deepEqual(r, { answers: 1, pending: false, staged: 0, dirty: -1, kept: false })
   const prev = readFileSync(join(root, ".agent", "prev", "answers.md"), "utf8")
   assert.match(prev, /10/)
   assert.doesNotMatch(prev, /50/)                                                     // overwritten, not appended
@@ -245,6 +245,7 @@ test("a number that stands in a requirement's verify is sourced — the BRD slic
   <delta op="GET /glossary" form="Changed" node="src/GlossaryResource.java" from="404" to="глоссарий"/>
   <scenario id="S1" uc="UC1" before="GET /glossary не отвечает" after="отдаёт глоссарий" nodes="src/GlossaryResource.java"/>
   <touched path="src/GlossaryResource.java" why="появляется чтение глоссария"/>
+  <carried req="R1" by="UC1/1"/>
 </frd>`
 
   // Live run e132f0a1 died on exactly this: the number stood in `verify`, F5 said "nowhere in the
@@ -295,6 +296,7 @@ test("возобновление судит строение промоучен�
   <scenario id="S1" uc="UC1" before="каждый вызов идёт в хранилище" after="повторный вызов берётся из кэша" nodes="src/GlossaryResource.java"/>
   <touched path="src/GlossaryResource.java" why="появляется чтение из кэша"/>
   <nfr subject="glossary-cache" fit="кэш живёт 300000 мс" source="answers.md"/>
+  <carried req="R1" by="UC1/1"/>
 </frd>`
   writeFileSync(join(root, ".agent", "staging", "frd.xml"), frd)
   writeFileSync(join(root, ".agent", "frd.xml"), frd)                    // тот же артефакт, промоученный
@@ -884,148 +886,8 @@ const named = (root) => {
 // Живой прогон 17 авг: воркфлоу звал core({group: undefined}) и получал «группы «» нет в разбиении».
 // Причина — производный id, оставшийся внутри модуля: схема хоста его не выпускала. Имя артефакта
 // партии обязано выходить наружу, иначе позвать её нельзя.
-test("разбиение отдаёт slug партии — им её и зовут, и им названы её артефакты", () => {
-  const root = designRoot()
-  // Карта ТРЕБУЕТСЯ фазой ③: без неё у карточки нет ни фактов, ни образца, ни команды проверки.
-  writeFileSync(join(root, ".agent", "appgraph.xml"), `<appgraph grammar="3" modules="1">
-  <suite id="unit" kind="unit" cmd="./mvnw test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
-  <module path="src/ParcelResource.java" level="1"><role>REST-точка посылок</role></module>
-</appgraph>`);
-  // Ключ задачи спрашивается ДО первого вызова роли: под него кладётся вся поставка шага.
-  const asked = parts.run({}, ctx(root))
-  assert.equal(asked.ok, false)
-  assert.equal(asked.ask, true, "без ключа — вопрос оператору, а не запись мимо")
-  writeFileSync(join(root, ".agent", "answers.md"), newExchange([{ n: 1, question: KEY_QUESTION, text: "DOS-42" }]).value)
-
-  const r = parts.run({}, ctx(root))
-  assert.equal(r.ok, true, r.why)
-  assert.equal(r.at, "task/DOS-42", "поставка шага живёт рядом с веткой, под ключом задачи")
-  assert.equal(r.ok, true)
-  assert.ok(r.parts.length, "хотя бы одна партия")
-  for (const x of r.parts) {
-    assert.equal(typeof x.slug, "string")
-    assert.equal(x.slug.includes("/"), false, "slug — имя файла, а не путь")
-  }
-})
-
-test("гейт: артефакты снесённых проходов не переживают его НИКОГДА, а зелёный словарь переживает", () => {
-  // skip — от шага 9 не остаётся ничего
-  const skip = designRoot("skip")
-  writeFileSync(join(skip, ".agent", "values.xml"), "<values/>")
-  writeFileSync(join(skip, ".agent", "design-graph.xml"), "<design/>")
-  writeFileSync(join(skip, ".agent", "data-flow.md"), "$START_FLOW id=\"вчера\"\n$END_FLOW\n")
-  assert.deepEqual(design.run({}, ctx(skip)), { ok: true, design: "skip" })
-  for (const f of ["values.xml", "design-graph.xml", "data-flow.md"]) {
-    assert.equal(existsSync(join(skip, ".agent", f)), false, f)
-  }
-
-  // needed, словарь зелен СЕЙЧАС — он переиспользуется, а пара прошлой версии полосы уходит
-  const both = designRoot("needed")
-  writeFileSync(join(both, ".agent", "values.xml"), named(both))
-  writeFileSync(join(both, ".agent", "design-graph.xml"), "<design/>")
-  assert.deepEqual(design.run({}, ctx(both)).reused, ["values"])
-  assert.equal(existsSync(join(both, ".agent", "values.xml")), true)
-  assert.equal(existsSync(join(both, ".agent", "design-graph.xml")), false)
-
-  // needed, словарь зелен когда-то, но не сейчас: строку из него убрали, состав перестал сходиться
-  // со скелетом — гейт сносит его, и проход A пойдёт заново.
-  const stale = designRoot("needed")
-  writeFileSync(join(stale, ".agent", "values.xml"), named(stale).replace(/\n.*id="v3".*/, ""))
-  assert.deepEqual(design.run({}, ctx(stale)).reused, [])
-  assert.equal(existsSync(join(stale, ".agent", "values.xml")), false)
-})
-
-test("no .agent/design at the run root: refusal naming step 8", () => {
-  const r = design.run({}, ctx(designRoot(null)))
-  assert.equal(r.ok, false)
-  assert.match(r.why, /шаг 8 ripple не отработал/)
-})
-
-test("скрипт составляет словарь, роль называет пустые, промоут снимает леса", () => {
-  const root = designRoot()
-  design.run({}, ctx(root))
-
-  // СОСТАВ — скрипта: два конца use case и вызов узла изменения. Текст вызова списан из ряби
-  // дословно, остальное — работа роли, и её объём назван числом.
-  const s = design.run({ skeleton: ".agent/staging/values-skeleton.xml" }, ctx(root))
-  assert.deepEqual(s, { ok: true, rows: 3, filled: 1, blank: 2 })
-  const skel = readFileSync(join(root, ".agent", "staging", "values-skeleton.xml"), "utf8")
-  assert.match(skel, /<value id="v1" closes="UC1\/in" side="in" text="" end="клиент отправляет GET/)
-  // Операция изменения названа дельтой: она заявка требования о будущем, а не факт репозитория,
-  // и её узла в ряби может не быть вовсе (D33).
-  assert.match(skel, /<value id="v3" text="GET \/parcels" src="delta src\/ParcelResource.java"\/>/)
-  // Объявление СОСЕДА по ряби значением не является: изменение его не меняет.
-  assert.doesNotMatch(skel, /all\(\)/)
-
-  // Незаполненный скелет — красный: строка, которую никто не назвал, это дефект, а не пустое место.
-  const red = design.run({ path: stage(root, "values.xml", skel) }, ctx(root))
-  assert.equal(red.ok, false)
-  assert.equal(red.blockers.split("\n").length, 2)
-  assert.equal(existsSync(join(root, ".agent", "values.xml")), false)
-
-  // Заполненный — зелёный, и наружу уходит грамматика без лесов, которые читала роль.
-  const green = design.run({ path: stage(root, "values.xml", named(root)) }, ctx(root))
-  assert.deepEqual(green, { ok: true, values: 3 })
-  const out = readFileSync(join(root, ".agent", "values.xml"), "utf8")
-  assert.match(out, /^<values grammar="2">/)
-  assert.equal(/side=|end=|src=|form=/.test(out), false)
-  assert.match(out, /<value id="v1" text="GET \/parcels\?track=T" closes="UC1\/in"\/>/)
-  assert.equal(existsSync(join(root, ".agent", "staging", "values.xml")), false)   // promote is a MOVE
-})
-
-test("роль переписала состав: строка добавлена — красный, staging остаётся уликой, промоута нет", () => {
-  const root = designRoot()
-  design.run({}, ctx(root))
-  const p = stage(root, "values.xml", named(root).replace("</values>", '  <value id="v9" text="Parcel(track)"/>\n</values>'))
-
-  const r = design.run({ path: p }, ctx(root))
-  assert.equal(r.ok, false)
-  assert.match(r.blockers, /v9/)
-  assert.equal(existsSync(join(root, ".agent", "values.xml")), false)
-  assert.equal(existsSync(join(root, p)), true, "красный staging остаётся уликой")
-})
-
 // Проход B, io-шов: скелет цепочек считается из СЛОВАРЯ и FRD, а зелёная проверка СОБИРАЕТ поставку
 // в том же вызове — рабочий файл цепочек не промоутится никогда, потому что промоут это и есть пара.
-test("проход B: скелет цепочек, чек и сборка пары в одном зелёном вызове", () => {
-  const root = designRoot()
-  design.run({}, ctx(root))
-  design.run({ path: stage(root, "values.xml", named(root)) }, ctx(root))   // проход A закрыт
-
-  const s = design.run({ pass: "chains", skeleton: ".agent/staging/chains-skeleton.xml" }, ctx(root))
-  assert.deepEqual(s, { ok: true, chains: 1, blank: 1 })
-  const skel = readFileSync(join(root, ".agent", "staging", "chains-skeleton.xml"), "utf8")
-  // Начало и конец берутся из словаря: v1 закрывает UC1/in, v2 — UC1/post.
-  assert.match(skel, /entry="v1" exit="v2" nodes="src\/ParcelResource.java" steps=""/)
-
-  // Незаполненный скелет красный, и блокер говорит откуда и куда вести.
-  const red = design.run({ pass: "chains", path: stage(root, "chains.xml", skel) }, ctx(root))
-  assert.equal(red.ok, false)
-  assert.match(red.blockers, /от entry="v1" до exit="v2"/)
-  assert.equal(existsSync(join(root, ".agent", "design-graph.xml")), false)
-
-  const green = design.run({ pass: "chains", path: stage(root, "chains.xml", skel.replace('steps=""', 'steps="src/ParcelResource.java@v2"')) }, ctx(root))
-  assert.deepEqual(green, { ok: true, nodes: 1, units: 1, unstepped: [] })
-  // Поставка собрана скриптом: контракт несёт ТЕКСТЫ, шаг маршрута — номер альтернативы.
-  const graph = readFileSync(join(root, ".agent", "design-graph.xml"), "utf8")
-  assert.match(graph, /^<design mode="minor"/)
-  assert.match(graph, /<contract in="GET \/parcels\?track=T" out="Parcels\(совпавшие\)"\/>/)
-  assert.match(graph, /<route scenario="S1" entry="1" steps="src\/ParcelResource.java#1"\/>/)
-  const flow = readFileSync(join(root, ".agent", "data-flow.md"), "utf8")
-  assert.match(flow, /^1\. src\/ParcelResource\.java : GET \/parcels\?track=T -> Parcels\(совпавшие\)$/m)
-  assert.match(flow, /\$START_TESTS path="src\/ParcelResource\.java"/)
-  assert.equal(existsSync(join(root, ".agent", "staging", "chains.xml")), false)   // промоут это МOVE
-})
-
-test("nothing written to the staging path is MISSING, not merely red", () => {
-  const root = designRoot()
-  design.run({}, ctx(root))
-  const r = design.run({ path: ".agent/staging/values.xml" }, ctx(root))
-  assert.equal(r.ok, false)
-  assert.equal(r.missing, true)
-  assert.match(r.blockers, /роль ничего не записала/)
-})
-
 test("izi_answer drops the number the operator addressed each answer with, on disk and in the table", async () => {
   const root = tempRoot()
   setPending.run({
@@ -1197,19 +1059,25 @@ test("a refusal erases yesterday's plan-index.json", () => {
 const reviewRoot = (verdict) => {
   const root = tempRoot()
   mkdirSync(join(root, ".agent", "staging"), { recursive: true })
-  writeFileSync(join(root, ".agent", "frd.xml"), FRD_R)
-  writeFileSync(join(root, ".agent", "plan-index.json"), JSON.stringify({
-    grammar: 1,
-    order: ["src/ParcelResource.java"],
-    nodes: [{ id: "src/ParcelResource.java", kind: "code", delta: ["GET /parcels (Added)"], deps: [], check: [{ suite: "unit", cmd: "mvn test" }], coveredBy: ["scenario:S1"] }],
-  }))
+  // Критик судит ТРЕБОВАНИЕ: FRD со staging против brd.md. Плана здесь нет — шаг 11 переехал выше него.
+  writeFileSync(join(root, ".agent", "brd.md"), [
+    "R1 Посылку можно найти по номеру",
+    "   fit: список сужается до совпавших",
+    "subjects[]: посылка", "analogue: —", "open-questions: 0",
+  ].join("\n"))
+  writeFileSync(join(root, ".agent", "staging", "frd.xml"), `<frd grammar="1" goal="искать посылку">
+  <usecase id="UC1" actor="api" goal="найти посылку"><post>вернулись совпавшие</post><step n="1">клиент шлёт GET /parcels?track=…</step></usecase>
+  <delta op="GET /parcels" form="Changed" node="src/ParcelResource.java" from="list()" to="list(track)"/>
+  <scenario id="S1" uc="UC1" before="весь реестр" after="только совпавшие" nodes="src/ParcelResource.java"/>
+  <carried req="R1" by="UC1/1"/>
+</frd>`)
   writeFileSync(join(root, ".agent", "staging", "review.xml"), verdict)
   return root
 }
 
 test("review promotes a Pass and returns the verdict", () => {
-  // grammar 2 (D21): a Pass now has to CLOSE the checklist — this FRD owes exactly one row, S1.
-  const root = reviewRoot('<review verdict="Pass" grammar="2"><covers item="S1" node="src/ParcelResource.java"/></review>')
+  // grammar 2 (D21): Pass обязан ЗАКРЫТЬ чек-лист — здесь одна строка долга, R1.
+  const root = reviewRoot('<review verdict="Pass" grammar="2"><covers item="R1" node="UC1/1"/></review>')
   const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
   assert.equal(r.ok, true, r.ok ? "" : r.blockers)
   assert.equal(r.verdict, "Pass")
@@ -1218,7 +1086,7 @@ test("review promotes a Pass and returns the verdict", () => {
 })
 
 test("review promotes a Reject too, and hands back the owner of each blocker", () => {
-  const root = reviewRoot('<review verdict="Reject" grammar="2"><blocker code="goal-not-delivered" node="src/ParcelResource.java" evidence="S1">поиск не выполняется ни одним узлом</blocker></review>')
+  const root = reviewRoot('<review verdict="Reject" grammar="2"><covers item="R1" node="UC1/1"/><blocker code="goal-not-delivered" node="UC1" evidence="S1">post не достижим из собственных шагов</blocker></review>')
   const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
   assert.equal(r.ok, true, r.ok ? "" : r.blockers)
   assert.equal(r.verdict, "Reject")
@@ -1231,7 +1099,7 @@ test("review promotes a Reject too, and hands back the owner of each blocker", (
 // budgets schema test above uses: a key present in the runtime shape but missing from `required`/
 // `properties` is how a live run silently drops a field the caller (band()) depends on.
 test("review output schema: findings carry `note`, and the host's own validator accepts the shape", () => {
-  const root = reviewRoot('<review verdict="Reject" grammar="2"><blocker code="goal-not-delivered" node="src/ParcelResource.java" evidence="S1">поиск не выполняется ни одним узлом</blocker></review>')
+  const root = reviewRoot('<review verdict="Reject" grammar="2"><covers item="R1" node="UC1/1"/><blocker code="goal-not-delivered" node="UC1" evidence="S1">post не достижим из собственных шагов</blocker></review>')
   const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
   assert.equal(r.ok, true, r.ok ? "" : r.blockers)
   assert.equal(r.findings[0].note, "", "goal-not-delivered carries no OPERATOR_NOTE — band() never reads this row's note")
@@ -1243,29 +1111,18 @@ test("review output schema: findings carry `note`, and the host's own validator 
 // "const auto = …") — a `note` added to one and not the other still validates as long as no test
 // exercises the missing side. This is that side.
 test("review output schema: an autoFindings open-question finding also carries `note`", () => {
-  const root = tempRoot()
-  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
-  writeFileSync(join(root, ".agent", "frd.xml"), `<frd grammar="1" goal="искать посылку">
-  <delta op="GET /parcels" form="Added" node="src/ParcelResource.java" from="list()" to="list(track)"/>
-  <scenario id="S1" uc="UC1" before="весь реестр" after="только совпавшие" nodes="src/ParcelResource.java"/>
-  <touched path="src/ParcelResource.java"/>
-  <question subject="track-format" why="формат трек-номера не определён"/>
-</frd>
-`)
-  writeFileSync(join(root, ".agent", "plan-index.json"), JSON.stringify({
-    grammar: 1,
-    order: ["src/ParcelResource.java"],
-    nodes: [{ id: "src/ParcelResource.java", kind: "code", delta: ["GET /parcels (Added)"], deps: [], check: [{ suite: "unit", cmd: "mvn test" }], coveredBy: ["scenario:S1"] }],
-  }))
-  writeFileSync(join(root, ".agent", "staging", "review.xml"),
-    '<review verdict="Pass" grammar="2"><covers item="S1" node="src/ParcelResource.java"/></review>')
+  const root = reviewRoot('<review verdict="Pass" grammar="2"><covers item="R1" node="UC1/1"/></review>')
+  // Открытый вопрос дописан в тот же артефакт: он машинная находка, роль о нём не спрашивают.
+  const frdPath = join(root, ".agent", "staging", "frd.xml")
+  writeFileSync(frdPath, readFileSync(frdPath, "utf8").replace("</frd>",
+    '  <question subject="track-format" why="формат трек-номера не определён"/>\n</frd>'))
 
   const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
   assert.equal(r.ok, true, r.ok ? "" : r.blockers)
-  assert.equal(r.verdict, "Reject", "an unanswered <question> reaching the plan turns the RESULT to Reject regardless of the role's own Pass")
+  assert.equal(r.verdict, "Reject", "неотвеченный <question> делает РЕЗУЛЬТАТ отказом, что бы ни написала роль")
   const q = r.findings.find((f) => f.code === "open-question")
   assert.ok(q, JSON.stringify(r.findings))
-  assert.equal(q.note, "", "open-question's owner is step 6, not operator — OPERATOR_NOTE has no row for it")
+  assert.equal(q.note, "", "владелец open-question — шаг 6, не оператор: строки в OPERATOR_NOTE у него нет")
   const validate = Compile(review.output)
   assert.equal(validate.Check(r), true, JSON.stringify(r))
 })
@@ -1281,8 +1138,8 @@ test("a malformed verdict promotes nothing and erases yesterday's review", () =>
 
 test("review names the step that did not run instead of reading an absent artifact", () => {
   const root = reviewRoot('<review verdict="Pass" grammar="1"/>')
-  rmSync(join(root, ".agent", "plan-index.json"))
-  assert.match(review.run({ path: ".agent/staging/review.xml" }, ctx(root)).blockers, /шаг 10 plan не отработал/)
+  rmSync(join(root, ".agent", "staging", "frd.xml"))
+  assert.match(review.run({ path: ".agent/staging/review.xml" }, ctx(root)).blockers, /шаг 6 intake не отработал/)
 })
 
 // --- D10: the phase of step 9 is ONE pass while the step is rewritten ----------------------------
@@ -1291,80 +1148,81 @@ test("review names the step that did not run instead of reading an absent artifa
 // the only seam available for its structure is the one the ENVELOPE test above already uses: read the
 // source and hold it to what the pass requires.
 const IZI = readFileSync(new URL("../workflows/izi.js", import.meta.url), "utf8")
+const EXT = readFileSync(new URL("./index.mjs", import.meta.url), "utf8")
 
+
+
+
+
+
+// J14 — НАРЯД ШАГА 6 НЕСЁТ ВТОРУЮ КАРТУ, И РОЛЬ БОЛЬШЕ НЕ ИЩЕТ ТОГО, ЧТО ПОДСТАВЛЕНО.
 //
-// Passes B and C were deleted, so the ladder of three is gone with them. What is asserted here is the
-// shape that replaced it and the two facts a live run cannot recover from being wrong about: the
-// phase is handed WHERE THE BAND STARTED (a rewind to step 6 must not reuse a dictionary extracted
-// from the previous FRD), and the band STOPS after the pass instead of walking into step 10 with no
-// design at all — step 10 accepts a missing design as legal input, so nothing below would refuse.
-test("the band hands the design phase where it STARTED, and the phase re-runs pass A on a rewind", () => {
-  assert.match(IZI, /await designing\(from\)/)
-  assert.match(IZI, /if \(from > 6 && \(gate\.reused \|\| \[\]\)\.includes\("values"\)\)/)
+// BUG_FIX_CONTEXT: живой прогон 19.08.2026, форма eddi (DOS-535). Роль спросила оператора
+//   «AgentConfiguration model class path (not in appgraph.xml — needed for R3 `glossaries` field
+//   delta…)», хотя `.agent/graph-computed.xml` нёс
+//   `<decl at="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java" kind="class"/>`
+//   среди 6890 объявлений по 1856 файлам. Карта роя покрывает 86 клеток фокуса, и имени в ней нет
+//   ни разу. Оператор потратил ход на факт, который лежал на диске.
+const TYPES_MAP = `<appgraph grammar="4" modules="1">
+  <module path="src/main/java/app/snippets/mongo/SnippetStore.java" pkg="app.snippets.mongo">
+    <decl kind="class" name="SnippetStore" sig="public class SnippetStore"/>
+  </module>
+</appgraph>`
+const TYPES_COMPUTED = `<computed by="script">
+  <decl at="src/main/java/app/agents/model/AgentConfiguration.java" kind="class" name="AgentConfiguration" sig="public class AgentConfiguration"/>
+  <decl at="src/main/java/app/agents/model/AgentConfiguration.java" kind="method" name="getSnippets()" sig="public List&lt;URI&gt; getSnippets()"/>
+</computed>`
+const typesRoot = () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "appgraph.xml"), TYPES_MAP)
+  writeFileSync(join(root, ".agent", "graph-computed.xml"), TYPES_COMPUTED)
+  writeFileSync(join(root, "TASK.md"), "Glossary is bound to the agent, versioned like SnippetStore.\n")
+  writeFileSync(join(root, ".agent", "brd.md"), "R3 reference in agent config, as snippets\n")
+  writeFileSync(join(root, ".agent", "answers.md"), EXCHANGE("field name in AgentConfiguration?", "glossaries"))
+  return root
+}
+
+test("наряд шага 6 несёт таблицу типов, собранную СКРИПТОМ по вычисленному графу", () => {
+  const root = typesRoot()
+  const r = graphMap.run({}, ctx(root))
+
+  assert.equal(r.ok, true)
+  // Имя, которого карта роя не знает НИ РАЗУ, приезжает с путём, видом и тем, что объявляет.
+  assert.equal(r.types.includes("AgentConfiguration · src/main/java/app/agents/model/AgentConfiguration.java · class · declares public List<URI> getSnippets()"), true, r.types)
+  // Карта роя остаётся первым источником — одно имя, один резолвер, две карты.
+  assert.match(r.types, /^SnippetStore · src\/main\/java\/app\/snippets\/mongo\/SnippetStore\.java · class$/m)
+  assert.equal(r.typeRows, 2)
+  // ИМЯ, КОТОРОГО В ГРАФЕ НЕТ, В ТАБЛИЦУ НЕ ПОПАДАЕТ: `Glossary` этим изменением создаётся, и
+  // спросить о нём оператора по-прежнему законно.
+  assert.equal(r.types.includes("Glossary"), false)
+
+  // Второй карты нет — таблица пуста, и вопрос про путь снова законен. Это ровно то состояние, из
+  // которого прогон 19.08.2026 и задал свой вопрос.
+  rmSync(join(root, ".agent", "graph-computed.xml"))
+  const blind = graphMap.run({}, ctx(root))
+  assert.equal(blind.types.includes("AgentConfiguration"), false)
+  assert.equal(blind.typeRows, 1, "карта роя отвечает и одна — но только про клетки фокуса")
 })
 
-test("два прохода — две роли, два наряда, и имена ролей те, которые pi резолвит по ФАЙЛУ", () => {
-  for (const [id, role, tpl] of [["values", "valuer", "order-values.tpl"], ["chains", "router", "order-chains.tpl"]]) {
-    assert.match(IZI, new RegExp(`role: "${role}",\\s+tpl: "steps/design/${tpl}"`), id)
-    assert.equal(existsSync(new URL(`../steps/design/${role}.md`, import.meta.url).pathname), true, role)
-    assert.equal(existsSync(new URL(`../steps/design/${tpl}`, import.meta.url).pathname), true, tpl)
-  }
-  // Наряды снесённой трёхпроходной конструкции не лежат там, где их найдёт хост.
-  for (const gone of ["designer.md", "order-nodes.tpl", "order-routes.tpl", "order.tpl"]) {
-    assert.equal(existsSync(new URL(`../steps/design/${gone}`, import.meta.url).pathname), false, gone)
-  }
-})
-
-test("шаг 9 — ДВА прохода одной формы, и второй собирает поставку", () => {
-  // Один цикл на оба прохода: composing → role → guardrail → promote. Разные у них только ключи
-  // наряда, и это ровно то, что отличает «назови конец» от «проведи маршрут».
-  assert.match(IZI, /await onePass\("values", \(\) => \(\{ FRD \}\)\)/)
-  assert.match(IZI, /await onePass\("chains", \(\) => \(\{ FRD, VALUES \}\)\)/)
-  assert.match(IZI, /return "\.agent\/data-flow\.md"/)
-  // Шаги 10 и 11 ОТЛОЖЕНЫ до наряда D35 — одной константой и одной строкой лестницы, чтобы
-  // возврат стоил снятия `true`, а не разбора того, что и куда переехало.
-  assert.match(IZI, /const STOP_AFTER_DESIGN = true;/)
-  assert.match(IZI, /if \(STOP_AFTER_DESIGN\) return from <= 9/)
-  // …и `skip` шага 8 — по-прежнему отдельный случай: дизайна нет по решению.
-  assert.match(IZI, /return "\.agent\/design"; \/\/ the flag file IS the receipt of the skip/)
-})
-
-// Наряд прохода A несёт СКЕЛЕТ и файл прошлой попытки. `prompt()` требует точного двустороннего
-// совпадения ключей, поэтому `{SKELETON}` в шаблоне без ключа здесь бросает НА ЗАПУСКЕ — после
-// гейта и после расчёта скелета. Шов — grep, и стоит он миллисекунду.
-test("наряд прохода несёт скелет, число пустых строк и файл прошлой попытки", () => {
-  assert.match(IZI, /\.\.\.extra\(\), SKELETON, PREVIOUS, BLANK: String\(s\.blank\), FEEDBACK: feedback/)
-  assert.match(IZI, /\(none — first attempt\)/)
-})
-
-// BUG_FIX_CONTEXT: живой прогон 4cfdbf54 (форма eddi). Наряд прохода A нёс в CONSTRAINTS пример
-// формы значения — `POST /loans/{id}/renew`, — и `prompt()` прочитал `{id}` как ПОДСТАНОВКУ: он
-// требует двустороннего совпадения ключей и бросил `Missing prompt value "id"`. Крах пришёл ПОСЛЕ
-// гейта, ряби и посчитанного скелета, то есть за миллисекунду до вызова роли и без единого артефакта.
-// Проверка стоит миллисекунду и держит обе стороны сразу: каждая фигурная скобка шаблона — ключ,
-// который воркфлоу передаёт, и каждый ключ — скобка в шаблоне.
-test("плейсхолдеры нарядов обоих проходов и ключи, которые им передают, — одно множество", () => {
-  // Ключ — то, что стоит ПОСЛЕ разделителя объекта; хвостовой разделитель ловится заглядыванием,
-  // иначе съеденная запятая крадёт следующий ключ.
-  // Конец среза ищется ПОСЛЕ его начала: в файле два вызова sized на шаге 9, и общий поиск
-  // «if (o.over)» находил чужой.
-  const passAt = IZI.indexOf("const o = sized(`design/${id}`")
-  const call = IZI.slice(passAt, IZI.indexOf("if (o.over)", passAt))
-  const common = [...new Set([...call.matchAll(/[{,]\s*([A-Z][A-Z_]*)\s*(?=[,:])/g)].map((m) => m[1]))]
-  for (const [tplName, own] of [["order-values.tpl", "FRD"], ["order-chains.tpl", "FRD, VALUES"]]) {
-    const tpl = readFileSync(new URL(`../steps/design/${tplName}`, import.meta.url), "utf8")
+// Тот же двусторонний шов, что у нарядов шага 9: `prompt()` требует точного совпадения ключей, и
+// плейсхолдер `{TYPES}` без ключа в полосе (или ключ без плейсхолдера) роняет шаг 6 НА ЗАПУСКЕ —
+// после карты, после ответов и за миллисекунду до роли.
+test("плейсхолдеры нарядов шага 6 и ключи, которые им передают, — одно множество на каждый пласт", () => {
+  for (const pass of ["A", "B", "C", "D"]) {
+    const at_ = IZI.indexOf(`order = await sized("intake/${pass}", tpl${pass}, {`)
+    assert.ok(at_ > 0, `в полосе нет сборки наряда прохода ${pass}`)
+    const call = IZI.slice(at_, IZI.indexOf("});", at_) + 3)
+    const inCall = [...new Set([...call.matchAll(/[{,]\s*([A-Z][A-Z_]*)\s*(?=[,:}])/g)].map((m) => m[1]))].sort()
+    const tpl = readFileSync(new URL(`../steps/intake/order-${pass.toLowerCase()}.tpl`, import.meta.url), "utf8")
     const inTpl = [...new Set([...tpl.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]))].sort()
-    const inCall = [...new Set([...common, ...own.split(", ")])].sort()
-    assert.deepEqual(inTpl, inCall, tplName)
+    assert.deepEqual(inTpl, inCall, `steps/intake/order-${pass.toLowerCase()}.tpl`)
   }
-
-  // …и наряд партии, который собирается своим циклом: у него другой набор ключей.
-  const partAt = IZI.indexOf("const o = sized(`design/part/${one.slug}`")
-  const partCall = IZI.slice(partAt, IZI.indexOf("if (o.over)", partAt))
-  const inPartCall = [...new Set([...partCall.matchAll(/[{,]\s*([A-Z][A-Z_]*)\s*(?=[,:])/g)].map((m) => m[1]))].sort()
-  const partTpl = readFileSync(new URL("../steps/design/order-part.tpl", import.meta.url), "utf8")
-  const inPartTpl = [...new Set([...partTpl.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]))].sort()
-  assert.deepEqual(inPartTpl, inPartCall, "order-part.tpl")
+  // КАРТА ЕДЕТ РОВНО В ОДИН НАРЯД. Пласты A и C о репозитории не рассуждают, а в D о нём судит скрипт
+  // (F8 читает вычисленный граф сам) — 107 811 Б карты в их нарядах были бы чистой тратой окна.
+  const withMap = ["A", "B", "C", "D"].filter((p) =>
+    /\{MAP\}/.test(readFileSync(new URL(`../steps/intake/order-${p.toLowerCase()}.tpl`, import.meta.url), "utf8")))
+  assert.deepEqual(withMap, ["B"], "карта роя обязана ехать только в наряд пласта B")
 })
 
 test("the valuer returns a count, so the envelope carries it — additionalProperties is false", () => {
@@ -1373,23 +1231,34 @@ test("the valuer returns a count, so the envelope carries it — additionalPrope
 
 // и она ответила `<witness cmd="mvn verify -Pnative"/>` для HTML-страницы — команда машинную сверку
 // проходит (она у закрывающего сценария) и страницу не открывает. Убери `dod` из строки — красный.
-test("reviewForm: строка {UNCHECKED} несёт юниты узла, а не один его id", () => {
+test("reviewForm: два чек-листа — долг перед требованиями и то, чего никто не просил", () => {
   const root = tempRoot()
-  mkdirSync(join(root, ".agent"), { recursive: true })
-  writeFileSync(join(root, ".agent", "frd.xml"), FRD_R)
-  writeFileSync(join(root, ".agent", "plan-index.json"), JSON.stringify({
-    grammar: 2,
-    order: ["src/page.html", "scenario:S1"],
-    nodes: [
-      { id: "src/page.html", kind: "code", delta: [], why: "вызов и карточка", dod: ["клик -> GET /x", "200 -> карточка"], deps: [], check: [], coveredBy: ["scenario:S1"] },
-      { id: "scenario:S1", kind: "scenario", scenario: "S1", deps: [], check: [{ suite: "unit", cmd: "mvn test" }], coveredBy: [] },
-    ],
-  }))
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  writeFileSync(join(root, ".agent", "brd.md"), [
+    "R1 Посылку можно найти по номеру",
+    "   fit: GET /parcels/{id} возвращает посылку",
+    "R2 Список посылок фильтруется по статусу",
+    "   fit: GET /parcels?status=… возвращает только этот статус",
+    "subjects[]: посылка", "analogue: —", "open-questions: 0",
+  ].join("\n"))
+  writeFileSync(join(root, ".agent", "staging", "frd.xml"), `<frd grammar="1" goal="поиск посылки">
+  <usecase id="UC1" actor="api" goal="найти посылку"><post>посылка вернулась</post><step n="1">клиент шлёт GET /parcels/{id}</step></usecase>
+  <usecase id="UC9" actor="api" goal="выгрузить архив посылок в S3"><post>архив в S3</post><step n="1">админ просит выгрузку</step></usecase>
+  <delta op="GET /parcels/{id}" form="Added" node="src/ParcelResource.java" new="yes"/>
+  <scenario id="S1" uc="UC1" before="404" after="200" nodes="src/ParcelResource.java"/>
+  <carried req="R1" by="UC1/1"/>
+</frd>`)
+
   const f = reviewForm.run({}, ctx(root))
-  assert.match(f.unchecked, /src\/page\.html — своей команды нет; закрывают: mvn test/)
-  assert.match(f.unchecked, /делает:/)
-  assert.match(f.unchecked, /1\. клик -> GET \/x/)
-  assert.match(f.unchecked, /2\. 200 -> карточка/)
+  // Долг — строка на требование, id машинный: роль его КОПИРУЕТ.
+  assert.match(f.owed, /^R1 — Посылку можно найти по номеру · fit: GET \/parcels\/\{id\}/m)
+  assert.match(f.owed, /^R2 — Список посылок фильтруется по статусу/m)
+  // Обратный ход: UC9 не назван ни одной строкой carried — ровно та находка, ради которой список
+  // и заведён (живой прогон eddi: UC8, четыре наряда работы, которой никто не просил).
+  assert.match(f.unbacked, /UC9 — use case «выгрузить архив посылок в S3»/)
+  assert.equal(/UC1 —/.test(f.unbacked), false, "названный через carried use case подозреваемым не бывает")
+  // Словарь кодов приезжает оттуда же, откуда судит правило.
+  assert.equal(f.codes, "requirement-not-carried | invented-value | goal-not-delivered | open-question")
 })
 
 // --- D23: гейт шага 6 — узел изменения, которого не исполняет ни один сьют ------------------------
@@ -1494,394 +1363,57 @@ test("гейт срабатывает ТОЛЬКО после зелёного c
   assert.equal(still.waived, undefined)
 })
 
-test("шов 9: {UNCHECKED} спрашивает про узел, а про два множества, о которых не спрашивают, говорит", () => {
-  const root = tempRoot()
-  mkdirSync(join(root, ".agent"), { recursive: true })
-  writeFileSync(join(root, ".agent", "frd.xml"), FRD_R)
-  writeFileSync(join(root, ".agent", "plan-index.json"), JSON.stringify({
-    grammar: 2,
-    order: ["src/page.html", "src/card.html", "scenario:S1"],
-    nodes: [
-      { id: "src/page.html", kind: "code", new: false, delta: [], dod: ["клик -> GET /x"], deps: [], check: [], coveredBy: ["scenario:S1"] },
-      { id: "src/card.html", kind: "code", new: true, delta: ["GET /card (Added)"], dod: [], deps: [], check: [], coveredBy: ["scenario:S1"] },
-      { id: "scenario:S1", kind: "scenario", scenario: "S1", deps: [], check: [{ suite: "unit", cmd: "mvn test" }], coveredBy: [] },
-    ],
-  }))
-
-  // Создаваемый узел спрошенным не бывает: до него не может доходить ни одна команда карты — карта
-  // старше файла (steps/review/review.mjs::askedNodes). Но и молча пропасть он не может: строка
-  // наряда называет его ФАКТОМ шага 16, иначе пропажа читается как недосмотр и роль чинит её сама.
-  const before = reviewForm.run({}, ctx(root))
-  assert.match(before.unchecked, /src\/page\.html — своей команды нет/)
-  assert.equal(/src\/card\.html — своей команды нет/.test(before.unchecked), false)
-  assert.match(before.unchecked, /эти узлы изменение СОЗДАЁТ.*шаг 16.*Блокер unverifiable-node на них не пишется: src\/card\.html/)
-  assert.equal(/принята оператором/.test(before.unchecked), false)
-
-  // Узел с `accept` — тоже, и вместо него одна строка про решение оператора: строка чек-листа,
-  // которую правило не посчитает, тратит внимание роли впустую.
-  answerOnDisk(root, `${BLIND_STEM("src/page.html")}${BLIND_TAIL}`, "accept")
-  const after = reviewForm.run({}, ctx(root))
-  assert.equal(/src\/page\.html — своей команды нет/.test(after.unchecked), false)
-  assert.match(after.unchecked, /неверифицируемость этих узлов принята оператором на шаге 6: src\/page\.html/)
-})
-
-// --- D23-11: наряд и правило спрашивают ОДНО множество (главный io-шов) ---------------------------
+// --- D23-11: НАРЯД И ПРАВИЛО СПРАШИВАЮТ ОДНО МНОЖЕСТВО (главный io-шов шага 11) ------------------
 //
-// Форма quarkus-rest-json-app-v2-t3, три артефакта её прогона c6bc2e54 ДОСЛОВНО. Роль здесь не
-// зовётся: её ответ СОБИРАЕТСЯ из выхода reviewForm — `<covers>` на каждую строку {OWED} и
-// `<witness>` на каждую строку {UNCHECKED}, то есть ровно то, о чём наряд спросил, и ничего сверх.
-// Такой ответ обязан пройти review({path}) целиком. D23 давал на нём
-// `R6 узел …/fruit-card.html без своей команды`: множество «о чём спрашивают» было записано дважды,
-// и наряд перестал называть создаваемый узел раньше, чем правило перестало его судить.
-const T3_LIST = "src/main/resources/META-INF/resources/fruits.html"
-const T3_CARD = "src/main/resources/META-INF/resources/fruit-card.html"
-const T3_PLAN = `{
-  "grammar": 1,
-  "mode": "minor",
-  "branch": {
-    "task": "IZI-3",
-    "name": "feature/IZI-3",
-    "base": "main",
-    "source": "operator-answer"
-  },
-  "gaps": [
-    "toggle",
-    "spec"
-  ],
-  "order": [
-    "src/main/java/org/acme/rest/json/FruitResource.java",
-    "src/main/resources/META-INF/resources/fruits.html",
-    "src/main/resources/META-INF/resources/fruit-card.html",
-    "scenario:S2",
-    "scenario:S3"
-  ],
-  "nodes": [
-    {
-      "id": "src/main/java/org/acme/rest/json/FruitResource.java",
-      "kind": "code",
-      "new": false,
-      "delta": [
-        "GET /fruits/{id} (Added)"
-      ],
-      "deps": [],
-      "check": [
-        {
-          "suite": "unit",
-          "cmd": "mvn test -Dtest=FruitResourceTest"
-        },
-        {
-          "suite": "component-native",
-          "cmd": "mvn verify -Pnative -Dit.test=FruitResourceIT"
-        }
-      ],
-      "coveredBy": [
-        "scenario:S3"
-      ]
-    },
-    {
-      "id": "src/main/resources/META-INF/resources/fruits.html",
-      "kind": "code",
-      "new": false,
-      "delta": [
-        "list-page navigation (Added)"
-      ],
-      "deps": [
-        "src/main/java/org/acme/rest/json/FruitResource.java"
-      ],
-      "check": [],
-      "coveredBy": [
-        "scenario:S2"
-      ]
-    },
-    {
-      "id": "src/main/resources/META-INF/resources/fruit-card.html",
-      "kind": "code",
-      "new": true,
-      "delta": [
-        "GET /fruit-card.html (Added)"
-      ],
-      "deps": [
-        "src/main/java/org/acme/rest/json/FruitResource.java"
-      ],
-      "check": [],
-      "coveredBy": [
-        "scenario:S3"
-      ]
-    },
-    {
-      "id": "scenario:S2",
-      "kind": "scenario",
-      "scenario": "S2",
-      "deps": [
-        "src/main/resources/META-INF/resources/fruits.html"
-      ],
-      "check": [
-        {
-          "suite": "unit",
-          "cmd": "mvn test"
-        },
-        {
-          "suite": "component-native",
-          "cmd": "mvn verify -Pnative"
-        }
-      ],
-      "coveredBy": []
-    },
-    {
-      "id": "scenario:S3",
-      "kind": "scenario",
-      "scenario": "S3",
-      "deps": [
-        "src/main/resources/META-INF/resources/fruit-card.html",
-        "src/main/java/org/acme/rest/json/FruitResource.java"
-      ],
-      "check": [
-        {
-          "suite": "unit",
-          "cmd": "mvn test"
-        },
-        {
-          "suite": "component-native",
-          "cmd": "mvn verify -Pnative"
-        }
-      ],
-      "coveredBy": []
-    }
-  ]
-}
-`
-const T3_FRD = `<frd grammar="1" goal="отдельная страница карточки фрукта со своим адресом, отображающая имя и описание">
-  <actor name="browser" kind="human" via="HTTP GET /fruit-card.html, GET /fruits/{id}"/>
-  <actor name="list-page" kind="system" via="HTML navigation link in fruits.html"/>
-
-  <usecase id="UC1" actor="browser" goal="получить данные одного фрукта по идентификатору">
-    <pre>фрукт с таким name существует в коллекции</pre>
-    <post>вернётся JSON с полями name и description одного фрукта, HTTP 200</post>
-    <step n="1">клиент отправляет GET /fruits/{id}, где {id} — имя фрукта</step>
-    <step n="2">FruitResource находит фрукт по name в коллекции</step>
-    <step n="3">FruitResource возвращает JSON {name, description} со статусом 200</step>
-    <ext id="2a" error="FRUIT_NOT_FOUND" outcome="фрукт с таким name не найден — HTTP 404"/>
-  </usecase>
-
-  <usecase id="UC2" actor="browser" goal="перейти на карточку фрукта из списка">
-    <pre>пользователь видит страницу списка фруктов (fruits.html)</pre>
-    <post>клик по имени фрукта открывает страницу карточки /fruit-card.html с параметром id</post>
-    <step n="1">fruits.html рендерит список фруктов, каждое имя — ссылка &lt;a&gt;</step>
-    <step n="2">ссылка ведёт на /fruit-card.html?id=&lt;fruitName&gt;</step>
-    <step n="3">браузер открывает страницу fruit-card.html</step>
-  </usecase>
-
-  <usecase id="UC3" actor="browser" goal="отобразить карточку фрукта">
-    <pre>пользователь открыл /fruit-card.html?id=&lt;fruitName&gt;</pre>
-    <post>на странице отображены name и description фрукта</post>
-    <step n="1">fruit-card.html считывает параметр id из URL</step>
-    <step n="2">страница отправляет GET /fruits/{id}</step>
-    <step n="3">при получении ответа страница отображает name и description</step>
-    <ext id="2a" error="FRUIT_NOT_FOUND" outcome="GET вернул 404 — страница показывает сообщение об отсутствии фрукта"/>
-  </usecase>
-
-  <field name="id" in="GET /fruits/{id}" type="string" domain="any fruit name present in collection" required="yes" error="FRUIT_NOT_FOUND" source="answers.md"/>
-
-  <failure code="FRUIT_NOT_FOUND" status="404" client="отобразить сообщение об отсутствии" operator="—" from="UC1/2a,UC3/2a"/>
-
-  <delta op="GET /fruits/{id}" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java" from="endpoint отсутствует" to="endpoint возвращает Fruit по name (200) или 404"/>
-  <delta op="GET /fruit-card.html" form="Added" node="src/main/resources/META-INF/resources/fruit-card.html" new="yes"/>
-  <delta op="list-page navigation" form="Added" node="src/main/resources/META-INF/resources/fruits.html" from="имя фрукта не кликабельно" to="имя фрукта — ссылка &lt;a href=&quot;/fruit-card.html?id={name}&quot;&gt;"/>
-
-  <scenario id="S1" uc="UC1" before="GET /fruits/{id} не существует — сервер возвращает 404 для любого path-параметра" after="GET /fruits/{id} возвращает JSON с name и description фрукта или 404 при отсутствии" nodes="src/main/java/org/acme/rest/json/FruitResource.java"/>
-  <scenario id="S2" uc="UC2" before="fruits.html не содержит ссылок на карточку фрукта" after="имя каждого фрукта в списке — кликабельная ссылка на /fruit-card.html?id={name}" nodes="src/main/resources/META-INF/resources/fruits.html"/>
-  <scenario id="S3" uc="UC3" before="файл fruit-card.html не существует, адрес /fruit-card.html недоступен" after="fruit-card.html загружает фрукт по GET /fruits/{id} и отображает name и description" nodes="src/main/resources/META-INF/resources/fruit-card.html src/main/java/org/acme/rest/json/FruitResource.java"/>
-
-  <touched path="src/main/java/org/acme/rest/json/FruitResource.java" why="добавлен метод findByName() с @PathParam для GET /fruits/{id}"/>
-  <touched path="src/main/resources/META-INF/resources/fruits.html" why="имя фрукта в списке обёрнуто в &lt;a&gt; со ссылкой на карточку"/>
-  <touched path="src/main/resources/META-INF/resources/fruit-card.html" why="новый HTML-файл страницы карточки, загружающий данные по GET /fruits/{id}"/>
-
-  <nfr subject="existing-contracts" fit="format ответа существующих endpoints unchanged" source="brd.md"/>
-</frd>
-`
-const T3_MAP = `<appgraph grammar="3" modules="17" components="2" isolated="7" levels="4">
-  <artifact name="rest-json-quickstart" root="."/>
-  <suite id="unit" kind="unit" cmd="mvn test" one="-Dtest={class}" path="src/test/java" match="*Test.java"/>
-  <suite id="component-native" kind="component" cmd="mvn verify -Pnative" one="-Dit.test={class}" path="src/test/java" match="*IT.java"/>
-  <build cmd="mvn package"/>
-  <toggles found="no"/>
-  <branching found="no"/>
-  <contract found="no"/>
-  <lang id="(unknown)" files="10" edges="no-rules" routes="no-rules" decls="no-rules"/>
-  <lang id="java" files="9" edges="yes" routes="yes" decls="class,interface,enum,record,method,field"/>
-  <subject name="fruit"/>
-  <subject name="card" found="no"/>
-  <subject name="page"/>
-  <subject name="list"/>
-  <subject name="link"/>
-  <component id="c1" modules="5" heads="src/main/resources/META-INF/resources/fruits.html src/test/java/org/acme/rest/json/FruitResourceIT.java"/>
-  <component id="c2" modules="5" heads="src/main/resources/META-INF/resources/legumes.html src/test/java/org/acme/rest/json/LegumeResourceIT.java"/>
-  <module path=".github/modernize/java-upgrade/hooks/scripts/recordToolUse.ps1" level="1" fanin="0" fanout="0">
-    <role>PowerShell hook script recording tool use events for java-upgrade extension</role>
-  </module>
-  <module path=".github/modernize/java-upgrade/hooks/scripts/recordToolUse.sh" level="1" fanin="0" fanout="0">
-    <role>Bash hook script recording tool use events for java-upgrade extension</role>
-  </module>
-  <module path="src/main/docker/Dockerfile.jvm" level="1" fanin="0" fanout="0">
-    <role>Dockerfile for JVM-mode container image of Quarkus application</role>
-  </module>
-  <module path="src/main/docker/Dockerfile.legacy-jar" level="1" fanin="0" fanout="0">
-    <role>Dockerfile for legacy JAR-mode container image of Quarkus application</role>
-  </module>
-  <module path="src/main/docker/Dockerfile.native" level="1" fanin="0" fanout="0">
-    <role>Dockerfile for native-mode container image of Quarkus application</role>
-  </module>
-  <module path="src/main/docker/Dockerfile.native-micro" level="1" fanin="0" fanout="0">
-    <role>Dockerfile for native micro-base container image of Quarkus application</role>
-  </module>
-  <module path="src/main/java/org/acme/rest/json/Fruit.java" pkg="org.acme.rest.json" component="c1" level="4" fanin="1" fanout="0">
-    <role>POJO class representing a fruit entity</role>
-    <decl kind="class" name="Fruit" sig="public class Fruit"/>
-    <decl kind="method" name="Fruit()" sig="public Fruit()"/>
-    <decl kind="method" name="Fruit(String name, String description)" sig="public Fruit(String name, String description)"/>
-    <decl kind="field" name="name" sig="public String name"/>
-    <decl kind="field" name="description" sig="public String description"/>
-  </module>
-  <module path="src/main/java/org/acme/rest/json/FruitResource.java" pkg="org.acme.rest.json" component="c1" level="3" fanin="2" fanout="1">
-    <role>JAX-RS REST resource managing in-memory fruit collection</role>
-    <api name="DELETE /fruits" kind="http" scope="public" via="@DELETE public Set&lt;Fruit&gt; delete(Fruit fruit)"/>
-    <api name="GET /fruits" kind="http" scope="public" via="@GET public Set&lt;Fruit&gt; list()"/>
-    <api name="POST /fruits" kind="http" scope="public" via="@POST public Set&lt;Fruit&gt; add(Fruit fruit)"/>
-    <decl kind="class" name="FruitResource" sig="public class FruitResource"/>
-    <decl kind="method" name="FruitResource()" sig="public FruitResource()"/>
-    <decl kind="method" name="list()" sig="public Set&lt;Fruit&gt; list()"/>
-    <decl kind="method" name="add(Fruit fruit)" sig="public Set&lt;Fruit&gt; add(Fruit fruit)"/>
-    <decl kind="method" name="delete(Fruit fruit)" sig="public Set&lt;Fruit&gt; delete(Fruit fruit)"/>
-    <test path="src/test/java/org/acme/rest/json/FruitResourceTest.java" suite="unit"/>
-    <test path="src/test/java/org/acme/rest/json/FruitResourceIT.java" suite="component-native"/>
-  </module>
-  <module path="src/main/java/org/acme/rest/json/Legume.java" pkg="org.acme.rest.json" component="c2" level="4" fanin="1" fanout="0">
-    <role>POJO class representing a legume entity</role>
-    <decl kind="class" name="Legume" sig="public class Legume"/>
-    <decl kind="method" name="Legume()" sig="public Legume()"/>
-    <decl kind="method" name="Legume(String name, String description)" sig="public Legume(String name, String description)"/>
-    <decl kind="field" name="name" sig="public String name"/>
-    <decl kind="field" name="description" sig="public String description"/>
-  </module>
-  <module path="src/main/java/org/acme/rest/json/LegumeResource.java" pkg="org.acme.rest.json" component="c2" level="3" fanin="2" fanout="1">
-    <role>JAX-RS REST resource managing in-memory legume collection</role>
-    <api name="GET /legumes" kind="http" scope="public" via="@GET public Response list()"/>
-    <decl kind="class" name="LegumeResource" sig="public class LegumeResource"/>
-    <decl kind="method" name="LegumeResource()" sig="public LegumeResource()"/>
-    <decl kind="method" name="list()" sig="public Response list()"/>
-    <test path="src/test/java/org/acme/rest/json/LegumeResourceTest.java" suite="unit"/>
-    <test path="src/test/java/org/acme/rest/json/LegumeResourceIT.java" suite="component-native"/>
-  </module>
-  <module path="src/main/java/org/acme/rest/json/LoggingFilter.java" pkg="org.acme.rest.json" level="1" fanin="0" fanout="0">
-    <role>JAX-RS provider filter logging incoming HTTP requests</role>
-    <decl kind="class" name="LoggingFilter" sig="public class LoggingFilter"/>
-    <decl kind="method" name="filter(ContainerRequestContext context)" sig="public void filter(ContainerRequestContext context)"/>
-  </module>
-  <module path="src/main/resources/META-INF/resources/fruits.html" component="c1" level="1" fanin="0" fanout="1">
-    <role>AngularJS single-page client for viewing and adding fruits via /fruits API</role>
-  </module>
-  <module path="src/main/resources/META-INF/resources/legumes.html" component="c2" level="1" fanin="0" fanout="1">
-    <role>AngularJS single-page client for viewing legumes via /legumes API</role>
-  </module>
-  <module path="src/test/java/org/acme/rest/json/FruitResourceIT.java" pkg="org.acme.rest.json" kind="test" suite="component-native" component="c1" level="1" fanin="0" fanout="1">
-    <role>Quarkus integration test delegating to FruitResourceTest</role>
-    <decl kind="class" name="FruitResourceIT" sig="public class FruitResourceIT"/>
-  </module>
-  <module path="src/test/java/org/acme/rest/json/FruitResourceTest.java" pkg="org.acme.rest.json" kind="test" suite="unit" component="c1" level="2" fanin="1" fanout="1">
-    <role>Quarkus unit test for FruitResource list and add operations</role>
-    <decl kind="class" name="FruitResourceTest" sig="public class FruitResourceTest"/>
-    <decl kind="method" name="testList()" sig="public void testList()"/>
-    <decl kind="method" name="testAdd()" sig="public void testAdd()"/>
-  </module>
-  <module path="src/test/java/org/acme/rest/json/LegumeResourceIT.java" pkg="org.acme.rest.json" kind="test" suite="component-native" component="c2" level="1" fanin="0" fanout="1">
-    <role>Quarkus integration test delegating to LegumeResourceTest</role>
-    <decl kind="class" name="LegumeResourceIT" sig="public class LegumeResourceIT"/>
-  </module>
-  <module path="src/test/java/org/acme/rest/json/LegumeResourceTest.java" pkg="org.acme.rest.json" kind="test" suite="unit" component="c2" level="2" fanin="1" fanout="1">
-    <role>Quarkus unit test for LegumeResource list operation</role>
-    <decl kind="class" name="LegumeResourceTest" sig="public class LegumeResourceTest"/>
-    <decl kind="method" name="testList()" sig="public void testList()"/>
-  </module>
-  <edge from="src/main/java/org/acme/rest/json/FruitResource.java" to="src/main/java/org/acme/rest/json/Fruit.java" via="private Set&lt;Fruit&gt; fruits = Collections.newSetFromMap(Collections.synchronizedMap(new LinkedHashMap&lt;&gt;()));"/>
-  <edge from="src/main/java/org/acme/rest/json/LegumeResource.java" to="src/main/java/org/acme/rest/json/Legume.java" via="private Set&lt;Legume&gt; legumes = Collections.synchronizedSet(new LinkedHashSet&lt;&gt;());"/>
-  <edge from="src/test/java/org/acme/rest/json/FruitResourceIT.java" to="src/test/java/org/acme/rest/json/FruitResourceTest.java" via="public class FruitResourceIT extends FruitResourceTest {"/>
-  <edge from="src/test/java/org/acme/rest/json/LegumeResourceIT.java" to="src/test/java/org/acme/rest/json/LegumeResourceTest.java" via="public class LegumeResourceIT extends LegumeResourceTest {"/>
-  <edge from="src/main/resources/META-INF/resources/fruits.html" to="src/main/java/org/acme/rest/json/FruitResource.java" via="url: '/fruits'," by="use"/>
-  <edge from="src/main/resources/META-INF/resources/legumes.html" to="src/main/java/org/acme/rest/json/LegumeResource.java" via="url: '/legumes'" by="use"/>
-  <edge from="src/test/java/org/acme/rest/json/FruitResourceTest.java" to="src/main/java/org/acme/rest/json/FruitResource.java" via=".when().get(&quot;/fruits&quot;)" by="use"/>
-  <edge from="src/test/java/org/acme/rest/json/LegumeResourceTest.java" to="src/main/java/org/acme/rest/json/LegumeResource.java" via=".when().get(&quot;/legumes&quot;)" by="use"/>
-  <surface>
-    <api name="DELETE /fruits" kind="http" at="src/main/java/org/acme/rest/json/FruitResource.java"/>
-    <api name="GET /fruits" kind="http" at="src/main/java/org/acme/rest/json/FruitResource.java"/>
-    <api name="POST /fruits" kind="http" at="src/main/java/org/acme/rest/json/FruitResource.java"/>
-    <api name="GET /legumes" kind="http" at="src/main/java/org/acme/rest/json/LegumeResource.java"/>
-  </surface>
-  <systems/>
-  <isolated path=".github/modernize/java-upgrade/hooks/scripts/recordToolUse.ps1"/>
-  <isolated path=".github/modernize/java-upgrade/hooks/scripts/recordToolUse.sh"/>
-  <isolated path="src/main/docker/Dockerfile.jvm"/>
-  <isolated path="src/main/docker/Dockerfile.legacy-jar"/>
-  <isolated path="src/main/docker/Dockerfile.native"/>
-  <isolated path="src/main/docker/Dockerfile.native-micro"/>
-  <isolated path="src/main/java/org/acme/rest/json/LoggingFilter.java"/>
-</appgraph>
-`
-
-const t3Root = () => {
-  const root = tempRoot()
-  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
-  writeFileSync(join(root, ".agent", "plan-index.json"), T3_PLAN)
-  writeFileSync(join(root, ".agent", "frd.xml"), T3_FRD)
-  writeFileSync(join(root, ".agent", "appgraph.xml"), T3_MAP)
-  // Гейт шага 6 на этой форме спрашивает про fruits.html — узел ширины с fanin="0", до которого не
-  // доходит ни один сьют, — и до шага 11 полоса доходит ТОЛЬКО с ответом `accept`: `suite` и `drop`
-  // останавливают её там же (steps/ripple/ripple.mjs::BLIND_TAIL). Прогон c6bc2e54 старше гейта,
-  // поэтому ответ дописан здесь: без него у формы нет пути до шага 11 вовсе.
-  answerOnDisk(root, `${BLIND_STEM(T3_LIST)}${BLIND_TAIL}`, "accept")
-  return root
-}
-
-// Ответ роли, собранный ИЗ НАРЯДА. Ни один id здесь не набран руками: пункты приходят строками
-// {OWED}, узлы без своей команды — строками {UNCHECKED} вместе со своими командами-кандидатами.
-// Узел для `<covers>` роль выбирает по FRD (LAW 2 роли, правило R7): пункт живёт на узлах своего
-// сценария, а для `nfr:` узла у FRD нет вовсе.
+// Роль здесь не зовётся: её ответ СОБИРАЕТСЯ из выхода reviewForm — `<covers>` на каждую строку
+// обоих чек-листов, то есть ровно то, о чём наряд спросил, и ничего сверх. Такой ответ обязан
+// пройти review({path}) целиком. Разведи наряд и правило — роль, ответившая дословно, получит R5 на
+// строку, о которой её не спрашивали, и это будет видно ЗДЕСЬ, а не на живом прогоне.
 const orderIds = (block, mark) => String(block).split("\n")
   .filter((l) => l.includes(mark))
   .map((l) => l.split(" — ")[0].trim())
-const answerTheOrder = (form, plan, frd) => {
-  const planIds = new Set((plan.nodes || []).map((n) => n.id))
-  const nodeFor = (item) => {
-    const uc = item.includes("/") ? item.split("/")[0] : null
-    const own = (frd.scenarios || []).filter((s) => (uc ? String(s.uc).trim() === uc : String(s.id).trim() === item))
-    const cands = own.flatMap((s) => [`scenario:${String(s.id).trim()}`, ...String(s.nodes || "").split(/\s+/).filter(Boolean)])
-    return cands.find((id) => planIds.has(id)) || [...planIds][0]
-  }
-  const covers = orderIds(form.owed, " — ").map((id) => `<covers item="${id}" node="${nodeFor(id)}"/>`)
-  const witness = String(form.unchecked).split("\n")
-    .filter((l) => l.includes("своей команды нет; закрывают: "))
-    .map((l) => {
-      const id = l.split(" — ")[0].trim()
-      const cmd = l.split("закрывают: ")[1].split(" · ")[0].trim()
-      return `<witness node="${id}" cmd="${cmd}"/>`
-    })
-  return `<review verdict="Pass" grammar="2">\n  ${[...covers, ...witness].join("\n  ")}\n</review>`
+const answerTheOrder = (form, frd) => {
+  const ids = [...frdIds(frd)]
+  const uc = (frd.usecases || [])[0]
+  const nodeFor = () => (uc && (uc.steps || []).length ? `${uc.id}/1` : ids[0])
+  const covers = [...orderIds(form.owed, " — "), ...orderIds(form.unbacked, " — ")]
+    .map((id) => `<covers item="${id}" node="${nodeFor()}"/>`)
+  return `<review verdict="Pass" grammar="2">\n  ${covers.join("\n  ")}\n</review>`
 }
 
-test("шов 11: роль, ответившая наряду ДОСЛОВНО, проходит шаг 11 на форме t3", () => {
-  const root = t3Root()
-  const plan = JSON.parse(T3_PLAN)
-  const answers = [{ n: 1, question: `${BLIND_STEM(T3_LIST)}${BLIND_TAIL}`, text: "accept" }]
+test("шов 9: наряд критика спрашивает ТЕМ ЖЕ выражением, каким считает правило", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  writeFileSync(join(root, ".agent", "brd.md"), [
+    "R1 Посылку можно найти по номеру", "   fit: список сужается",
+    "R2 Архив выгружается в S3", "   fit: архив лежит в бакете",
+    "subjects[]: посылка", "analogue: —", "open-questions: 0",
+  ].join("\n"))
+  const frdText = `<frd grammar="1" goal="искать посылку">
+  <usecase id="UC1" actor="api" goal="найти посылку"><post>совпавшие</post><step n="1">клиент шлёт GET /parcels</step></usecase>
+  <usecase id="UC9" actor="api" goal="выгрузить архив в S3"><post>архив в бакете</post><step n="1">админ просит выгрузку</step></usecase>
+  <delta op="GET /parcels" form="Changed" node="src/ParcelResource.java" from="list()" to="list(track)"/>
+  <scenario id="S1" uc="UC1" before="весь реестр" after="только совпавшие" nodes="src/ParcelResource.java"/>
+  <carried req="R1" by="UC1/1"/>
+</frd>`
+  writeFileSync(join(root, ".agent", "staging", "frd.xml"), frdText)
+
   const form = reviewForm.run({}, ctx(root))
+  const frd = parseFrd(frdText)
+  const brd = [{ id: "R1", statement: "Посылку можно найти по номеру", fit: "список сужается" },
+               { id: "R2", statement: "Архив выгружается в S3", fit: "архив лежит в бакете" }]
+  assert.deepEqual(orderIds(form.owed, " — "), owedItems({ requirements: brd }).map((r) => r.id))
+  assert.deepEqual(orderIds(form.unbacked, " — "), unbackedItems({ frd }).map((r) => r.id))
+  // Обратный список на этой фикстуре не пуст: UC9 не просило ни одно требование — та самая находка,
+  // ради которой он и заведён (живой прогон eddi: UC8, четыре наряда никем не заказанной работы).
+  assert.deepEqual(unbackedItems({ frd }).map((r) => r.id), ["UC9"])
+})
 
-  // О чём наряд спрашивает — то правило и считает. Одно выражение на обоих концах: верни `!n.new` в
-  // любую одну сторону, и эти два множества разойдутся (D23).
-  assert.deepEqual(orderIds(form.unchecked, "своей команды нет"), askedNodes({ plan, answers }).map((n) => n.id))
-  // На этой форме спрашивать не о чем: fruits.html принят оператором, fruit-card.html создаётся.
-  assert.deepEqual(askedNodes({ plan, answers }), [])
-  assert.match(form.unchecked, new RegExp(`принята оператором на шаге 6: ${T3_LIST}`))
-  assert.match(form.unchecked, new RegExp(`эти узлы изменение СОЗДАЁТ.*${T3_CARD}`))
-
-  writeFileSync(join(root, ".agent", "staging", "review.xml"), answerTheOrder(form, plan, parseFrd(T3_FRD)))
+test("шов 11: роль, ответившая наряду ДОСЛОВНО, проходит шаг 11", () => {
+  const root = reviewRoot('<review verdict="Pass" grammar="2"/>')
+  const form = reviewForm.run({}, ctx(root))
+  const frd = parseFrd(readFileSync(join(root, ".agent", "staging", "frd.xml"), "utf8"))
+  writeFileSync(join(root, ".agent", "staging", "review.xml"), answerTheOrder(form, frd))
   const r = review.run({ path: ".agent/staging/review.xml" }, ctx(root))
   assert.equal(r.ok, true, r.ok ? "" : r.blockers)
   assert.equal(r.verdict, "Pass")
@@ -1906,11 +1438,33 @@ const ROLE_FILES = [
   ["brd/gilb.md", /business analyst/],
   ["scope/scout.md", /REVERSE ENGINEER/],
   ["intake/intake.md", /requirements analyst/],
+  // `design/valuer.md` припаркована вместе со словарём значений (шаг 9 переписывается, docs/plan.md),
+  // `design/router.md` и `design/core-designer.md` удалены вместе с цепочками и карточкой партии.
   ["design/valuer.md", /INTERFACE ANALYST/],
-  ["design/router.md", /SYSTEMS ANALYST/],
   ["review/critic.md", /DESIGN REVIEWER/],
 ]
 const roleText = (f) => readFileSync(new URL(`../steps/${f}`, import.meta.url), "utf8")
+
+// МОДЕЛЬ РОЛИ — АЛИАС, А НЕ ИДЕНТИФИКАТОР ПРОВАЙДЕРА. Решение оператора 21.08.2026
+// (standards/role.md): под `execution` и `judgment` сегодня лежит один и тот же qwen, но модель
+// кругов починки 4-5 поднимается тиром выше одной строкой машинных настроек, а не правкой семи
+// файлов. Ловушка, ради которой шов и заведён: с идентификатором во frontmatter правка
+// `modelAliases` не делает НИЧЕГО и не говорит об этом — два прогона 13.08.2026 ушли на это.
+test("роль называет модель алиасом: идентификатор провайдера не возвращается молча", () => {
+  const ALIASES = new Set(["routing", "execution", "judgment"])
+  const files = readdirSync(new URL("../steps", import.meta.url).pathname, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .flatMap((d) => readdirSync(new URL(`../steps/${d.name}`, import.meta.url).pathname)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => `${d.name}/${f}`))
+  const withModel = files.filter((f) => /^model:/m.test(roleText(f)))
+  assert.ok(withModel.length >= 5, "роли с объявленной моделью исчезли — шов смотрит не туда")
+  for (const f of withModel) {
+    const model = (roleText(f).match(/^model:\s*(\S+)/m) || ["", ""])[1]
+    assert.ok(ALIASES.has(model),
+      `${f}: model: ${model} — это идентификатор провайдера, а не алиас. Правка modelAliases его не увидит`)
+  }
+})
 
 test("no role carries a word of a form this pipeline is run against — the example is the only concrete place", () => {
   // The regression form (fruits) and the hard input (eddi, its glossary): live-domain vocabulary in a
@@ -1924,67 +1478,102 @@ test("no role carries a word of a form this pipeline is run against — the exam
 
 
 // $START_ORDER — то же устройство, что $START_SWARM, $START_BLAME и $START_REENTRY: блок ВЫРЕЗАН из
-// workflows/izi.js и исполнен здесь, потому что импортировать этот файл нельзя. `prompt`, `log` и
-// потолок передаются параметрами — внутри песочницы это глобали хоста.
+// workflows/izi.js и исполнен здесь, потому что импортировать этот файл нельзя. `prompt`, `log`,
+// `orderLine` и потолок передаются параметрами — внутри песочницы это глобали хоста.
 //
 // D29b. До этого блока ни один шаг не знал, насколько разросся его наряд: рябь выросла с 2 311
 // символов (форма `t2`) до 30 281 (`eddi`), и не заметила этого ни одна строка лога. Прогон 162e8b02
 // ушёл за окно на 112 токенов — HTTP 400, роль не запускалась вовсе, и из чата это неотличимо от
 // роли, которая ответила плохо.
-const ORDER = (cap) => new Function("prompt", "log", "ORDER_CAP", `${IZI.slice(IZI.indexOf("// $START_ORDER"), IZI.indexOf("// $END_ORDER"))}
+//
+// J12. ЧТО из этой меры едет в чат — решает core/orderline.mjs, и здесь оно исполняется НАСТОЯЩЕЕ:
+// хост-функция `orderLine` подставлена САМОЙ СОБОЙ — той, что расширение отдаёт в песочницу. Полосе
+// остаются мера и КРУГ — сколько нарядов этого рода прогон уже собрал.
+const ORDER = (cap) => new Function("prompt", "log", "orderLine", "ORDER_CAP", `${IZI.slice(IZI.indexOf("// $START_ORDER"), IZI.indexOf("// $END_ORDER"))}
   return { sized }`)(
   (tpl, keys) => `${tpl}::${Object.values(keys).join("")}`,
   (line) => LOGGED.push(line),
+  async (x) => orderLine.run(x),
   cap,
 )
 let LOGGED = []
 
-test("D29b: размер наряда печатается СЛАГАЕМЫМИ — иначе «наряд большой» это число, с которым нечего делать", () => {
+test("J12: разбор наряда печатается ОДИН раз на род наряда — дальше едет только итог", async () => {
   LOGGED = []
-  const o = ORDER(1000).sized("intake", "tpl", { MAP: "m".repeat(300), BRD: "b".repeat(40), FEEDBACK: "" })
+  const band = ORDER(1000)
+  const keys = { MAP: "m".repeat(300), BRD: "b".repeat(40), FEEDBACK: "" }
+  const first = await band.sized("intake", "tpl", keys)
+  const second = await band.sized("intake", "tpl", keys)
 
-  assert.equal(o.chars, o.text.length)
-  assert.equal(o.over, false)
-  assert.equal(LOGGED.length, 1)
-  // Слагаемые — по убыванию размера: первым стоит тот документ, который и разнесло.
-  assert.equal(LOGGED[0], "intake: наряд 345 симв из 1000 — шаблон 3 · MAP 300 · BRD 40 · FEEDBACK 0")
+  assert.equal(first.chars, first.text.length)
+  assert.equal(first.over, false)
+  assert.equal(LOGGED.length, 2)
+  // Первый круг: слагаемые по убыванию размера — первым стоит тот документ, который и разнесло.
+  assert.equal(LOGGED[0], "intake: наряд 345 симв из 1000, круг 1 — шаблон 3 · MAP 300 · BRD 40 · FEEDBACK 0")
+  // Второй: внутренности сборки не меняются, а каждая строка лога — запись сессии, которая едет в
+  // контекст всех следующих ходов чат-модели (замер 01a017dc).
+  assert.equal(LOGGED[1], "intake: наряд 345 симв из 1000, круг 2")
+  // Отказ несёт разбор на любом круге — он и есть ответ на «почему не влезло».
+  assert.match(second.why, /шаблон 3 · MAP 300 · BRD 40 · FEEDBACK 0$/)
 })
 
-test("D29b: наряд выше потолка — отказ, и он НАЗЫВАЕТ слагаемые", () => {
+test("J12: род наряда, а не имя шага, считает круги — рой и партии собирают ОДИН наряд", async () => {
   LOGGED = []
-  const o = ORDER(100).sized("design/values", "tpl", { FRD: "f".repeat(60), RIPPLE: "r".repeat(60) })
+  const band = ORDER(1000)
+  await band.sized("scope/c1", "tpl", { A: "a" }, "scope")
+  await band.sized("scope/c2", "tpl", { A: "a" }, "scope")
+  await band.sized("design/values", "tpl", { A: "a" })
+
+  assert.match(LOGGED[0], /^scope\/c1: наряд 6 симв из 1000, круг 1 — шаблон 3 · A 1$/)
+  assert.equal(LOGGED[1], "scope/c2: наряд 6 симв из 1000, круг 2")
+  // Другой род — свой счёт: наряд, которого не видели, показывает состав.
+  assert.equal(LOGGED[2], "design/values: наряд 6 симв из 1000, круг 1 — шаблон 3 · A 1")
+})
+
+test("D29b: наряд выше потолка — отказ, и он НАЗЫВАЕТ слагаемые", async () => {
+  LOGGED = []
+  const band = ORDER(100)
+  await band.sized("design/values", "tpl", { FRD: "f", RIPPLE: "r" })          // круг 1 этого рода
+  const o = await band.sized("design/values", "tpl", { FRD: "f".repeat(60), RIPPLE: "r".repeat(60) })
 
   assert.equal(o.over, true)
   assert.match(o.why, /^наряд design\/values — 125 симв при потолке 100:/)
   assert.match(o.why, /FRD 60/)
   assert.match(o.why, /RIPPLE 60/)
-  // Строка лога печатается и в этом случае: отказ едет оператору, а лог остаётся в прогоне.
-  assert.equal(LOGGED.length, 1)
+  // Второй круг молчал бы — но наряд не влез, и разбор печатается: искать виноватый документ
+  // оператору больше негде, роль не запускалась вовсе.
+  assert.equal(LOGGED.length, 2)
+  assert.equal(LOGGED[1], "design/values: наряд 125 симв из 100, круг 2 — шаблон 3 · FRD 60 · RIPPLE 60")
 })
 
-test("D29b: пять прямых сборок наряда идут через sized, и каждая отказывает по-своему", () => {
-  // ШЕСТЬ мест — шаги 2, 4, 6, 11 и ДВА на шаге 9: проход (словарь либо цепочки) и план партии.
-  // Каждый идёт через одну и ту же меру против окна модели.
-  assert.equal([...IZI.matchAll(/= sized\(/g)].length, 6, "шесть прямых сборок наряда")
-  assert.match(IZI, /const order = sized\("brd", orderTpl, \{/)
-  assert.match(IZI, /const order = sized\(`scope\/\$\{cell\.id\}`, orderTpl, \{/)
-  assert.match(IZI, /const order = sized\("intake", orderTpl, \{/)
-  assert.match(IZI, /const o = sized\(`design\/\$\{id\}`, tpl, \{/)
-  assert.match(IZI, /const order = sized\("review", orderTpl, \{/)
+test("D29b: прямые сборки наряда идут через sized, и каждая отказывает по-своему", () => {
+  // ДЕВЯТЬ мест — шаги 2, 4, 11, ЧЕТЫРЕ на шаге 6 (у каждого пласта свой наряд,
+  // steps/intake/passes-data-flow.md) и ДВА на шаге 10в: критик плана и его фиксер. Два места шага 9
+  // (проход и карточка партии) удалены 21.08.2026 вместе со старым шагом; новый вернёт сюда свои.
+  assert.equal([...IZI.matchAll(/= await sized\(/g)].length, 9, "девять прямых сборок наряда")
+  assert.match(IZI, /const order = await sized\("planreview", criticTpl, \{/)
+  assert.match(IZI, /const fix = await sized\("planreview\/fix", tpl, \{/)
+  assert.match(IZI, /const order = await sized\("brd", orderTpl, \{/)
+  assert.match(IZI, /const order = await sized\(`scope\/\$\{cell\.id\}`, orderTpl, \{/)
+  for (const pass of ["A", "B", "C", "D"]) {
+    assert.match(IZI, new RegExp(`order = await sized\\("intake/${pass}", tpl${pass}, \\{`), `наряд прохода ${pass}`)
+  }
+  assert.match(IZI, /const order = await sized\("review", orderTpl, \{/)
 
   // Ни одного `prompt(` мимо sized: наряд, собранный в обход меры, — это наряд, размер которого
   // впервые узнают из HTTP 400 (прогон 162e8b02).
   const raw = [...IZI.matchAll(/prompt\(([A-Za-z.[\]"]+)/g)].map((m) => m[1])
   assert.deepEqual(raw.sort(), ["tpl"], "prompt() вызывается только внутри sized")
-  // Обе сборки шага 9 — проход и план партии — идут через sized.
-  assert.match(IZI, /const o = sized\(`design\/part\/\$\{one\.slug\}`, tpl, \{/)
 
   // Отказ шага 4 — ЗНАЧЕНИЕ, а не exit: parallel() глотает бросок и перебрасывает свой.
   const scoutFn = IZI.slice(IZI.indexOf("async function scout("), IZI.indexOf("// FUNCTION_CONTRACT: scope"))
   assert.match(scoutFn, /if \(order\.over\) return \{ ok: false, why: order\.why \};/)
   assert.doesNotMatch(scoutFn, /exit\(/)
-  // …а остальные пять — blocked с диагнозом гардрейла.
-  assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 5)
+  // …а остальные — blocked с диагнозом гардрейла. Их четыре: шаги 2, 6, 11 и критик плана 10в;
+  // фиксер того же шага отказывает своей строкой (`fix.over`). Два отказа шага 9 (проход и карточка
+  // партии) удалены вместе со старым шагом 21.08.2026.
+  assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 4)
+  assert.match(IZI, /if \(fix\.over\) exit\(err\("blocked"/, "наряд фиксера без меры против окна")
 
   // Потолок не переписан в этом файле: он приходит из core/budgets.mjs через budgets().
   assert.match(IZI, /ORDER_CAP = b\.orderCap;/)
@@ -2025,3 +1614,930 @@ test("мусор вместо ключа ключом не считается �
   assert.equal(checkTask.run({}, ctx(keyRoot("task: dos-535\nПоиск.\n"))).key, "")
   assert.equal(checkTask.run({}, ctx(keyRoot("task: DOS535\nПоиск.\n"))).key, "")
 })
+
+
+// --- шаг 14: хост валидирует ВЫХОД, и незаявленный ключ роняет прогон ------------------------------
+//
+// Третий раз один класс: `maxParallel` (657fcd98), `intakeLoops` (c8bd1294), ветка шага 13 — и теперь
+// живой прогон 9bbf195f, который вошёл ровно в шаг 14 и умер на «Invalid output from tickets»: ядро
+// научилось отмечать наряд с воротами на ВСЁМ сьюте (`wholeSuite`), а схема хоста осталась прежней и
+// `additionalProperties: false` отвергла ответ целиком. Ядро шага проверено своими юнитами; здесь
+// проверяется ГРАНИЦА — РЕАЛЬНЫЙ ответ `tickets.run` против РЕАЛЬНОЙ схемы, тем же валидатором, каким
+// судит хост.
+//
+// Шов доказан обратно: снятая строка `wholeSuite` из `tickets.output` красит этот тест.
+const ticketsRoot = () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  mkdirSync(join(root, "task", "DOS-1", "design"), { recursive: true })
+  mkdirSync(join(root, "src", "test", "java", "app"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\nСделать стор.\n")
+  writeFileSync(join(root, ".agent", "gate1.json"), JSON.stringify({ key: "DOS-1", plan: "x", answer: "approve" }))
+  writeFileSync(join(root, "src", "test", "java", "app", "OldStoreIT.java"), "// образец внешнего сьюта\n")
+  writeFileSync(join(root, ".agent", "frd.xml"), `<frd grammar="1" goal="a document store">
+  <actor name="api" kind="system" via="HTTP /store"/>
+  <field name="key" in="Term" type="string" domain="1-64 chars" required="yes" error="CONFLICT" source="brd.md"/>
+  <usecase id="UC1" actor="api" goal="create a document">
+    <post>the document is stored</post>
+    <step n="1">the client sends POST /store with the document</step>
+    <step n="2">the system writes the record</step>
+    <ext id="2a" error="CONFLICT" outcome="the duplicate is rejected"/>
+  </usecase>
+  <usecase id="UC2" actor="api" goal="read a document">
+    <post>the document is returned</post>
+    <step n="1">the client sends GET /store/{id}</step>
+    <step n="2">the system reads the record</step>
+  </usecase>
+  <failure code="CONFLICT" status="409" client="duplicate" operator="—" from="UC1/2a"/>
+  <delta op="POST /store" form="Added" node="src/rest/RestStore.java" new="yes"/>
+  <scenario id="S1" uc="UC1" before="absent" after="present" nodes="src/rest/RestStore.java src/mongo/Store.java src/model/Doc.java"/>
+  <scenario id="S2" uc="UC2" before="absent" after="present" nodes="src/rest/RestStore.java src/mongo/Store.java src/model/Doc.java"/>
+</frd>`)
+  // У юнитового сьюта НЕТ шаблона одного теста — ровно тот репозиторий, на котором наряд получает
+  // ворота на всём сьюте и шаг обязан сказать это вслух.
+  writeFileSync(join(root, ".agent", "appgraph.xml"), `<appgraph grammar="4">
+  <suite id="unit" kind="unit" cmd="./mvnw test" path="src/test/java" match="*Test.java"/>
+  <suite id="it" kind="component" cmd="./mvnw verify" path="src/test/java" match="*IT.java"/>
+  <build cmd="./mvnw verify" compile="./mvnw -q -DskipTests package"/>
+  <lang id="java" files="500" edges="yes" decls="class,method"/>
+  <module path="src/model/Old.java" pkg="model"/>
+  <module path="src/mongo/OldStore.java" pkg="mongo"/>
+  <module path="src/rest/OldRest.java" pkg="rest"/>
+</appgraph>`)
+  // ПЛАН — ОДИН ДОКУМЕНТ. Папка карточек партий удалена вместе со старым шагом 9 (docs/plan.md):
+  // нарезка и гейт читают собранный PLAN.md, и фикстура кладёт разделы туда же, куда их положит
+  // новый шаг.
+  writeFileSync(join(root, "task", "DOS-1", "PLAN.md"), `# Design
+
+## src/model/Doc.java
+what: the record
+signatures: getName() : String
+declares: public class Doc
+calls: none
+sample: src/model/Old.java — same style
+closes: UC1 step 2 · UC2 step 2
+verify: ./mvnw test -Dtest=DocTest · DocTest
+
+## src/mongo/Store.java
+what: the mongo store
+signatures: create(Doc d) : Id · read(String id) : Doc
+declares: public class Store
+calls: src/model/Doc.java — the record
+sample: src/mongo/OldStore.java — same style
+closes: UC1 step 2 · UC1 step 2a · UC2 step 2
+verify: ./mvnw test -Dtest=StoreTest · StoreTest
+
+## src/rest/RestStore.java
+what: the entry point
+signatures: post(Doc d) : Response · get(String id) : Response
+declares: public class RestStore
+calls: src/mongo/Store.java — stores · src/model/Doc.java — the model
+sample: src/rest/OldRest.java — same style
+closes: UC1 step 1 · UC2 step 1
+verify: ./mvnw test -Dtest=RestStoreTest · RestStoreTest
+`)
+
+  return root
+}
+
+test("шаг 14: нарезанные тикеты — валидный выход, а не падение хоста", () => {
+  const root = ticketsRoot()
+  const out = tickets.run({}, ctx(root))
+  assert.equal(out.ok, true, out.blockers || out.why)
+  assert.ok(out.wholeSuite.length > 0, "у репозитория нет шаблона одного теста — ворота на всём сьюте обязаны быть названы")
+  const schema = Compile(tickets.output)
+  assert.equal(schema.Check(out), true, `выход не проходит схему хоста: ${JSON.stringify(out)}`)
+})
+
+// --- шаг 10б: СУХОЙ ПРОГОН НАРЕЗКИ — та же нарезка, до гейта и без диска --------------------------
+//
+// Нарезка это две чистые функции плюс запись файлов, и всё, что она читает, лежит на диске уже к
+// шагу 10: разделы плана (шаг 9), frd.xml (6), appgraph.xml (5), ripple.xml (8). Из шагов 12-13 сюда
+// приходят только РАЗРЕШЕНИЕ писать и имя ветки в заголовок. Значит вопрос «нарезается ли по этому
+// плану исполнимый набор» имеет ответ ДО гейта, и отвечает на него тот же код, который потом режет.
+//
+// Здесь проверяется ГРАНИЦА, как и у мокрого прогона: РЕАЛЬНЫЙ ответ против РЕАЛЬНОЙ схемы тем же
+// валидатором, каким судит хост (четвёртый случай «Invalid output» куплен именно этим классом).
+test("шаг 10б: сухой прогон считает нарезку без гейта и не пишет ни одного файла", () => {
+  const root = ticketsRoot()
+  rmSync(join(root, ".agent", "gate1.json"))          // состояние ШАГА 10: план ещё не утверждён
+
+  const dry = tickets.run({ dry: true }, ctx(root))
+  assert.equal(dry.ok, true, dry.blockers || dry.why)
+  assert.equal(Compile(tickets.output).Check(dry), true, `выход не проходит схему хоста: ${JSON.stringify(dry)}`)
+  assert.equal(existsSync(join(root, "task", "DOS-1", "tickets")), false, "сухой прогон записал наряды на диск")
+  assert.ok(dry.total > 0 && dry.modules > 0 && dry.waves.length > 0)
+
+  // Мокрый прогон после гейта обязан выдать ТОТ ЖЕ счёт: иначе оператор утверждал одно, а исполняет
+  // полоса другое.
+  writeFileSync(join(root, ".agent", "gate1.json"), JSON.stringify({ key: "DOS-1", plan: "x", answer: "approve" }))
+  const wet = tickets.run({}, ctx(root))
+  assert.equal(wet.ok, true, wet.blockers || wet.why)
+  assert.equal(wet.total, dry.total)
+  assert.equal(wet.modules, dry.modules)
+  assert.equal(wet.tests, dry.tests)
+  assert.deepEqual(wet.waves, dry.waves)
+
+  // Без гейта мокрый прогон по-прежнему отказывает: гейт это разрешение ПИСАТЬ, и сухой режим его
+  // не отменяет, а обходит.
+  rmSync(join(root, ".agent", "gate1.json"))
+  assert.equal(tickets.run({}, ctx(root)).ok, false)
+})
+
+// --- ШАГ 11: КРИТИК ЗОВЁТСЯ РОВНО ОДИН РАЗ НА АРТЕФАКТ (наряд J6e) --------------------------------
+//
+// Критик не судит починку собственной критики: иначе на каждое замечание приходит новое, и полоса
+// критикует себя вечно. Полоса — код в песочнице без импортов, поэтому шов здесь тот же, что у
+// остальных её правил: читаем исходник и держим его к тому, что требует шаг.
+// Полоса не сочиняет строку, по которой роль выбирает ремонт: она возит готовое поле. Собери её
+// здесь снова — и проверить форму будет нечем, кроме регулярки по этому же файлу.
+test("шаг 11: форму строки FEEDBACK задаёт срез критика, а не полоса", () => {
+  assert.match(IZI, /fromCritic = verdict\.feedback;/)
+  assert.equal(/fromCritic = verdict\.findings\.map/.test(IZI), false, "строка снова собирается в полосе")
+  assert.equal(/`critic: \$\{/.test(IZI), false, "шаблон строки критика снова живёт в полосе")
+})
+
+test("шаг 11 стоит СРАЗУ за интейком и высказывается один раз", () => {
+  // Место: между зелёным checkFrd и весом. Раньше нельзя — машина ещё не признала артефакт
+  // разобранным; позже незачем — смысл в том, чтобы отказы МАШИНЫ ниже по полосе не случились.
+  const at11 = IZI.indexOf("if (from <= 6 && !criticSpoke)")
+  assert.ok(at11 > 0, "критик не вызывается после интейка")
+  assert.ok(at11 < IZI.indexOf('phase("weight")'), "критик обязан стоять до веса")
+  assert.ok(at11 > IZI.indexOf('phase("intake")'), "критик обязан стоять после интейка")
+
+  // Один вызов: флаг ставится ДО вызова, поэтому даже отказ роли не даёт второго круга критики.
+  assert.match(IZI, /criticSpoke = true;\s*\n\s*phase\("review"\)/)
+  // `Reject` даёт роли шага 6 ровно один круг — и возвращается на 6, а не на себя.
+  assert.match(IZI, /if \(verdict\.verdict === "Reject"\) \{\s*\n\s*from = 6;/)
+  // Луп шага 10в отмоток НЕ ДЕЛАЕТ: после сборки плана конвейер выше закрыт, и критик с фиксером
+  // доводят до рабочего состояния сам план. Единственная отмотка назад — решение ОПЕРАТОРА на гейте.
+  assert.equal(/planLoop[\s\S]{0,400}rebuild/.test(IZI), false, "луп снова умеет отматывать полосу")
+  // Наряд критика больше не несёт плана: предмет — требование.
+  assert.equal(/PLAN, FRD, PREVIOUS, CODES/.test(IZI), false, "в наряд шага 11 всё ещё едет план")
+  assert.match(IZI, /TASK, BRD, FRD, PREVIOUS, CODES: FORM\.codes, OWED: FORM\.owed, UNBACKED: FORM\.unbacked/)
+})
+
+// РЕЛЬСА lookup (наряд J15): роль просит ФАКТ, отвечает скрипт, оператор не будится.
+// Живой прогон 19.08.2026: роль разбудила человека ради пути AgentConfiguration, лежавшего в
+// graph-computed.xml. Здесь проверяется io этой рельсы: имена входят, строки таблицы выходят, карта
+// при этом НЕ возвращается — возить 107 КБ ради одного пути незачем.
+test("graphMap({resolve}): имена резолвятся без карты, ненайденное строк не даёт", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "appgraph.xml"), '<appgraph grammar="4"><module path="src/rest/Store.java" pkg="rest"/></appgraph>')
+  writeFileSync(join(root, ".agent", "graph-computed.xml"), `<computed>
+  <decl at="src/main/java/app/configs/AgentConfiguration.java" kind="class" name="AgentConfiguration" sig="public class AgentConfiguration"/>
+  <decl at="src/main/java/app/configs/AgentConfiguration.java" kind="method" name="getId()" sig="public String getId()"/>
+</computed>`)
+
+  const found = graphMap.run({ resolve: ["AgentConfiguration"] }, ctx(root))
+  assert.equal(found.ok, true)
+  assert.equal(found.typeRows, 1)
+  assert.match(found.types, /AgentConfiguration/)
+  assert.match(found.types, /src\/main\/java\/app\/configs\/AgentConfiguration\.java/)
+  // Готовый ответ рельсы несёт путь, а не число: подмена поля в полосе краснит этот тест и юнит
+  // steps/intake/lookup.test.mjs одновременно.
+  assert.match(found.answer, /src\/main\/java\/app\/configs\/AgentConfiguration\.java/)
+  assert.equal(found.text, undefined, "в режиме resolve карта не возвращается")
+
+  // Имя, которого нет нигде: строк нет — и это законный повод спросить оператора, а не выдумать путь.
+  const nothing = graphMap.run({ resolve: ["Nowhere"] }, ctx(root))
+  assert.equal(nothing.typeRows, 0)
+  assert.equal(Compile(graphMap.output).Check(found), true, JSON.stringify(found))
+  assert.equal(Compile(graphMap.output).Check(nothing), true, JSON.stringify(nothing))
+})
+
+// Полоса: рельса есть в конверте роли и разведена с вопросом человеку.
+test("шаг 6: lookup отвечает скриптом и тратит круг починки, а не круг оператора", () => {
+  assert.match(IZI, /enum: \["blocked", "invalid", "question", "lookup", "escalate", "crashed"\]/)
+  assert.match(IZI, /env\.kind === "lookup"/)
+  assert.match(IZI, /await graphMap\(\{ resolve: want, spent: \+\+lookups, cap: LOOKUP_ROUNDS, pending: feedback \}\)/)
+  // Ответ уезжает роли ФИДБЕКОМ и тратит попытку — иначе роль, спрашивающая по имени за раз,
+  // крутила бы полосу вечно.
+  // Полоса берёт ГОТОВЫЙ текст одним полем: составлять его здесь — это то, на чём прогон 64cebdda
+  // уехал со счётчиком вместо таблицы. Сам текст судит steps/intake/lookup.test.mjs.
+  // Полоса возит ОДНО поле и не принимает решений: и текст ответа, и склейку с уже стоявшими
+  // замечаниями собирает срез (steps/intake/lookup.mjs — lookupAnswer + mergeFeedback, у обеих юниты).
+  // Так закрыты оба дефекта 19.08.2026: счётчик вместо таблицы и присваивание вместо склейки.
+  assert.match(IZI, /pending: feedback \}\)/)
+  assert.match(IZI, /feedback = String\(found\.answer \|\| ""\)/)
+  assert.equal(/feedback = pending \?/.test(IZI), false, "склейка снова живёт в полосе")
+  assert.equal(/feedback = `lookup:/.test(IZI), false, "текст ответа снова собирается в полосе")
+  // Ненайденное имя отправляет роль к оператору — но текст этого отказа живёт в
+  // steps/intake/lookup.mjs и судится его юнитом; полоса лишь возит поле.
+  assert.match(IZI, /LOOKUP_ROUNDS/)
+  // Фраза «справок больше нет» — часть ОТВЕТА и живёт в steps/intake/lookup.mjs; полоса её не
+  // сочиняет, а только передаёт счётчик. Копия фразы здесь означала бы два места одного правила.
+  assert.equal(/Больше справок нет/.test(IZI), false, "текст исчерпания снова дублирован в полосе")
+})
+
+// ШАГ 3б ГОВОРИТ ВСЛУХ, ЧЕГО НЕ ПРОЧИТАЛ (наряд J18).
+//
+// Живой прогон eddi 19.08.2026: `focus.json` напечатал `dropped: 30 срезов, 66 клеток`, и ни одна
+// строка не сказала, что среди них лежит предмет `agent` — названный `subjects[]` BRD и требованием
+// R3. Роль потом спрашивала у оператора путь `AgentConfiguration.java`, правила краснели на
+// существующем файле, шаг 8 встал `unknown-node`. Три остановки от одного молчания.
+test("шаг 3б: непрочитанный и недочитанный предмет доезжают до лога и до наряда шага 6", () => {
+  // Полоса печатает оба факта РАЗДЕЛЬНО: не прочитан вовсе и прочитан частично — это разные вещи.
+  assert.match(IZI, /предметы требования НЕ прочитаны/)
+  assert.match(IZI, /предметы прочитаны ЧАСТИЧНО/)
+  // И передаёт первое роли шага 6 слотом наряда; пусто говорится СЛОВАМИ.
+  assert.match(IZI, /UNCOVERED: NO_GAP/)
+  assert.match(IZI, /нет: все предметы требования прочитаны/)
+  // Факт читается из артефакта шага 3б, а не пересчитывается в полосе: одно правило — одно место.
+  assert.match(IZI, /readText\(\{ path: "\.agent\/focus\.json" \}\)/)
+
+  // Наряд роли объявляет слот и прямо запрещает додумывать то, чего рой не читал.
+  // Наряд ПЛАСТА B — единственный, кто рассуждает о репозитории, и он же объявляет слот.
+  const tpl = readFileSync(new URL("../steps/intake/order-b.tpl", import.meta.url), "utf8")
+  assert.match(tpl, /\{UNCOVERED\}/)
+  assert.match(tpl, /do not invent an operation and do not invent its contract/)
+})
+
+// --- ШАГ 6 ПРОХОДАМИ: полоса исполняется, а не сверяется регуляркой -----------------------------
+//
+// P3. Порядок пластов — РЕШЕНИЕ, и решение проверяется вызовом. До этого среза единственным способом
+// узнать, пускает ли красный проход B в проход C, был живой прогон: пять часов и 572 000 токенов за
+// ответ, который здесь стоит миллисекунду.
+//
+// Срез берётся из ИСХОДНИКА полосы (`$START_INTAKE`), а не переписывается сюда: копия разошлась бы с
+// оригиналом на первой правке — та же дисциплина, что у среза `$START_ORDER` выше.
+const INTAKE = (stubs) => {
+  const src = IZI.slice(IZI.indexOf("// $START_INTAKE"), IZI.indexOf("// $END_INTAKE"))
+  const names = Object.keys(stubs)
+  return new Function(...names, `${src}\n  return intake`)(...names.map((n) => stubs[n]))
+}
+
+// Стенд: роль всегда отвечает «написал», гардрейл отвечает по СПИСКУ вердиктов, который задаёт тест.
+const stand = ({ verdicts = {}, full = [{ ok: true }], envelopes = {} } = {}) => {
+  const seen = { orders: [], keys: [], checks: [], promoted: 0, asked: [], logs: [] }
+  const queue = { ...verdicts }
+  const fullQ = [...full]
+  return {
+    seen,
+    stubs: {
+      readText: async () => "",
+      graphMap: async () => ({ ok: true, text: "MAP", types: "TYPES", nodes: 1, bytes: 1, cap: 2, typeRows: 1, answer: "lookup: ok" }),
+      answers: async () => [],
+      frdForm: async () => ({ deltaForms: "Added", sources: "brd.md" }),
+      reviewForm: async () => ({ owed: "R1 — …" }),
+      answersBlock: () => "",
+      // блок последнего обмена: стенд возвращает его дословно, чтобы шов ниже видел, ЧТО уехало роли
+      answeredBlock: (_seen, asked) => ((asked || []).length ? `ОТВЕТЫ НА: ${asked.join(" | ")}` : ""),
+      sized: async (step, _tpl, keys) => { seen.orders.push(step); seen.keys.push(keys); return { text: step, over: false } },
+      agent: async (text) => envelopes[text] || { track: "ok" },
+      checkFrd: async ({ pass }) => {
+        if (!pass) return fullQ.length > 1 ? fullQ.shift() : fullQ[0]
+        seen.checks.push(pass)
+        const list = queue[pass]
+        const v = Array.isArray(list) ? (list.length > 1 ? list.shift() : list[0]) : { ok: true }
+        return v
+      },
+      carried: async ({ blockers }) => ({ text: String(blockers || ""), seen: [] }),
+      promote: async () => { seen.promoted++ },
+      askOperator: async (env, n, name) => { seen.asked.push(name) },
+      charge: () => ({ n: 1, spent: false }),
+      noRoundsLeft: (x) => x,
+      log: (line) => seen.logs.push(line),
+      exit: (e) => { throw new Error(`EXIT ${JSON.stringify(e)}`) },
+      err: (kind, d) => ({ kind, ...d }),
+      ENVELOPE: {},
+      INTAKE_LOOPS: 3,
+      LOOKUP_ROUNDS: 3,
+      QUESTION_ROUNDS: 3,
+      ASKED_N: 0,
+    },
+  }
+}
+
+test("шаг 6: четыре прохода идут по порядку, и промоут ровно один — после ПОЛНОГО суда", async () => {
+  const { stubs, seen } = stand()
+  await INTAKE(stubs)("", "")
+  assert.deepEqual(seen.orders, ["intake/A", "intake/B", "intake/C", "intake/D"])
+  assert.deepEqual(seen.checks, ["A", "B", "C", "D"])
+  assert.equal(seen.promoted, 1)
+})
+
+test("шаг 6: красный проход не пускает в следующий, а зелёный не переигрывается", async () => {
+  const { stubs, seen } = stand({
+    verdicts: { B: [{ ok: false, blockers: "F3 узел" }, { ok: false, blockers: "F3 узел" }, { ok: true }] },
+  })
+  await INTAKE(stubs)("", "")
+  // B чинился трижды, и всё это время C и D не начинались
+  assert.deepEqual(seen.checks, ["A", "B", "B", "B", "C", "D"])
+  // A написан ОДИН раз: закрытый пласт не переписывается из-за красного соседа
+  assert.equal(seen.orders.filter((x) => x === "intake/A").length, 1)
+  assert.equal(seen.orders.filter((x) => x === "intake/B").length, 3)
+})
+
+test("шаг 6: круги проходу отпущены свои — исчерпал B, полоса встаёт на B и не идёт в C", async () => {
+  const { stubs, seen } = stand({ verdicts: { B: [{ ok: false, blockers: "F3 узел" }] } })
+  await assert.rejects(() => INTAKE(stubs)("", ""), /проход B шага 6: цикл исчерпан/)
+  assert.equal(seen.checks.includes("C"), false, "после исчерпанного B полоса вошла в C")
+  assert.equal(seen.promoted, 0)
+})
+
+test("шаг 6: вопрос задаёт ЛЮБОЙ проход, и пауза названа его именем", async () => {
+  const { stubs, seen } = stand()
+  // Роль прохода C спрашивает ОДИН раз и после ответа пишет файл. Важно двоякое: вопрос вообще
+  // возможен не только в A, и имя паузы несёт пласт — иначе вопрос прохода C и вопрос прохода B
+  // схлопнутся в одну паузу, а хост ключует паузу по имени (CLAUDE.md, ограничение 4).
+  let askedOnce = false
+  stubs.agent = async (text) => {
+    if (text === "intake/C" && !askedOnce) { askedOnce = true; return { track: "err", kind: "question", items: ["какой HTTP-код?"] } }
+    return { track: "ok" }
+  }
+  await INTAKE(stubs)("", "")
+  assert.deepEqual(seen.asked, ["intake-C"])
+  // и вопрос НЕ съел круг починки: пласт C собрал два наряда, но потратил ноль попыток
+  assert.equal(seen.orders.filter((x) => x === "intake/C").length, 2)
+})
+
+test("шаг 6: возврат от критика входит в НАЗВАННЫЙ проход и идёт от него вперёд", async () => {
+  const { stubs, seen } = stand()
+  await INTAKE(stubs)("critic: invented-value · S1", "B")
+  assert.deepEqual(seen.orders, ["intake/B", "intake/C", "intake/D"])
+  assert.equal(seen.orders.includes("intake/A"), false, "пласт A переигран без нужды")
+})
+
+test("шаг 6: красный ПОЛНЫЙ суд возвращает полосу в ранний пласт, а не поднимает эскалацию", async () => {
+  const { stubs, seen } = stand({
+    full: [{ ok: false, blockers: "F3c дельта без сценария", pass: "B" }, { ok: true }],
+  })
+  await INTAKE(stubs)("", "")
+  // первый заход A→D, полный суд красен и назвал B; второй заход с B и до конца
+  assert.deepEqual(seen.orders, ["intake/A", "intake/B", "intake/C", "intake/D", "intake/B", "intake/C", "intake/D"])
+  assert.equal(seen.promoted, 1)
+})
+
+test("шаг 6: гейт сьютов и промоут стоят на ПОЛНОМ суде, а не в проходе", async () => {
+  const { stubs, seen } = stand({
+    full: [{ ok: false, ask: true, subject: "узел без сьюта", items: ["a"], why: "нет сьюта" }, { ok: true }],
+  })
+  await INTAKE(stubs)("", "")
+  assert.deepEqual(seen.asked, ["intake"])
+  assert.equal(seen.promoted, 1)
+})
+
+// ЧЕК-ЛИСТ ДОЛГА СЧИТАЕТСЯ ИЗ BRD, И FRD ЕМУ НЕ НУЖЕН. Полоса зовёт `reviewForm` в проходе D шага 6,
+// когда артефакта ещё нет ни в staging, ни промоутнутого: общий ранний возврат обнулял ОБА поля, и
+// роль получала «(нет FRD: чек-лист пуст)» — 24 символа вместо двух килобайт списка.
+test("reviewForm: долг перед требованиями есть и БЕЗ артефакта — пуст только обратный ход", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "brd.md"), [
+    "R1 Посылку можно найти по номеру",
+    "   fit: GET /parcels/{id} возвращает посылку",
+    "R2 Список фильтруется по статусу",
+    "   fit: GET /parcels?status=… возвращает только этот статус",
+    "subjects[]: посылка", "analogue: —", "open-questions: 0",
+  ].join("\n"))
+
+  const out = reviewForm.run({}, ctx(root))
+  assert.match(out.owed, /^R1 — /m, "долг обнулён отсутствием FRD")
+  assert.match(out.owed, /^R2 — /m)
+  assert.doesNotMatch(out.owed, /чек-лист пуст/)
+  assert.match(out.unbacked, /артефакта ещё нет/, "обратный ход обязан САМ сказать, почему он пуст")
+})
+
+test("шаг 6: возврат от критика кладёт промоутнутый артефакт ОБРАТНО на стол, а не начинает с нуля", async () => {
+  // promote ПЕРЕМЕЩАЕТ: после зелёного шага по staging-пути пусто, и роль прохода A читает наряд
+  // буквально — «пусто значит ты ещё ничего не писал». Живой прогон 19.08.2026: 8 use case, 15 дельт,
+  // 9 полей и 17 строк <carried> исчезли за один перезаход.
+  const { stubs, seen } = stand()
+  const moved = []
+  stubs.readText = async ({ path }) => (path === ".agent/frd.xml" ? "<frd>…четыре пласта…</frd>" : "")
+  stubs.promote = async ({ from, to }) => { moved.push(`${from} → ${to}`); seen.promoted++ }
+  await INTAKE(stubs)("critic: requirement-not-carried · R1", "A")
+  assert.equal(moved[0], ".agent/frd.xml → .agent/staging/frd.xml", "артефакт не вернули на правку")
+
+  // а на ПЕРВОМ проходе шага (не возврат) ничего никуда не возвращается
+  const first = stand()
+  first.stubs.readText = async ({ path }) => (path === ".agent/frd.xml" ? "<frd>…</frd>" : "")
+  const movedFirst = []
+  first.stubs.promote = async ({ from, to }) => { movedFirst.push(from) }
+  await INTAKE(first.stubs)("", "")
+  assert.deepEqual(movedFirst, [".agent/staging/frd.xml"], "на первом проходе двигается только промоут")
+})
+
+// Q1: РАЗГОВОР ОСТАЁТСЯ АРТЕФАКТОМ. `pending.json` стирается в тот же миг, и без записи узнать после
+// прогона, о чём роль спрашивала на шаге, неоткуда — а разбор начинается именно с этого.
+test("clearPending: закрытый обмен ложится в .agent/ask.xml и только потом стирает pending", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+  writeFileSync(join(root, ".agent", "staging", "frd.xml"), "<frd>черновик на 31 символ</frd>")
+  writeFileSync(join(root, ".agent", "pending.json"), JSON.stringify({
+    subject: "s", evidence: "e",
+    items: [{ n: 1, text: "нужен GET по id?" }, { n: 2, text: "код отказа?" }],
+  }))
+  writeFileSync(join(root, ".agent", "answers.md"), [
+    "<exchange>",
+    "  <question_1>нужен GET по id?</question_1>",
+    "  <answer_1>да, нужен GET /parcels/{id}</answer_1>",
+    "  <question_2>код отказа?</question_2>",
+    "  <answer_2>422</answer_2>",
+    "</exchange>",
+  ].join("\n"))
+
+  const out = clearPending.run({ step: "intake", pass: "A", draft: ".agent/staging/frd.xml" }, ctx(root))
+  assert.equal(out.asked, 2)
+  const ask = readFileSync(join(root, ".agent", "ask.xml"), "utf8")
+  assert.match(ask, /<ask step="intake" pass="A" draft="32">/, "не записан размер черновика на момент вопроса")
+  assert.match(ask, /<a n="1">да, нужен GET \/parcels\/\{id\}<\/a>/)
+  assert.equal(existsSync(join(root, ".agent", "pending.json")), false, "pending стёрт — это и есть закрытие обмена")
+
+  // второй обмен ДОПИСЫВАЕТСЯ, а не затирает первый
+  writeFileSync(join(root, ".agent", "pending.json"), JSON.stringify({ subject: "s2", items: [{ n: 1, text: "второй вопрос?" }] }))
+  writeFileSync(join(root, ".agent", "answers.md"), readFileSync(join(root, ".agent", "answers.md"), "utf8") +
+    "\n<exchange>\n  <question_1>второй вопрос?</question_1>\n  <answer_1>второй ответ</answer_1>\n</exchange>")
+  clearPending.run({ step: "intake", pass: "C" }, ctx(root))
+  const both = readFileSync(join(root, ".agent", "ask.xml"), "utf8")
+  assert.equal((both.match(/<ask /g) || []).length, 2, "второй обмен затёр первый")
+  assert.match(both, /<ask step="intake" pass="C" draft="0">/, "проход C спросил ДО того, как написал — draft=0")
+  // и в записи прохода C нет вопросов прохода A: обмен — это ответы на СВОИ вопросы
+  assert.equal(both.split("<ask ")[2].includes("нужен GET по id"), false)
+})
+
+test("newRun уносит разговор прошлого прогона вместе с ответами", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, ".agent", "answers.md"), "<exchange></exchange>")
+  writeFileSync(join(root, ".agent", "ask.xml"), '<ask step="intake" pass="A" draft="0">\n</ask>\n')
+  newRun.run({}, ctx(root))
+  assert.equal(existsSync(join(root, ".agent", "ask.xml")), false, "разговор остался рядом с новыми ответами")
+  assert.match(readFileSync(join(root, ".agent", "prev", "ask.xml"), "utf8"), /<ask step="intake"/)
+})
+
+
+// Q2: ОТВЕТ ОПЕРАТОРА ЕДЕТ ОТДЕЛЬНЫМ БЛОКОМ. Накопленная история {ANSWERS} к пятому обмену весит
+// полторы тысячи символов, и новые ответы в ней ничем не выделены: живой прогон 19.08.2026 — роль
+// применила один ответ из трёх и закрылась зелёной.
+test("шаг 6: после ответа роль получает ИМЕННО свой обмен, а не только общую историю", async () => {
+  const { stubs, seen } = stand()
+  let askedOnce = false
+  stubs.agent = async (text) => {
+    if (text === "intake/B" && !askedOnce) { askedOnce = true; return { track: "err", kind: "question", items: ["в каком модуле поле?", "как назвать поле?"] } }
+    return { track: "ok" }
+  }
+  await INTAKE(stubs)("", "")
+
+  const bOrders = seen.keys.filter((_, i) => seen.orders[i] === "intake/B")
+  assert.equal(bOrders.length, 2, "проход B собрал не два наряда")
+  assert.equal(bOrders[0].ANSWERED, "(вопросов ты ещё не задавал)", "до вопроса блок обязан говорить это СЛОВАМИ")
+  assert.match(bOrders[1].ANSWERED, /ОТВЕТЫ НА: в каком модуле поле\? \| как назвать поле\?/, "обмен не доехал до роли")
+
+  // и он есть в наряде КАЖДОГО прохода: спросил один пласт, перечитывать может следующий
+  for (const p of ["A", "B", "C", "D"]) {
+    const k = seen.keys[seen.orders.indexOf(`intake/${p}`)]
+    assert.ok("ANSWERED" in k, `наряд ${p} без слота ANSWERED`)
+  }
+})
+
+// L0: ПРОДОЛЖЕНИЕ НЕ ТЕРЯЕТ ОТВЕТОВ. Каждый ответ — пауза человека, и унести их у прогона, который
+// продолжает ту же работу, значит спросить всё заново. Прогон 19.08.2026 дошёл до гейта 1 с пятью
+// обменами; реворк после него перезапускается — и без этого правила терял бы их все.
+test("newRun: прогон с нуля уносит состояние, продолжение — оставляет", () => {
+  const make = (withLog) => {
+    const root = tempRoot()
+    mkdirSync(join(root, ".agent", "staging"), { recursive: true })
+    writeFileSync(join(root, ".agent", "answers.md"), "<exchange>\n  <question_1>q</question_1>\n  <answer_1>a</answer_1>\n</exchange>")
+    writeFileSync(join(root, ".agent", "ask.xml"), '<ask step="intake" draft="0">\n</ask>\n')
+    writeFileSync(join(root, ".agent", "staging", "frd.xml"), "<frd/>")
+    if (withLog) {
+      // журнал, в котором шаг 1 закрыт и его артефакт цел → лестница войдёт ВЫШЕ первого шага
+      writeFileSync(join(root, "TASK.md"), "task: DOS-1\n")
+      runlogMark.run({ step: 1, name: "task", status: "done", artifacts: ["TASK.md"] }, ctx(root))
+    }
+    return root
+  }
+
+  const scratch = make(false)
+  const a = newRun.run({}, ctx(scratch))
+  assert.equal(a.kept, false)
+  assert.equal(a.answers, 1, "прогон с нуля обязан унести ответы")
+  assert.equal(existsSync(join(scratch, ".agent", "answers.md")), false)
+  assert.equal(existsSync(join(scratch, ".agent", "prev", "ask.xml")), true)
+
+  const cont = make(true)
+  const b = newRun.run({}, ctx(cont))
+  assert.equal(b.kept, true, "журнал говорит, что шаг 1 закрыт — это продолжение")
+  assert.equal(b.answers, 0, "у продолжения не унесено ничего, и лог обязан это сказать")
+  assert.equal(existsSync(join(cont, ".agent", "answers.md")), true, "ответы унесены у продолжения")
+  assert.equal(existsSync(join(cont, ".agent", "ask.xml")), true, "разговор унесён у продолжения")
+  // staging чистится в ОБОИХ случаях: недописанный черновик прошлой попытки не наследуется
+  assert.equal(existsSync(join(cont, ".agent", "prev", "staging", "frd.xml")), true)
+})
+
+// L3: ПРАВКА ПО ЯКОРЮ ПРИМЕНЯЕТСЯ МАШИНОЙ. Роль называет строку дословно; не нашли — отказ, а не
+// вставка наугад. Иначе фиксер, промахнувшийся якорем, тихо пишет не туда.
+test("planFix: правка по якорю применяется, промах якорем — отказ без записи", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, "task", "DOS-1"), { recursive: true })
+  const before = "## 7. GlossaryService.java\nfields: glossaryCache: Map<String, Glossary> — cache\n"
+  writeFileSync(join(root, "task", "DOS-1", "PLAN.md"), before)
+
+  const good = planFix.run({ target: "task/DOS-1/PLAN.md",
+    patch: "REPLACE: fields: glossaryCache: Map<String, Glossary> — cache\nfields: glossaryCache: Caffeine Cache — TTL 5 minutes" }, ctx(root))
+  assert.equal(good.ok, true)
+  assert.match(readFileSync(join(root, "task", "DOS-1", "PLAN.md"), "utf8"), /Caffeine Cache — TTL 5 minutes/)
+
+  const now = readFileSync(join(root, "task", "DOS-1", "PLAN.md"), "utf8")
+  const bad = planFix.run({ target: "task/DOS-1/PLAN.md", patch: "REPLACE: строки, которой нет\nчто-то" }, ctx(root))
+  assert.equal(bad.ok, false)
+  assert.match(bad.why, /no such line in the file/)
+  assert.equal(readFileSync(join(root, "task", "DOS-1", "PLAN.md"), "utf8"), now, "файл тронут при отказе")
+})
+
+// L2 на диске: маршрут смотрит в НАСТОЯЩИЙ план, а не в слова находки.
+test("planRoute: правка раздела — в круге, потерянный модуль — через требование", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, "task", "DOS-1"), { recursive: true })
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\n")
+  writeFileSync(join(root, "task", "DOS-1", "PLAN.md"), "## 7. src/app/GlossaryService.java\nfields: cache\n")
+  writeFileSync(join(root, ".agent", "frd.xml"), `<frd><scenario nodes="src/app/Weigher.java"/></frd>`)
+
+  const out = planRoute.run({ verdict: [
+    "R17 | PLAN LOST | src/app/GlossaryService.java | заменить Map на Caffeine",
+    "R11 | PLAN LOST | (отсутствует модуль) | добавить ссылку в src/app/Weigher.java",
+    "R12 | PLAN LOST | (отсутствует модуль) | добавить ссылку в src/app/Unknown.java",
+  ].join("\n") }, ctx(root))
+  assert.equal(out.found, 3)
+  assert.deepEqual(out.plan.length, 1, "правка существующего раздела чинится в круге")
+  assert.deepEqual(out.design.length, 1, "модуль знает требование, а плана нет — переигрывание")
+  assert.deepEqual(out.frd.length, 1, "модуля не знает и требование — сперва оно")
+  assert.match(out.plan[0], /R17/)
+  assert.match(out.design[0], /R11/)
+  assert.match(out.frd[0], /R12/)
+  // Пути, названные находками, — вход nodeFacts: их называет разборщик, а не роль по прозе.
+  assert.ok(out.paths.includes("src/app/Weigher.java"))
+})
+
+// L4: ЛУП НАД ПЛАНОМ ВКЛЮЧАЕТСЯ ДВАЖДЫ и разводит находки по цене починки.
+test("шаг 10в: луп стоит до гейта, слова оператора уходят в него, маршруты разведены", () => {
+  // до гейта — сам по себе, и только потом презентация человеку
+  assert.ok(IZI.indexOf('phase("planreview")') < IZI.indexOf('phase("gate1")'), "критик плана после гейта")
+
+  // слова оператора с гейта не откатывают полосу, а входят в тот же луп
+  assert.match(IZI, /fromGate = back\.note;/)
+  // ЧЕТВЁРТОЕ РЕШЕНИЕ ГЕЙТА — единственная законная отмотка, и объявляет её человек: требования нет
+  // в источнике, правкой плана его не создать. Полоса идёт к доработке требований и интейку.
+  assert.match(IZI, /back\.requirements[\s\S]{0,300}from = 2;/, "гейт не умеет вернуть полосу к требованиям")
+  assert.match(readFileSync(new URL("../steps/plan/gate.mjs", import.meta.url), "utf8"),
+    /requirements: <какое требование упущено>/, "оператору не сказали, что такое решение есть")
+  assert.match(IZI, /слова уходят критику плана/)
+  assert.equal(/const back = await gating\(\);[\s\S]{0,200}from = 6;/.test(IZI), false,
+    "гейт снова откатывает на шаг 6 в обход критика плана")
+
+  // ПОСЛЕ СБОРКИ ПЛАНА КОНВЕЙЕР ВЫШЕ ЗАКРЫТ. Остаются трое: критик находит, фиксер правит, гардрейлы
+  // не дают сломать. Отмоток у лупа нет — ни на 6, ни на 9: артефакты шагов 6-9 к этому моменту
+  // материал, из которого план собран.
+  //
+  // BUG_FIX_CONTEXT: прогон c972e5c2 (20.08.2026). Пять настоящих находок; полоса починила
+  // требование и ушла на пересборку, ОТБРОСИВ четыре находки плана — их предстояло найти заново
+  // новым кругом критика после двух вызовов ролей. Повторная работа не бесплатна.
+  const loop = IZI.slice(IZI.indexOf("async function planLoop("))
+  const body = loop.slice(0, loop.indexOf("\nasync function ", 1))
+  assert.equal(/from = 6|from = 9/.test(body), false, "луп сам двигает полосу вместо того, чтобы вернуть решение")
+  // Правится ИСТОЧНИК — карточка партии: `PLAN.md` собирает planbook из карточек, и правка в
+  // документе живёт лишь до первой пересборки.
+  assert.match(body, /for \(const \[target, lines\] of byCard\)[\s\S]{0,300}judge: "card"/,
+    "фиксер правит документ вместо карточки — правки пропадут при пересборке")
+  assert.match(EXT, /judge === "card"[\s\S]{0,700}writeFileSync\(at\(root, target\), before\)/,
+    "правка карточки, после которой план не режется, остаётся на диске")
+  // Потерянный модуль патчем не дописывается: модули берутся из `nodes` сценариев требования
+  // (card.mjs::partsOf), и раздел, вписанный в документ, сотрёт первый же вход в шаг 9.
+  // Требование правит СКРИПТ: путь назвал разборщик, use case — строка `<carried>`, сценарий один.
+  // Роль здесь не нужна, а значит и не ошибётся — две её правки требования 20.08.2026 были мимо.
+  assert.match(body, /await frdAdopt\(\{ path: node, req/, "потерянный модуль не усыновляется скриптом")
+  assert.equal(/fixOne\(\{ target: FRD_PATH_LOOP/.test(body), false, "требование всё ещё правит роль")
+  assert.match(body, /return \{ replay:/, "план не переигрывается после починки требования")
+
+  // ГАРДРЕЙЛ ВМЕСТО ОТМОТКИ: нарезка судит правку ДО записи, и красная откатывается.
+  assert.match(EXT, /judge === "cut"[\s\S]{0,600}writeFileSync\(at\(root, target\), before\)/,
+    "правка, после которой план не режется, остаётся на диске")
+
+  // Промах якорем и отказ нарезки — один класс: замечание о собственном ответе роли, СВОИМ блоком.
+  assert.match(body, /broke = put\.blockers \|\| put\.why/, "отказ гардрейла не едет фиксеру")
+  assert.match(body, /rejected: missed/, "замечание прошлого круга не доезжает до фиксера")
+
+  // Наряд фиксера говорит СЛОВАРЁМ ХАРНЕСА: PREVIOUS — твой артефакт, FEEDBACK — почему он вернулся,
+  // строки помечены источником. Своих имён блоков наряд не изобретает: роль обучена этим словам
+  // всеми остальными нарядами конвейера, а у нового имени прошлого опыта нет.
+  const fixTplText = readFileSync(new URL("../steps/planreview/order.fix.tpl", import.meta.url), "utf8")
+  assert.match(fixTplText, /\$START_PREVIOUS/, "артефакт фиксера едет не блоком PREVIOUS")
+  assert.match(fixTplText, /\$START_FEEDBACK/, "замечания едут не блоком FEEDBACK")
+  assert.doesNotMatch(fixTplText, /\$START_REJECTED/, "наряд снова изобрёл свой блок")
+  assert.match(fixTplText, /`critic:`/, "не сказано, что делать со строкой критика")
+  assert.match(fixTplText, /`guardrail:` — YOUR LAST ANSWER WAS REFUSED/, "промах не отделён от находок")
+  // форму строки задаёт СРЕЗ, а не полоса (тот же договор, что у шага 11)
+  assert.match(IZI, /await planFeedback\(\{ findings, rejected/)
+})
+
+// N2: ВЕЛИЧИНА, КОТОРОЙ ПЛАН НЕ НЕСЁТ, СТАНОВИТСЯ РАБОТОЙ. У `<nfr>` нет адреса — его ищет модель по
+// цепочкам; полоса лишь считает, чего не хватает, и той же функцией, что судит потраченный ответ
+// оператора (F13): твёрдый знак либо есть в плане, либо нет.
+test("planFeedback: величина без своего знака в плане едет строкой nfr:, с знаком — молчит", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, "task", "DOS-1"), { recursive: true })
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\n")
+  writeFileSync(join(root, ".agent", "frd.xml"), `<frd goal="g">
+    <usecase id="UC1" actor="api" goal="g"><post>p</post><step n="1">s</step></usecase>
+    <nfr subject="cache-ttl" fit="5 minutes" source="brd.md R17"/>
+    <nfr subject="style" fit="по образцу соседнего модуля" source="brd.md R2"/>
+  </frd>`)
+  writeFileSync(join(root, "task", "DOS-1", "PLAN.md"), "## 1. src/app/Store.java\nfields: cache: Map\n")
+
+  const out = planFeedback.run({ findings: "", rejected: "", nfrs: true }, ctx(root))
+  assert.equal(out.count, 1, "величина без твёрдых знаков взята в работу либо потерянная пропущена")
+  assert.match(out.text, /^nfr: cache-ttl = 5 minutes \(источник brd\.md R17\)$/m)
+  assert.equal(out.text.includes("style"), false, "«по образцу» проверке не поддаётся — правило молчит")
+
+  // величина доехала — работы нет
+  writeFileSync(join(root, "task", "DOS-1", "PLAN.md"), "## 1. src/app/Store.java\nfields: cache: Caffeine TTL 5 minutes\n")
+  assert.equal(planFeedback.run({ nfrs: true }, ctx(root)).count, 0)
+})
+
+// КАЖДАЯ РОЛЬ, КОТОРУЮ ЗОВЁТ ПОЛОСА, ОБЯЗАНА БЫТЬ ОБЪЯВЛЕНА РАСШИРЕНИЮ. Роли резолвятся ТОЛЬКО из
+// `roleDirectories`: файл роли, лежащий в срезе, но не названный здесь, для хоста не существует.
+//
+// BUG_FIX_CONTEXT: живой прогон 20.08.2026, первая же секунда. Полоса позвала `plan-fixer`, хост
+// ответил `Unknown agent type: plan-fixer`, прогон умер до шага 9. Срез `steps/planreview/` был
+// написан, испытан и даже проигран по артефактам — и не объявлен. Ни один шов этого не видел:
+// тесты зовут роли не через хост.
+test("роль, которую зовёт полоса, объявлена в roleDirectories", () => {
+  const izi = readFileSync(new URL("../workflows/izi.js", import.meta.url), "utf8")
+  const called = new Set([...izi.matchAll(/\brole:\s*"([^"]+)"/g)].map((m) => m[1]))
+  const INDEX = readFileSync(new URL("./index.mjs", import.meta.url), "utf8")
+  const dirs = [...INDEX.matchAll(/steps\/([a-z]+)\/", import\.meta\.url\)/g)].map((m) => m[1])
+  const declared = new Set()
+  for (const d of dirs) {
+    for (const f of readdirSync(new URL(`../steps/${d}/`, import.meta.url)).filter((x) => x.endsWith(".md"))) {
+      if (!/^description:/m.test(readFileSync(new URL(`../steps/${d}/${f}`, import.meta.url), "utf8").split("---")[1] || "")) continue
+      declared.add(f.replace(/\.md$/, ""))
+    }
+  }
+  // Имя роли в наряде — имя ФАЙЛА роли, БУКВА В БУКВУ: так их резолвит хост.
+  for (const r of called) {
+    assert.ok(declared.has(r),
+      `полоса зовёт роль «${r}», а файла steps/*/${r}.md нет в roleDirectories — прогон умрёт на «Unknown agent type»`)
+  }
+  // ...и имя обязано быть уникальным на все каталоги: хост склеивает роли в один словарь и отвергает
+  // МЕТАДАННЫЕ целиком при совпадении имён — прогон не стартует вовсе.
+  const seen = new Map()
+  for (const d of dirs) {
+    for (const f of readdirSync(new URL(`../steps/${d}/`, import.meta.url)).filter((x) => x.endsWith(".md"))) {
+      if (!/^description:/m.test(readFileSync(new URL(`../steps/${d}/${f}`, import.meta.url), "utf8").split("---")[1] || "")) continue
+      const name = f.replace(/\.md$/, "")
+      assert.ok(!seen.has(name), `роль «${name}» объявлена дважды: steps/${seen.get(name)}/ и steps/${d}/ — хост отвергнет метаданные`)
+      seen.set(name, d)
+    }
+  }
+})
+
+// АДРЕСНАЯ КНИГА ЕДЕТ ФИКСЕРУ. Узел называет роль, а знает его КАРТА: без списка путей роль пишет
+// его по памяти, и живой прогон 20.08.2026 это купил — `…/agent/AgentConfig.java` вместо
+// `…/configs/agents/model/AgentConfiguration.java`. Гардрейл поймал (F3 «файла нет ни в карте, ни в
+// репозитории»), но круг лупа был потрачен на опечатку, которую нечем было не сделать.
+test("шаг 10в: фиксер получает список путей карты, а не вспоминает их", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, "task", "DOS-1"), { recursive: true })
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\n")
+  writeFileSync(join(root, "task", "DOS-1", "PLAN.md"), "## 1. src/app/A.java\n")
+  writeFileSync(join(root, ".agent", "appgraph.xml"),
+    `<map><module path="src/app/A.java"/><module path="src/app/very/deep/AgentConfiguration.java"/></map>`)
+
+  const r = planReview.run({}, ctx(root))
+  assert.deepEqual(r.known.split("\n"), ["src/app/A.java", "src/app/very/deep/AgentConfiguration.java"],
+    "хост не отдаёт адресную книгу — фиксеру нечего копировать")
+
+  const tpl = readFileSync(new URL("../steps/planreview/order.fix.tpl", import.meta.url), "utf8")
+  assert.match(tpl, /\{KNOWN\}/, "наряд фиксера не несёт книгу")
+  assert.match(tpl, /ADDRESS BOOK/, "наряд не говорит, что путь КОПИРУЕТСЯ, а не вспоминается")
+  assert.match(IZI, /KNOWN: known \|\| ""/, "полоса не подставляет книгу в наряд")
+  // ПОЛЯ ПО ИМЕНАМ, А НЕ ПО ПОРЯДКУ: прогон c972e5c2 умер на `Invalid input for planFeedback`,
+  // потому что дописанная шестым аргументом книга села в слот `nfrs`. Шов проверяет ИМЯ, а не факт
+  // присутствия строки в скобках.
+  for (const m of IZI.matchAll(/fixOne\((.*?)\);/g)) {
+    assert.match(m[1], /^\{ target[,:]/, `вызов fixOne позиционными аргументами: ${m[1].slice(0, 70)}`)
+    assert.match(m[1], /known: src\.known/, `вызов fixOne без адресной книги: ${m[1].slice(0, 70)}`)
+  }
+})
+
+// ПРАВКА ТРЕБОВАНИЯ — ТРАНЗАКЦИЯ. Поставку держит отметка журнала (sha256): записать в неё то, что
+// не прошло суд, — значит порвать отметку, и следующий запуск войдёт не в луп, а в переписывание
+// требования с нуля. Прогон 20.08.2026 заплатил за этот порядок полным шагом 6.
+test("planFix judge=frd: красная правка НЕ доезжает до диска", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\n")
+  writeFileSync(join(root, ".agent", "appgraph.xml"), `<map><module path="src/app/A.java"/></map>`)
+  writeFileSync(join(root, ".agent", "brd.md"), "R1 требование\n   fit: любое\n")
+  const frd = `<frd>\n  <deltas>\n    <delta op="a" form="Changed" node="src/app/A.java" from="x" to="y"/>\n  </deltas>\n</frd>\n`
+  writeFileSync(join(root, ".agent", "frd.xml"), frd)
+  const before = readFileSync(join(root, ".agent", "frd.xml"), "utf8")
+
+  const bad = planFix.run({ target: ".agent/frd.xml", judge: "frd", patch:
+    `INSERT AFTER:     <delta op="a" form="Changed" node="src/app/A.java" from="x" to="y"/>\n    <delta op="b" form="Changed" node="src/app/NOPE.java" from="x" to="y"/>` }, ctx(root))
+  assert.equal(bad.ok, false, "правка с выдуманным узлом принята")
+  assert.match(bad.blockers || "", /NOPE\.java/, "блокеры не вернулись автору правки")
+  assert.equal(readFileSync(join(root, ".agent", "frd.xml"), "utf8"), before, "красная правка попала на диск")
+  assert.equal(existsSync(join(root, ".agent", "frd.xml.candidate")), false, "кандидат остался лежать в run state")
+})
+
+// ПРАВКЕ ВМЕНЯЕТСЯ ТОЛЬКО ЕЁ СОБСТВЕННЫЙ УЩЕРБ. Артефакт приезжает в луп с долгом, которого он не
+// делал: правило F13 завели ПОСЛЕ прогона 19.08.2026, и требование того прогона красно им сегодня.
+// Требовать от точечной правки закрыть этот долг — тупик: роль не может (ответа оператора у неё
+// нет), круги кончатся, и полоса уйдёт на шаг 6 в обход всей дешёвой ветки.
+test("planFix judge=frd: старый долг артефакта не вменяется новой правке", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\n")
+  const many = ["A", "B", "C", "D", "E"].map((x) => `src/app/${x}.java`)
+  writeFileSync(join(root, ".agent", "appgraph.xml"), `<map>${many.map((p) => `<module path="${p}"/>`).join("")}</map>`)
+  writeFileSync(join(root, ".agent", "brd.md"), "R1 требование\n   fit: любое\n")
+  // Артефакт УЖЕ красен: дельта на узел, которого нет в карте.
+  const frd = [
+    `<frd>`,
+    `  <scenario id="S1" uc="UC1" before="a" after="b" nodes="src/app/A.java"/>`,
+    `  <deltas>`,
+    `    <delta op="a" form="Changed" node="src/app/GHOST.java" from="x" to="y"/>`,
+    `  </deltas>`,
+    `</frd>`,
+  ].join("\n") + "\n"
+  writeFileSync(join(root, ".agent", "frd.xml"), frd)
+  assert.equal(checkFrd.run({ path: ".agent/frd.xml" }, ctx(root)).ok, false, "фикстура должна быть красной")
+
+  // Правка ПОЛНАЯ: узел получает и дельту, и место в сценарии — своего долга она не создаёт.
+  const good = planFix.run({ target: ".agent/frd.xml", judge: "frd", patch:
+    `REPLACE:   <scenario id="S1" uc="UC1" before="a" after="b" nodes="src/app/A.java"/>\n  <scenario id="S1" uc="UC1" before="a" after="b" nodes="src/app/A.java src/app/B.java"/>\n\n` +
+    `INSERT AFTER:     <delta op="a" form="Changed" node="src/app/GHOST.java" from="x" to="y"/>\n    <delta op="b" form="Changed" node="src/app/B.java" from="p" to="q"/>` }, ctx(root))
+  assert.equal(good.ok, true, `правка отвергнута чужим долгом: ${good.blockers || good.why}`)
+  assert.match(readFileSync(join(root, ".agent", "frd.xml"), "utf8"), /src\/app\/B\.java/, "правка не записана")
+})
+
+
+// ДВА ДЕФЕКТА ОДНОГО ПРОГОНА e1f7b5c8 (20.08.2026), и оба про то, что круг лупа обязан быть честным.
+//
+// ① Путь доставки роли ПУСТ до вызова. Круг 2: фиксер не записал ничего, `planfix.txt` нёс правку
+//    круга 1, полоса применила её повторно. Спас якорь — план не тронут, но круг потрачен.
+// ② Находка, чья правка НЕ ЛЕГЛА, переживает круг. Круг 3: критик назвал ноль находок, и полоса
+//    объявила план чистым — с открытой R11, той самой дырой, из-за которой оператор забраковал план.
+test("шаг 10в: staging чистится перед ролью, а незакрытая находка переживает пустой вердикт", () => {
+  const loop = IZI.slice(IZI.indexOf("async function planLoop("))
+  const body = loop.slice(0, loop.indexOf("\nasync function ", 1))
+  const fix = IZI.slice(IZI.indexOf("async function fixOne("))
+  const fixBody = fix.slice(0, fix.indexOf("\nasync function ", 1))
+
+  assert.match(fixBody, /clearStaged\(\{ path: STAGED_FIX \}\)[\s\S]{0,400}agent\(fix\.text/,
+    "фиксера зовут, не очистив путь доставки — ответ прошлого круга сойдёт за этот")
+  assert.match(body, /clearStaged\(\{ path: STAGED_VERDICT \}\)[\s\S]{0,900}agent\(order\.text/,
+    "критика зовут, не очистив путь доставки")
+  assert.match(fixBody, /роль ничего не записала/, "молчание роли неотличимо от промаха якорем")
+  // ОБРЫВ ЗАПИСИ ПОВТОРЯЕТСЯ НА МЕСТЕ, а не кругом лупа: круг стоит вызова КРИТИКА сверху.
+  // Прогон da99bbae: `write` вернул «Operation aborted», роль отчиталась об успехе, файл пуст.
+  assert.match(fixBody, /take <= WRITE_TAKES && !patch/, "оборванная запись роли не повторяется")
+  assert.match(fixBody, /запись роли не доехала, заход/, "повтор молчит — из лога не видно, что было")
+
+  assert.match(body, /const open = \[\.\.\.new Set\(\[\.\.\.owed/, "долг прошлых кругов не подмешивается к находкам")
+  assert.match(body, /if \(!open\.length && !routed\.frd\.length && !routed\.design\.length\)/,
+    "выход из лупа судит только вердикт круга, забыв долг и потерянные модули")
+  assert.match(body, /owed = open;/, "не легла правка — долг не записан")
+  assert.match(body, /owed = \[\];/, "легла правка — долг не снят")
+  assert.match(body, /НЕ ЗАКРЫТО \$\{left\.length\}/, "план уходит к гейту молча, с открытыми находками")
+  // Находка, которую скрипт не смог усыновить, НЕ едет фиксеру плана: он закрыл бы её разделом без
+  // партии, уровня и зависимостей — то есть работой, которую никто не нарежет.
+  assert.match(body, /stuck = \[\.\.\.new Set\(\[\.\.\.stuck, line\]\)\]/, "неусыновлённое подмешивается к долгу плана")
+  assert.equal(/owed = \[\.\.\.new Set\(\[\.\.\.owed, line\]\)\]/.test(body), false, "неусыновлённое всё ещё уедет фиксеру плана")
+  // Правка кладётся в карточку ТОГО модуля, о котором находка: якорь чужой карточки не найдётся.
+  // ПРАВКА АДРЕСОВАНА ТОМУ ЖЕ АРТЕФАКТУ, КОТОРЫЙ СУДИЛ КРИТИК. Раньше находки разводились по
+  // карточкам партий, чтобы пережить пересборку PLAN.md из них; карточек нет с 21.08.2026, и
+  // единственный законный адрес правки — план, который критик и читал (`src.at`).
+  assert.match(body, /const byCard = new Map\(\[\[src\.at, \[\.\.\.open\]\]\]\)/,
+    "правка адресована не тому артефакту, который судил критик")
+  // Выбор карточки по модулю находки удалён вместе с карточками: адрес правки теперь один.
+})
+
+// СИГНАТУРЫ И ВЫЗОВЫ БЕРУТСЯ С ДИСКА. Раздел про СУЩЕСТВУЮЩИЙ файл роль писать не может: в наряде у
+// неё были только ПУТИ, а объявлений — ни одного. Сигнатура, придуманная по имени класса, читается
+// исполнителем как факт и уводит писать не тот код.
+//
+// BUG_FIX_CONTEXT: прогон e1f7b5c8 (20.08.2026). Фиксеру велели дописать раздел про
+// `AgentConfiguration.java`; вычисленный граф несёт по нему 151 объявление и ребро на
+// `HitlTimeoutPolicy.java`, и ничего из этого в наряд не ехало.
+test("шаг 10в: фиксер получает объявления и вызовы названных файлов", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\n")
+  writeFileSync(join(root, ".agent", "graph-computed.xml"),
+    `<computed><decl at="src/app/A.java" kind="class" name="A"/><decl at="src/app/A.java" kind="method" name="run()"/>` +
+    `<edge from="src/app/A.java" to="src/app/B.java"/></computed>`)
+  writeFileSync(join(root, ".agent", "appgraph.xml"), `<map><module path="src/app/A.java"/></map>`)
+
+  const r = nodeFacts.run({ paths: ["src/app/A.java", "src/app/NOPE.java"] }, ctx(root))
+  assert.equal(r.nodes, 1, "молчащий файл не должен занимать место в наряде")
+  assert.match(r.text, /class A/)
+  assert.match(r.text, /method run\(\)/)
+  assert.match(r.text, /calls: src\/app\/B\.java/, "рёбра файла не доехали — `calls:` будет из головы")
+
+  // Пути роль не выковыривает из прозы: их называет разборщик вердикта.
+  const routed = planRoute.run({ verdict: "R1 | PLAN LOST | src/app/A.java | добавить поле" }, ctx(root))
+  assert.deepEqual(routed.paths, ["src/app/A.java"])
+
+  const tpl = readFileSync(new URL("../steps/planreview/order.fix.tpl", import.meta.url), "utf8")
+  assert.match(tpl, /\{FACTS\}/, "наряд не несёт фактов")
+  assert.match(IZI, /nodeFacts\(\{ paths: routed\.paths/, "полоса не запрашивает факты")
+  assert.match(IZI, /FACTS: facts/, "факты не подставлены в наряд")
+  // Очередь работ роль не пишет: её считает нарезка по `calls:` и карте.
+  assert.match(tpl, /You do not number the work and you do not order it/, "роли не сказали, что волну считает машина")
+})
+
+// УСЫНОВЛЕНИЕ УЗЛА — СКРИПТ. Модуль входит в план ТОЛЬКО через `nodes` сценария требования
+// (steps/design/card.mjs::partsOf), и всё, что для этого нужно, вычислимо: путь назвал разборщик
+// вердикта, use case — строка `<carried req>`, сценарий у него один, текст дельты — сама находка.
+//
+// BUG_FIX_CONTEXT: 20.08.2026, две правки требования от роли подряд — якорь из чужого артефакта,
+// затем выдуманный путь. Обе поймал гардрейл, обе стоили круга лупа.
+test("frdAdopt: узел вписан в сценарий и дельту, а спорное — отказ, а не догадка", () => {
+  const root = tempRoot()
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\n")
+  writeFileSync(join(root, ".agent", "appgraph.xml"),
+    `<map><module path="src/app/A.java"/><module path="src/app/Cfg.java"/></map>`)
+  writeFileSync(join(root, ".agent", "brd.md"), "R1 требование\n   fit: любое\n")
+  writeFileSync(join(root, ".agent", "frd.xml"), [
+    `<frd>`,
+    `  <carried req="R7" by="UC1/2"/>`,
+    `  <scenario id="S1" uc="UC1" before="a" after="b" nodes="src/app/A.java"/>`,
+    `  <deltas>`,
+    `    <delta op="a" form="Changed" node="src/app/A.java" from="x" to="y"/>`,
+    `  </deltas>`,
+    `</frd>`,
+  ].join("\n") + "\n")
+
+  const ok = frdAdopt.run({ path: "src/app/Cfg.java", req: "R7", what: "хранить ссылки на словари" }, ctx(root))
+  assert.equal(ok.ok, true, `скрипт не смог вписать узел: ${ok.blockers || ok.why}`)
+  const now = readFileSync(join(root, ".agent", "frd.xml"), "utf8")
+  assert.match(now, /nodes="src\/app\/A\.java src\/app\/Cfg\.java"/, "узел не дописан в сценарий — в план он не войдёт")
+  assert.match(now, /<delta op="r7"[^>]*node="src\/app\/Cfg\.java"[^>]*to="хранить ссылки на словари"/, "дельта не написана")
+
+  // Второй раз — уже на месте: скрипт отказывает, а не плодит дубли.
+  assert.match(frdAdopt.run({ path: "src/app/Cfg.java", req: "R7" }, ctx(root)).why || "", /уже назван сценарием/)
+  // Требования без <carried> скрипт не трогает: выбирать сценарий было бы догадкой.
+  assert.match(frdAdopt.run({ path: "src/app/Other.java", req: "R99" }, ctx(root)).why || "", /нет строки <carried/)
+})
+
+// ПРАВКА ЖИВЁТ В ИСТОЧНИКЕ. `PLAN.md` — производный документ: `planbook` копирует его разделы из
+// карточек партий. Правка, положенная в документ, исчезает при первой же пересборке — а пересборка
+// случается всякий раз, когда требование получает новый модуль.
+//
+// BUG_FIX_CONTEXT: 20.08.2026. Луп внёс в PLAN.md четыре правки (константа resource URI, ключ
+// шаблона `glossary`, Caffeine вместо Map, исключение под 422) и величину `5 minutes`; карточка
+// осталась прежней, и переигрывание плана вернуло бы документ к её тексту.
+// РАЗДЕЛ С ОТСТУПОМ — ТИХАЯ ПОТЕРЯ РАБОТЫ. Правка, порождающая такой заголовок, отвергается: раздел
+// не увидит ни покрытие, ни нарезка, а следующий круг критика увидит его СЛОВА и промолчит.
+//
+// BUG_FIX_CONTEXT: прогон 7d8e36b5 (20.08.2026). `INSERT AFTER` унёс отступ якоря, раздел про
+// `AgentConfiguration.java` стал текстом внутри соседа: разделов 11, нарядов 16, наряда на модуль
+// нет — и план ушёл на гейт «чистым».
+test("planFix: правка, прячущая раздел отступом, не доезжает до диска", () => {
+  const root = tempRoot()
+  const dir = join(root, "task", "DOS-1")
+  mkdirSync(join(dir, "design"), { recursive: true })
+  mkdirSync(join(root, ".agent"), { recursive: true })
+  writeFileSync(join(root, "TASK.md"), "task: DOS-1\n")
+  const card = "task/DOS-1/design/src-app.md"
+  writeFileSync(join(root, card), "## src/app/A.java\nwhat: работа\nverify: ATest#works — closes: UC1 step 1\n")
+  const before = readFileSync(join(root, card), "utf8")
+
+  const bad = planFix.run({ target: card, judge: "card",
+    patch: "INSERT AFTER: verify: ATest#works — closes: UC1 step 1\n  ## src/app/B.java\n  what: невидимая работа" }, ctx(root))
+  assert.equal(bad.ok, false, "раздел с отступом принят — работа исчезнет молча")
+  assert.match(bad.blockers || "", /не на нулевой колонке/)
+  assert.match(bad.blockers || "", /ПОСЛЕДНЮЮ строку файла/, "роли не сказано, как починить")
+  assert.equal(readFileSync(join(root, card), "utf8"), before, "карточка тронута")
+
+})
+
+// ПЕРЕИГРЫВАНИЕ ПЛАНА — ТОЖЕ БЮДЖЕТ. Счётчик кругов лупа обнуляется при каждом заходе в шаг 10в,
+// а лента крутится в `for (;;)`: без предела «критик нашёл модуль → усыновили → пересобрали →
+// критик нашёл ещё один» повторяется, пока не кончится терпение человека. Каждый заход стоит двух
+// вызовов ролей и около восьми минут.
+test("лента: переигрываний плана не больше PLAN_REPLAYS за прогон", () => {
+  assert.match(IZI, /const PLAN_REPLAYS = \d/, "предела переигрываниям нет")
+  assert.match(IZI, /verdict\.replay && replays >= PLAN_REPLAYS/, "бюджет не проверяется перед отмоткой")
+  assert.match(IZI, /replays\+\+/, "счётчик переигрываний не растёт")
+  assert.match(IZI, /переигрывания исчерпаны[\s\S]{0,120}НЕ ЗАКРЫТО/,
+    "бюджет исчерпан молча — оператор не узнает, что осталось незакрытым")
+})
+
+
+
+// УДАЛЕНО 21.08.2026: 11 теста проводки старого шага 9 (design · parts · part · partJoin ·
+// chainsJoin · planbook · planCard). Сами функции удалены вместе с шагом — docs/plan.md.
+
+// УДАЛЕНО 21.08.2026: 8 швов проводки старого шага 9 (проходы A/B, порции карточки,
+// расстановка величин по карточкам). Код, который они сторожили, удалён; правила, которые
+// переживают переделку, получат свои швы вместе с новым шагом — docs/plan.md §3.

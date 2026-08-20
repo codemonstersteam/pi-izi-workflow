@@ -37,6 +37,7 @@
 // an accepted node).
 
 import { ok, err } from "../../core/result.mjs"
+import { nodeKind, KINDS } from "../../core/node.mjs"
 import { attrs, elem, esc, tokens } from "../../core/xml.mjs"
 import { MAP_CAP_BYTES } from "../intake/map.mjs"
 import { reachedBy, hasOwnCheck } from "../../core/suites.mjs"
@@ -214,7 +215,16 @@ const openTag = (path, seed, rest, cut) => {
 //                          "unknown-node" — a seed the map does not declare; every one is named
 //                          "over-cap"     — the subgraph does not fit the reader's window
 //   Purity:       pure
-export function newRipple({ xml, frd, mode, map, cap = MAP_CAP_BYTES } = {}) {
+// repo — пути, которые ЕСТЬ В РЕПОЗИТОРИИ по вычисленному графу шага 3 (ext/index.mjs::ripple).
+// Что считается узлом, решает ОДНА функция на всю полосу — core/node.mjs::nodeKind: карта роя
+// покрывает клетки фокуса, и узел вне фокуса она объявляет несуществующим, а шаг 6 такой узел уже
+// принял законным. Пусто — правило судит по карте, как судило до этой правки.
+//
+// BUG_FIX_CONTEXT: живой прогон eddi 19.08.2026. Шаг 6 закрылся зелёным с дельтой на
+//   `configs/agents/model/AgentConfiguration.java` (файл существует, вычисленный граф его несёт), а
+//   шаг 8 тут же отказал: `unknown-node — узла нет в карте`. Полоса встала между двумя своими же
+//   шагами, которые по-разному отвечали на вопрос «что такое узел».
+export function newRipple({ xml, frd, mode, map, repo = new Set(), cap = MAP_CAP_BYTES } = {}) {
   const weight = String(mode == null ? "" : mode).trim()
   if (!weight) return err("no-mode", ".agent/mode пуст или отсутствует — шаг 7 не отработал, вес не угадывается")
   if (!DESIGN_TABLE[weight]) {
@@ -249,9 +259,17 @@ export function newRipple({ xml, frd, mode, map, cap = MAP_CAP_BYTES } = {}) {
   //   without it the very next refusal would have been `unknown-node` here.
   const created = new Set(deltas.filter((d) => d.new === "yes" && d.node).map((d) => d.node))
 
-  const unknown = named.filter((p) => !nodes.has(p) && !created.has(p))
+  // Слова одни на всю полосу: `none` — выдумка, всё остальное законно (create — `new`, фокус —
+  // `swarm`, файл вне фокуса — `repo`).
+  const kindOf = nodeKind({ nodes, paths: repo instanceof Set ? repo : new Set(), created })
+  const unknown = named.filter((p) => kindOf(p) === KINDS.NONE)
   if (unknown.length) {
-    return err("unknown-node", `узла нет в карте: ${unknown.join(", ")} — frd.xml старше appgraph.xml либо путь выдуман`)
+    // ОТКАЗ НАЗЫВАЕТ ВЫХОД, А НЕ ДВЕ НЕВЕРНЫЕ ПРИЧИНЫ (standards/guardrail.md).
+    //
+    // BUG_FIX_CONTEXT: живой прогон eddi 19.08.2026. Здесь стояло «frd.xml старше appgraph.xml либо
+    //   путь выдуман» — и ОБЕ причины были ложны: FRD был свежее карты, а путь существовал, просто
+    //   лежал вне фокуса роя. Роль, прочитав такой отказ, чинить его не могла ничем.
+    return err("unknown-node", `файла нет ни в карте роя, ни в репозитории: ${unknown.join(", ")}. Скопируй путь из карты; не помнишь, где лежит тип, — спроси справку (track:"err", kind:"lookup"); файл создаётся этим изменением — объяви дельту с new="yes"`)
   }
 
   const seeds = new Set(named.filter((p) => !tests.has(p) && !created.has(p)))

@@ -1,6 +1,6 @@
 ---
 description: INTERFACE ANALYST — names the value at each end of the change, filling the blanks of a skeleton a script composed
-model: openrouter/qwen/qwen3.6-27b
+model: execution
 thinking: low
 contextFiles: []
 tools: [read, write]
@@ -81,7 +81,9 @@ $END_FORBIDDEN
 $START_OUTPUT_FORMAT
 Один артефакт: тот же файл, с заполненными строками, ПО-АНГЛИЙСКИ (закон языка — ниже FRD полосу
 читает исполнитель, а не человек).
-Внутри значений атрибутов `<` пиши как `&lt;`, `&` как `&amp;`.
+
+    верно:   text="create(List&lt;T&gt; configs)"
+    неверно: text="create(List<T> configs)"
 
 После записи вызови `workflow_result` строго по `outputSchema`:
 

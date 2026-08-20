@@ -497,3 +497,21 @@ test("analogue: the model this work follows is a FIELD, and its absence is decla
   assert.equal(analogueTerm(withWhy.match(/analogue: (.*)/)[1]), "PromptSnippet")
   assert.equal(analogueTerm("none — ничего похожего"), "")
 })
+
+// РЕГУЛЯРКА — НЕ ИСТОЧНИК ЧИСЕЛ, И ЭТО ТУПИК, А НЕ НЕТОЧНОСТЬ.
+//
+// Живой прогон eddi 19.08.2026: роль написала домен ключа термина верно — `^[a-z0-9_]{1,64}$`, —
+// а провенанс прочитал квантор `{1,64}` как число «1.64» и класс `a-z0-9` как «9». F5 обвинил роль в
+// значении, которого в артефакте НЕТ: починить такой блокер нечем, кроме удаления правильной
+// регулярки. Верни `[…]`/`{…}` в разбор — и тупик вернётся вместе с ними.
+test("numbersIn: цифры внутри класса символов и квантора мерой не считаются", () => {
+  assert.deepEqual([...numbersIn("^[a-z0-9_]{1,64}$")], [])
+  assert.deepEqual([...numbersIn("[0-9]{3}")], [])
+  // Число в ПРОЗЕ рядом с регуляркой по-прежнему видно: правило не ослаблено, сужено.
+  assert.deepEqual([...numbersIn("^[a-z]+$ до 64 символов")], ["64"])
+  assert.deepEqual([...numbersIn("до 64 символов")], ["64"])
+  assert.deepEqual([...numbersIn("300ms")], ["300"])
+  assert.deepEqual([...numbersIn("1,5 сек")], ["1.5"])
+  // Обозначения защищены как раньше.
+  assert.deepEqual([...numbersIn("ISO-8601")], [])
+})

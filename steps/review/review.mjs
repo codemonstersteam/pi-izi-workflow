@@ -11,10 +11,6 @@
 // EXTERNAL_DEPENDENCY: steps/intake/frd.mjs — parseFrd, done by the CALLER and handed in. The FRD's
 //             grammar is the intake slice's, and a second reader of it here would be a second
 //             grammar to keep in step.
-// EXTERNAL_DEPENDENCY: steps/ripple/ripple.mjs — waiverFor, the resolver that OWNS the text of step
-//             6's gate question. R6 reads the operator's `accept` with the same expression the gate
-//             asked it with; a second reader of `.agent/answers.md` here would be a second opinion on
-//             what the operator answered.
 // EXTERNAL_DEPENDENCY: steps/review/critic.md — the role states the same two codes in its LAW, and
 //             review.test.mjs fails when the role and CODES disagree: the role is what the model
 //             reads, CODES is what runs.
@@ -24,20 +20,17 @@
 //             finding at a step that did not produce the artifact.
 // Interface:  GRAMMAR_VERSION — stamped on the artifact
 //             CODES — the closed vocabulary of blocker codes, the ONE copy
+//             passOf(finding, frd) -> "A"|"B"|"C"|"D" — в какой проход шага 6 едет находка
 //             CODE_CULPRIT · CODE_OWNER · CODE_EVIDENCE · OPERATOR_NOTE — the four functions of a code
 //             frdIds(frd) -> Set<string> — every id the FRD offers as an address; also the input
 //               steps/intake/frd.mjs::checkFrd's F9 resolves a rewind's evidence against
-//             askedNodes({ plan, answers }) -> node[] — the ONE set step 11 asks the role about, read
-//               by R6 here and by the order (ext/index.mjs::reviewForm)
-//             createdNodes({ plan }) -> node[] — the nodes this change creates, named by the order in
-//               a line of their own so their absence from askedNodes is a fact, not an oversight
+//             owedItems({ requirements }) -> row[] — чек-лист долга: строка на требование BRD
+//             unbackedItems({ frd }) -> row[] — обратный ход: элемент FRD, которого не просило ничто
 //             parseReview(xml) -> { verdict, blockers[] }
 //             newReview({ xml, plan, frd, map, answers }) -> Result<{ verdict, blockers[] }, cls>
 
 import { ok, err } from "../../core/result.mjs"
 import { attrs, elem, tag, tokens } from "../../core/xml.mjs"
-import { reachedBy } from "../../core/suites.mjs"
-import { waiverFor } from "../ripple/ripple.mjs"
 
 // 2 — D21: `<covers item node/>`, the checklist the role fills instead of judging "as a whole", and
 //     the three codes it makes expressible. Additive: a grammar-1 file is a grammar-2 file with no
@@ -59,95 +52,56 @@ export const GRAMMAR_VERSION = 2
 //     unanswered: `frdIds` below knew neither, so R4 would have REJECTED the honest finding as
 //     evidence that resolves to nothing.
 //   The third — a node whose only check command cannot witness it — had no code at all.
+// Два слова вердикта, и третьего нет: «частично» полоса маршрутизировать не умеет.
+const VERDICTS = ["Pass", "Reject"]
+
 export const CODES = Object.freeze([
-  "unreachable-antecedent",
+  "requirement-not-carried",
+  "invented-value",
   "goal-not-delivered",
   "open-question",
-  "node-not-required",
-  "unverifiable-node",
 ])
 
 // Three functions OF the code, not three questions to the role. Asking a model for a value a table
 // derives, and then spending a guardrail rule on checking that value, is paying twice for no
 // decision at all (docs/review.md §4) — so the role writes none of these.
+// Три функции ОТ кода, а не три вопроса роли. Спрашивать модель о значении, которое выводит таблица,
+// и потом тратить правило гардрейла на проверку этого значения — платить дважды за решение, которого
+// нет (docs/review.md §4). Роль не пишет ни одного из них.
+//
+// Виновник у всех четырёх один — `frd.xml`: критик судит требование, и всякая его находка есть
+// находка об этом артефакте. Владелец починки, соответственно, шаг 6: у артефакта есть роль, которая
+// его пишет, и блокер едет ей в FEEDBACK.
 export const CODE_CULPRIT = Object.freeze({
-  "unreachable-antecedent": "plan-index.json",
+  "requirement-not-carried": "frd.xml",
+  "invented-value": "frd.xml",
   "goal-not-delivered": "frd.xml",
   "open-question": "frd.xml",
-  "node-not-required": "appgraph.xml",
-  // Not frd.xml: verifiability is a property of the REPOSITORY (which suites exist), and the map is
-  // what says so. Naming frd.xml as the culprit pointed step 6 at a document it cannot fix this with
-  // — no rewording of a requirement creates a suite (live run 508d74fa; CODE_OWNER, below).
-  "unverifiable-node": "appgraph.xml",
 })
 
-// The step that OWNS the culprit artifact — the address the band routes the repair to
-// (docs/review.md §6): 10 is a script, so its fix is a substitution; 6 has a role, so its fix is a
-// re-delegation with the blocker in FEEDBACK.
-// `operator` is the third kind of address, and it exists because the band has no machine repair for
-// it: a node the plan built out of a SPINE answer (steps/plan/plan.mjs:190) is wrong because the map
-// is wrong, and rewinding to step 6 cannot touch the map. The run stops and says so, with the finding
-// in hand — which is the honest end, not a silent Pass (workflows/izi.js::band).
-// BUG_FIX_CONTEXT: live run 508d74fa (sandbox/runbox/quarkus-rest-json-app-v2-t2). `unverifiable-node`
-//   owned step 6, so the band rewound to intake with the honest finding in FEEDBACK. Step 6 has no
-//   repair for "no suite exercises this node" — F2 forbids a touched/delta on a test (frd.mjs:238),
-//   and no rewording of the requirement creates one — so the role did the only thing that silences the
-//   blocker: it deleted the page from the requirement (`<touched>` emptied, `S2@nodes` cut). The plan
-//   collapsed from 3 nodes to 1 and R2 of the BRD stopped being delivered by anyone, unremarked. The
-//   run then deadlocked a different way when the role tried the honest repair instead (§ review.mjs
-//   frdIds, below) — but the deadlock is a SEPARATE defect from the ownership one this fixes.
 export const CODE_OWNER = Object.freeze({
-  "unreachable-antecedent": 10,
+  "requirement-not-carried": 6,
+  "invented-value": 6,
   "goal-not-delivered": 6,
   "open-question": 6,
-  "node-not-required": "operator",
-  // No step owns this repair: unlike `goal-not-delivered`, whose carrier is always expressible in FRD
-  // grammar (a touched, a delta, a scenario), verifiability never is — it is a fact of what suites
-  // exist, and step 6 is forbidden from touching that fact. `operator` is honest here for the same
-  // reason it is honest for `node-not-required`: the band stops and shows the finding instead of
-  // deleting the requirement to reach a green.
-  "unverifiable-node": "operator",
 })
 
-// The KIND of evidence a code takes, and it is not a matter of taste: `unreachable-antecedent` says
-// "this node needs that node", and the pair IS the missing edge that steps/plan/plan.mjs applies. An
-// FRD id in that slot names no edge, so the finding would be true and unusable — and a blocker the
-// band cannot act on is what this whole module exists to reject.
+// Какого РОДА улика у кода — единственное, что отличает их друг от друга при проверке формы.
+//   requirement — номер требования BRD: находка о том, что его никто не несёт
+//   quote       — строка источника, которая значение ЗАПРЕЩАЕТ, или её отсутствие: находка о том,
+//                 что значение появилось само. Улика обязана быть непустой, но резолвить её не по
+//                 чему — это ЦИТАТА, а не адрес
+//   frd         — id элемента самого артефакта
 export const CODE_EVIDENCE = Object.freeze({
-  "unreachable-antecedent": "plan",
+  "requirement-not-carried": "requirement",
+  "invented-value": "quote",
   "goal-not-delivered": "frd",
   "open-question": "frd",
-  // The address IS the evidence: the finding is "this node answers to nothing in the FRD", and the
-  // node's own id is the whole of it. Demanding an FRD id here would be demanding the very thing the
-  // finding says does not exist.
-  "node-not-required": "self",
-  "unverifiable-node": "frd",
 })
 
-// The words the OPERATOR reads for a code whose owner is `operator` (CODE_OWNER, above) — the one
-// address the band has no machine repair for. A role never writes this: it is a function OF THE CODE,
-// the same device CODE_CULPRIT and CODE_OWNER are, so the escalation's `evidence` is derived here once
-// instead of being composed in prose at the call site (workflows/izi.js::band used to hardcode the
-// `node-not-required` sentence at the one call site that existed; a second `operator` code with a
-// different honest end would have had nowhere to put its own words without this table).
-export const OPERATOR_NOTE = Object.freeze({
-  "node-not-required": "чинится оператором: узел плана выведен из ответа карты, а не из требования — перемотка полосы над картой не властна",
-  // The three honest ends of an unverifiable node (docs/review.md §6; live run 508d74fa's diagnosis)
-  // — none of them a machine repair, which is the whole reason this code's owner is `operator` and not
-  // step 6.
-  "unverifiable-node": "чинится оператором: ни одна команда сценария не наблюдает узел, а требование не гасят удалением его из FRD — три честных выхода: 1) завести сьют, исполняющий узел, и перезапустить полосу; 2) снять требование правкой TASK.md/BRD (не FRD) и перезапустить; 3) принять неверифицируемость сознательно — ответом accept на гейте шага 6. Про этот узел там спрашивали: блокер здесь значит, что ответа accept на диске (.agent/answers.md) нет",
-})
+// Ни у одного кода нет адреса `operator`: все четыре чинятся переписыванием артефакта ролью шага 6.
+export const OPERATOR_NOTE = Object.freeze({})
 
-const VERDICTS = Object.freeze(["Pass", "Reject"])
-
-// FUNCTION_CONTRACT: parseReview — the verdict's elements out of its text
-//   Input:        xml — text of `.agent/staging/review.xml`; type unconstrained
-//   Dependencies: core/xml.mjs
-//   Antecedent:   any value — undefined/null/garbage read as no verdict and no blockers
-//   Consequent:   success: { verdict, blockers[{ code, node, evidence, text }] } in appearance
-//                          order; an absent attribute is "", never a default that could pass a rule
-//                 failure: none — total
-//   Purity:       pure
 export function parseReview(xml) {
   const s = String(xml == null ? "" : xml)
   // matchAll, not match: tag() is global, and String.match with a global regexp returns the full
@@ -204,62 +158,174 @@ export const frdIds = (frd) => new Set([
   ...((frd && frd.usecases) || []).map((u) => (u && u.id) || ""),
   ...((frd && frd.usecases) || []).filter((u) => u && u.id && u.post).map((u) => `${u.id}/post`),
   ...((frd && frd.usecases) || []).flatMap((u) => ((u && u.exts) || []).map((x) => `${(u && u.id) || ""}/${(x && x.id) || ""}`)),
+  // ШАГ — ТОЖЕ АДРЕС. Требование исполняется шагом, а не use case целиком: «R1 унесено в UC1/2» —
+  // самая точная строка, какую роль может написать, и до этой правки она не резолвилась.
+  ...((frd && frd.usecases) || []).flatMap((u) => ((u && u.steps) || []).map((_, k) => `${(u && u.id) || ""}/${k + 1}`)),
   ...((frd && frd.scenarios) || []).map((s) => (s && s.id) || ""),
   ...((frd && frd.failures) || []).map((f) => (f && f.code) || ""),
   ...((frd && frd.deltas) || []).map((d) => (d && d.op) || ""),
+  // УЗЕЛ ДЕЛЬТЫ И ТРОНУТЫЙ ПУТЬ — тоже адреса: требование «модуль X меняется» несёт именно узел, а не
+  // текст операции.
+  ...((frd && frd.deltas) || []).map((d) => (d && d.node) || ""),
+  ...((frd && frd.touched) || []),
+  // ПОЛЕ — АДРЕС, И БЕЗ НЕГО ЯЗЫК ТРЕБОВАНИЯ ШИРЕ АДРЕСНОГО ПРОСТРАНСТВА.
+  //
+  // BUG_FIX_CONTEXT: живой прогон 4c8f26eb (eddi, 19.08.2026) умер на шаге 6, сжёг шесть кругов и 572К
+  //   токенов. Роль семь раз писала `<carried req="R4" by="field:id field:version field:terms"/>` —
+  //   и была ПРАВА: требование «поля ресурса — только id + version + terms» унесено строками
+  //   `<field>`, а других носителей у него нет. Правило отвечало «такого элемента нет», роль сносила
+  //   use case, чтобы погасить соседний блокер, и ломала то, что уже сходилось.
+  ...((frd && frd.fields) || []).map((f) => (f && f.name ? `field:${f.name}` : "")),
   ...((frd && frd.nfrs) || []).map((n) => (n && n.subject ? `nfr:${n.subject}` : "")),
   ...((frd && frd.questions) || []).map((q) => (q && q.subject) || ""),
 ].filter(Boolean).map((x) => String(x).trim()).filter((x) => !x.endsWith("/")))
 
-// FUNCTION_CONTRACT: owedItems — the checklist: what this plan OWES the FRD, item by item
-//   Input:        frd — parseFrd's parse; plan — the parsed plan-index
+// FUNCTION_CONTRACT: passOf — в какой проход шага 6 едет находка критика
+//   Input:        finding — { code, node } как их разобрал parseReview; frd — разбор FRD
+//                 (steps/intake/frd.mjs::parseFrd) либо ничего
 //   Dependencies: —
-//   Antecedent:   any values; absences read as empty
-//   Consequent:   success: [{ id, what }] — one row per thing the plan must answer for, with a
-//                          MACHINE-GENERATED id the role copies rather than composes (CLAUDE.md
-//                          constraint 4). Rows: `<post>` of every use case, `after` of every scenario,
-//                          every `<ext>` of every use case, every `<nfr>` by subject — and one row per
-//                          plan node the FRD does not name anywhere, which is the half that catches a
-//                          node nobody asked for
-//                 failure: none — total
+//   Antecedent:   любые значения; отсутствие FRD читается как пустой артефакт
+//   Consequent:   success: "A" | "B" | "C" — проход, с которого полоса перезапускает шаг 6 и идёт
+//                          ВПЕРЁД до D (steps/intake/passes-data-flow.md). Элемент, которого в
+//                          артефакте нет вовсе, даёт "A": раньше чинить нечего, а «не знаю» полосе не
+//                          с чем делать
+//                 failure: none — тотальна
 //   Purity:       pure
 //
-// WHY A LIST AND NOT A LAW. Until D21 the role was asked to judge "does the plan deliver the goal",
-// and answered as a whole — which is how three defects passed unremarked. A list cannot be answered
-// as a whole: every row is closed by a `<covers>` or by a blocker, and R5 counts. The role stops
-// having to REMEMBER what the FRD contained; it is in front of it.
-export function owedItems(frd, plan) {
+// ПРОХОД ВЫВОДИТСЯ ИЗ ЭЛЕМЕНТА, А НЕ ИЗ КОДА. Критик судит требование целиком и о проходах не знает —
+// он называет `node`. Один и тот же `invented-value` уезжает в три разных пласта: лишний use case
+// снимает проход A, лишнее значение — C, лишняя работа — B. Таблица «код → проход» была бы враньём на
+// первом же артефакте.
+//
+// ДВА ПЛАСТА У ОДНОГО ЭЛЕМЕНТА → РАННИЙ, и порядок проверок ниже это и есть. Узел дельты назван ещё и
+// в `nodes` сценария; поле названо и в `<field>`, и в требовании. Починка нижнего пласта может снять
+// находку верхнего (сняли use case — исчезли его сценарии и дельты), обратное неверно.
+//
+// ПОЧЕМУ D НЕ БЫВАЕТ АДРЕСОМ. `requirement-not-carried` — это «строки <carried> не хватает» ровно до
+// шага 11, а до шага 11 стоит F11: он не выпускает пласт D, пока строка есть не у каждого требования
+// BRD. Значит у находки критика строка ЕСТЬ и она ЛОЖНА — носителя нет, и его пишет пласт A. Пласт D
+// всё равно будет переигран: полоса идёт от входа вперёд до конца.
+export function passOf(finding = {}, frd = {}) {
+  const node = String((finding && finding.node) || "").trim()
+  const f = frd || {}
+  const idsOf = (list, pick) => new Set((list || []).map((x) => (x ? String(pick(x) || "").trim() : "")).filter(Boolean))
+
+  // `open-question` чинит не роль, а оператор; вход в A — самый ранний и самый дешёвый: этот проход
+  // идёт без карты.
+  if (finding && finding.code === "open-question") return "A"
+  // Строка <carried> не бывает предметом находки: см. «ПОЧЕМУ D НЕ БЫВАЕТ АДРЕСОМ» выше.
+  if (finding && finding.code === "requirement-not-carried") return "A"
+
+  // A — требование: use case, его шаг (`UC1/2`), его конец (`UC1/post`), его ветка (`UC1/1a`), актёр.
+  const ucs = idsOf(f.usecases, (u) => u.id)
+  if (ucs.has(node) || ucs.has(node.split("/")[0])) return "A"
+  if (idsOf(f.actors, (a) => a.name).has(node)) return "A"
+
+  // B — изменение: узел дельты, её операция, тронутый путь, сценарий.
+  if (idsOf(f.deltas, (d) => d.node).has(node)) return "B"
+  if (idsOf(f.deltas, (d) => d.op).has(node)) return "B"
+  if ((f.touched || []).some((t) => String(t || "").trim() === node)) return "B"
+  if (idsOf(f.scenarios, (x) => x.id).has(node)) return "B"
+
+  // C — величины и отказы. `field:` и `nfr:` — префиксы адресного пространства критика (frdIds выше).
+  if (node.startsWith("field:") || idsOf(f.fields, (x) => x.name).has(node)) return "C"
+  if (node.startsWith("nfr:") || idsOf(f.nfrs, (x) => x.subject).has(node)) return "C"
+  if (idsOf(f.failures, (x) => x.code).has(node)) return "C"
+
+  return "A"
+}
+
+// FUNCTION_CONTRACT: criticEntry — с какого прохода шага 6 полоса переигрывает требование после Reject
+//   Input:        findings — находки критика [{ code, node }]; frd — разбор FRD
+//   Dependencies: passOf
+//   Antecedent:   любые значения; пусто читается как «находок нет»
+//   Consequent:   success: РАННИЙ проход среди названных: полоса входит в него и идёт вперёд до D,
+//                          и правка раннего пласта снимает находки поздних (обратное неверно). Без
+//                          находок — "A"
+//                 failure: none — тотальна
+//   Purity:       pure
+export function criticEntry(findings = [], frd = {}) {
+  const routed = new Set((findings || []).filter(Boolean).map((b) => passOf(b, frd)))
+  return ["A", "B", "C", "D"].filter((x) => routed.has(x))[0] || "A"
+}
+
+// FUNCTION_CONTRACT: owedItems — чек-лист: что ТРЕБОВАНИЕ обязано увидеть в этом FRD
+//   Input:        { requirements } — [{ id, statement, fit }] из steps/brd/brd.mjs::parseBrd
+//   Dependencies: —
+//   Antecedent:   любые значения; отсутствие читается как пусто
+//   Consequent:   success: [{ id, what }] — строка на требование BRD, id МАШИННЫЙ (его номер), и роль
+//                          его КОПИРУЕТ, а не сочиняет (CLAUDE.md, constraint 4)
+//                 failure: none — тотальна
+//   Purity:       pure
+//
+// ПОЧЕМУ СПИСОК, А НЕ ЗАКОН. До D21 роль просили судить «доставляет ли артефакт цель», и она отвечала
+// ЦЕЛИКОМ — так три дефекта прошли незамеченными (живой прогон c64dbd32). Список целиком не ответишь:
+// каждая строка закрывается `<covers>` или блокером, и R5 это считает.
+//
+// ПОЧЕМУ ТРЕБОВАНИЯ, А НЕ ПЛАН. Критик переехал: его предмет — FRD против TASK.md и brd.md, и долг у
+// FRD перед ТРЕБОВАНИЕМ, а не перед планом (`tasks/j6-critic-frd.md`). TASK.md едет в наряд
+// документом: требование записи — это BRD, а соответствие BRD задаче судит шаг 2.
+export function owedItems({ requirements = [] } = {}) {
+  return (requirements || []).filter((r) => r && r.id).map((r) => Object.freeze({
+    id: String(r.id).trim(),
+    what: [String(r.statement || "").trim(), r.fit ? `fit: ${String(r.fit).trim()}` : ""].filter(Boolean).join(" · "),
+  }))
+}
+
+// FUNCTION_CONTRACT: unbackedItems — ОБРАТНЫЙ ход того же вопроса: чего никто не просил
+//   Input:        { frd } — parseFrd's parse
+//   Dependencies: —
+//   Antecedent:   любые значения
+//   Consequent:   success: [{ id, what }] — элементы FRD, которых не называет НИ ОДНА строка
+//                          `<carried by>`: use case, сценарий, дельта, nfr. Пустой `carried` даёт
+//                          пустой список: судить не по чему, а «всё подозрительно» — не рассуждение
+//                 failure: none — тотальна
+//   Purity:       pure
+//
+// BUG_FIX_CONTEXT: ручной прогон этой роли по артефактам eddi (19.08.2026, qwen 27B, $0.04, минута).
+//   Прямой ход («чем исполнено требование R…») закрыл все 18 строк долга и НЕ ЗАМЕТИЛ, что в FRD
+//   живёт целый use case UC8 — синхронизация с удалённым инстансом, эндпоинт /descriptors, превью
+//   StructuralMatcher, UpgradeExecutor, — которого не просит ни TASK.md (23 строки), ни одно из 18
+//   требований BRD. Это четыре наряда работы (07, 14, 18, 21), которую никто не заказывал. Находка
+//   сделана ОБРАТНЫМ ходом; здесь он перестаёт быть удачей и становится списком.
+//
+// Строки — ПОДОЗРЕВАЕМЫЕ, а не виноватые: элемент может обслуживать требование, названное через
+// соседа. Поэтому строка закрывается тем же способом, что строка долга: `<covers>` или блокер.
+export function unbackedItems({ frd } = {}) {
+  const carried = ((frd && frd.carried) || []).flatMap((c) => String((c && c.by) || "").split(/\s+/)).filter(Boolean)
+  if (!carried.length) return []
+  const named = new Set(carried)
+  // Принадлежность ТРАНЗИТИВНА: строка `by="UC1/2"` заявляет весь UC1, а вместе с ним — сценарии
+  // этого use case и узлы, через которые они проходят. Иначе список кричал бы на каждую дельту
+  // заявленного требования, и роль перестала бы его читать.
+  const backs = (id) => Boolean(id) && [...named].some((n) => n === id || n.startsWith(`${id}/`))
+  const backedUcs = new Set(((frd && frd.usecases) || []).map((u) => (u && u.id) || "").filter(backs))
+  const backedScenarios = ((frd && frd.scenarios) || []).filter((x) => x && (named.has(x.id) || backedUcs.has(x.uc)))
+  const backedNodes = new Set(backedScenarios.flatMap((x) => String(x.nodes || "").split(/\s+/)).filter(Boolean))
   const rows = []
   for (const u of (frd && frd.usecases) || []) {
     const id = (u && u.id) || ""
-    if (!id) continue
-    if (u.post) rows.push({ id: `${id}/post`, what: u.post })
-    for (const x of (u.exts) || []) {
-      if (x && x.id) rows.push({ id: `${id}/${x.id}`, what: `ветвление: ${x.outcome || x.error || "(без описания)"}` })
-    }
+    // Use case назван и сам по себе, и любым своим шагом или ветвлением: `by="UC1/2"` означает, что
+    // требование живёт в UC1.
+    if (!id || backedUcs.has(id)) continue
+    rows.push({ id, what: `use case «${u.goal || id}»` })
   }
-  for (const s of (frd && frd.scenarios) || []) {
-    if (s && s.id) rows.push({ id: s.id, what: `сценарий: ${s.after || "(без after)"}` })
+  for (const x of (frd && frd.scenarios) || []) {
+    const id = (x && x.id) || ""
+    if (!id || backedScenarios.includes(x)) continue
+    rows.push({ id, what: `сценарий «${x.after || id}»` })
+  }
+  for (const d of (frd && frd.deltas) || []) {
+    const node = (d && d.node) || ""
+    if (!node || named.has(node) || backedNodes.has(node)) continue
+    rows.push({ id: node, what: `дельта «${d.op || node}»` })
   }
   for (const n of (frd && frd.nfrs) || []) {
-    if (n && n.subject) rows.push({ id: `nfr:${n.subject}`, what: `ограничение: ${n.fit || "(без fit)"}` })
+    const id = n && n.subject ? `nfr:${n.subject}` : ""
+    if (!id || named.has(id)) continue
+    rows.push({ id, what: `ограничение «${n.fit || id}»` })
   }
-  // The other half. A node the FRD names nowhere was put into the plan by the SCRIPT — out of a
-  // spine answer or as a scenario carrier (steps/plan/plan.mjs) — and the requirement never asked
-  // for it. The role must decide about each such node explicitly; `named` is the whole vocabulary of
-  // paths the FRD offers.
-  const named = new Set([
-    ...((frd && frd.touched) || []),
-    ...((frd && frd.deltas) || []).map((d) => (d && d.node) || ""),
-    ...((frd && frd.scenarios) || []).flatMap((s) => tokens(s && s.nodes)),
-  ].filter(Boolean))
-  for (const n of (plan && plan.nodes) || []) {
-    const id = (n && n.id) || ""
-    if (!id || named.has(id) || id.startsWith("scenario:")) continue
-    rows.push({ id, what: `узел плана, которого FRD не называет${n.mechanism ? ` — механизм «${n.mechanism}»` : ""}` })
-  }
-
-  return rows
+  return rows.map((r) => Object.freeze(r))
 }
 
 // FUNCTION_CONTRACT: autoFindings — the findings that cost no role call at all
@@ -286,80 +352,53 @@ export function autoFindings({ frd } = {}) {
   })).filter((b) => b.evidence)
 }
 
-// FUNCTION_CONTRACT: askedNodes — the nodes step 11 ASKS the role about, in ONE expression
-//   Input:        { plan, answers }
-//                 plan    — the parsed `.agent/plan-index.json` object
-//                 answers — [{ question, text }] as core/answers.mjs reads them off disk
-//   Dependencies: waiverFor (steps/ripple/ripple.mjs) — the resolver that OWNS step 6's gate question
-//   Antecedent:   any values — absences read as empty, never as "everything"
-//   Consequent:   success: the plan's `code` nodes whose own `check` is empty, MINUS the two the rule
-//                          has no operand for: a node this change CREATES (`new` — the map predates
-//                          the file, so no command of the map can be shown to reach it; verifiability
-//                          of a created node is step 16's fact) and a node whose unverifiability the
-//                          operator ACCEPTED at step 6's gate (asking again offers no exit)
-//                 failure: none — total
+// FUNCTION_CONTRACT: feedbackLines — вердикт критика, как его ЧИТАЕТ роль шага 6
+//   Input:        findings — блокеры из newReview: { code, node, evidence, text }
+//   Dependencies: —
+//   Antecedent:   любые значения; пустой список даёт пустую строку
+//   Consequent:   success: строки FEEDBACK, по одной на блокер, каждая с префиксом `critic:` — по
+//                          нему роль отличает суждение о СОДЕРЖАНИИ от блокера гардрейла о ФОРМЕ и
+//                          выбирает ремонт по коду (steps/intake/intake.md, шаг 11 STRATEGY)
+//                 failure: none — тотальна
 //   Purity:       pure
-//   Interface:    askedNodes({ plan, answers }) -> node[]
-//   BUG_FIX_CONTEXT: D23 wrote this set TWICE and the two copies drifted. The order
-//                 (ext/index.mjs::reviewForm) subtracted both the created node and the accepted one;
-//                 R6 subtracted only the accepted one, and `!n.new` guarded just the map's half of the
-//                 rule. A role that answered the order VERBATIM was then told
-//                 `R6 узел …/fruit-card.html без своей команды` — the order had stopped naming the
-//                 created node while the rule went on judging it. Reproduced by substitution over the
-//                 saved artifacts of runbox/quarkus-rest-json-app-v2-t3. The order and the rule read
-//                 this one expression now: what the role is asked and what the role is judged by
-//                 cannot disagree, because there is nothing left to disagree with.
-export function askedNodes({ plan, answers = [] } = {}) {
-  return (((plan && plan.nodes) || [])).filter((n) =>
-    n && n.kind === "code" && !((n.check || []).length) && !n.new &&
-    waiverFor({ node: n.id, answers }).word !== "accept")
+//
+// ПОЧЕМУ ЗДЕСЬ, А НЕ В ПОЛОСЕ. Форма этой строки — КОНТРАКТ между двумя ролями: критик пишет, intake
+// разбирает по префиксу и по коду. Пока она собиралась в `workflows/izi.js`, её нельзя было проверить
+// ничем, кроме регулярки по исходнику полосы, — а такая проверка видит, что строка собрана, и не
+// видит, из чего. Ровно так прогон 64cebdda уехал со счётчиком строк вместо самих строк в соседней
+// рельсе. Здесь у формы есть юнит.
+export function feedbackLines(findings = []) {
+  return (Array.isArray(findings) ? findings : [])
+    .filter((b) => b && b.code)
+    .map((b) => `critic: ${b.code} · ${b.node || "—"} · улика ${b.evidence || "—"} — ${String(b.text || "").trim()}`)
+    .join("\n  ")
 }
 
-// FUNCTION_CONTRACT: createdNodes — the nodes of the same list this change CREATES
-//   Input:        { plan } — the parsed `.agent/plan-index.json` object
-//   Dependencies: —
-//   Antecedent:   any value — absences read as empty
-//   Consequent:   success: the `code` nodes with an empty `check` of their own that carry `new`, i.e.
-//                          exactly what askedNodes drops for want of an operand. The order names them
-//                          in a line of their own: a node that vanished from the checklist with no
-//                          word reads as an oversight, and an oversight is what a role repairs by
-//                          inventing a finding
-//                 failure: none — total
-//   Purity:       pure
-//   Interface:    createdNodes({ plan }) -> node[]
-export const createdNodes = ({ plan } = {}) =>
-  (((plan && plan.nodes) || [])).filter((n) => n && n.kind === "code" && !((n.check || []).length) && n.new)
-
-// FUNCTION_CONTRACT: newReview — the critic's file judged as a verdict the band can act on
-//   Input:        { xml, plan, frd, map, answers }
-//                 xml  — the staged review as the role wrote it
-//                 plan — the parsed `.agent/plan-index.json` object (io reads the JSON)
-//                 frd  — parseFrd's parse of `.agent/frd.xml`
-//                 map  — steps/intake/map.mjs::parseMap of `.agent/appgraph.xml`, or null. R6's
-//                        reachability operand: `nodeTests` says which tests a module has, `edges`
-//                        say where a test's execution can travel. With no map the half stays silent
-//                        (no sources, no judgement — the device `known: null` uses in steps/design)
-//                 answers — [{ question, text }] as core/answers.mjs reads them off disk, the SAME
-//                        operand steps/plan/plan.mjs::newPlanIndex takes. It carries the operator's
-//                        waivers from step 6's gate; without it R6 stops the band on a node whose
-//                        unverifiability the operator already accepted
-//   Dependencies: parseReview, frdIds, owedItems, askedNodes, CODES, CODE_CULPRIT, CODE_OWNER,
-//                 CODE_EVIDENCE, reachedBy
-//   Antecedent:   any values — every absence below is a named refusal, never a default
+// FUNCTION_CONTRACT: newReview — вердикт критика, судимый как вердикт, с которым полоса умеет работать
+//   Input:        { xml, frd, requirements }
+//                 xml          — staging-вердикт, как его написала роль
+//                 frd          — parseFrd от `.agent/staging/frd.xml`: адресное пространство находок
+//                 requirements — [{ id, statement, fit }] из brd.md: чек-лист долга
+//   Dependencies: parseReview, frdIds, owedItems, unbackedItems, CODES, CODE_CULPRIT, CODE_OWNER,
+//                 CODE_EVIDENCE
+//   Antecedent:   любые значения — каждое отсутствие ниже названный отказ, а не умолчание
 //   Consequent:   success: { verdict, blockers[{ code, node, evidence, culprit, owner, text }] } —
-//                          `culprit` and `owner` derived here, never read from the role's file
-//                 failure: "empty"          — no <review> element at all: the role wrote nothing
-//                          "no-plan"        — the plan carries no node, so no finding can resolve
-//                          "invalid-review" — R1..R4; the detail is the blockers, joined the way
-//                                             newBrd/newDesign join theirs, and it rides in FEEDBACK
+//                          `culprit` и `owner` выводятся ЗДЕСЬ, из кода, и никогда не читаются из
+//                          файла роли
+//                 failure: "empty"          — нет элемента <review>: роль не написала артефакт
+//                          "no-frd"         — в FRD нет ни одного адреса: судить не о чем
+//                          "invalid-review" — R1..R5/R7; детали едут в FEEDBACK
 //   Purity:       pure
-export function newReview({ xml, plan, frd, map = null, answers = [] } = {}) {
+export function newReview({ xml, frd, requirements = [] } = {}) {
   const parsed = parseReview(xml)
   if (!parsed.found) return err("empty", "в staging нет элемента <review> — роль не написала артефакт")
 
-  const nodeIds = new Set((((plan && plan.nodes) || []).map((n) => (n && n.id) || "")).filter(Boolean))
-  if (!nodeIds.size) return err("no-plan", "в .agent/plan-index.json нет ни одного узла — судить нечего")
+  // АДРЕС НАХОДКИ — ЭЛЕМЕНТ FRD. Критик судит требование, и всё, на что он может показать, живёт в
+  // самом артефакте: use case, его шаг и ветвление, сценарий, код отказа, op дельты, nfr, вопрос.
   const ids = frdIds(frd)
+  if (!ids.size) return err("no-frd", "в FRD нет ни одного адресуемого элемента — судить не о чем")
+
+  const reqIds = new Set((requirements || []).map((r) => String((r && r.id) || "").trim()).filter(Boolean))
 
   const B = []
   // R1. The verdict and its body must say the same thing. Both directions: a Pass carrying a blocker
@@ -382,126 +421,58 @@ export function newReview({ xml, plan, frd, map = null, answers = [] } = {}) {
     }
     // `open-question` is about the REQUIREMENT, not about a node: its address is synthetic and there
     // is no plan node to point at — that is precisely what the finding says.
-    if (b.code !== "open-question" && !nodeIds.has(b.node)) {
-      B.push(`R3 ${where} (${b.code}): node="${b.node}" не узел плана — адрес обязан быть id из .agent/plan-index.json`)
+    // `open-question` адресуется синтетически (`question:<subject>`): находка о ТРЕБОВАНИИ, и узла,
+    // на который показать, у неё нет — ровно это она и говорит.
+    if (b.code !== "open-question" && !ids.has(b.node)) {
+      B.push(`R3 ${where} (${b.code}): node="${b.node}" не элемент FRD — адресом может быть use case, его шаг, ветвление, сценарий, код отказа, op дельты или nfr:<subject>`)
     }
     const kind = CODE_EVIDENCE[b.code]
-    if (kind === "plan" && !nodeIds.has(b.evidence)) {
-      B.push(`R4 ${where} (${b.code}): evidence="${b.evidence}" не узел плана — для этого кода улика есть НЕДОСТАЮЩЕЕ РЕБРО, то есть id узла, которого не хватает`)
+    if (kind === "requirement" && !reqIds.has(b.evidence)) {
+      B.push(`R4 ${where} (${b.code}): evidence="${b.evidence}" не номер требования BRD — улика этого кода есть требование, которое артефакт не несёт (${[...reqIds].slice(0, 4).join(", ")}…)`)
     }
-    if (kind === "self" && b.evidence !== b.node) {
-      B.push(`R4 ${where} (${b.code}): evidence="${b.evidence}" — для этого кода улика ЕСТЬ сам адрес: повтори id узла, которого требование не просило`)
+    if (kind === "quote" && !b.evidence) {
+      B.push(`R4 ${where} (${b.code}): улика пуста — процитируй строку TASK.md или brd.md, которая это значение ЗАПРЕЩАЕТ, либо покажи, что его не просит ни одна`)
     }
     if (kind === "frd" && !ids.has(b.evidence)) {
-      B.push(`R4 ${where} (${b.code}): evidence="${b.evidence}" не id FRD — назови use case, сценарий, код отказа или op дельты, которую план не выполняет`)
+      B.push(`R4 ${where} (${b.code}): evidence="${b.evidence}" не id FRD — назови use case, сценарий, код отказа или op дельты`)
     }
     if (!b.text) B.push(`R4 ${where} (${b.code}): текст блокера пуст — оператору и роли починки читать нечего`)
   }
 
-  // R5 — COMPLETENESS. Every row the plan owes is closed exactly once: by a `<covers>` naming a plan
-  // node, or by a blocker whose evidence IS that row. "As a whole, yes" stops being expressible — a
-  // Pass with an unfilled table is a red FORM, re-delegated, not a verdict.
-  const owed = owedItems(frd, plan)
+  // R5 — ПОЛНОТА. Каждая строка ОБОИХ списков закрыта ровно один раз: `<covers>` с элементом FRD,
+  // который её исполняет, или блокер, чья улика/адрес — эта строка. «В целом да» перестаёт быть
+  // выразимым: Pass с незаполненной таблицей — это красная ФОРМА, переделегирование, а не вердикт.
+  //
+  // Списков два, и они смотрят в разные стороны: долг («чем исполнено требование») и незаявленное
+  // («какое требование просило этот элемент»). Второй куплен прогоном, где первый закрыл все 18
+  // строк и не заметил целого use case, которого не просил никто (см. unbackedItems).
+  const owed = owedItems({ requirements })
+  const unbacked = unbackedItems({ frd })
+  const rows = [...owed.map((r) => ({ ...r, list: "долг" })), ...unbacked.map((r) => ({ ...r, list: "не заявлено" }))]
   const claimed = new Map()
   for (const c of parsed.covers) claimed.set(c.item, (claimed.get(c.item) || 0) + 1)
   const byEvidence = new Set(parsed.blockers.map((b) => b.evidence))
   const byNode = new Set(parsed.blockers.map((b) => b.node))
-  for (const row of owed) {
+  for (const row of rows) {
     const covered = claimed.get(row.id) || 0
     const blamed = byEvidence.has(row.id) || byNode.has(row.id)
     if (!covered && !blamed) {
-      B.push(`R5 пункт "${row.id}" (${row.what}) не закрыт: ни <covers item="${row.id}" node="…"/>, ни блокера с этим id — «в целом да» не ответ`)
+      B.push(`R5 «${row.list}» — пункт "${row.id}" (${row.what}) не закрыт: ни <covers item="${row.id}" node="…"/>, ни блокера с этим id`)
     } else if (covered > 1) {
       B.push(`R5 пункт "${row.id}" закрыт ${covered} раз — один пункт, одна строка`)
     }
   }
-  // R7 — a row is closed by a node that can plausibly ANSWER it. R5 counts that every row is closed
-  // once and that the node exists; until D21+R2 nothing checked the two had anything to do with each
-  // other, and run 79650c98 shipped `<covers item="S1" node="scenario:S2"/>` — a scenario that lives
-  // on another node entirely — inside a green Pass. The operands are already in parseFrd.
-  const scenarioNodes = (id) => {
-    const sc = ((frd && frd.scenarios) || []).find((x) => x && String(x.id).trim() === id)
-    return sc ? [`scenario:${id}`, ...tokens(sc.nodes)] : null
-  }
-  const ucNodes = (uc) => {
-    const own = ((frd && frd.scenarios) || []).filter((x) => x && String(x.uc || "").trim() === uc)
-    return own.length ? own.flatMap((x) => [`scenario:${String(x.id).trim()}`, ...tokens(x.nodes)]) : null
-  }
-  const allowedFor = (item) => {
-    if (item.startsWith("nfr:")) return null                       // an NFR has no node of its own in the FRD
-    if (item.includes("/")) return ucNodes(item.split("/")[0])     // UC1/post, UC1/2a
-    return scenarioNodes(item)                                     // S1, S2 — and a plan node id falls through
-  }
 
-  const owedIds = new Set(owed.map((r) => r.id))
+  // R7 — строка закрыта тем, что способно на неё ОТВЕТИТЬ. R5 считает, что каждая закрыта однажды и
+  // что названный элемент существует; до D21 ничто не проверяло, что эти двое имеют друг к другу
+  // отношение, и прогон 79650c98 привёз `<covers item="S1" node="scenario:S2"/>` внутри зелёного
+  // Pass. Здесь операнд другой, чем был: адресное пространство — сам FRD, и «отвечать» значит быть
+  // его элементом. Строка «не заявлено» закрывается ЛЮБЫМ элементом: ответ на неё — «этот элемент
+  // просило требование R…», и требование названо текстом `covers`, а не адресом.
+  const rowIds = new Set(rows.map((r) => r.id))
   for (const c of parsed.covers) {
-    if (!owedIds.has(c.item)) B.push(`R5 <covers item="${c.item}"/> — такого пункта в списке нет; пункты выдаёт машина, их не сочиняют`)
-    else if (!nodeIds.has(c.node)) B.push(`R5 <covers item="${c.item}" node="${c.node}"/> — node не узел плана`)
-    else {
-      const allowed = allowedFor(c.item)
-      if (allowed && !allowed.includes(c.node)) {
-        B.push(`R7 <covers item="${c.item}" node="${c.node}"/> — этот узел к пункту отношения не имеет; пункт живёт на ${allowed.join(" · ")}`)
-      }
-    }
-  }
-
-  // R6 — THE SECOND TABLE GETS ITS OWN RULE. A code node with no check command of its own is closed by
-  // somebody else's command, and that command may execute nothing the node does. Until R2 the order
-  // handed the role that list (`{UNCHECKED}`) and no rule demanded an answer — so on run 79650c98 the
-  // role passed over `fruits.html`, closed by java suites that never open a page, and the verdict was
-  // Pass. A table with no counting rule is a suggestion.
-  //
-  // The answer is the COMMAND, not the node: naming the node is free, naming which of its scenarios'
-  // commands executes it is a decision. The command is copied from the order's list and checked here
-  // against the plan. Whether that command would actually turn red stays step 16's fact — this rule
-  // is about reachability, and the residual risk of a false witness is named, not hidden.
-  const nodeById = new Map(((plan && plan.nodes) || []).map((n) => [(n && n.id) || "", n]))
-  // The SAME expression the order asked with (askedNodes, above): the node the operator already
-  // accepted at step 6's gate and the node this change creates are outside the rule, not outside half
-  // of it, and they are outside it in one place.
-  for (const n of askedNodes({ plan, answers })) {
-    const mine = parsed.witness.filter((w) => w.node === n.id)
-    const blamed = parsed.blockers.some((b) => b.node === n.id)
-    if (!mine.length && !blamed) {
-      B.push(`R6 узел ${n.id} без своей команды: нет ни <witness node cmd/>, ни блокера — назови команду, которая его ИСПОЛНЯЕТ, либо скажи блокером, что такой нет`)
-      continue
-    }
-    if (mine.length > 1) { B.push(`R6 узел ${n.id}: ${mine.length} <witness> — одна команда, одна строка`); continue }
-    if (!mine.length) continue
-    const checks = (n.coveredBy || []).flatMap((sc) => ((nodeById.get(sc) || {}).check) || [])
-    const cmds = checks.map((c) => c.cmd)
-    if (!cmds.includes(mine[0].cmd)) {
-      B.push(`R6 <witness node="${n.id}" cmd="${mine[0].cmd}"/> — такой команды нет среди команд его сценариев (${cmds.join(" · ") || "их нет вовсе"}): команда КОПИРУЕТСЯ из списка, не сочиняется`)
-      continue
-    }
-
-    // R6, the half the map decides. A copied command is not yet a witness: it has to be able to
-    // OBSERVE the node. The map answers that without a word from the role — a suite's tests are
-    // `<test suite=…>` rows, and where their execution can travel is `<edge from to>`. A node no
-    // test of that suite reaches is not witnessed by it, and the only honest answer left is the
-    // blocker `unverifiable-node`, which the machine writes itself rather than asking again.
-    //
-    // BUG_FIX_CONTEXT: live runs 79650c98 and 0aa13bff, both on quarkus-rest-json-app-v2-t2. The
-    //   critic closed `…/fruits.html` — a static AngularJS page — with `mvn verify -Pnative`, a java
-    //   suite that never opens a page, and both verdicts were Pass. The page's `fanin="0"` was in the
-    //   map all along: no test leads to it, and nothing but a role's word said otherwise.
-    //
-    // ONE MAP THIS HALF HAS NO OPERAND FOR, and silence is the honest answer: a map that binds NO
-    // test to any node at all (`nodeTests.size === 0`). "No suite reaches this node" is then
-    // indistinguishable from "nobody wrote down which tests exist" — measured on runbox/eddi, where
-    // `if (map)` alone reddened all 16 nodes of the width, the role had no honest repair and the LOOPS
-    // burned out (standards/code.md, constraint 2). The other half — the command is COPIED from the
-    // list — keeps judging such a node.
-    // The node this change CREATES has no operand for EITHER half, and it left the rule before this
-    // line: it is not in askedNodes at all (see its BUG_FIX_CONTEXT), so a `!n.new` guard here would
-    // be dead code and, worse, a second copy of that decision.
-    if (map && (map.nodeTests || new Map()).size) {
-      const suites = new Set(checks.filter((c) => c.cmd === mine[0].cmd).map((c) => c.suite).filter(Boolean))
-      const reachable = suites.size && [...suites].some((id) => reachedBy(map, id).has(n.id))
-      if (!reachable) {
-        B.push(`R6 <witness node="${n.id}" cmd="${mine[0].cmd}"/> — эту команду не исполняет ни один тест, доходящий до узла: в карте нет пути от тестов сьюта до ${n.id}. Узел непроверяем — блокер unverifiable-node, а не свидетель`)
-      }
-    }
+    if (!rowIds.has(c.item)) B.push(`R5 <covers item="${c.item}"/> — такого пункта в списках нет; пункты выдаёт машина, их не сочиняют`)
+    else if (!ids.has(c.node)) B.push(`R7 <covers item="${c.item}" node="${c.node}"/> — node не элемент FRD: назови use case, его шаг, сценарий, код отказа, op дельты или nfr:<subject>`)
   }
 
   if (B.length) return err("invalid-review", B.join("\n  "))

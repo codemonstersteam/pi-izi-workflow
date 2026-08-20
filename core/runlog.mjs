@@ -49,6 +49,20 @@ const unquote = (v) => (/^".*"$/.test(v) ? v.slice(1, -1) : v)
 // item. Refusing beats escaping — an escape is a second grammar nobody reads.
 const unwritable = (v) => /[\n\r]/.test(v) || /^\s*[-#]/.test(str(v).trim())
 
+// ЗАМЕТКА — СВОБОДНЫЙ ТЕКСТ, И ОДНОСТРОЧНОЙ ЕЁ ДЕЛАЕТ КОД, А НЕ НАДЕЖДА. `note` несёт блокер
+// гардрейла или слова оператора: то и другое бывает многострочным, а формат построчный. Свернуть
+// перенос в « · » — не потеря: заметку читает человек, а вся правда лежит в артефакте, на который
+// ссылается отметка. Остальные поля (`key`, `at`, `status`, пути) сворачивать НЕЛЬЗЯ — там перенос
+// строки это дефект вызывающего, и `unwritable` обязан его отвергнуть.
+//
+// BUG_FIX_CONTEXT: live run 5b52f76d, 20.08.2026. The dry slicing of step 10б refused with a
+// two-line blocker, the band marked step 9 for rework with `note: why.slice(0, 80)` — a slice that
+// cuts the LENGTH but not the line break — `render` refused the value, `runlogPut` threw, and the
+// run died as `crashed` right after PLAN.md had been assembled. Four call sites feed this field from
+// a guardrail or from the operator's prose, so the fold belongs HERE, in the factory, not in any of
+// them (standards/code.md, rule 1 and rule 7).
+const oneLine = (v) => str(v).replace(/\s*[\r\n]+\s*/g, " · ").replace(/^\s*[-#]+\s*/, "").trim()
+
 // FUNCTION_CONTRACT: newLog — the journal as data
 //   Input:        text — the contents of .agent/run.yaml, or "" / undefined when there is none
 //   Dependencies: STEP_KEYS, TICKET_KEYS, HEAD_KEYS — the vocabulary; an unknown key is a refusal
@@ -213,10 +227,11 @@ export const begin = (log, { key = "", at = "" } = {}) => freeze({
 // FUNCTION_CONTRACT: mark — one step's receipt
 //   Input:        { step, name, unit, status, at, artifacts, note }
 //                 artifacts — [{ path, sha256 }], the files this step is answerable for
-//   Dependencies: —
+//   Dependencies: oneLine — `note` is free text and is folded to one line here
 //   Antecedent:   any values; `step` that is not a number makes the mark unreachable by the ladder,
 //                 which is why the caller's contract names it
-//   Consequent:   success: a new Log where the mark for this `step`+`unit` REPLACES the previous one
+//   Consequent:   success: a new Log where the mark for this `step`+`unit` REPLACES the previous one,
+//                          its `note` folded to a single line the format can carry
 //                 failure: none — total
 //   Purity:       pure
 export function mark(log, { step, name = "", unit = "", status = "", at = "", artifacts = [], note = "" } = {}) {
@@ -224,7 +239,7 @@ export function mark(log, { step, name = "", unit = "", status = "", at = "", ar
   const one = {
     step: Number(step) || 0,
     unit: str(unit),
-    name, status, at, note,
+    name, status, at, note: oneLine(note),
     artifacts: (Array.isArray(artifacts) ? artifacts : []).filter((a) => a && a.path),
   }
   const same = (m) => Number(m.step) === one.step && str(m.unit) === one.unit
@@ -234,14 +249,15 @@ export function mark(log, { step, name = "", unit = "", status = "", at = "", ar
 
 // FUNCTION_CONTRACT: ticket — one implementer ticket's receipt (step 15)
 //   Input:        { id, wave, status, at, note }
-//   Dependencies: —
+//   Dependencies: oneLine — `note` is free text and is folded to one line here
 //   Antecedent:   any values
-//   Consequent:   success: a new Log where the row for this `id` REPLACES the previous one
+//   Consequent:   success: a new Log where the row for this `id` REPLACES the previous one, its
+//                          `note` folded to a single line the format can carry
 //                 failure: none — total
 //   Purity:       pure
 export function ticket(log, { id, wave = "", status = "", at = "", note = "" } = {}) {
   const l = log && typeof log === "object" ? log : EMPTY
-  const one = { id: str(id), wave: wave === "" ? "" : Number(wave) || 0, status: str(status), at: str(at), note: str(note) }
+  const one = { id: str(id), wave: wave === "" ? "" : Number(wave) || 0, status: str(status), at: str(at), note: oneLine(note) }
   const kept = (l.tickets || []).filter((t) => str(t.id) !== one.id)
   return freeze({ ...l, tickets: [...kept, one] })
 }

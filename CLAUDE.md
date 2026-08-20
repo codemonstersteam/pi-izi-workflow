@@ -22,8 +22,8 @@ role is written).
 $END_CONTEXT
 
 $START_RUN
-**THE RUNBOOK IS A FILE, AND IT IS NOT IN THIS REPOSITORY — READ IT BEFORE PREPARING ANY LIVE RUN:**
-`~/IdeaProjects/codemonstersdev/sandbox/pi-runbox.md`. It carries what only live runs taught: the
+**READ THE RUNBOOK BEFORE PREPARING ANY LIVE RUN: `standards/runbox.md`** (it lived outside this
+repository until 19.08.2026 and moved in with `standards/guardrail.md`). It carries what only live runs taught: the
 MASTER form (`sandbox/quarkus-rest-json-app-v2-t1-3`, never run in — copied to `sandbox/runbox/` and
 run there),
 the three preconditions before every launch (restart pi; no `*.md` under

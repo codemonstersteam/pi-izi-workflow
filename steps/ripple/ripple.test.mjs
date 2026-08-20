@@ -351,3 +351,27 @@ test("шов 4: ответ находится по СТВОЛУ вопроса �
   assert.equal(waiverFor({ node: FRUITS_HTML, answers: fixed }).word, "suite")
   assert.deepEqual([...WAIVER_WORDS], ["suite", "drop", "accept"])
 })
+
+// УЗЕЛ ВНЕ ФОКУСА — НЕ ВЫДУМКА. Живой прогон eddi 19.08.2026: шаг 6 закрылся зелёным с дельтой на
+// `configs/agents/model/AgentConfiguration.java` (файл существует, вычисленный граф шага 3 его
+// несёт), а шаг 8 отказал `unknown-node — узла нет в карте`. Полоса встала между двумя своими же
+// шагами, по-разному отвечавшими на вопрос «что такое узел». Сними `repo` — отказ вернётся.
+test("рябь: путь, известный вычисленному графу, засчитывается затравкой", () => {
+  const outside = "src/main/java/app/configs/AgentConfiguration.java"
+  const frd = parseFrd(`<frd grammar="1" goal="привязка">
+  <delta op="glossaries field" form="Changed" node="${outside}" from="нет поля" to="список ссылок"/>
+</frd>`)
+  const map = parseMap(`<appgraph grammar="4">
+  <module path="src/rest/Store.java" pkg="rest"/>
+</appgraph>`)
+  const blind = newRipple({ xml: "<appgraph/>", frd, mode: "minor", map })
+  assert.equal(blind.ok, false)
+  assert.equal(blind.error.cls, "unknown-node")
+
+  const seeing = newRipple({ xml: "<appgraph/>", frd, mode: "minor", map, repo: new Set([outside]) })
+  assert.equal(seeing.error?.cls, undefined, `узел из репозитория всё ещё отвергнут: ${seeing.error?.detail || ""}`)
+
+  // Выдуманный путь остаётся выдумкой при любом графе.
+  const invented = parseFrd(`<frd grammar="1" goal="x"><delta op="o" form="Changed" node="src/Nowhere.java" from="a" to="b"/></frd>`)
+  assert.equal(newRipple({ xml: "<appgraph/>", frd: invented, mode: "minor", map, repo: new Set([outside]) }).error.cls, "unknown-node")
+})

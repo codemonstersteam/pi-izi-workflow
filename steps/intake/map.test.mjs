@@ -118,3 +118,29 @@ test("mapIndex: the map degrades to what exists and what it offers — and decla
   assert.ok(back.entries.has("src/main/java/acme/A.java"))
   assert.ok(mapMeasure(idx).bytes < mapMeasure(full).bytes)
 })
+
+// M1 — ТЕСТ СТРОКОЙ, А НЕ БЛОКОМ. Множество `tests` держит одно правило на всю полосу (F2/F3: тест
+// это `<dod>` изменения, а не изменение), и оно не должно зависеть от того, какой формой карта
+// записала тест. Обе формы читаются: старая `kind="test"` (карты прошлых прогонов) и новая строка.
+test("M1: тест резолвится в `tests` и строкой верхнего уровня, и строкой внутри модуля", () => {
+  const m = parseMap(`<appgraph grammar="4" modules="1" tests="2">
+  <paths prefix="src/"/>
+  <module path="~main/java/app/Fruit.java" level="0" fanin="0" fanout="0">
+    <test path="~test/java/app/FruitTest.java" suite="unit"/>
+  </module>
+  <test path="~test/java/app/OrphanIT.java" suite="component"/>
+</appgraph>`)
+  assert.equal(m.tests.has("src/test/java/app/FruitTest.java"), true, "тест, названный своим модулем")
+  assert.equal(m.tests.has("src/test/java/app/OrphanIT.java"), true, "тест-сирота: его модуля в карте нет")
+  assert.equal(m.nodes.has("src/test/java/app/OrphanIT.java"), false, "тест не узел карты")
+  // и привязка «узел → его тест» осталась там же, где была: её читает шаг 10
+  assert.deepEqual([...(m.nodeTests.get("src/main/java/app/Fruit.java") || [])],
+    [{ path: "src/test/java/app/FruitTest.java", suite: "unit" }])
+})
+
+test("M1: старая форма карты читается по-прежнему — kind=\"test\" остаётся тестом", () => {
+  const m = parseMap(`<appgraph grammar="4" modules="1">
+  <module path="src/test/java/app/OldTest.java" kind="test" suite="unit" level="0" fanin="0" fanout="0"/>
+</appgraph>`)
+  assert.equal(m.tests.has("src/test/java/app/OldTest.java"), true)
+})

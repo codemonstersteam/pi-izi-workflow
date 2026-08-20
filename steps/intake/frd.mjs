@@ -13,10 +13,16 @@
 //             fixes this artifact, and one blocker per call means paying a call per blocker —
 //             steps/brd/brd.mjs, constraint 2); FRD_FORM is fixed at module load.
 // Interface:  FRD_FORM — the artifact's form as data (grammar, deltaForms, sources)
+//             unreadable(xml) -> string[]  — F0: места, где элемент пропадает из разбора
+//             spentAnswers({ xml, said }) -> string[]  — F13: ответ оператора потрачен
 //             parseFrd(xml) -> Frd
 //             endsOf(frd) -> [{ token, uc, side, text }]  — the ends of every use case
-//             checkFrd({ frd, nodes, tests, entries, edges, known }) -> string[]  — blockers, empty = green
-//             newFrd({ xml, nodes, tests, entries, edges, sources }) -> Result<Frd, "invalid-frd">
+//             checkFrd({ frd, nodes, tests, entries, edges, known, pass }) -> string[]  — blockers, empty = green
+//             newFrd({ xml, nodes, tests, entries, edges, sources, pass }) -> Result<Frd, "invalid-frd">
+//             RULE_PASS / PASSES — какому пласту принадлежит правило (steps/intake/passes-data-flow.md)
+//             passOfBlocker(blocker) -> "A"|"B"|"C"|"D"|"*"
+//             forPass(blockers, pass) -> string[]  — что этот проход имеет право показать роли
+//             entryPass(blockers) -> "A"|"B"|"C"|"D"  — откуда переигрывать после красного полного суда
 
 import { ok, err } from "../../core/result.mjs"
 // EXTERNAL_DEPENDENCY: core/xml.mjs — the tag scanner shared with steps/scope and steps/design. One
@@ -33,6 +39,14 @@ import { numbersIn } from "../brd/brd.mjs"
 // the SAME set, on the FRD the role just rewrote. Not a cycle: review.mjs takes frd/plan as data and
 // never imports this module.
 import { frdIds } from "../review/review.mjs"
+// EXTERNAL_DEPENDENCY: core/node.mjs — «что такое узел изменения» отвечено ОДИН раз на всю полосу
+// (core/node.md). Три остановки прогона 19.08.2026 куплены тем, что этот вопрос задавался здесь, в
+// шаге 8 и в шаге 14 по-разному.
+import { nodeKind, KINDS } from "../../core/node.mjs"
+// EXTERNAL_DEPENDENCY: core/answers.mjs::hardTokens — «чем ответ оператора УЗНАЁТСЯ в артефакте»
+// отвечено один раз, там же, где живёт разбор самих ответов. Второй набор регулярок здесь разошёлся
+// бы с первым на первом же новом виде знака.
+import { hardTokens } from "../../core/answers.mjs"
 
 // THE FORM AS DATA, so the order can SUBSTITUTE it instead of restating it (ext/index.mjs::frdForm,
 // the same device as brdForm — see its BUG_FIX_CONTEXT G9e).
@@ -82,6 +96,86 @@ const childText = (body, name) => {
   return m ? m[2].trim() : ""
 }
 
+// FUNCTION_CONTRACT: spentAnswers — F13: ответ оператора обязан быть ПОТРАЧЕН
+//   Input:        { xml — текст артефакта; said — [{ n, question, text }] как их отдаёт
+//                 core/answers.mjs::newAnswers }
+//   Dependencies: hardTokens
+//   Antecedent:   любые значения; пусто читается как «обменов не было» и правило молчит
+//   Consequent:   success: string[] блокеров F13 — по одному на ответ, чьи твёрдые знаки НЕ встречены
+//                          в артефакте. Ответ без твёрдых знаков пропускается молча: судить его
+//                          нечем, и притворяться, что есть чем, — хуже, чем промолчать
+//                 failure: none — тотальна
+//   Purity:       pure
+//
+// ЗАЧЕМ ПРАВИЛО. Пауза оператора — самое дорогое, что есть у полосы: человек читает вопрос, думает и
+// отвечает. Ответ, не доехавший до артефакта, тратит это дважды — впустую сейчас и повторным
+// вопросом потом. Ни одно другое правило этого не видит: F1 судит состав use case, F6c — концы,
+// F11 — покрытие требований; «куда делся ответ» не спрашивает никто.
+//
+// Это F5 наоборот: там у числа обязан быть источник, здесь у источника обязано быть значение.
+//
+// BUG_FIX_CONTEXT: живой прогон eddi 19.08.2026, шаг 6, пласт A. Роль спросила три вопроса, получила
+//   три ответа и закрылась ЗЕЛЁНОЙ, потеряв два: «нужен GET /glossarystore/glossaries/{id}» —
+//   одиночного чтения в семи use case нет вовсе; «замена набора терминов целиком» — уровень слияния
+//   не назван. Правило ловит первый (у него есть путь) и молчит о втором (твёрдых знаков нет) —
+//   потолок назван в core/answers.mjs::hardTokens и в docs/ask.md §6.
+export function spentAnswers({ xml = "", said = [] } = {}) {
+  // КОММЕНТАРИЙ — НЕ АРТЕФАКТ. Ни шаг 7, ни шаг 9, ни нарезка не читают `<!-- … -->`: до исполнителя
+  // из него не доезжает ничего. Знак ответа, найденный в комментарии, — это правило, обманутое
+  // отговоркой, а не потраченный ответ.
+  //
+  // BUG_FIX_CONTEXT: проигрыш 20.08.2026. Фиксер, получив блокер F13 про «нужен GET
+  //   /glossarystore/glossaries/{id}», дописал в конец файла
+  //   `<!-- PENDING: GET /glossarystore/glossaries/{id} requested but out of scope -->` — и полный
+  //   суд позеленел. Ответ оператора при этом потерян ровно так же, как был.
+  const text = String(xml == null ? "" : xml).replace(/<!--[\s\S]*?-->/g, " ")
+  const out = []
+  for (const a of Array.isArray(said) ? said : []) {
+    if (!a || !a.text) continue
+    const tok = hardTokens(a.text)
+    if (!tok.length) continue
+    if (tok.some((t) => text.includes(t))) continue
+    out.push(`F13 ответ оператора не потрачен: на вопрос «${String(a.question || "").slice(0, 90)}» отвечено «${String(a.text).slice(0, 90)}», а в артефакте нет ни одного знака этого ответа: ${tok.join(", ")}. Впиши то, что оператор назвал — путь в <step>, код в <ext error> и <failure code>, поле в <field>; ответ устарел и больше не про эту работу — вернись к оператору вопросом, но молча его не теряй`)
+  }
+  return out
+}
+
+// FUNCTION_CONTRACT: unreadable — места, где артефакт перестаёт читаться, ДО всякого суждения о нём
+//   Input:        xml — текст `.agent/staging/frd.xml`; тип не ограничен
+//   Dependencies: —
+//   Antecedent:   любое значение; не-строка читается как пустой текст
+//   Consequent:   success: string[] блокеров F0 — по одному на строку с сырым `<` внутри значения
+//                          атрибута. Пусто = файл читается целиком
+//                 failure: none — тотальна
+//   Purity:       pure
+//
+// ЗАЧЕМ ОТДЕЛЬНОЕ ПРАВИЛО, А НЕ ОТКАЗ. Сырой `<` в значении атрибута — не «плохой XML вообще», а
+// ТИХАЯ ПОТЕРЯ: сканер (core/xml.mjs) заканчивает элемент на первом `<`, и элемент исчезает из
+// разбора целиком. Дальше правила судят артефакт, в котором этого элемента НЕТ, и обвиняют роль в
+// том, чего она не писала, — ровно то, что запрещает standards/guardrail.md. Отказ здесь не годится:
+// он убивает прогон, а дефект чинится одной правкой строки.
+//
+// Правило вне пластов: испорченная строка одинаково слепит любой проход, и молчать о ней нельзя ни в
+// одном.
+//
+// BUG_FIX_CONTEXT: живой прогон eddi 19.08.2026, третий запуск, пласт B. Роль написала
+//   `before="no glossary term substitution; <code>{{glossary.<term>}}</code> expressions …"` —
+//   сценарий S6 для UC6. Разбор его не увидел, и гардрейл вернул ДВА блокера: «у UC6 нет сценария»
+//   (ложь — он написан) и «дельта GlossaryService без сценария» (следствие: узел назван именно в S6).
+//   Тем же почерком в пласте A пропал `<question>`: открытый вопрос исчез из артефакта молча.
+//   Экранированных `&lt;` в файле было НОЛЬ — роль не знала, что так нельзя.
+export function unreadable(xml) {
+  const out = []
+  const lines = String(xml == null ? "" : xml).split("\n")
+  lines.forEach((line, i) => {
+    // значение атрибута — между кавычками; `<` внутри него в XML невозможен ни в каком виде
+    for (const m of line.matchAll(/(\w+)="([^"]*<[^"]*)"/g)) {
+      out.push(`F0 строка ${i + 1}, атрибут ${m[1]}: внутри значения стоит «<» — по XML там обязано быть &lt;, и наш разбор обрывает элемент на этом знаке, то есть элемент ПРОПАДАЕТ целиком и правила судят артефакт без него. Убери разметку из значения: пиши {{glossary.&lt;term&gt;}} или вовсе без тегов — «{{glossary.<term>}}» лучше записать словами`)
+    }
+  })
+  return out
+}
+
 // FUNCTION_CONTRACT: parseFrd — the FRD's elements out of its text
 //   Input:        xml — text of `.agent/staging/frd.xml`; type unconstrained
 //   Dependencies: childText, core/xml.mjs
@@ -104,6 +198,12 @@ export function parseFrd(xml) {
       id: a.id || "",
       actor: a.actor || "",
       goal: a.goal || "",
+      // via — КАНАЛ ЭТОГО use case, перекрывающий актёрский. Живой прогон eddi: у актёра
+      // `api-client` один `via="HTTP /glossarystore/glossaries"`, и его получили ВСЕ восемь use
+      // case — включая экспорт, импорт и синхронизацию, которые входят через `/backup/export/...`
+      // и `/backup/import/sync`. Граничные наряды 05-07 велели проверять экспорт агента через CRUD
+      // словарей — тест, который написать нельзя. Пусто — канал берётся у актёра, как раньше.
+      via: a.via || "",
       pre: childText(body, "pre"),
       post: childText(body, "post"),
       steps: Object.freeze([...body.matchAll(tag("step", ">([\\s\\S]*?)</step>"))].map((x) => x[2].trim())),
@@ -136,6 +236,11 @@ export function parseFrd(xml) {
     touchedRows: list("touched"),
     nfrs: list("nfr"),
     questions: list("question"),
+    // carried — САМОПРОВЕРКА РОЛИ, СТАВШАЯ УЛИКОЙ. По строке на каждое требование BRD: чем оно
+    // унесено в это требование (`by="UC1/2"`, `by="S3"`, `by="src/rest/Store.java"`). Роль проходит
+    // требования по одному и называет носителя; судит строку скрипт (F11), поэтому
+    // самосертификации здесь нет — есть предъявленная улика.
+    carried: list("carried"),
   })
 }
 
@@ -220,6 +325,112 @@ function provenance(at, value, source, known) {
   return out
 }
 
+// ПЛАСТ ПРАВИЛА. Шаг 6 идёт четырьмя проходами (steps/intake/passes-data-flow.md): A требование ·
+// B изменение · C величины и отказы · D покрытие. Правило судит ТОТ пласт, элементы которого читает,
+// и в проходе, где этих элементов ещё нет, обязано молчать.
+//
+// Пласт объявлен ОДИН раз и здесь — не у места вызова `B.push`: код блокера уже стоит первым словом
+// строки, а значит адрес правила уже существует, и второй его экземпляр у каждого из тридцати с
+// лишним `push` разошёлся бы с этим на первой же правке (standards/code.md §1).
+//
+// Правило-мост, читающее два пласта, живёт в ПОЗДНЕМ из них — иначе оно судит по половине картины:
+//   F4b (use case без сценария) и F10 (канал и узлы) читают A и B → B;
+//   F8 (поле и модуль, который его напишет) читает B и C → D, вместе с F11.
+// `*` — правило вне пластов: F9 сторожит перемотку и обязано стоять в любом проходе.
+//
+// BUG_FIX_CONTEXT: живой прогон 19.08.2026, шаг 6 одним вызовом. Первый вердикт — 15 блокеров, из
+//   них шесть про сценарии, которых роль ещё не начинала писать, и одна `F6 карта отказов пуста` на
+//   артефакте, где ещё не было ни одной дельты. Модель чинила несуществующее и переписывала уже
+//   зелёное; три круга ушли на бухгалтерию.
+export const PASSES = Object.freeze(["A", "B", "C", "D"])
+export const RULE_PASS = Object.freeze({
+  F1: "A",   // цель, актёр, гарантия, шаги
+  F6c: "A",  // два конца с одним текстом — концы объявляет пласт A
+  F2: "B",   // touched резолвится в узел
+  F2b: "B",  // touched чем-то объяснён
+  F2c: "B",  // touched без why
+  F3: "B",   // форма, узел, новизна дельты
+  F3b: "B",  // движение from/to
+  F3c: "B",  // дельта без сценария
+  F4: "B",   // сценарии и их узлы
+  F4b: "B",  // use case без сценария
+  F7: "B",   // ни одной дельты
+  F10: "B",  // канал use case принадлежит его узлам
+  F14: "B",  // предмет со своим пакетом без модуля изменения
+  F5: "C",   // источник числа
+  F6: "C",   // карта отказов и её объявление
+  F6d: "C",  // отказ ссылается на существующую ветку
+  F8: "D",   // поле в чужой сущности, которую никто не пишет
+  F11: "D",  // требование BRD не унесено
+  F9: "*",   // предмет перемотки не удалён
+  F0: "*",   // элемент пропадает из разбора — слепит любой проход
+  F13: "*",  // ответ оператора теряется одинаково в любом проходе
+})
+
+// КТО ЧИНИТ — НЕ ВСЕГДА ТОТ, КТО ВИДИТ. Правило-мост становится видимым в ПОЗДНЕМ пласте (раньше его
+// операндов нет), а чинится в РАННЕМ — там, где живёт элемент, который надо дописать. Совпадение
+// подразумевается: запись здесь нужна только там, где пласты расходятся.
+//
+// F8 — единственный такой случай сегодня. Он загорается в D (нужны и поля пласта C, и дельты пласта
+// B), а закрывается ДЕЛЬТОЙ, которую пишет только B. Отправить его починку в D значило бы выдать роли
+// блокер, закрыть который её наряд ей запрещает, — тупик, который `standards/guardrail.md` называет
+// прямо: «блокер, который нечем закрыть».
+export const RULE_FIX = Object.freeze({ F8: "B" })
+
+// FUNCTION_CONTRACT: passOfBlocker — чей это пласт
+//   Dependencies: RULE_PASS, RULE_FIX
+//   Antecedent:   любое значение
+//   Input:        blocker — строка блокера; fix — спрашивать ли о том, КТО ЧИНИТ (по умолчанию нет:
+//                 вопрос «чей пласт» задают оба раза, но правило-мост чинится раньше, чем видится)
+//   Consequent:   success: "A" | "B" | "C" | "D" | "*"; код без записи в RULE_PASS даёт `*` —
+//                          НЕИЗВЕСТНОЕ ПРАВИЛО ЗВУЧИТ ВСЕГДА. Промолчать было бы тише и хуже: новое
+//                          правило, забытое в таблице, исчезло бы из всех четырёх проходов разом, и
+//                          его отсутствие никто бы не заметил (шов — frd.test.mjs, «у каждого кода
+//                          есть пласт»)
+//                 failure: none — тотальна
+//   Purity:       pure
+export function passOfBlocker(blocker, fix = false) {
+  const code = String(blocker == null ? "" : blocker).trim().split(/\s/)[0]
+  return (fix && RULE_FIX[code]) || RULE_PASS[code] || "*"
+}
+
+// FUNCTION_CONTRACT: entryPass — с какого прохода полоса переигрывает шаг после КРАСНОГО полного суда
+//   Input:        blockers — строки блокеров (или один текст в несколько строк)
+//   Dependencies: passOfBlocker, PASSES
+//   Antecedent:   любые значения; пусто читается как «блокеров нет»
+//   Consequent:   success: РАННИЙ пласт среди тех, кто ЧИНИТ (не тех, кто видит): правка нижнего
+//                          пласта снимает находки верхних, обратное неверно. Ничего не узнав — "A":
+//                          самый ранний вход дешевле неверного
+//                 failure: none — тотальна
+//   Purity:       pure
+export function entryPass(blockers) {
+  const lines = (Array.isArray(blockers) ? blockers : String(blockers == null ? "" : blockers).split("\n"))
+    .map((x) => String(x).trim()).filter(Boolean)
+  const fixers = new Set(lines.map((b) => passOfBlocker(b, true)))
+  return PASSES.filter((x) => fixers.has(x))[0] || "A"
+}
+
+// FUNCTION_CONTRACT: forPass — блокеры, которые этот проход имеет право показать роли
+//   Input:        blockers — string[]; pass — "A"|"B"|"C"|"D" либо пусто (полный суд)
+//   Dependencies: passOfBlocker, PASSES
+//   Antecedent:   любые значения; неизвестное имя прохода читается как полный суд — судить всем
+//                 строже, чем судить ничем
+//   Consequent:   success: блокеры своего пласта И ВСЕХ ПРЕДЫДУЩИХ, плюс `*`. Предыдущие оставлены
+//                          намеренно: пласт, закрытый зелёным, роль следующего прохода всё равно
+//                          держит в руках и на живом прогоне переписывала его (12:51, 19.08.2026);
+//                          порча закрытого пласта должна всплыть в том же круге, а не после D
+//                 failure: none — тотальна
+//   Purity:       pure
+export function forPass(blockers, pass) {
+  const list = Array.isArray(blockers) ? blockers : []
+  const upto = PASSES.indexOf(String(pass || ""))
+  if (upto < 0) return list
+  return list.filter((b) => {
+    const p = passOfBlocker(b)
+    return p === "*" || PASSES.indexOf(p) <= upto
+  })
+}
+
 // FUNCTION_CONTRACT: checkFrd — the seven rules of docs/intake.md §4, plus F9 (guard against a
 //                     rewind erasing what it was sent to repair)
 //   Input:        { frd, nodes, known, rewind }
@@ -234,7 +445,30 @@ function provenance(at, value, source, known) {
 //                          docs/intake.md §4 and are NOT restated in prose here
 //                 failure: none — total; "the FRD is bad" is DATA, not a function failure
 //   Purity:       pure
-export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], known = null, rewind = [] }) {
+// types/members — ВТОРАЯ карта, вычисленный граф шага 3 (steps/scope/computed.mjs::parseComputed):
+// `types` отвечает «в каком файле объявлена сущность E», `members` — «какие объявления несёт этот
+// файл». Карта роя (`nodes`) на них не годится: рой читает только клетки фокуса, и на живом прогоне
+// eddi `AgentConfiguration` не встречается в appgraph.xml НИ РАЗУ, при том что вычисленный граф
+// резолвит его в путь. Обе таблицы НЕОБЯЗАТЕЛЬНЫ и по умолчанию пусты: правило, которому нечем
+// судить, молчит — та же дисциплина, что у F5 без `sources` и F9 без `rewind`.
+// links — рёбра ВЫЧИСЛЕННОГО графа шага 3 ({from, to}): чем один файл держится за другой. Карта роя
+// знает рёбра только внутри фокуса, и связки «реализация → интерфейс» в ней обычно нет: эндпоинт
+// объявлен интерфейсом, а класс подключается контейнером. Пусто — правила, стоящие на них, молчат.
+export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], known = null, rewind = [], types = new Map(), members = new Map(), routes = [], requirements = [], links = [], pass = "", subjects = [], analogue = "", dirs = new Set() }) {
+  // Узлом изменения считается путь РЕПОЗИТОРИЯ, а не только клетка фокуса. Слова и их порядок —
+  // core/node.mjs: `swarm` (рой читал) · `repo` (файл есть, не читан) · `new` · `none`.
+  const kindOf = nodeKind({ nodes, paths: new Set(members instanceof Map ? members.keys() : []) })
+  const inRepo = (p) => kindOf(p) !== KINDS.NONE
+  // ВТОРАЯ КАРТА ДЛЯ ВОПРОСА «ЕСТЬ ЛИ У УЗЛА ВХОД». Два разных факта, и оба нужны:
+  //   `calledInRepo` — кого ЗОВУТ (ребро указывает НА узел);
+  //   `entryThroughLink` — чья внешняя точка объявлена СОСЕДОМ, на которого узел показывает: эндпоинт
+  //     пишут на интерфейсе, а работу делает реализация, и ребро «реализация → интерфейс» это и есть.
+  // Пусто — правила остаются при карте роя, как было.
+  const repoLinks = Array.isArray(links) ? links.filter(Boolean) : []
+  const calledInRepo = new Set(repoLinks.map((e) => e.to).filter(Boolean))
+  const routeAt = new Set((Array.isArray(routes) ? routes : []).map((r) => r && r.at).filter(Boolean))
+  const entryThroughLink = new Set(repoLinks.filter((e) => entries.has(e.to) || routeAt.has(e.to)).map((e) => e.from))
+
   const B = []
   // Who has an existing caller: a node someone else points an edge AT. `entries` answers the same
   // question for the world outside the repository. Both come from the map (steps/intake/map.mjs) —
@@ -251,9 +485,9 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   if (!frd.usecases.length) B.push("F1 ни одного <usecase> — требование не прожарено, а переписано")
   for (const u of frd.usecases) {
     const at = u.id || "UC?"
-    if (!u.actor) B.push(`F1 ${at}: нет actor — у внешнего входа обязан быть тот, кто его подаёт`)
-    if (!u.post) B.push(`F1 ${at}: нет <post> — гарантия успеха не названа`)
-    if (!u.steps.length) B.push(`F1 ${at}: нет ни одного <step> — основной сценарий пуст`)
+    if (!u.actor) B.push(`F1 ${at}: нет actor — у внешнего входа обязан быть тот, кто его подаёт. Напиши <usecase id="${(u && u.id) || "UC1"}" actor="кто входит" goal="…">, а самого актёра объяви строкой <actor name="…" kind="human|system" via="как он входит"/>`)
+    if (!u.post) B.push(`F1 ${at}: нет <post> — гарантия успеха не названа. Напиши <post>что верно ПОСЛЕ успешного прохода</post>: это то, что потом проверит граничный тест`)
+    if (!u.steps.length) B.push(`F1 ${at}: нет ни одного <step> — основной сценарий пуст. Напиши шаги по одному действию: <step n="1">кто и что делает</step>, начиная со входа актёра`)
   }
 
   // F2 — a touched is a NODE of the map, never a name out of the role's head, and never a TEST.
@@ -315,9 +549,9 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   ])
   for (const t of frd.touched) {
     if (newNodes.has(t)) continue   // a node this change creates: F3 below judges it, the map cannot
-    if (!nodes.has(t)) B.push(`F2 touched «${t}» не резолвится в узел карты — такого path в appgraph.xml нет`)
-    else if (tests.has(t)) B.push(`F2 touched «${t}» — тест: тест это <dod> изменения, а не изменение; он едет в тикет вместе со своим модулем (<test> карты, шаг 10)`)
-    else if (!explained.has(t)) B.push(`F2b touched «${t}» ничем не объяснён: у него нет своей <delta>, и ни один <scenario nodes> через него не идёт. «Посмотрел, но не менял» — не тронутость: она считается шириной изменения на шаге 8`)
+    if (!inRepo(t)) B.push(`F2 touched «${t}» не резолвится ни в узел карты роя (appgraph.xml), ни в файл репозитория (graph-computed.xml) — такого пути нет. Скопируй path из карты или из таблицы типов наряда; не помнишь, где лежит тип, — спроси справку (track:"err", kind:"lookup", items:["ИмяТипа"]); файл создаётся этим изменением — объяви его дельтой с new="yes", а не touched`)
+    else if (tests.has(t)) B.push(`F2 touched «${t}» — тест: тест это <dod> изменения, а не изменение; он едет в тикет вместе со своим модулем (<test> карты, шаг 10). Сними эту строку и назови вместо неё МОДУЛЬ, который тест проверяет`)
+    else if (!explained.has(t)) B.push(`F2b touched «${t}» ничем не объяснён: у него нет своей <delta>, и ни один <scenario nodes> через него не идёт. «Посмотрел, но не менял» — не тронутость: она считается шириной изменения на шаге 8 Одно из двух: заведи ей свою <delta op="…" form="…" node="${t}"/>, либо впиши ${t} в nodes сценария, который через неё проходит.`)
   }
   // F2c — every touched says WHAT changes in it, in its own words.
   //
@@ -332,7 +566,7 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   // place the artifact says what the new file is for. Gating this on `nodes.has(path)` alone would let
   // every new node through silently the moment F2 above stopped blocking it.
   for (const t of frd.touchedRows || []) {
-    const judged = t.path && (newNodes.has(t.path) || (nodes.has(t.path) && !tests.has(t.path)))
+    const judged = t.path && (newNodes.has(t.path) || (inRepo(t.path) && !tests.has(t.path)))
     if (judged && !String(t.why || "").trim()) {
       B.push(`F2c touched «${t.path}» без why — назови, ЧТО в этом узле меняется. Маршрут сценария через узел не значит, что узел меняется, а ширина изменения (шаг 8) считается по этому списку`)
     }
@@ -362,7 +596,13 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     // THE BLOCKER NAMES ITS EXITS — all three, one command each. Without the third the role invents a
     // use case for a service module rather than admit the node moves only behind its neighbour: the
     // precedent is `.agent.bak-20260815`, where `TemplateEngineModule` simply vanished from the FRD.
-    B.push(`F3c дельта на «${d.node}» без сценария — ни один <scenario nodes> не называет этот узел. Впиши ${d.node} в nodes сценария, который через него работает; нет такого сценария — у изменения не хватает use case, напиши его; узел меняется лишь вслед за соседней дельтой — сними эту дельту`)
+    // БЛОКЕР НАЗЫВАЕТ КАНДИДАТОВ, А НЕ ЗАСТАВЛЯЕТ ВСПОМИНАТЬ. Живой прогон eddi 19.08.2026: F3c
+    // держался на шести дельтах три круга подряд, причём КАЖДЫЙ круг на разных — роль переписывала
+    // дельты заново вместо того, чтобы дописать узел в сценарий, потому что «сценарий, который через
+    // него работает» ей нужно было ВСПОМНИТЬ. Слабая модель выбирает из списка и не выводит из
+    // описания (CLAUDE.md, constraint 4: ключ КОПИРУЕТСЯ машиной).
+    const known = frd.scenarios.map((x) => `${x.id}${x.uc ? ` (${x.uc})` : ""}`).filter(Boolean)
+    B.push(`F3c дельта на «${d.node}» без сценария — ни один <scenario nodes> не называет этот узел. Впиши ${d.node} в nodes ОДНОГО из этих сценариев: ${known.join(" · ") || "их нет вовсе"}; ни один из них через узел не идёт — напиши новый <scenario id="…" uc="…" before="…" after="…" nodes="${d.node}"/>; узел меняется лишь вслед за соседней дельтой — сними эту дельту`)
   }
 
   // F7 — an FRD without a delta says nothing about the change.
@@ -399,20 +639,20 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
       continue
     }
     if (d.form === "Unknown") {
-      if (!d.why) B.push(`F3 ${at}: Unknown без why — оператору нечего показать на шаге 7`)
+      if (!d.why) B.push(`F3 ${at}: Unknown без why — оператору нечего показать на шаге 7. Напиши <delta op="…" form="Unknown" why="почему не удалось классифицировать: два кандидата в карте / контракт не виден"/>`)
       continue
     }
-    if (!d.node) { B.push(`F3 ${at}: ${d.form} без node — дельта обязана опираться на узел карты`); continue }
+    if (!d.node) { B.push(`F3 ${at}: ${d.form} без node — дельта обязана опираться на узел карты. Допиши node="path из карты"; узла нет вовсе — тогда это form="Unknown" с why`); continue }
     // F3n — the module this change CREATES. Everything the rules below ask of a delta is asked of it
     // too, except the one thing that cannot be true of a file that does not exist yet: being in the
     // map. The two claims are checked in the opposite direction, and the form is pinned: a module
     // that is not there yet cannot have its contract Changed, Removed or Fixed — nothing to move.
     if (d.new === "yes") {
-      if (nodes.has(d.node)) B.push(`F3 ${at}: new="yes", но узел «${d.node}» ЕСТЬ в карте — это не новый модуль, сними признак`)
-      if (d.form !== "Added") B.push(`F3 ${at}: new="yes" с формой ${d.form} — у модуля, которого ещё нет, контракт двигаться не может: новый модуль это Added`)
+      if (inRepo(d.node)) B.push(`F3 ${at}: new="yes", но файл «${d.node}» в репозитории ЕСТЬ — это не новый модуль, сними признак`)
+      if (d.form !== "Added") B.push(`F3 ${at}: new="yes" с формой ${d.form} — у модуля, которого ещё нет, контракт двигаться не может. Поставь form="Added" и сними from/to, либо сними new="yes", если модуль в репозитории есть`)
       continue
     }
-    if (!nodes.has(d.node)) B.push(`F3 ${at}: узла «${d.node}» нет в карте — либо это Unknown, либо путь выдуман, либо модуль создаётся этим изменением и тогда дельта несёт new="yes"`)
+    if (!inRepo(d.node)) B.push(`F3 ${at}: файла «${d.node}» нет ни в карте роя, ни в репозитории — либо это Unknown, либо путь выдуман, либо модуль создаётся этим изменением и тогда дельта несёт new="yes"`)
     else if (tests.has(d.node)) B.push(`F3 ${at}: узел «${d.node}» — тест: тест это <dod> изменения, а не изменение; назови модуль, который меняется, тест приедет с ним в один тикет (<test> карты, шаг 10)`)
 
     // `Changed`/`Removed` are defined BY THEIR EFFECT ON AN EXISTING CALL (steps/intake/intake.md,
@@ -427,7 +667,16 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     //   calls the resource. The weight came out `major` and step 8 ordered a design on what is a purely
     //   additive change. The same breed as discrepancy A of S22 (docs/weight.md §2), one layer down:
     //   there the definitions were missing, here they had nothing to bite on.
-    else if (knowsCallers && (d.form === "Changed" || d.form === "Removed") && !entries.has(d.node) && !called.has(d.node)) {
+    // ...И ТОЛЬКО ПО УЗЛУ, КОТОРЫЙ РОЙ ЧИТАЛ. `entries` и `called` собраны из карты РОЯ: про файл вне
+    // фокуса она не говорит «его никто не зовёт», она не говорит о нём ничего. Живой прогон
+    // 19.08.2026: `AgentConfiguration.java` вне фокуса, а зовущие у него в репозитории есть
+    // (`CapabilityRegistryService.register(String, AgentConfiguration)` — вычисленный граф). Судить
+    // такой узел этим правилом значит выдавать незнание за факт — та же дисциплина, что у
+    // `knowsCallers` выше: правилу, которому нечем судить, судить нечего.
+    // ...и вызов ищется в ОБЕИХ картах: рой видит рёбра только внутри фокуса, а класс, чей эндпоинт
+    // объявлен интерфейсом, подключается контейнером и входящего ребра в ней не имеет (живой прогон
+    // 19.08.2026, `RestExportService` — ложный блокер дважды подряд).
+    else if (knowsCallers && nodes.has(d.node) && (d.form === "Changed" || d.form === "Removed") && !entries.has(d.node) && !called.has(d.node) && !calledInRepo.has(d.node) && !entryThroughLink.has(d.node)) {
       B.push(`F3 ${at}: «${d.node}» — ${d.form}, но у узла нет ни своей внешней точки (<api>), ни входящего вызова: ломаться нечему. Поведение, которого не было, это Added; поведение wrong→right — Fixed`)
     }
 
@@ -444,10 +693,10 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     const from = String(d.from || "").trim()
     const to = String(d.to || "").trim()
     if (d.form === "Changed" || d.form === "Fixed") {
-      if (!from || !to) B.push(`F3b ${at}: ${d.form} без from/to — движение не названо, а форма его утверждает`)
-      else if (from === to) B.push(`F3b ${at}: from и to совпадают («${from}») — ничего не двинулось. Операция, которая не меняется, дельтой не бывает: в списке дельт ей не место`)
+      if (!from || !to) B.push(`F3b ${at}: ${d.form} без from/to — движение не названо, а форма его утверждает. Допиши оба конца: from="как контракт выглядит сейчас" to="как станет"; концы совпадают — это не дельта, сними её`)
+      else if (from === to) B.push(`F3b ${at}: from и to совпадают («${from}») — ничего не двинулось. Операция, которая не меняется, дельтой не бывает: сними эту строку целиком, а если движение всё же есть — напиши в from нынешний контракт, в to требуемый`)
     } else if (from && to && from === to) {
-      B.push(`F3b ${at}: from и to совпадают («${from}») — ничего не двинулось. Операция, которая не меняется, дельтой не бывает: в списке дельт ей не место`)
+      B.push(`F3b ${at}: from и to совпадают («${from}») — ничего не двинулось. Операция, которая не меняется, дельтой не бывает: сними эту строку целиком, а если движение всё же есть — напиши в from нынешний контракт, в to требуемый`)
     }
   }
 
@@ -463,13 +712,13 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   const ucs = new Set(frd.usecases.map((u) => u.id))
   for (const sc of frd.scenarios) {
     const at = sc.id || "(scenario без id)"
-    if (!sc.uc || !ucs.has(sc.uc)) B.push(`F4 ${at}: uc="${sc.uc || ""}" — такого <usecase> нет`)
-    if (!sc.before || !sc.after) B.push(`F4 ${at}: before/after пусты — сценарий не различающий`)
-    else if (sc.before.trim() === sc.after.trim()) B.push(`F4 ${at}: before и after совпадают — сценарий зелен и до изменения`)
+    if (!sc.uc || !ucs.has(sc.uc)) B.push(`F4 ${at}: uc="${sc.uc || ""}" — такого <usecase> нет. Скопируй id из шапки use case (<usecase id="UC1" …>); сценарий описывает работу, которой нет ни в одном use case, — напиши сам use case`)
+    if (!sc.before || !sc.after) B.push(`F4 ${at}: before/after пусты — сценарий не различающий. Напиши before="что происходит СЕЙЧАС" after="что станет ПОСЛЕ": разница между ними и есть работа`)
+    else if (sc.before.trim() === sc.after.trim()) B.push(`F4 ${at}: before и after совпадают — сценарий зелен и до изменения. Напиши в before нынешний отказ (404, пустой список, ошибка), в after — требуемый исход`)
     const route = tokens(sc.nodes)
-    if (!route.length) B.push(`F4 ${at}: nodes пуст — через какие узлы карты идёт сценарий, не названо`)
+    if (!route.length) B.push(`F4 ${at}: nodes пуст — через какие узлы карты идёт сценарий, не названо. Перечисли пути через пробел: nodes="src/rest/X.java src/model/Y.java" — от входа до места, где рождается результат`)
     // A scenario may run through a node this change creates — that is the whole point of adding one.
-    for (const p of route) if (!nodes.has(p) && !newNodes.has(p)) B.push(`F4 ${at}: узла «${p}» нет ни в карте, ни среди создаваемых этим изменением (<delta new="yes">) — маршрут сценария опирается на выдуманный путь`)
+    for (const p of route) if (!inRepo(p) && !newNodes.has(p)) B.push(`F4 ${at}: узла «${p}» нет ни в репозитории, ни среди создаваемых этим изменением (<delta new="yes">) — маршрут сценария опирается на выдуманный путь. Скопируй path из карты или из таблицы типов наряда; не знаешь, где лежит тип, — спроси справку (track:"err", kind:"lookup"); узел создаётся этим изменением — объяви его <delta new="yes">`)
   }
 
   // F4b — the same binding, read the other way. F4 above refuses a scenario whose `uc` resolves to
@@ -529,8 +778,8 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   const NO_CODE = "none"
   const errs = new Set(frd.usecases.flatMap((u) => u.exts.map((e) => e.error).filter((e) => e && e !== NO_CODE)))
   const codes = new Set(frd.failures.map((f) => f.code).filter(Boolean))
-  for (const e of errs) if (!codes.has(e)) B.push(`F6 код «${e}» из <ext> не описан в карте отказов`)
-  for (const c of codes) if (!errs.has(c)) B.push(`F6 код «${c}» карты отказов не встречен ни одним <ext>`)
+  for (const e of errs) if (!codes.has(e)) B.push(`F6 код «${e}» из <ext> не описан в карте отказов. Напиши строку: <failure code="${e}" status="HTTP-код" client="что видит клиент" operator="что видит оператор" from="UC1/1a"/>`)
+  for (const c of codes) if (!errs.has(c)) B.push(`F6 код «${c}» карты отказов не встречен ни одним <ext>. Либо назови ветку, которая его поднимает — <ext id="2a" error="${c}" outcome="что наблюдает актёр"/>, либо сними строку отказа: код, который никто не поднимает, реализовать нечем`)
 
   // F6c — one cause of failure, a different OBSERVATION on every layer. The ends are taken from
   // `endsOf` (above, this module), side `out`: `UCx/post` and every `<ext outcome>` — exactly the
@@ -601,6 +850,141 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     B.push(`F6d ветка ${b.token} поднимает «${b.code}», но не названа в from его строки — <failure code="${b.code}" … from="…"/> перечисляет ВСЕ ветки этого кода: from="UC1/1a UC2/2a"`)
   }
 
+  // F11 — КАЖДОЕ ТРЕБОВАНИЕ BRD ПРОЙДЕНО, И РОЛЬ СКАЗАЛА, ЧЕМ ОНО УНЕСЕНО.
+  //
+  // BUG_FIX_CONTEXT: форма t2, два прогона подряд. Требование нерегрессии «существующий вызов
+  //   остаётся без изменений» не доехало до FRD НИЧЕМ — ни use case, ни сценарием, ни nfr, ни
+  //   дельтой, — и не поймано никем: `checkFrd` требований BRD физически не получал (BRD входил
+  //   только словарём чисел для F5), а критик строил чек-лист ИЗ FRD, где требования уже не было.
+  //   Пропажу нечем было обнаружить, потому что её НЕТ: молчание артефакта неотличимо от согласия.
+  //
+  // ПРАВИЛО — РАЗНОСТЬ ДВУХ СПИСКОВ НОМЕРОВ, и ничего кроме. Номера требований приходят из brd.md
+  // тем же парсером, каким судит шаг 2; из артефакта берутся строки `<carried req>`; блокер — это
+  // требование, номера которого среди них нет. Атрибут `by` здесь НЕ ЧИТАЕТСЯ.
+  //
+  // BUG_FIX_CONTEXT: живой прогон 4c8f26eb (eddi, 19.08.2026) — правило судило ещё и АДРЕС в `by`,
+  //   резолвя его против собственного набора элементов. Набор оказался уже языка требования (в нём
+  //   не было полей, а у `<nfr>` читалось несуществующее свойство `id`), и роль шесть кругов писала
+  //   ВЕРНЫХ носителей — `field:id field:version field:terms` для требования «поля ресурса только
+  //   id + version + terms» — получая «такого элемента нет». Прогон умер на шаге 6: 572К токенов, до
+  //   критика не дошло ничего.
+  //
+  // Почему адрес больше не блокер: кривой `by` не создаёт МОЛЧАЛИВОЙ пропажи, а создаёт видимое
+  // противоречие, и его ловят двое ниже по полосе — обратный список критика (элемент, на который не
+  // показала ни одна строка, всплывает как «этого никто не просил») и сам критик, судящий, исполняет
+  // ли названный элемент требование. Отсутствующая строка не самозалечивается ничем — потому
+  // блокером осталась только она.
+  // F14 — ПРЕДМЕТ ТРЕБОВАНИЯ СО СВОИМ ПАКЕТОМ ОБЯЗАН ИМЕТЬ МОДУЛЬ В ИЗМЕНЕНИИ.
+  //
+  // Ни одного списка слов: правило стоит на трёх фактах, добытых полосой. `subjects` — якоря, которые
+  // шаг 2 выписал из требования; `dirs` — каталоги, которые знает вычисленный граф шага 3; модули
+  // изменения — дельты и `touched` этого артефакта. Предмет, у которого в репозитории ЕСТЬ свой пакет,
+  // а в изменении НЕТ ни одного модуля из него, — либо забытая работа, либо предмет не о работе, и
+  // сказать это может только роль.
+  //
+  // Предмет БЕЗ пакета молчит: его создаёт это изменение, трогать нечего. Аналог (`analogue:` из BRD)
+  // не судится вовсе: его копируют, а не меняют.
+  //
+  // ЦЕНА НАЗВАНА: на артефакте прогона 19.08.2026 шесть предметов дали три блокера — `agent` (дефект),
+  // `descriptor` (похоже, дефект) и `configuration` (шум: каталог совпал именем случайно). Один лишний
+  // круг против потерянного требования и забракованного плана.
+  //
+  // BUG_FIX_CONTEXT: тот же прогон. `subjects[]` несёт `agent`, репозиторий несёт `configs/agents`
+  //   (13 файлов, среди них `AgentConfiguration.java`), изменение не трогает ни одного модуля оттуда.
+  //   Требование R11 («глоссарий подключён к агенту ссылкой в agent config») закрылось строкой
+  //   `<carried req="R11" by="UC5/1"/>`, где шаг ЧИТАЕТ ссылку, а не создаёт её; F11 принял строку
+  //   (элемент резолвится), критик написал `Pass`, и гейт 1 забраковал план целиком.
+  const stem = (w) => String(w || "").trim().toLowerCase().replace(/(ies|es|s)$/, "")
+  if (subjects.length && dirs.size) {
+    const mine = [...new Set([...frd.deltas.map((d) => d.node), ...frd.touched])].filter(Boolean).map((x) => String(x).toLowerCase())
+    const an = stem(analogue)
+    for (const raw of subjects) {
+      const a = stem(raw)
+      if (!a || (an && (a.includes(an) || an.includes(a)))) continue
+      const home = [...dirs].some((d) => String(d).split("/").some((seg) => stem(seg) === a))
+      if (!home) continue
+      if (mine.some((p) => p.split("/").some((seg) => stem(seg) === a || stem(seg.replace(/\.[a-z]+$/, "")).includes(a)))) continue
+      B.push(`F14 предмет требования «${raw}» есть в репозитории своим пакетом, но изменение не трогает ни одного модуля оттуда — требование о нём никто не выполнит. Объяви <delta node="путь из этого пакета" …/>, если работа там есть; узел меняется без сдвига контракта — <touched path="…" why="…"/>; предмет к этой работе не относится — напиши <question subject="${raw}" why="почему его трогать не надо"/>`)
+    }
+  }
+
+  if (Array.isArray(requirements) && requirements.length) {
+    const said = new Set(frd.carried.map((c) => String((c && c.req) || "").trim()).filter(Boolean))
+    for (const req of requirements) {
+      const id = String(req || "").trim()
+      if (!id || said.has(id)) continue
+      B.push(`F11 требование ${id} не пройдено: строки <carried req="${id}" by="…"/> в артефакте нет. Пройди требования brd.md ПО ОДНОМУ и на каждое назови носителя — use case, его шаг, сценарий, поле, дельту или nfr`)
+    }
+  }
+
+  // F10 — КАНАЛ USE CASE ПРИНАДЛЕЖИТ ЕГО СОБСТВЕННЫМ УЗЛАМ.
+  //
+  // BUG_FIX_CONTEXT: живой прогон eddi/DOS-535. У актёра `api-client` один
+  //   `via="HTTP /glossarystore/glossaries"`, и его получили ВСЕ восемь use case этого актёра —
+  //   включая UC6 (экспорт агента), UC7 (импорт) и UC8 (синхронизация с удалённым узлом), которые
+  //   входят через backup-эндпоинты (`GET /backup/export/{agentFilename}`, `POST /backup/import/sync`
+  //   — обе строки лежат в вычисленном графе репозитория). Граничные наряды 05-07 велели исполнителю
+  //   проверять экспорт агента через CRUD словарей: такой тест написать нельзя.
+  //
+  // Судится ПРИНАДЛЕЖНОСТЬ, а не текст: у пути из канала есть владелец — узел, который его объявляет
+  // (`<api>` карты) или создаёт (дельта, чей `op` этот путь называет). Если владелец известен и НИ
+  // ОДИН из владельцев не входит в узлы сценария этого use case, канал чужой. Владельца нет вовсе —
+  // правило молчит: путь не привязан ни к чему, и утверждать нечего.
+  {
+    const routeOwners = (path) => new Set([
+      ...frd.deltas.filter((d) => d.node && String(d.op || "").includes(path)).map((d) => d.node),
+      ...(Array.isArray(routes) ? routes : []).filter((r) => r && String(r.name || "").includes(path)).map((r) => r.at),
+    ].filter(Boolean))
+    for (const u of frd.usecases) {
+      const channel = u.via || (frd.actors.find((a) => a.name === u.actor) || {}).via || ""
+      // Канал может называть НЕСКОЛЬКО путей («GET /fruit-card.html, GET /fruits/{id}» формы t3):
+      // use case входит через любой из них, и хватает одного, чей владелец — узел этого сценария.
+      const paths = [...new Set(String(channel).match(/\/[\w{}\-\/.]+/g) || [])]
+      if (!paths.length) continue
+      const owners = new Set(paths.flatMap((one) => [...routeOwners(one)]))
+      if (!owners.size) continue
+      const mine = new Set(frd.scenarios.filter((x) => x.uc === u.id).flatMap((x) => String(x.nodes || "").split(/\s+/)).filter(Boolean))
+      if (!mine.size) continue
+      // ВЛАДЕЛЕЦ ДОСТИЖИМ И ЧЕРЕЗ РЕБРО. Эндпоинт объявляет ИНТЕРФЕЙС, а в узлах сценария стоит
+      // реализация — на живом прогоне 19.08.2026 это дало ложный блокер дважды подряд
+      // (`POST /backup/import/initialAgents` принадлежит `IRestImportService`, а сценарий идёт через
+      // `RestImportService`). Ребро «реализация → интерфейс» лежит в вычисленном графе.
+      const reach = new Set(mine)
+      for (const e of Array.isArray(links) ? links : []) if (e && mine.has(e.from) && e.to) reach.add(e.to)
+      if ([...owners].some((o) => reach.has(o))) continue
+      B.push(`F10 ${u.id} объявлен входящим через «${channel}», но эти пути принадлежат ${[...owners].join(", ")} — узлам, которых нет в сценарии ${u.id}. Назови канал самого use case: <usecase id="${u.id}" … via="…"/>; пути репозитория перечислены строками <api> карты`)
+    }
+  }
+
+  // F8 — ПОЛЕ, ОБЪЯВЛЕННОЕ В ЧУЖОЙ СУЩНОСТИ, КОТОРОЕ НИКТО НЕ НАПИШЕТ.
+  //
+  // BUG_FIX_CONTEXT: живой прогон eddi/DOS-535. FRD объявил `<field name="glossaries"
+  //   in="AgentConfiguration" …/>`, и от него зависели ТРИ шага требования (UC5/1, UC6/2, UC7/4).
+  //   Дельты на `configs/agents/model/AgentConfiguration.java` не было ни одной — значит не было
+  //   раздела плана, значит не было наряда, значит поля никто не напишет: UC5 не закрывается вовсе,
+  //   UC6 и UC7 закрываются наполовину. Полоса прошла зелёной до самых нарядов.
+  //
+  // Правило судит ТРИ условия, и каждое куплено проигрышем по четырём сохранённым формам:
+  //   1) сущность резолвится в существующий путь — иначе она СОЗДАЁТСЯ этим изменением, и требовать
+  //      от неё дельту не по чему (так молчат Glossary и Term живого FRD);
+  //   2) поля у этого пути ещё НЕТ — поле, которое у сущности уже есть, изменение читает, а не
+  //      пишет; без этого условия правило краснело на `Fruit.name`/`Fruit.description` формы t2;
+  //   3) путь не заявлен ни дельтой, ни touched — оба способа назвать модуль работой считаются.
+  // Таблицы приходят из вычисленного графа (ext/index.mjs::checkFrd); нет таблиц — правило молчит.
+  if (types.size) {
+    const deltaNodes = new Set(frd.deltas.map((d) => d.node).filter(Boolean))
+    const claimed = new Set([...deltaNodes, ...frd.touched])
+    const createdHere = new Set([...deltaNodes].map((p) => String(p).split("/").pop().replace(/\.[^.]+$/, "")))
+    for (const f of frd.fields) {
+      const E = f.in || ""
+      if (!E || createdHere.has(E)) continue
+      const path = types.get(E)
+      if (!path || claimed.has(path)) continue
+      if ((members.get(path) || new Set()).has(f.name)) continue
+      B.push(`F8 поле «${f.name}» объявлено в «${E}» (${path}), но этот модуль не заявлен изменением: ни <delta node="${path}">, ни <touched path="${path}">, и поля у него сегодня нет — объявленное поле, которое никто не напишет. Впиши <delta op="поле ${f.name}" form="Changed" node="${path}" from="поля нет" to="поле есть"/>; поле принадлежит другой сущности — поправь in="…"; поле не нужно требованию — сними строку <field name="${f.name}">`)
+    }
+  }
+
   // F9 — a rewind's SUBJECT survives the repair. `rewind` carries the previous review's blockers only
   // when it Rejected (ext/index.mjs::checkFrd reads .agent/review.xml); [] otherwise, and then this
   // rule is as silent as F5 is with no sources.
@@ -625,7 +1009,7 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
     }
   }
 
-  return B
+  return forPass(B, pass)
 }
 
 // FUNCTION_CONTRACT: newFrd — step 6's artifact, fit to be handed to steps 7-9
@@ -641,8 +1025,10 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
 //                 failure: "invalid-frd" — the detail carries EVERY blocker, one per line, and rides
 //                          in the FEEDBACK of the redelegation exactly as newBrd's does
 //   Purity:       pure
-export function newFrd({ xml, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], sources = [], rewind = [] }) {
+export function newFrd({ xml, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], sources = [], rewind = [], types = new Map(), members = new Map(), routes = [], requirements = [], links = [], pass = "", said = [], subjects = [], analogue = "", dirs = new Set() }) {
   const frd = parseFrd(xml)
+  // Пласт A пишет use case и НИ ОДНОЙ дельты — «в артефакте нет ни того, ни другого» остаётся отказом,
+  // но требовать дельту в проходе A значит требовать пласт, который этот проход не пишет.
   if (!frd.usecases.length && !frd.deltas.length) {
     return err("invalid-frd", "в артефакте нет ни <usecase>, ни <delta> — грамматика не распознана: staging пуст или это не frd.xml")
   }
@@ -650,7 +1036,17 @@ export function newFrd({ xml, nodes = new Set(), tests = new Set(), entries = ne
   const src = sources.filter(Boolean)
   const known = src.length ? new Set(src.flatMap((t) => [...numbersIn(t)])) : null
 
-  const blockers = checkFrd({ frd, nodes, tests, entries, edges, known, rewind })
+  // ЧИТАЕМОСТЬ РАНЬШЕ СУЖДЕНИЯ. Блокеры F0 не проходят через `forPass`: пласта у них нет, испорченная
+  // строка слепит любой проход одинаково.
+  // ВСЕ ВХОДЫ СУДА ЕДУТ В СУД. Правило, чьи входы не доехали, МОЛЧИТ — и молчит неотличимо от
+  // правила, которому нечего сказать.
+  //
+  // BUG_FIX_CONTEXT: разбор 20.08.2026. F14 («предмет требования имеет свой пакет, но изменение не
+  //   трогает оттуда ни одного модуля») написан, испытан и объявлен ценой прогона 19.08.2026 — а в
+  //   продакшене не срабатывал НИ РАЗУ: хост считал `subjects`, `analogue` и `dirs`, передавал их
+  //   сюда, и эта строка их роняла. На артефакте того самого прогона правило даёт блокер про
+  //   `agent` — ту самую дыру R11, из-за которой оператор забраковал план.
+  const blockers = [...unreadable(xml), ...spentAnswers({ xml, said }), ...checkFrd({ frd, nodes, tests, entries, edges, known, rewind, types, members, routes, requirements, links, pass, subjects, analogue, dirs })]
   if (blockers.length) return err("invalid-frd", blockers.join("\n  "))
 
   return ok(Object.freeze({ ...frd, unknown: frd.deltas.filter((d) => d.form === "Unknown").length }))

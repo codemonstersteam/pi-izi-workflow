@@ -124,10 +124,13 @@ test("happy: the live form merges into a map — modules, suites bound by name, 
   assert.ok(g.gaps.some((x) => x.path === "src/main/resources/import.sql"))   // the part's own gap survives
 
   const xml = graphXml(g)
-  assert.match(xml, new RegExp(`^<appgraph grammar="${GRAMMAR_VERSION}" modules="6" components="1" isolated="1" levels="4">`))
+  // Шапка считает то, что НАПИСАНО: четыре модуля и два теста строками (M1). Тест — не модуль карты.
+  assert.match(xml, new RegExp(`^<appgraph grammar="${GRAMMAR_VERSION}" modules="4" tests="2" components="1" isolated="1" levels="4">`))
   assert.match(xml, /<artifact name="rest-json-quickstart" root="\."\/>/)
   assert.match(xml, /<toggles found="no"\/>/)
-  assert.match(xml, new RegExp(`<module path="${T}/FruitResourceIT\\.java" kind="test" suite="component-native"`))
+  // Тестовый файл выходит СТРОКОЙ со своим сьютом, и блока `<module kind="test">` в карте нет вовсе.
+  assert.match(xml, new RegExp(`<test path="${T}/FruitResourceIT\\.java" suite="component-native"/>`))
+  assert.doesNotMatch(xml, /<module [^>]*kind="test"/, "тест вернулся в карту блоком")
   assert.match(xml, /<systems\/>/)                       // no external system IS the answer, not silence
   assert.match(xml, /<edge from="[^"]*fruits\.html"[^>]* by="use"\/>/)
   assert.ok(!xml.includes("<cycle"))
@@ -343,4 +346,28 @@ test("suiteFor: the deepest folder wins, an unbreakable tie stays UNBOUND rather
   assert.equal(suiteFor("src/test/it/FooIT.java", suites), "component-it")  // deeper folder, not the first match
   assert.equal(suiteFor("src/e2e/Foo.java", suites), "")                    // two claimants, no `match` — honest ""
   assert.equal(suiteFor("src/main/Foo.java", suites), "")
+})
+
+// M1: тест, которого не назвал ни один модуль, обязан остаться в карте СТРОКОЙ. На живой форме eddi
+// таких ВСЕ 34: привязок `<test>` карта не несла ни одной, и единственным следом теста был его
+// собственный блок. Потеряй его — `parseMap.tests` беднеет молча, и F2/F3 перестают отличать тест от
+// изменения на живом артефакте.
+test("M1: тест-сирота выходит строкой; названный своим модулем — не дублируется", () => {
+  const mod = (path, extra = {}) => ({
+    path, pkg: "", kind: "", suite: "", component: "", level: 0, fanin: 0, fanout: 0,
+    role: "", api: [], decls: [], declsMore: 0, io: [], tests: [], ...extra,
+  })
+  const xml = graphXml({
+    grammar: 4,
+    modules: [
+      mod("src/main/java/app/Fruit.java", { tests: [{ path: "src/test/java/app/FruitTest.java", suite: "unit" }] }),
+      mod("src/test/java/app/FruitTest.java", { kind: "test", suite: "unit" }),
+      mod("src/test/java/app/OrphanIT.java", { kind: "test", suite: "component" }),
+    ],
+    edges: [], components: [], isolated: [], subjects: [], langs: [], suites: [], answers: {},
+  })
+  assert.match(xml, /^<appgraph grammar="4" modules="1" tests="2"/, "шапка считает написанное")
+  assert.match(xml, /<test path="src\/test\/java\/app\/OrphanIT\.java" suite="component"\/>/, "сирота потерян")
+  // названный своим модулем пишется ОДИН раз — строкой внутри модуля, и не повторяется сверху
+  assert.equal((xml.match(/<test path="src\/test\/java\/app\/FruitTest\.java"/g) || []).length, 1)
 })
