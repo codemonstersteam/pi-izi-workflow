@@ -12,7 +12,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { parseValues, valuesSkeleton, normalize, checkValues, VALUES_GRAMMAR } from "./values.mjs"
-import { parseFrd } from "../intake/frd.mjs"
+import { parseFrd } from "../../intake/frd.mjs"
 
 const FRD_XML = `<frd grammar="1" goal="бронь слота с блокировкой">
   <usecase id="UC1" actor="client" goal="забронировать слот">

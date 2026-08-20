@@ -34,7 +34,7 @@ test("установка везёт исполняемое и НЕ везёт п
   try {
     execFileSync(process.execPath, [join(HARNESS, "bin", "install.mjs"), `--to=${dst}`], { stdio: "ignore" })
 
-    assert.equal(existsSync(join(dst, "steps", "design", "valuer.md")), true, "роль едет в проект")
+    assert.equal(existsSync(join(dst, "steps", "plan", "values", "valuer.md")), true, "роль едет в проект")
     assert.equal(existsSync(join(dst, "workflows", "izi.js")), true, "программа едет в проект")
     assert.equal(existsSync(join(dst, "steps", "design", "valuer-ru.md")), false, "перевод остаётся в харнесе")
   } finally {

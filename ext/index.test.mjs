@@ -835,7 +835,7 @@ test("no .agent/mode at the run root: refusal naming step 7, and nothing left be
 // left by a run of an older version of this pipeline.
 //
 // The other half is what replaced the pass: the composition of the dictionary is a SCRIPT
-// (steps/design/values.mjs::valuesSkeleton), and the role only names what the script left blank.
+// (steps/plan/values/values.mjs::valuesSkeleton), and the role only names what the script left blank.
 const DESIGN_RIPPLE = `<ripple grammar="1" mode="minor" seeds="1" nodes="2">
   <module path="src/ParcelResource.java" seed="yes" level="3">
     <role>REST-ресурс посылок</role>
@@ -1438,9 +1438,9 @@ const ROLE_FILES = [
   ["brd/gilb.md", /business analyst/],
   ["scope/scout.md", /REVERSE ENGINEER/],
   ["intake/intake.md", /requirements analyst/],
-  // `design/valuer.md` припаркована вместе со словарём значений (шаг 9 переписывается, docs/plan.md),
+  // `plan/values/valuer.md` припаркована вместе со словарём значений (шаг 9 переписывается, docs/plan.md),
   // `design/router.md` и `design/core-designer.md` удалены вместе с цепочками и карточкой партии.
-  ["design/valuer.md", /INTERFACE ANALYST/],
+  ["plan/values/valuer.md", /INTERFACE ANALYST/],
   ["review/critic.md", /DESIGN REVIEWER/],
 ]
 const roleText = (f) => readFileSync(new URL(`../steps/${f}`, import.meta.url), "utf8")
@@ -1547,10 +1547,12 @@ test("D29b: наряд выше потолка — отказ, и он НАЗЫ�
 })
 
 test("D29b: прямые сборки наряда идут через sized, и каждая отказывает по-своему", () => {
-  // ДЕВЯТЬ мест — шаги 2, 4, 11, ЧЕТЫРЕ на шаге 6 (у каждого пласта свой наряд,
-  // steps/intake/passes-data-flow.md) и ДВА на шаге 10в: критик плана и его фиксер. Два места шага 9
-  // (проход и карточка партии) удалены 21.08.2026 вместе со старым шагом; новый вернёт сюда свои.
-  assert.equal([...IZI.matchAll(/= await sized\(/g)].length, 9, "девять прямых сборок наряда")
+  // ОДИННАДЦАТЬ мест — шаги 2, 4, 11, ЧЕТЫРЕ на шаге 6 (у каждого пласта свой наряд,
+  // steps/intake/passes-data-flow.md), ДВА на шаге 10в (критик плана и его фиксер) и ДВА на шаге 9:
+  // словарь границы и общий цикл порций, через который идут и дерево, и потоки.
+  assert.equal([...IZI.matchAll(/= await sized\(/g)].length, 11, "одиннадцать прямых сборок наряда")
+  assert.match(IZI, /const order = await sized\("design\/values", /, "наряд словаря собран мимо меры")
+  assert.match(IZI, /const o = await sized\(`design\/\$\{id\}`, tpl, slots/, "наряд порции собран мимо меры")
   assert.match(IZI, /const order = await sized\("planreview", criticTpl, \{/)
   assert.match(IZI, /const fix = await sized\("planreview\/fix", tpl, \{/)
   assert.match(IZI, /const order = await sized\("brd", orderTpl, \{/)
@@ -1569,10 +1571,9 @@ test("D29b: прямые сборки наряда идут через sized, и
   const scoutFn = IZI.slice(IZI.indexOf("async function scout("), IZI.indexOf("// FUNCTION_CONTRACT: scope"))
   assert.match(scoutFn, /if \(order\.over\) return \{ ok: false, why: order\.why \};/)
   assert.doesNotMatch(scoutFn, /exit\(/)
-  // …а остальные — blocked с диагнозом гардрейла. Их четыре: шаги 2, 6, 11 и критик плана 10в;
-  // фиксер того же шага отказывает своей строкой (`fix.over`). Два отказа шага 9 (проход и карточка
-  // партии) удалены вместе со старым шагом 21.08.2026.
-  assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 4)
+  // …а остальные — blocked с диагнозом гардрейла. Их шесть: шаги 2, 6, 11, критик плана 10в и ДВА на
+  // шаге 9 — словарь границы и цикл порций; фиксер 10в отказывает своей строкой (`fix.over`).
+  assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 6)
   assert.match(IZI, /if \(fix\.over\) exit\(err\("blocked"/, "наряд фиксера без меры против окна")
 
   // Потолок не переписан в этом файле: он приходит из core/budgets.mjs через budgets().
@@ -2270,7 +2271,10 @@ test("роль, которую зовёт полоса, объявлена в ro
   const izi = readFileSync(new URL("../workflows/izi.js", import.meta.url), "utf8")
   const called = new Set([...izi.matchAll(/\brole:\s*"([^"]+)"/g)].map((m) => m[1]))
   const INDEX = readFileSync(new URL("./index.mjs", import.meta.url), "utf8")
-  const dirs = [...INDEX.matchAll(/steps\/([a-z]+)\/", import\.meta\.url\)/g)].map((m) => m[1])
+  // Каталоги ролей берутся из САМОГО расширения: список в тесте разошёлся бы с реестром молча.
+  // Шаг 9 стал модулем с подшагами (steps/plan/tree/, flows/, values/), поэтому сегмент может быть
+  // составным — регулярка это допускает.
+  const dirs = [...INDEX.matchAll(/steps\/([a-z/-]+)\/", import\.meta\.url\)/g)].map((m) => m[1])
   const declared = new Set()
   for (const d of dirs) {
     for (const f of readdirSync(new URL(`../steps/${d}/`, import.meta.url)).filter((x) => x.endsWith(".md"))) {

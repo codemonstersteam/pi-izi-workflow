@@ -92,11 +92,11 @@ test("ни один наряд не оставлен без разбора", () 
   // Файл наряда, который полоса не читает, — мёртвый текст: правка в нём не доедет до роли никогда, и
   // заметить это можно только по странному поведению живого прогона. Считаются ВСЕ `.tpl` шагов, а не
   // только `order.tpl`: у шага 6 их четыре, у шага 9 — три.
-  const files = readdirSync(join(ROOT, "steps"), { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .flatMap((d) => readdirSync(join(ROOT, "steps", d.name))
-      .filter((f) => f.endsWith(".tpl"))
-      .map((f) => `steps/${d.name}/${f}`))
+  // ОБХОД РЕКУРСИВНЫЙ. Шаг 9 стал одним модулем с подшагами (steps/plan/tree/, flows/, values/), и
+  // плоский обход перестал видеть их наряды — то есть перестал сторожить именно то, ради чего заведён.
+  const tpls = (dir) => readdirSync(join(ROOT, dir), { withFileTypes: true })
+    .flatMap((d) => (d.isDirectory() ? tpls(`${dir}/${d.name}`) : d.name.endsWith(".tpl") ? [`${dir}/${d.name}`] : []))
+  const files = tpls("steps")
   // Путь наряда бывает и ДАННЫМИ: шаг 9 выбирает шаблон прохода по роли (`tpl: "steps/design/…"` в
   // его таблице проходов) и читает его переменной. Считается всякое упоминание пути в полосе.
   const read = new Set([...WORKFLOW.matchAll(/"(steps\/[^"]+\.tpl)"/g)].map((m) => m[1]))
@@ -104,13 +104,38 @@ test("ни один наряд не оставлен без разбора", () 
   // проводка удалена 21.08.2026, а материал словаря значений оставлен решением оператора. Пока
   // читателя нет, наряд обязан стоять В ЭТОМ СПИСКЕ — иначе «мёртвый текст» и «текст, ждущий нового
   // шага» неотличимы, и первый тихо доживёт до прогона.
-  const PARKED = new Map([
-    ["steps/design/order-values.tpl", "шаг 9A: словарь значений ждёт проводки нового шага 9"],
-  ])
+  // Парковка пуста: шаг 9 написан целиком, и все три его наряда читаются полосой (T10 закрыт).
+  const PARKED = new Map()
   for (const [f] of PARKED) assert.ok(files.includes(f), `припаркован наряд, которого нет: ${f} — список протух`)
   for (const [f] of PARKED) assert.ok(!read.has(f), `наряд ${f} уже читается полосой — сними его с парковки`)
   const orphans = files.filter((f) => !read.has(f) && !PARKED.has(f))
   assert.deepEqual(orphans, [], `наряд есть, а полоса его не читает: ${orphans.join(", ")}`)
+})
+
+// ШАГ 9 — ЧЕТЫРЕ ПОДШАГА, И ПОРЯДОК МЕЖДУ НИМИ НЕ СЛУЧАЕН. Словарь границы, дерево модулей, потоки,
+// план скриптом. Дерево стоит ПЕРЕД потоками, потому что поток называет модули, а объявляет их
+// дерево; план стоит последним и роли не зовёт вовсе.
+test("полоса: шаг 9 идёт словарь → дерево → потоки → план, и план собирает скрипт", () => {
+  const step9 = WORKFLOW.slice(WORKFLOW.indexOf("async function designing("), WORKFLOW.indexOf("async function portions("))
+  const order = ["values({})", "tree({})", "flows({})", "planbook({})"].map((x) => step9.indexOf(`await ${x}`))
+  assert.ok(order.every((i) => i > 0), `подшаг потерян: ${JSON.stringify(order)}`)
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "подшаги идут не в том порядке")
+  const after = step9.slice(step9.indexOf("await planbook({})"))
+  assert.doesNotMatch(after, /await agent\(/, "план собирает роль — он обязан быть сборкой, а не сочинением")
+})
+
+// ЧЕТЫРЕ ПРАВИЛА ЦИКЛА ПОРЦИЙ КУПЛЕНЫ КРУГАМИ ЖИВЫХ ПРОГОНОВ, и текст полосы — единственное место,
+// где их можно сторожить: цикл исполняется в песочнице хоста и никем не импортируется.
+test("полоса: адресат блокера, зелёная порция и прошлый ответ — правила цикла порций", () => {
+  const loop = WORKFLOW.slice(WORKFLOW.indexOf("async function portions("))
+  const gateAddressee = loop.indexOf("const named =")
+  const gateGreen = loop.indexOf("if (kept.ok)")
+  assert.ok(gateAddressee > 0 && gateGreen > 0, "ворота не найдены — цикл переписан")
+  assert.ok(gateAddressee < gateGreen, "зелёная порция пропускается ДО вычисления адресата (прогон 5b52f76d)")
+  assert.match(loop, /const first = !carried && attempt === 0/, "первый проход считается по счётчику, а не по обратной связи")
+  assert.match(loop, /if \(first && mineText\.trim\(\)\)/, "ворота зелени не ограничены первым проходом")
+  assert.match(loop, /const blind = !first &&/, "блокер без путей не разведён — круг уйдёт в пустоту")
+  assert.match(loop, /const slots = await order\(n, mineText, feedback\)/, "прошлый ответ роли не уезжает в наряд")
 })
 
 // ШАГ БЕЗ ОТМЕТКИ МОЛЧА ЛОМАЕТ ВОЗОБНОВЛЕНИЕ. Лестница (core/runlog.mjs::resumeAt) входит в ПЕРВЫЙ
@@ -535,7 +560,7 @@ test("важное правило наряда стоит в начале И п�
 
   // Наряд цепочек удалён вместе со старым шагом 9 (docs/plan.md); словарь значений припаркован и
   // правило про экранирование в нём сторожится по-прежнему — материал переживает переделку.
-  for (const tpl of ["steps/design/order-values.tpl"]) {
+  for (const tpl of ["steps/plan/values/order-values.tpl"]) {
     const text = readFileSync(join(ROOT, tpl), "utf8")
     const task = block(text, "TASK")
     const output = block(text, "OUTPUT")

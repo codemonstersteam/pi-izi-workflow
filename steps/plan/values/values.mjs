@@ -47,9 +47,9 @@
 // What remains blank is 24 rows on `eddi` and 6 on `t2` — the ends the requirement wrote in prose,
 // where naming is the whole job.
 
-import { attrs, elem, tag, tokens, esc } from "../../core/xml.mjs"
-import { endsOf } from "../intake/frd.mjs"
-import { changeWidth } from "../ripple/ripple.mjs"
+import { attrs, elem, tag, tokens, esc } from "../../../core/xml.mjs"
+import { endsOf } from "../../intake/frd.mjs"
+import { changeWidth } from "../../ripple/ripple.mjs"
 
 // The artifact's version. It moved to 2 when the composition became the script's: a dictionary of
 // grammar 1 was written whole by a role and its rows carry no relation to a skeleton, so a leftover

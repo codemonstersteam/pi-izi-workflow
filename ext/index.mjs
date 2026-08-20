@@ -78,7 +78,7 @@ import { lookupAnswer, mergeFeedback } from "../steps/intake/lookup.mjs"
 import { newMode } from "../steps/weight/weight.mjs"
 import { newRipple, blindNodes, waiverFor } from "../steps/ripple/ripple.mjs"
 import { parseDesign, parseRoutes, expand, unitsByPath } from "../steps/design/design.mjs"
-import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/design/values.mjs"
+import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/plan/values/values.mjs"
 
 // `checkPart` шага 4 (часть графа) уже занимает это имя в файле — ядро шага 9 приезжает под
 // псевдонимом. Одно имя на два разных вопроса было бы дефектом чтения, а не удобством.
@@ -1724,6 +1724,51 @@ const knownPaths = (map) => [...String(map || "").matchAll(/<module\b[^>]*\bpath
 
 // УДАЛЕНО 21.08.2026 вместе со старым шагом 9 (docs/plan.md): `planbook`.
 
+// --- ШАГ 9A: СЛОВАРЬ ЗНАЧЕНИЙ --------------------------------------------------------------------
+//
+// Словарь отвечает за значения ГРАНИЦЫ: адреса, статусы, коды отказов, сущности требования. Данные,
+// живущие внутри изменения («Glossary (черновик создания)»), объявляются в потоках и там же судятся
+// правилом «один порождающий» — расширять словарь на каждое внутреннее имя значило бы перестать
+// сверять его с требованием (docs/plan-design.md §3).
+export const values = {
+  description: "Step 9A: the dictionary of boundary values. Without arguments — the SKELETON: one row per end of every use case (its `closes` already filled in, a failure branch already written as «status code»), then one row per `<api>` and `<decl kind=method>` of every node of the change, copied verbatim out of .agent/ripple.xml; the role only names what the script left blank. With `path` — the CHECK against that skeleton (a row lost or added, an end re-attributed, a prefilled text edited, a text left blank) and, on green, the promotion to .agent/values.xml. Without arguments AND with the artifact green NOW it answers `reused` — the pass costs no tokens at all.",
+  input: { type: "object", properties: { path: { type: "string" } }, additionalProperties: false },
+  output: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" }, why: { type: "string" }, blockers: { type: "string" }, missing: { type: "boolean" },
+      at: { type: "string" }, rows: { type: "number" }, filled: { type: "number" }, blank: { type: "number" }, reused: { type: "boolean" },
+    },
+    required: ["ok"],
+    additionalProperties: false,
+  },
+  run({ path = "" } = {}, context) {
+    const root = runRoot(context)
+    if (!existsSync(at(root, FRD_PATH))) return { ok: false, why: `${FRD_PATH} не существует — словарь строить не из чего` }
+    const frd = frdAt(root)
+    const ripple = readIfExists(root, RIPPLE_PATH)
+
+    if (!path) {
+      // ЗЕЛЁНОЕ СЕЙЧАС — НЕ ПЕРЕПИСЫВАЕМ. Тот же вопрос, что задаёт себе полоса о порции, и та же
+      // цена: ноль токенов. Судится СЕГОДНЯШНИМИ входами, а не отметкой прошлого прогона.
+      if (greenValues(root)) return { ok: true, reused: true, at: VALUES_PATH }
+      const sk = valuesSkeleton({ frd, ripple })
+      mkdirSync(at(root, STAGING_DIR), { recursive: true })
+      writeFileSync(at(root, `${STAGING_DIR}/values.xml`), sk.xml)
+      return { ok: true, at: `${STAGING_DIR}/values.xml`, rows: sk.rows, filled: sk.filled, blank: sk.blank }
+    }
+    if (!existsSync(at(root, path))) {
+      return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
+    }
+    const staged = readFileSync(at(root, path), "utf8")
+    const bad = checkValues({ staged, frd, ripple })
+    if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
+    writeFileSync(at(root, VALUES_PATH), normalize(staged))
+    rmSync(at(root, path), { force: true })
+    return { ok: true, at: VALUES_PATH, rows: parseValues(readIfExists(root, VALUES_PATH)).length }
+  },
+}
+
 // --- ШАГ 9: ДЕРЕВО МОДУЛЕЙ, ПОТОКИ И ПЛАН ---------------------------------------------------------
 //
 // Три функции на три подшага, и у всех троих одна форма: без аргументов — СКЕЛЕТ (скрипт считает
@@ -1767,11 +1812,21 @@ export const tree = {
     const all = [...modulesOfChange({ frd }).keys()]
     const portions = Math.max(1, Math.ceil(all.length / TREE_CAP))
 
+    // СКЕЛЕТ РЕЖЕТСЯ НА ПОРЦИИ ЗДЕСЬ ЖЕ. Одна порция — один файл и один вызов роли: наряд на все 12
+    // модулей это 63 735 символов и 5-9 минут с обрывами, четыре модуля держатся устойчиво.
     if (!path) {
       const sk = treeSkeleton({ frd, ripple: readIfExists(root, RIPPLE_PATH), map })
       mkdirSync(at(root, STAGING_DIR), { recursive: true })
-      writeFileSync(at(root, TREE_STAGING), sk.xml)
-      return { ok: true, at: TREE_STAGING, modules: sk.modules, portions }
+      mkdirSync(at(root, STEP9_DIR), { recursive: true })
+      writeFileSync(at(root, `${STEP9_DIR}/tree-skeleton.xml`), sk.xml)
+      const head = sk.xml.slice(0, sk.xml.indexOf(">") + 1)
+      const blocks = [...sk.xml.matchAll(/ {2}<module[\s\S]*?<\/module>/g)].map((m) => m[0])
+      for (let n = 1; n <= portions; n++) {
+        const mine = portionOf(all, n)
+        const part = blocks.filter((b) => mine.some((q) => b.includes(`path="${q}"`)))
+        writeFileSync(at(root, `${STEP9_DIR}/tree~${n}.xml`), `${head}\n${part.join("\n")}\n</tree>\n`)
+      }
+      return { ok: true, at: `${STEP9_DIR}/tree~1.xml`, modules: sk.modules, portions, mine: portionOf(all, 1) }
     }
 
     if (!existsSync(at(root, path))) {
@@ -1795,6 +1850,27 @@ export const tree = {
 // сигнатуры соседей ей больше неоткуда: приём взят у superpowers (блок `Interfaces: Consumes /
 // Produces` тикета), но там его пишет человек, а здесь считает скрипт из уже зелёных порций. Пока
 // этого блока не было, гардрейл считал соседа по `needs` призраком — живой дефект 20.08.2026.
+// Склейка МАШИННАЯ: пропущенная порция — отказ с её номером, а не тихая потеря модулей.
+export const treeJoin = {
+  description: "Step 9B: join the per-portion answers into one staged tree. The portions are independent — a module knows only what it needs — so the join is a concatenation of `<module>` blocks in portion order, nobody's text edited. Refuses when a portion is missing, naming it. Costs no tokens.",
+  input: { type: "object", properties: { portions: { type: "number" } }, required: ["portions"], additionalProperties: false },
+  output: { type: "object", properties: { ok: { type: "boolean" }, why: { type: "string" }, at: { type: "string" }, modules: { type: "number" } }, required: ["ok"], additionalProperties: false },
+  run({ portions }, context) {
+    const root = runRoot(context)
+    const blocks = []
+    for (let n = 1; n <= portions; n++) {
+      const p = `${STAGING_DIR}/tree~${n}.xml`
+      const text = readIfExists(root, p)
+      if (!text.trim()) return { ok: false, why: `порция ${n} не написана: ${p} пуст — склеивать нечего` }
+      blocks.push(...[...text.matchAll(/ {2}<module[\s\S]*?<\/module>/g)].map((m) => m[0]))
+    }
+    const head = readIfExists(root, `${STEP9_DIR}/tree-skeleton.xml`).split("\n")[0] || '<tree task="">'
+    mkdirSync(at(root, STAGING_DIR), { recursive: true })
+    writeFileSync(at(root, TREE_STAGING), `${head}\n${blocks.join("\n")}\n</tree>\n`)
+    return { ok: true, at: TREE_STAGING, modules: blocks.length }
+  },
+}
+
 export const neighbours = {
   description: "Step 9B: the NEIGHBOURS block of one portion's order — what the modules OUTSIDE this portion own and declare, as the already-written portions say it. Computed from the staged tree, never authored: the role sees only its own four modules and has no other way to learn a sibling's type names and signatures. Costs no tokens.",
   input: { type: "object", properties: { slice: { type: "number" } }, required: ["slice"], additionalProperties: false },
@@ -1804,7 +1880,9 @@ export const neighbours = {
     const frd = frdAt(root)
     const all = [...modulesOfChange({ frd }).keys()]
     const mine = new Set(portionOf(all, slice))
-    const written = parseTree(readIfExists(root, TREE_STAGING)).modules.filter((m) => !mine.has(m.path) && (m.owns || m.contract.sig))
+    const done = []
+    for (let n = 1; n <= Math.ceil(all.length / TREE_CAP); n++) done.push(readIfExists(root, `${STAGING_DIR}/tree~${n}.xml`))
+    const written = parseTree(done.join("\n")).modules.filter((m) => !mine.has(m.path) && (m.owns || m.contract.sig))
     const text = written.map((m) => [
       `${m.path}`,
       m.owns ? `  владеет типом: ${m.owns}` : "",
@@ -1841,8 +1919,15 @@ export const flows = {
     if (!path) {
       const sk = flowsSkeleton({ frd })
       mkdirSync(at(root, STAGING_DIR), { recursive: true })
-      writeFileSync(at(root, FLOWS_STAGING), sk.xml)
-      return { ok: true, at: FLOWS_STAGING, flows: sk.flows, steps: sk.steps, ucs }
+      mkdirSync(at(root, STEP9_DIR), { recursive: true })
+      writeFileSync(at(root, `${STEP9_DIR}/flows-skeleton.xml`), sk.xml)
+      // Порция потоков — ОДИН use case со всеми его ветвлениями: единица здесь смысловая, а не
+      // счётная, и резать её пополам значит рвать сценарий посередине.
+      for (const id of ucs) {
+        const own = [...sk.xml.matchAll(/ {2}<flow[\s\S]*?<\/flow>/g)].map((m) => m[0]).filter((b) => b.includes(`uc="${id}"`))
+        writeFileSync(at(root, `${STEP9_DIR}/flows~${id}.xml`), `<flows task="">\n${own.join("\n")}\n</flows>\n`)
+      }
+      return { ok: true, at: `${STEP9_DIR}/flows~${ucs[0] || ""}.xml`, flows: sk.flows, steps: sk.steps, ucs }
     }
     if (!existsSync(at(root, path))) {
       return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
@@ -1855,6 +1940,25 @@ export const flows = {
 
     writeFileSync(at(root, FLOWS_PATH), staged.endsWith("\n") ? staged : `${staged}\n`)
     return { ok: true, at: FLOWS_PATH, flows: parsed.flows.length, steps: parsed.flows.reduce((n, f) => n + f.steps.length, 0), ucs }
+  },
+}
+
+export const flowsJoin = {
+  description: "Step 9C: join the per-use-case answers into one staged flows file. Refuses when a use case's portion is missing, naming it. Costs no tokens.",
+  input: { type: "object", properties: { ucs: { type: "array", items: { type: "string" } } }, required: ["ucs"], additionalProperties: false },
+  output: { type: "object", properties: { ok: { type: "boolean" }, why: { type: "string" }, at: { type: "string" }, flows: { type: "number" } }, required: ["ok"], additionalProperties: false },
+  run({ ucs }, context) {
+    const root = runRoot(context)
+    const blocks = []
+    for (const id of ucs || []) {
+      const p = `${STAGING_DIR}/flows~${id}.xml`
+      const text = readIfExists(root, p)
+      if (!text.trim()) return { ok: false, why: `поток use case ${id} не написан: ${p} пуст — склеивать нечего` }
+      blocks.push(...[...text.matchAll(/ {2}<flow[\s\S]*?<\/flow>/g)].map((m) => m[0]))
+    }
+    mkdirSync(at(root, STAGING_DIR), { recursive: true })
+    writeFileSync(at(root, FLOWS_STAGING), `<flows task="">\n${blocks.join("\n")}\n</flows>\n`)
+    return { ok: true, at: FLOWS_STAGING, flows: blocks.length }
   },
 }
 
@@ -3086,13 +3190,13 @@ export default function extension(pi) {
   registerWorkflowExtension({
     version: "1.25.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
-    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/orderLine/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/tree/neighbours/flows/planbook/decision/planReview/planFix/planRoute/planFeedback/clearStaged/nodeFacts/frdAdopt/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/, steps/planreview/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, orderLine, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, tree, neighbours, flows, planbook, decision, planReview, planFix, planRoute, planFeedback, clearStaged, nodeFacts, frdAdopt, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
+    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/orderLine/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/values/tree/treeJoin/neighbours/flows/flowsJoin/planbook/decision/planReview/planFix/planRoute/planFeedback/clearStaged/nodeFacts/frdAdopt/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/, steps/planreview/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, orderLine, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, values, tree, treeJoin, neighbours, flows, flowsJoin, planbook, decision, planReview, planFix, planRoute, planFeedback, clearStaged, nodeFacts, frdAdopt, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;
     // pi-extensible-workflows scans a role directory for *.md files only (validation.js
     // scanRoleFiles), so the non-.md neighbours here are inert to role resolution.
-    roleDirectories: [new URL("../steps/brd/", import.meta.url), new URL("../steps/scope/", import.meta.url), new URL("../steps/intake/", import.meta.url), new URL("../steps/design/", import.meta.url), new URL("../steps/review/", import.meta.url), new URL("../steps/planreview/", import.meta.url)],
+    roleDirectories: [new URL("../steps/brd/", import.meta.url), new URL("../steps/scope/", import.meta.url), new URL("../steps/intake/", import.meta.url), new URL("../steps/plan/values/", import.meta.url), new URL("../steps/plan/tree/", import.meta.url), new URL("../steps/plan/flows/", import.meta.url), new URL("../steps/review/", import.meta.url), new URL("../steps/planreview/", import.meta.url)],
   })
 }

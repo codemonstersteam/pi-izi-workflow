@@ -1087,24 +1087,166 @@ const rework = async (steps, note) => {
   }
 };
 
-// FUNCTION_CONTRACT: designing — шаг 9: ПЕРЕПИСЫВАЕТСЯ
-//   Input:        from — с какого шага вошла полоса; fromCut — блокеры сухой нарезки
-//   Dependencies: EXTERNAL — exit, err
-//   Antecedent:   любые значения
-//   Consequent:   failure: blocked — шаг не существует, пока не написаны дерево модулей и потоки
+// FUNCTION_CONTRACT: designing — шаг 9: дерево модулей, потоки и план
+//   Input:        from — с какого шага вошла полоса; fromCut — блокеры сухой нарезки предыдущего круга
+//   Dependencies: EXTERNAL — values, tree, treeJoin, neighbours, flows, flowsJoin, planbook (ext);
+//                 sized, agent, readText, clearStaged, log, exit, err
+//   Antecedent:   шаги 6 и 8 закрыты: есть frd.xml, ripple.xml и решение о дизайне
+//   Consequent:   success: путь собранного PLAN.md
+//                 failure: exit blocked/escalate — с блокером гардрейла, а не с пересказом
 //   Purity:       io
 //
-// 21.08.2026 старый шаг 9 удалён целиком: карточка партии, её гардрейл, цепочки и сборка PLAN.md из
-// карточек. Причина измерена и записана в docs/plan.md §0: очередь работ выводили из потока данных,
-// а поток цикличен по природе — запрос идёт вниз, ответ вверх. Новый шаг пишет ДВА артефакта с
-// разными отношениями: дерево модулей с «без чего меня не написать» (порядок работ) и потоки
-// (покрытие). Полоса намеренно останавливается здесь, а не делает вид, что план собран.
+// ЧЕТЫРЕ ПОДШАГА И ОДНО ПРАВИЛО МЕЖДУ НИМИ: скрипт считает всё, что можно посчитать, роль решает то,
+// что посчитать нельзя, гардрейл сверяет объявленное. Порядок: словарь границы → дерево модулей
+// порциями → потоки по use case → план скриптом. Отношения ДВА и они не выводятся друг из друга:
+// `needs` даёт очередь работ, поток даёт покрытие (docs/plan-design.md).
 async function designing(from = 6, fromCut = "") {
-  void from; void fromCut;
-  exit(err("blocked", {
-    subject: "шаг 9 переписывается: дерево модулей и потоки ещё не реализованы (docs/plan.md)",
-    evidence: "steps/design/: карточка партии, цепочки и сборка PLAN.md удалены 21.08.2026",
-  }));
+  const KEY = (await checkTask({})).key || "";
+  const treeTpl = await readText({ path: "steps/plan/tree/order-tree.tpl" });
+  const flowTpl = await readText({ path: "steps/plan/flows/order-flow.tpl" });
+  const FRD = await readText({ path: ".agent/frd.xml" });
+
+  // --- 9A: словарь границы -----------------------------------------------------------------------
+  const dict = await values({});
+  if (!dict.ok) exit(err("blocked", { subject: dict.why, evidence: "шаг 9A: словарь значений" }));
+  if (dict.reused) {
+    log("design/values: .agent/values.xml зелен сейчас — проход A закрыт без роли, 0 токенов");
+  } else {
+    const STAGING = dict.at;
+    let feedback = NO_FEEDBACK;
+    for (let attempt = 1; ; attempt++) {
+      if (attempt > LOOPS) exit(err("escalate", { subject: feedback, evidence: `шаг 9A: цикл исчерпан за ${LOOPS} попыток` }));
+      const order = await sized("design/values", await readText({ path: "steps/plan/values/order-values.tpl" }), {
+        SKELETON: await readText({ path: STAGING }), FRD, PREVIOUS: "", FEEDBACK: feedback,
+        BLANK: String(dict.blank || 0), STAGING, CHECK: "values({path}) — состав скелета не тронут, пустые заполнены",
+      }, "design/values");
+      if (order.over) exit(err("blocked", { subject: order.why, evidence: "наряд словаря не помещается в окно модели" }));
+      const env = await agent(order.text, { role: "valuer", outputSchema: ENVELOPE });
+      if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
+      const judged = await values({ path: STAGING });
+      if (judged.ok) { log(`design/values: ${judged.at} — строк ${judged.rows}`); break; }
+      feedback = judged.blockers;
+      log(`design/values: красный — попытка ${attempt} из ${LOOPS}: ${String(feedback).split("\n")[0].slice(0, 90)}`);
+    }
+  }
+
+  // --- 9B: дерево модулей порциями ---------------------------------------------------------------
+  const cut = await tree({});
+  if (!cut.ok) exit(err("blocked", { subject: cut.why, evidence: "шаг 9B: скелет дерева не посчитан" }));
+  log(`design/tree: модулей ${cut.modules}, порций ${cut.portions} — скелет посчитан скриптом, 0 токенов`);
+  await portions({
+    count: cut.portions, id: "tree", tpl: treeTpl, role: "tree-designer", KEY, FRD, fromCut,
+    // ПОРЦИЯ ВИДИТ ТОЛЬКО СВОИ ЧЕТЫРЕ МОДУЛЯ. Имена и объявления соседей приходят ВЫЧИСЛЕННЫМ блоком:
+    // роль не может их узнать иначе, и без него гардрейл считал соседа по `needs` призраком.
+    order: async (n, PREVIOUS, feedback) => {
+      const mine = await tree({ path: `${STEP9}/tree~${n}.xml`, slice: n });
+      const near = await neighbours({ slice: n });
+      const skeleton = await readText({ path: `${STEP9}/tree~${n}.xml` });
+      const twinPath = (skeleton.match(/candidates="([^" ]+)/) || ["", ""])[1];
+      return {
+        SKELETON: skeleton, TWIN: twinPath ? await readText({ path: twinPath }) : "(образца в репозитории не нашлось)",
+        NEIGHBOURS: near.text || "(твоя порция первая)", FRD, PREVIOUS, FEEDBACK: feedback,
+        MINE: (mine.mine || []).join(" · "), STAGING: `${STAGING_DIR}/tree~${n}.xml`,
+        CHECK: "tree({path, slice}) — раздел на каждый модуль порции, у каждого секрет, io, образец, контракт; needs это ПУТЬ",
+      };
+    },
+    judge: (n) => tree({ path: `${STAGING_DIR}/tree~${n}.xml`, slice: n }),
+    staging: (n) => `${STAGING_DIR}/tree~${n}.xml`,
+    join: () => treeJoin({ portions: cut.portions }),
+    whole: () => tree({ path: `${STAGING_DIR}/tree.xml`, composed: true }),
+    name: (n) => `порция ${n} из ${cut.portions}`,
+  });
+  const TREE = await readText({ path: ".agent/tree.xml" });
+
+  // --- 9C: потоки по use case --------------------------------------------------------------------
+  const sk = await flows({});
+  if (!sk.ok) exit(err("blocked", { subject: sk.why, evidence: "шаг 9C: скелет потоков не посчитан" }));
+  log(`design/flows: потоков ${sk.flows}, шагов ${sk.steps}, use case ${sk.ucs.length} — closes проставлен скриптом`);
+  await portions({
+    count: sk.ucs.length, id: "flows", tpl: flowTpl, role: "flow-designer", KEY, FRD, fromCut,
+    order: async (n, PREVIOUS, feedback) => ({
+      SKELETON: await readText({ path: `${STEP9}/flows~${sk.ucs[n - 1]}.xml` }), TREE, FRD,
+      UC: sk.ucs[n - 1], PREVIOUS, FEEDBACK: feedback, STAGING: `${STAGING_DIR}/flows~${sk.ucs[n - 1]}.xml`,
+      CHECK: "flows({path, uc}) — все шаги и ветвления этого use case закрыты, модуль из дерева, роль из словаря",
+    }),
+    judge: (n) => flows({ path: `${STAGING_DIR}/flows~${sk.ucs[n - 1]}.xml`, uc: sk.ucs[n - 1] }),
+    staging: (n) => `${STAGING_DIR}/flows~${sk.ucs[n - 1]}.xml`,
+    join: () => flowsJoin({ ucs: sk.ucs }),
+    whole: () => flows({ path: `${STAGING_DIR}/flows.xml`, composed: true }),
+    name: (n) => `use case ${sk.ucs[n - 1]}`,
+  });
+
+  // --- 9D: план собирается скриптом --------------------------------------------------------------
+  const book = await planbook({});
+  if (!book.ok) exit(err("escalate", { subject: book.blockers || book.why, evidence: book.cycle ? `очередь работ: ${book.cycle}` : "сборка плана шага 9D" }));
+  log(`design/plan: ${book.at} собран — модулей ${book.modules}, волны ${book.waves.join(" · ")}, use case ${book.ucs}`);
+  return book.at;
+}
+
+// FUNCTION_CONTRACT: portions — один подшаг, нарезанный на порции: написать, судить, склеить, судить целое
+//   Input:        { count, id, tpl, role, order, judge, staging, join, whole, name, fromCut } — сколько
+//                 порций, чем зовут роль, как собрать её наряд, чем судить порцию и целое
+//   Dependencies: EXTERNAL — sized, agent, readText, clearStaged, log, exit, err
+//   Antecedent:   скелет уже нарезан на порции скриптом
+//   Consequent:   success: undefined — целое зелено и продвинуто
+//                 failure: exit escalate — бюджет кругов исчерпан, с последним блокером
+//   Purity:       io
+//
+// ТРИ ПРАВИЛА ЭТОГО ЦИКЛА КУПЛЕНЫ ЖИВЫМИ ПРОГОНАМИ, И КАЖДОЕ СТОИЛО КРУГОВ:
+//   ① зелёная порция не переписывается — но АДРЕСАТ блокера целого зелёным не считается: пять кругов
+//      прогона 5b52f76d ушли в пустоту, потому что все порции отвечали «я зелена» на находку, которую
+//      ни одна из них не судила;
+//   ② адресат ищется по ПУТЯМ в блокере; блокер без единого пути адресата не имеет, и тогда
+//      переписываются ВСЕ порции — незнакомая находка едет по самому дорогому маршруту;
+//   ③ правка ставится на СВОЙ прошлый ответ (`PREVIOUS`), а не пишется заново: роль, переписывающая
+//      файл ради строки, теряет остальное.
+async function portions({ count, id, tpl, role, order, judge, staging, join, whole, name, fromCut = "" }) {
+  let feedback = fromCut || NO_FEEDBACK;
+  const carried = Boolean(String(feedback).trim()) && feedback !== NO_FEEDBACK;
+  let attempt = 0;
+
+  for (;;) {
+    if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `шаг 9 (${id}): цикл исчерпан за ${LOOPS} попыток` }));
+    for (let n = 1; n <= count; n++) {
+      const first = !carried && attempt === 0;
+      const mineText = await readText({ path: staging(n) });
+      const named = String(feedback).includes(`~${n}`) || (mineText && String(feedback)
+        .split(/\s+/).some((w) => w.includes("/") && mineText.includes(w)));
+      const blind = !first && !/src\//.test(String(feedback));
+      if (!(first || !mineText.trim() || named || blind)) continue;
+
+      if (first && mineText.trim()) {
+        const kept = await judge(n);
+        if (kept.ok) { log(`design/${id}: ${name(n)} зелена с прошлого прогона — роль не звалась, 0 токенов`); continue; }
+      }
+      if (!first) log(`design/${id}: ${name(n)} — адресат блокера${blind ? " (адресата не назвали — переписываются все)" : ""}, переписывается`);
+
+      const slots = await order(n, mineText, feedback);
+      const o = await sized(`design/${id}`, tpl, slots, `design/${id}`);
+      if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд ${name(n)} не помещается в окно модели` }));
+      const env = await agent(o.text, { role, outputSchema: ENVELOPE });
+      if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
+
+      const mine = await judge(n);
+      if (!mine.ok) {
+        feedback = mine.blockers || mine.why;
+        attempt++;
+        log(`design/${id}: ${name(n)} красная — попытка ${attempt} из ${LOOPS}: ${String(feedback).split("\n")[0].slice(0, 90)}`);
+        n--;
+        if (attempt >= LOOPS) break;
+        continue;
+      }
+      log(`design/${id}: ${name(n)} зелена`);
+    }
+
+    const joined = await join();
+    if (!joined.ok) { attempt++; log(`design/${id}: ${joined.why} — попытка ${attempt} из ${LOOPS}`); continue; }
+    const check = await whole();
+    if (check.ok) { log(`design/${id}: целое зелено — ${JSON.stringify({ ...check, ok: undefined }).replace(/[{}"]/g, "").replace(/,/g, ", ")}`); return; }
+    feedback = check.blockers || check.why;
+    attempt++;
+    log(`design/${id}: целое красное — попытка ${attempt} из ${LOOPS}: ${String(feedback).split("\n")[0].slice(0, 90)}`);
+  }
 }
 
 // FUNCTION_CONTRACT: gating — step 12: the operator approves the plan, or sends it back
