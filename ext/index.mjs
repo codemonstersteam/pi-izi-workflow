@@ -2466,8 +2466,15 @@ export const tickets = {
     const sections = sectionsOf(readIfExists(root, planDocPath))
     if (!sections.length) return { ok: false, why: `в ${planDocPath} нет ни одного раздела — шаг 9 не отработал` }
 
-    const { order, cycle } = orderOf({ sections, modules, edges: parseMap(map).edges })
-    if (cycle.length) return { ok: false, why: `очередь работ замкнута: ${cycle.join(" → ")} — артефакты разошлись с утверждённым планом` }
+    // ОЧЕРЕДЬ РАБОТ БЕРЁТСЯ ИЗ `needs` ДЕРЕВА, А НЕ ИЗ ВЫЗОВОВ. Пока она считалась по объявленным
+    // вызовам плюс статическим рёбрам карты, нарезка выдавала «iglossarystore (волна 2) ждёт
+    // glossarystore волна 3» — интерфейс ждал собственную реализацию, и этим кончился прогон
+    // 1410ae34. Волны тикетов обязаны совпадать с волнами плана: их считает один и тот же вход.
+    const treeText = readIfExists(root, TREE_PATH)
+    if (!treeText.trim()) return { ok: false, why: `${TREE_PATH} не существует — очередь работ строить не из чего, шаг 9B не закрыт` }
+    const byNeeds = wavesOf({ tree: treeText })
+    if (byNeeds.cycle.length) return { ok: false, why: `очередь работ замкнута: ${byNeeds.cycle.join(" → ")} — артефакты разошлись с утверждённым планом` }
+    const order = byNeeds.waves.flat()
 
     // Куда кладут тесты и как их называют, решает РЕПОЗИТОРИЙ: разведка записала это в карту, и
     // здесь оно только читается. Юнитовый сьют первым — модульный тикет закрывается им.

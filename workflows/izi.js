@@ -1225,6 +1225,25 @@ async function portions({ count, id, tpl, role, order, judge, staging, join, who
       const o = await sized(`design/${id}`, tpl, slots, `design/${id}`);
       if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд ${name(n)} не помещается в окно модели` }));
       const env = await agent(o.text, { role, outputSchema: ENVELOPE });
+      // ВОПРОС РОЛИ — РЕЛЬСА, А НЕ ОШИБКА. Роль спрашивает только о необратимом, о чём требование
+      // молчит (owner-decision: форма хранимых данных, публичная поверхность, внешняя зависимость);
+      // всё остальное ей отвечает образец из репозитория. Ответ оператора уезжает в журнал решений и
+      // переживает пересборку плана — без этого он жил бы только в тексте артефакта и умирал вместе
+      // с ним, как умирал три дня подряд.
+      if (env.track === "err" && env.kind === "question") {
+        const q = charge(env);
+        if (q.spent) exit(noRoundsLeft(env, `design/${id}`));
+        log(`design/${id}: вопрос ${q.n} — «${env.subject}»`);
+        await askOperator(env, q.n, `design-${id}-${n}`, role);
+        const said = await answers({});
+        const hit = (said || []).find((a) => String(a.question || "").trim() === String(env.subject || "").trim());
+        if (hit) {
+          const wrote = await decision({ question: env.subject, answer: hit.text, source: `оператор, круг ${q.n}`, route: "operator", why: env.evidence || "" });
+          if (!wrote.ok) log(`design/${id}: решение оператора не записано в журнал — ${wrote.why}`);
+        }
+        n--;
+        continue;
+      }
       if (env.track === "err") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
 
       const mine = await judge(n);

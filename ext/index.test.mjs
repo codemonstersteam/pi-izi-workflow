@@ -1665,6 +1665,27 @@ const ticketsRoot = () => {
   <module path="src/mongo/OldStore.java" pkg="mongo"/>
   <module path="src/rest/OldRest.java" pkg="rest"/>
 </appgraph>`)
+  // ОЧЕРЕДЬ РАБОТ БЕРЁТСЯ ИЗ ДЕРЕВА. Нарезка считает волны по `needs` — тому же входу, по которому
+  // их считает план, — поэтому фикстуре нужно дерево, а не только документ.
+  writeFileSync(join(root, ".agent", "tree.xml"), `<tree task="DOS-1" goal="a document store">
+  <module path="src/model/Doc.java" delta="Added" io="none">
+    <hides>форма записи</hides><owns type="Doc"/><twin kind="twin" path="src/model/Old.java"></twin>
+    <needs></needs>
+    <contract><sig>public class Doc</sig><pre>нет</pre><post>поля</post><fail>нет</fail></contract>
+  </module>
+  <module path="src/mongo/Store.java" delta="Added" io="db">
+    <hides>хранение</hides><owns type=""/><twin kind="twin" path="src/mongo/OldStore.java"></twin>
+    <needs><need path="src/model/Doc.java" why="параметр типа"/></needs>
+    <contract><sig>public class Store</sig><pre>монго доступна</pre><post>записан (UC1/2)</post><fail>нет</fail></contract>
+  </module>
+  <module path="src/rest/RestStore.java" delta="Added" io="http">
+    <hides>дверь</hides><owns type=""/><twin kind="twin" path="src/rest/OldRest.java"></twin>
+    <needs><need path="src/mongo/Store.java" why="делегирует"/><need path="src/model/Doc.java" why="тип тела"/></needs>
+    <contract><sig>public class RestStore</sig><pre>тело разобрано</pre><post>201 (UC1/1)</post><fail>нет</fail></contract>
+  </module>
+</tree>
+`)
+
   // ПЛАН — ОДИН ДОКУМЕНТ. Папка карточек партий удалена вместе со старым шагом 9 (docs/plan.md):
   // нарезка и гейт читают собранный PLAN.md, и фикстура кладёт разделы туда же, куда их положит
   // новый шаг.
