@@ -183,9 +183,20 @@ export function frdFor({ xml = "", modules = [], uc = "" } = {}) {
     const id = (u[0].match(/id="([^"]*)"/) || ["", ""])[1]
     if (wanted.has(id)) keep.push(u[0])
   }
+  // ДЕЛЬТЫ — ТОЛЬКО СВОИ. Порция 9B отбирает их по своим модулям; порция 9C — по узлам сценариев
+  // СВОЕГО use case. Первая версия нарезки оставляла все двенадцать: UC3 видел `LlmTask` и
+  // `ZipResourceSource`, которых в его сценарии нет, — 2,5 КБ шума на каждый из семи нарядов.
+  const nodesOfUc = new Set()
+  if (uc) {
+    for (const sc of scen) {
+      if ((sc.match(/uc="([^"]*)"/) || ["", ""])[1] !== uc) continue
+      for (const n of (sc.match(/nodes="([^"]*)"/) || ["", ""])[1].split(/\s+/)) if (n) nodesOfUc.add(n)
+    }
+  }
   for (const d of src.matchAll(/<delta\b[^>]*\/>/g)) {
     const node = (d[0].match(/node="([^"]*)"/) || ["", ""])[1]
-    if (!modules.length || mine.has(node)) keep.push(d[0])
+    const want = uc ? (!nodesOfUc.size || nodesOfUc.has(node)) : (!modules.length || mine.has(node))
+    if (want) keep.push(d[0])
   }
   for (const sc of scen) {
     const id = (sc.match(/uc="([^"]*)"/) || ["", ""])[1]

@@ -114,7 +114,17 @@ export function treeFor({ tree = "", frd = {}, uc = "" } = {}) {
     }
   }
   const head = src.slice(0, src.indexOf(">") + 1)
-  const full = blocks.filter((b) => [...own].some((p) => b.includes(`path="${p}"`)))
+  // РОЛИ ПОТОКА НУЖНЫ ТРИ ВЕЩИ: путь, что модуль прячет и что он гарантирует. По ним она называет
+  // значения. Образец, сигнатура и `needs` — материал шага 9B; здесь они шум того же рода, что тело
+  // файла в наряде дерева, и стоят 6 КБ из 11 на каждый наряд.
+  const short = (b) => b
+    .replace(/\n\s*<twin[\s\S]*?<\/twin>/g, "")
+    .replace(/\n\s*<needs[\s\S]*?<\/needs>|\n\s*<needs\/>/g, "")
+    .replace(/\n\s*<sig>[\s\S]*?<\/sig>/g, "")
+    .replace(/\n\s*<pre>[\s\S]*?<\/pre>/g, "")
+    .replace(/\n\s*<facts>[\s\S]*?<\/facts>/g, "")
+    .replace(/<contract>\s*/g, "<contract>")
+  const full = blocks.filter((b) => [...own].some((p) => b.includes(`path="${p}"`))).map(short)
   const brief = modules.filter((m) => near.has(m.path)).map((m) =>
     `  <module path="${m.path}" io="${m.io}"${m.owns ? ` owns="${m.owns}"` : ""} brief="через этот use case не проходит; здесь он только для ссылки"/>`)
   return `${head}\n${[...full, ...brief].join("\n")}\n</tree>\n`
@@ -131,11 +141,18 @@ export function treeFor({ tree = "", frd = {}, uc = "" } = {}) {
 //
 // ПОРЦИЯ — ОДИН USE CASE. Она может ответить за свои шаги и за свои ветвления, и больше ни за что:
 // «у значения один порождающий» — свойство ВСЕХ потоков сразу, и порция его не видит.
-export function checkFlows({ text = "", frd = {}, tree = "", only = "", portion = false, whole = false } = {}) {
+export function checkFlows({ text = "", frd = {}, tree = "", values = "", only = "", portion = false, whole = false } = {}) {
   const B = []
   const { flows } = parseFlows(text)
   const steps = flows.flatMap((f) => f.steps)
   const known = new Set(parseTree(tree).modules.map((m) => m.path))
+
+  // СЛОВАРЬ ГРАНИЦЫ СУДИТ ГРАНИЦУ, И ТОЛЬКО ЕЁ. Шаг 9A пишет `values.xml` — адреса, статусы, коды
+  // отказов, сущности требования, — и до этой правки его не читал НИКТО: подшаг был мёртвым грузом,
+  // а роль потока называла те же значения своей рукой, совпадая со словарём только по удаче.
+  // Внутренние данные («Glossary (черновик обновления)») в словаре не живут и не судятся им: их
+  // судит правило «один порождающий».
+  const dict = [...String(values || "").matchAll(/<value\b[^>]*\btext="([^"]*)"/g)].map((m) => m[1]).filter(Boolean)
 
   if (portion) {
     const uc = (frd.usecases || []).find((x) => x.id === only)
@@ -146,6 +163,23 @@ export function checkFlows({ text = "", frd = {}, tree = "", only = "", portion 
     }
     const alien = [...closed].filter((c) => c && !c.startsWith(`${uc.id}/`))
     if (alien.length) B.push(`F6 в этой порции закрыты чужие шаги: ${alien.join(", ")} — порция отвечает за ${uc.id} и только за него`)
+  }
+
+  // Значение границы узнаётся по форме: адрес (`GET /path`), статус (`404 CODE`) или голый код
+  // отказа. Роль вправе назвать своё внутреннее значение как угодно — но то, что смотрит наружу,
+  // обязано быть написано ТАК ЖЕ, как в словаре: иначе шаг 14 не сойдётся с шагом 9.
+  const boundary = (v) => /^(GET|POST|PUT|DELETE|PATCH)\s|^\d{3}\b|^[A-Z][A-Z0-9_]{3,}$/.test(String(v || "").trim())
+  const near = (v) => dict.find((d) => d.toLowerCase().replace(/\s+/g, "") === String(v).toLowerCase().replace(/\s+/g, ""))
+  if (dict.length) {
+    for (const s of steps) {
+      for (const v of [s.in, s.out]) {
+        if (!v || !boundary(v) || dict.includes(v)) continue
+        const same = near(v)
+        B.push(same
+          ? `F11 строка ${s.closes}: «${v}» — словарь границы пишет это же значение как «${same}»; перепиши слово в слово`
+          : `F11 строка ${s.closes}: «${v}» смотрит наружу, но такого значения нет в словаре границы (.agent/values.xml). Возьми готовое из словаря либо, если это ВНУТРЕННЕЕ значение, назови его так, чтобы оно не выглядело адресом или статусом`)
+      }
+    }
   }
 
   for (const s of steps) {

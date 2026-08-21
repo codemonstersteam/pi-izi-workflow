@@ -1188,6 +1188,7 @@ async function designing(from = 6, fromCut = "") {
       const own = await flows({ uc });
       return {
         SKELETON: await readText({ path: `${STEP9}/flows~${uc}.xml` }), TREE: own.tree || TREE, FRD: own.frd || FRD,
+        VALUES: own.values || "",
         UC: uc, PREVIOUS, FEEDBACK: feedback, STAGING: `${STAGING_DIR}/flows~${uc}.xml`,
         CHECK: "flows({path, uc}) — все шаги и ветвления этого use case закрыты, модуль из дерева, роль из словаря",
       };

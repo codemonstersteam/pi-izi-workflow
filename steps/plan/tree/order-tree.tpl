@@ -15,52 +15,56 @@ $END_TASK
 
 $START_DATA
 
-$START_DOCUMENT
-path: {STAGING} (skeleton — fill this file)
-Modules of this batch: {MINE}
-Composition was calculated by a script. `path`, `delta`, `candidates` and the `<facts>` block are already correct:
-`<facts>` contains declarations and addresses extracted from the repository; do not verify or rewrite them.
-$END_DOCUMENT
-$START_CONTENT
+$START_WORK_DOCUMENT
+path: {STAGING}
+ЭТО ТВОЯ РАБОТА — скелет, который ты заполняешь и записываешь целиком.
+Модули этой порции: {MINE}
+Состав посчитан скриптом. `path`, `delta`, `candidates` и блок `<facts>` уже правильные:
+`<facts>` — объявления и адреса, снятые с репозитория, их не нужно ни проверять, ни переписывать.
+$START_WORK_CONTENT
 {SKELETON}
-$END_CONTENT
+$END_WORK_CONTENT
+$END_WORK_DOCUMENT
 
-$START_DOCUMENT
-path: SAMPLE from the repository
-This is how a file that solves the same problem is already written in this project. Take base class, annotations and declaration shape from here — do not invent them.
-Line numbers appear on the left of every line. If something is missing, read PRECISELY and only by the rules:
-    read(path: <path from the first line of the excerpt>, offset: <line number minus 2>, limit: 12)
-At most EIGHT such reads per batch — one per shown SAMPLE. `read` without offset and limit is forbidden; no other files exist. Eight short reads at known addresses cost less than loading a whole file.
-$END_DOCUMENT
-$START_CONTENT
-{TWIN}
-$END_CONTENT
-
-$START_DOCUMENT
-path: neighbouring batches (already decided modules of the same work)
-Their types and declarations are what your modules may reference in `<needs>`.
-Empty means your batch is the first.
-$END_DOCUMENT
-$START_CONTENT
-{NEIGHBOURS}
-$END_CONTENT
-
-$START_DOCUMENT
-path: .agent/frd.xml
-Full requirement: use cases, their steps, branches, fields and failure codes.
-Write `<post>` against it: every guarantee names a requirement step of the form UC2/3.
-$END_DOCUMENT
-$START_CONTENT
-{FRD}
-$END_CONTENT
-
-$START_DOCUMENT
-path: {STAGING} (your file from the previous attempt; empty = first attempt)
-Repair it according to FEEDBACK; do not rewrite from scratch.
-$END_DOCUMENT
-$START_CONTENT
+$START_PREVIOUS_DOCUMENT
+path: {STAGING}
+ТВОЙ ФАЙЛ ПРОШЛОЙ ПОПЫТКИ (пусто = первая попытка).
+Чини его по FEEDBACK, а не пиши заново.
+$START_PREVIOUS_CONTENT
 {PREVIOUS}
-$END_CONTENT
+$END_PREVIOUS_CONTENT
+$END_PREVIOUS_DOCUMENT
+
+$START_SAMPLE_DOCUMENT
+path: файлы репозитория, решающие ту же задачу
+ОБРАЗЦЫ: по два кандидата на каждый твой модуль. Отсюда берутся базовый класс, аннотации и форма
+объявления — не выдумывай их. Выбери ОДИН путь и впиши его в `<twin path>` своего модуля.
+Слева от каждой строки — её номер в файле. Если чего-то не хватает, читай ТОЧЕЧНО и по правилам:
+    read(path: <путь из первой строки образца>, offset: <номер минус 2>, limit: 12)
+До ВОСЬМИ таких чтений на порцию — по одному на показанный образец. `read` без offset и limit
+запрещён, других файлов нет: восемь коротких чтений по адресу дешевле одного файла целиком.
+$START_SAMPLE_CONTENT
+{TWIN}
+$END_SAMPLE_CONTENT
+$END_SAMPLE_DOCUMENT
+
+$START_NEIGHBOURS_DOCUMENT
+path: соседние порции этой же работы
+УЖЕ РЕШЁННЫЕ МОДУЛИ: их типы и объявления — то, на что твои модули вправе ссылаться в `<needs>`.
+Пусто — значит твоя порция первая.
+$START_NEIGHBOURS_CONTENT
+{NEIGHBOURS}
+$END_NEIGHBOURS_CONTENT
+$END_NEIGHBOURS_DOCUMENT
+
+$START_REQUIREMENT_DOCUMENT
+path: .agent/frd.xml
+ТРЕБОВАНИЕ: use case твоих модулей, их шаги, ветвления, поля и коды отказов.
+По нему пишется `<post>`: гарантия называет шаг требования вида UC2/3.
+$START_REQUIREMENT_CONTENT
+{FRD}
+$END_REQUIREMENT_CONTENT
+$END_REQUIREMENT_DOCUMENT
 
 $END_DATA
 

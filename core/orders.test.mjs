@@ -393,18 +393,19 @@ test("полоса: переигрывание отмечается помощн
 // якорем читался как замечание о плане. Шов слотов↔ключей этого не ловит: он сверяет ИМЕНА КЛЮЧЕЙ,
 // а не словарь блоков.
 test("наряды говорят словарём харнеса, а не изобретают свои блоки", () => {
+  // ИМЯ БЛОКА СОСТАВНОЕ: приставка называет ПРЕДМЕТ, последнее слово — что с ним делать, и оно из
+  // закрытого словаря. `WORK_DOCUMENT` роль читает как «документ, и он про работу»; `REJECTED` —
+  // как обычный текст, потому что такого слова её не учили. Приставка свободна, хвост — нет.
   const KNOWN = new Set(["TASK", "DATA", "DOCUMENT", "CONTENT", "CONSTRAINTS", "PREVIOUS", "FEEDBACK",
     "ANSWERED", "SELFCHECK", "OUTPUT", "SKILL", "EXAMPLE"])
-  const files = readdirSync(join(ROOT, "steps"), { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .flatMap((d) => readdirSync(join(ROOT, "steps", d.name))
-      .filter((f) => f.endsWith(".tpl"))
-      .map((f) => [`steps/${d.name}/${f}`, readFileSync(join(ROOT, "steps", d.name, f), "utf8")]))
+  const tpls = (dir) => readdirSync(join(ROOT, dir), { withFileTypes: true })
+    .flatMap((d) => (d.isDirectory() ? tpls(`${dir}/${d.name}`) : d.name.endsWith(".tpl") ? [`${dir}/${d.name}`] : []))
+  const files = tpls("steps").map((f) => [f, readFileSync(join(ROOT, f), "utf8")])
   assert.ok(files.length >= 10, `нарядов найдено ${files.length} — разбор сломался`)
 
   for (const [name, text] of files) {
     const blocks = [...new Set([...text.matchAll(/\$START_([A-Z_]+)/g)].map((m) => m[1]))]
-    const strange = blocks.filter((b) => !KNOWN.has(b))
+    const strange = blocks.filter((b) => !KNOWN.has(b.split("_").pop()))
     assert.deepEqual(strange, [], `${name}: блок вне словаря харнеса — роль не знает, что с ним делать: ${strange.join(", ")}`)
   }
 })

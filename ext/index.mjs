@@ -1976,7 +1976,7 @@ export const flows = {
     properties: {
       ok: { type: "boolean" }, why: { type: "string" }, blockers: { type: "string" }, missing: { type: "boolean" },
       at: { type: "string" }, flows: { type: "number" }, steps: { type: "number" }, ucs: { type: "array", items: { type: "string" } },
-      tree: { type: "string" }, frd: { type: "string" },
+      tree: { type: "string" }, frd: { type: "string" }, values: { type: "string" },
     },
     required: ["ok"],
     additionalProperties: false,
@@ -1995,6 +1995,7 @@ export const flows = {
         ok: true, at: `${STEP9_DIR}/flows~${uc}.xml`, ucs: [uc],
         tree: treeFor({ tree: readIfExists(root, TREE_PATH), frd, uc }),
         frd: frdFor({ xml: readIfExists(root, FRD_PATH), uc }),
+        values: readIfExists(root, VALUES_PATH),
       }
     }
     if (!path) {
@@ -2014,7 +2015,7 @@ export const flows = {
       return { ok: false, missing: true, blockers: `${path} не существует — роль ничего не записала по staging-пути. Артефакт это ФАЙЛ по этому пути: запиши его инструментом write и только после этого верни track:"ok"` }
     }
     const staged = readFileSync(at(root, path), "utf8")
-    const bad = checkFlows({ text: staged, frd, tree: tree_, only: uc, portion: !composed, whole: composed })
+    const bad = checkFlows({ text: staged, frd, tree: tree_, values: readIfExists(root, VALUES_PATH), only: uc, portion: !composed, whole: composed })
     if (bad.length) return { ok: false, blockers: bad.join("\n  ") }
     const parsed = parseFlows(staged)
     if (!composed) return { ok: true, flows: parsed.flows.length, steps: parsed.flows.reduce((n, f) => n + f.steps.length, 0) }

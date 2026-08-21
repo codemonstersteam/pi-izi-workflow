@@ -108,3 +108,30 @@ test("целое: модель данных вне потоков — не де�
   assert.match(checkFlows({ text: GREEN, frd: FRD, tree: cut, whole: true }).join("\n"),
     /src\/model\/Doc.java не работают ни в одном потоке, и до них не дотягивается needs/)
 })
+
+// СЛОВАРЬ ГРАНИЦЫ ДОЛЖЕН КЕМ-ТО ЧИТАТЬСЯ. Шаг 9A пишет values.xml, и до 21.08.2026 его не читал
+// НИКТО: подшаг был мёртвым грузом, а роль потока называла адреса и статусы своей рукой, совпадая со
+// словарём только по удаче. Внутренние значения словарём не судятся — их судит «один порождающий».
+test("граница пишется словом из словаря, внутреннее значение — как угодно", () => {
+  const VALUES = `<values grammar="2">
+    <value id="v1" text="POST /store (doc)"/>
+    <value id="v2" text="201 (id)"/>
+    <value id="v3" text="NAME_INVALID"/>
+    <value id="v4" text="400 NAME_INVALID"/>
+  </values>`
+  const withDict = (text) => checkFlows({ text, frd: FRD, tree: TREE, values: VALUES, whole: true })
+
+  assert.deepEqual(withDict(GREEN), [], "зелёный поток покраснел от словаря: «Doc (черновик)» это ВНУТРЕННЕЕ значение")
+
+  // Написание разъехалось — блокер обязан показать, КАК пишет словарь.
+  const drift = GREEN.replace('in="POST /store (doc)"', 'in="POST /store(doc)"')
+  const b = withDict(drift).join("\n")
+  assert.match(b, /словарь границы пишет это же значение как «POST \/store \(doc\)»/)
+
+  // Адрес, которого в словаре нет вовсе.
+  const alien = GREEN.replace('out="201 (id)"', 'out="202 (accepted)"')
+  assert.match(withDict(alien).join("\n"), /смотрит наружу, но такого значения нет в словаре границы/)
+
+  // Без словаря правило МОЛЧИТ — судить не по чему, та же дисциплина, что у правила про модули.
+  assert.deepEqual(checkFlows({ text: GREEN, frd: FRD, tree: TREE, whole: true }), [])
+})
