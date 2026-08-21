@@ -1,0 +1,44 @@
+```xml
+<tree task="" goal="add Loan as a new configuration type with renew and versioning">
+  <module path="src/loans/model/Loan.java" delta="Added" io="none">
+    <hides>как займ представлен: поля id, version, dueOn и их валидация</hides>
+    <owns type="Loan"/>
+    <twin kind="twin" path="src/books/model/Book.java" candidates="src/books/model/Book.java"></twin>
+    <needs></needs>
+    <contract><sig>public class Loan</sig><pre>нет</pre><post>содержит id, version, dueOn (UC1/3)</post><fail>нет</fail></contract>
+  </module>
+  <module path="src/loans/ILoanStore.java" delta="Added" io="none">
+    <hides>как займы сохраняются и обновляются: сигнатуры методов, исключения и где проверяется версия</hides>
+    <owns type="ILoanStore"/>
+    <twin kind="twin" path="src/books/IBookStore.java" candidates="src/books/IBookStore.java"></twin>
+    <needs>
+      <need path="src/loans/model/Loan.java" why="параметр типа IResourceStore&lt;Loan&gt;"/>
+    </needs>
+    <contract><sig>public interface ILoanStore extends IResourceStore&lt;Loan&gt;</sig><pre>нет</pre><post>определяет методы read, renew, readAll (UC1/3)</post><fail>нет</fail></contract>
+  </module>
+  <module path="src/loans/mongo/LoanStore.java" delta="Added" io="db">
+    <hides>как займ хранится в MongoDB: коллекция, маппинг полей, версионирование и где проверяется срок возврата</hides>
+    <owns type=""/>
+    <twin kind="twin" path="src/books/mongo/BookStore.java" candidates="src/books/mongo/BookStore.java"></twin>
+    <needs>
+      <need path="src/loans/ILoanStore.java" why="реализует интерфейс"/>
+      <need path="src/loans/model/Loan.java" why="параметр типа AbstractResourceStore&lt;Loan&gt;"/>
+    </needs>
+    <contract><sig>@ApplicationScoped public class LoanStore extends AbstractResourceStore&lt;Loan&gt; implements ILoanStore</sig><pre>монго доступна; срок возврата уже проверен ЗДЕСЬ по правилу требования</pre><post>renew → version+1 и новый dueOn (UC1/3); readAll → все займы</post><fail>срок истёк → LOAN_OVERDUE (409), UC1/2a</fail></contract>
+    <facts>
+      <decl kind="method" name="renew" sig="Integer renew(String id, Integer version)"/>
+      <api name="renew"/>
+    </facts>
+  </module>
+  <module path="src/loans/rest/RestLoanStore.java" delta="Added" io="http">
+    <hides>как HTTP-запрос становится вызовом метода и как исключение превращается в статус-код</hides>
+    <owns type="RestLoanStore"/>
+    <twin kind="twin" path="src/books/rest/RestBookStore.java" candidates="src/books/rest/RestBookStore.java"></twin>
+    <needs>
+      <need path="src/loans/ILoanStore.java" why="делегирование операций"/>
+      <need path="src/loans/model/Loan.java" why="тип параметра и возвращаемого значения"/>
+    </needs>
+    <contract><sig>@ApplicationScoped public class RestLoanStore implements IRestLoanStore</sig><pre>ILoanStore доступен через DI</pre><post>POST /loanstore/loans/{id}/renew → делегирует в store (UC1/1)</post><fail>LOAN_OVERDUE → 409 Conflict</fail></contract>
+  </module>
+</tree>
+```

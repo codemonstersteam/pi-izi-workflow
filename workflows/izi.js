@@ -1149,39 +1149,11 @@ async function designing(from = 6, fromCut = "") {
     count: cut.portions, id: "tree", tpl: treeTpl, role: "tree-designer", KEY, FRD, fromCut,
     // ПОРЦИЯ ВИДИТ ТОЛЬКО СВОИ ЧЕТЫРЕ МОДУЛЯ. Имена и объявления соседей приходят ВЫЧИСЛЕННЫМ блоком:
     // роль не может их узнать иначе, и без него гардрейл считал соседа по `needs` призраком.
-    order: async (n, PREVIOUS, feedback) => {
-      // За данными идут к тому, кто их отдаёт: `tree({slice})` без пути ничего не судит и возвращает
-      // модули порции и её образец. Образец едет ПУТЁМ И ВЫЖИМКОЙ — тело файла заняло бы 63% наряда
-      // и вытеснило бы задачу в середину, которую слабая модель читает по диагонали.
-      const mine = await tree({ slice: n });
-      const near = await neighbours({ slice: n });
-      const sample = await twin({ slice: n });
-      return {
-        SKELETON: await readText({ path: `${STEP9}/tree~${n}.xml` }), TWIN: sample.text,
-        // Требование едет СУЖЕННЫМ до дельт этой порции и её use case: целиком оно давало 77%
-        // дублированного входа шага (измерено на eddi 21.08.2026).
-        NEIGHBOURS: near.text || "(твоя порция первая)", FRD: mine.frd || FRD, PREVIOUS, FEEDBACK: feedback,
-        MINE: (mine.mine || []).join(" · "), STAGING: `${STAGING_DIR}/tree~${n}.xml`,
-        CHECK: "tree({path, slice}) — раздел на каждый модуль порции, у каждого секрет, io, образец, контракт; needs это ПУТЬ",
-      };
-    },
-    judge: (n) => tree({ path: `${STAGING_DIR}/tree~${n}.xml`, slice: n }),
-    staging: (n) => `${STAGING_DIR}/tree~${n}.xml`,
+    // Слоты собирает ext::treeOrder — тот же код, которым их собирает компонентный тест шага.
+    order: async (n, PREVIOUS, feedback) => (await treeOrder({ slice: n, previous: PREVIOUS, feedback })).slots,
     fixTpl: treeFixTpl,
-    // НА ПОЧИНКЕ СКЕЛЕТ — МЁРТВЫЙ ГРУЗ: роль правит СВОЙ прошлый ответ, а не пустые поля. И задача
-    // у неё другая: не «заполни шесть мест», а «сделай ровно эти находки», каждая со своим адресом.
-    fix: async (n, PREVIOUS, feedback) => {
-      const mine = await tree({ slice: n });
-      const near = await neighbours({ slice: n });
-      const sample = await twin({ slice: n });
-      const todo = await repair({ blockers: feedback });
-      return {
-        TASKLIST: todo.text, COUNT: String(todo.count), PREVIOUS, TWIN: sample.text,
-        NEIGHBOURS: near.text || "(твоя порция первая)", FRD: mine.frd || FRD,
-        MINE: (mine.mine || []).join(" · "), STAGING: `${STAGING_DIR}/tree~${n}.xml`,
-        CHECK: "tree({path, slice}) — раздел на каждый модуль порции, у каждого секрет, io, образец, контракт; needs это ПУТЬ",
-      };
-    },
+    // НА ПОЧИНКЕ СКЕЛЕТА НЕТ: роль правит СВОЙ прошлый ответ, а задача — нумерованный список находок.
+    fix: async (n, PREVIOUS, feedback) => (await treeOrder({ slice: n, previous: PREVIOUS, feedback, fix: true })).slots,
     join: () => treeJoin({ portions: cut.portions }),
     whole: () => tree({ path: `${STAGING_DIR}/tree.xml`, composed: true }),
     name: (n) => `порция ${n} из ${cut.portions}`,

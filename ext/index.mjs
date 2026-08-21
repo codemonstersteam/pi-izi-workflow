@@ -87,6 +87,7 @@ import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/pl
 // ей место: чтение формата плана, топологическая сортировка и вид гейта.
 import { SECTION_KEYS, sectionsOf } from "../steps/plan/sections.mjs"
 import { modulesOfChange, sampleOf, rankedCandidates, treeSkeleton, parseTree, checkTree, digestOf, frdFor } from "../steps/plan/tree/tree.mjs"
+import { treeSlots, treeFixSlots } from "../steps/plan/tree/order.mjs"
 import { flowsSkeleton, parseFlows, checkFlows, treeFor } from "../steps/plan/flows/flows.mjs"
 import { repairTask } from "../steps/plan/repair.mjs"
 import { wavesOf, planDoc, checkBook } from "../steps/plan/book/book.mjs"
@@ -1965,6 +1966,36 @@ export const twin = {
   },
 }
 
+// СЛОТЫ НАРЯДА СОБИРАЕТ ОДИН КОД НА ВСЕХ ЧИТАТЕЛЕЙ. Полоса живёт в песочнице и ничего не
+// импортирует; компонентный тест шага импортирует всё. Собирай слоты в полосе — и тест собирал бы их
+// копией, а наряд, который он проверил, отличался бы от живого ровно на эту копию.
+export const treeOrder = {
+  description: "Step 9B: the SLOTS of one portion's order — the skeleton, the samples, the neighbours, the narrowed requirement, the portion's own paths, and on a repair round the numbered task built from the verdict. Assembled by steps/plan/tree/order.mjs, the single place both the band and the component test read, so the order a test proves is the order a live run sends. Costs no tokens.",
+  input: {
+    type: "object",
+    properties: { slice: { type: "number" }, previous: { type: "string" }, feedback: { type: "string" }, fix: { type: "boolean" } },
+    required: ["slice"],
+    additionalProperties: false,
+  },
+  output: { type: "object", properties: { ok: { type: "boolean" }, slots: { type: "object", additionalProperties: { type: "string" } }, fix: { type: "boolean" } }, required: ["ok"], additionalProperties: false },
+  run({ slice, previous = "", feedback = "", fix = false }, context) {
+    const root = runRoot(context)
+    const mine = tree.run({ slice }, context)
+    const sample = twin.run({ slice }, context)
+    const near = neighbours.run({ slice }, context)
+    const common = {
+      twin: sample.text, neighbours: near.text, frd: mine.frd, mine: mine.mine,
+      staging: `${STAGING_DIR}/tree~${slice}.xml`,
+      check: "tree({path, slice}) — раздел на каждый модуль порции, у каждого секрет, io, образец, контракт; needs это ПУТЬ",
+    }
+    if (fix) {
+      const t = repairTask(feedback)
+      return { ok: true, fix: true, slots: treeFixSlots({ ...common, tasklist: t.lines.join("\n"), count: t.count, previous }) }
+    }
+    return { ok: true, fix: false, slots: treeSlots({ ...common, skeleton: readIfExists(root, `${STEP9_DIR}/tree~${slice}.xml`), previous, feedback }) }
+  },
+}
+
 export const flows = {
   description: "Step 9C: the data flows. Without arguments — the SKELETON: one <flow> per use case and one per failure branch, with a row per step of the requirement whose `closes` is ALREADY written by the script (a role that typed the number by hand once produced a Cyrillic «2а» where the FRD had a Latin «2a», and the coverage became a lie). With `path` and `uc` — the CHECK of one portion: every step and branch of THAT use case closed, the module named by the tree, the role from the vocabulary. With `composed` — the check of the WHOLE (one producing module per value, every input produced or external, every failure born and delivered to its status, every module of the tree working in a flow or reachable by `needs`) and the promotion to .agent/flows.xml. Costs no tokens.",
   input: {
@@ -3293,8 +3324,8 @@ export default function extension(pi) {
   registerWorkflowExtension({
     version: "1.25.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
-    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/orderLine/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/values/tree/treeJoin/twin/repair/neighbours/flows/flowsJoin/planbook/decision/planReview/planFix/planRoute/planFeedback/clearStaged/nodeFacts/frdAdopt/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/, steps/planreview/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, orderLine, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, values, tree, treeJoin, twin, repair, neighbours, flows, flowsJoin, planbook, decision, planReview, planFix, planRoute, planFeedback, clearStaged, nodeFacts, frdAdopt, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
+    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/orderLine/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/values/tree/treeOrder/treeJoin/twin/repair/neighbours/flows/flowsJoin/planbook/decision/planReview/planFix/planRoute/planFeedback/clearStaged/nodeFacts/frdAdopt/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/, steps/planreview/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, orderLine, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, values, tree, treeOrder, treeJoin, twin, repair, neighbours, flows, flowsJoin, planbook, decision, planReview, planFix, planRoute, planFeedback, clearStaged, nodeFacts, frdAdopt, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

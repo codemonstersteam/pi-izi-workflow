@@ -1,0 +1,213 @@
+
+$START_TASK
+Fill the four modules of the tree.
+
+In the skeleton below, each module has six empty places: `io`, `<hides>`, `<owns>`, `<twin path>`, `<needs>`, `<contract>`. Fill them. Copy everything else character-for-character. Write the complete file to the staging path.
+
+PRIMARY RULE OF THIS ORDER: `<needs>` means “WITHOUT WHICH I CANNOT BE WRITTEN”, not “whom I call”.
+An implementation needs its interface. An interface does NOT need its own implementation.
+A module that accepts a type needs the file where that type is declared.
+
+SECOND RULE: every string is copied CHARACTER-FOR-CHARACTER, including `&lt;` `&gt;` `&amp;`.
+correct:   <sig>IResourceStore&lt;Glossary&gt;</sig>
+incorrect: <sig>IResourceStore<Glossary></sig>
+$END_TASK
+
+$START_DATA
+
+$START_WORK_DOCUMENT
+path: .agent/staging/tree~1.xml
+ЭТО ТВОЯ РАБОТА — скелет, который ты заполняешь и записываешь целиком.
+Модули этой порции: src/loans/model/Loan.java · src/loans/ILoanStore.java · src/loans/mongo/LoanStore.java · src/loans/rest/RestLoanStore.java
+Состав посчитан скриптом. `path`, `delta`, `candidates` и блок `<facts>` уже правильные:
+`<facts>` — объявления и адреса, снятые с репозитория, их не нужно ни проверять, ни переписывать.
+$START_WORK_CONTENT
+<tree task="" goal="add Loan as a new configuration type with renew and versioning">
+  <module path="src/loans/model/Loan.java" delta="Added" io="">
+    <hides></hides>
+    <owns type=""/>
+    <twin kind="twin" path="" candidates="src/books/model/Book.java"></twin>
+    <needs></needs>
+    <contract><sig></sig><pre></pre><post></post><fail></fail></contract>
+  </module>
+  <module path="src/loans/ILoanStore.java" delta="Added" io="">
+    <hides></hides>
+    <owns type=""/>
+    <twin kind="twin" path="" candidates="src/books/IBookStore.java"></twin>
+    <needs></needs>
+    <contract><sig></sig><pre></pre><post></post><fail></fail></contract>
+  </module>
+  <module path="src/loans/mongo/LoanStore.java" delta="Added" io="">
+    <hides></hides>
+    <owns type=""/>
+    <twin kind="twin" path="" candidates="src/books/mongo/BookStore.java"></twin>
+    <needs></needs>
+    <contract><sig></sig><pre></pre><post></post><fail></fail></contract>
+    <facts>
+      <decl kind="method" name="renew" sig="Integer renew(String id, Integer version)"/>
+      <api name="renew"/>
+    </facts>
+  </module>
+  <module path="src/loans/rest/RestLoanStore.java" delta="Added" io="">
+    <hides></hides>
+    <owns type=""/>
+    <twin kind="twin" path="" candidates="src/books/rest/RestBookStore.java"></twin>
+    <needs></needs>
+    <contract><sig></sig><pre></pre><post></post><fail></fail></contract>
+  </module>
+</tree>
+
+$END_WORK_CONTENT
+$END_WORK_DOCUMENT
+
+$START_PREVIOUS_DOCUMENT
+path: .agent/staging/tree~1.xml
+ТВОЙ ФАЙЛ ПРОШЛОЙ ПОПЫТКИ (пусто = первая попытка).
+Чини его по FEEDBACK, а не пиши заново.
+$START_PREVIOUS_CONTENT
+
+$END_PREVIOUS_CONTENT
+$END_PREVIOUS_DOCUMENT
+
+$START_FEEDBACK
+Blockers from the last validation of the staging file (empty = first attempt).
+Each blocker names a module by its path. Fix exactly those; change nothing else.
+$START_CONTENT
+
+$END_CONTENT
+$END_FEEDBACK
+
+$START_SAMPLE_DOCUMENT
+path: файлы репозитория, решающие ту же задачу
+ОБРАЗЦЫ: по два кандидата на каждый твой модуль. Отсюда берутся базовый класс, аннотации и форма
+объявления — не выдумывай их. Выбери ОДИН путь и впиши его в `<twin path>` своего модуля.
+Слева от каждой строки — её номер в файле. Если чего-то не хватает, читай ТОЧЕЧНО и по правилам:
+    read(path: <путь из первой строки образца>, offset: <номер минус 2>, limit: 12)
+До ВОСЬМИ таких чтений на порцию — по одному на показанный образец. `read` без offset и limit
+запрещён, других файлов нет: восемь коротких чтений по адресу дешевле одного файла целиком.
+$START_SAMPLE_CONTENT
+--- кандидаты в образцы для src/loans/model/Loan.java (выбери ОДИН и впиши его в <twin path>)
+path: src/books/model/Book.java  (всего строк 37)
+собрано: объявление типа, аннотаций 0, полей 4, сигнатур 5; отброшено 4 строк — импорты, комментарии, ТЕЛА методов, вложенные типы
+  11: public class Book
+  13: private String id;
+  14: private Integer version;
+  15: private String title;
+  16: private LocalDate addedOn;
+  18: public Book()
+  21: public Book(String title)
+  25: public String getId()
+  29: public void setId(String id)
+  33: public Integer getVersion()
+--- кандидаты в образцы для src/loans/ILoanStore.java (выбери ОДИН и впиши его в <twin path>)
+path: src/books/IBookStore.java  (всего строк 15)
+собрано: объявление типа, аннотаций 0, полей 0, сигнатур 1; отброшено 0 строк — импорты, комментарии, ТЕЛА методов, вложенные типы
+  11: public interface IBookStore extends IResourceStore<Book>
+  13: List<Book> readAll() throws IResourceStore.ResourceStoreException;
+--- кандидаты в образцы для src/loans/mongo/LoanStore.java (выбери ОДИН и впиши его в <twin path>)
+path: src/books/mongo/BookStore.java  (всего строк 52)
+собрано: объявление типа, аннотаций 7, полей 1, сигнатур 5; отброшено 8 строк — импорты, комментарии, ТЕЛА методов, вложенные типы
+  16: @ApplicationScoped
+  17: public class BookStore extends AbstractResourceStore<Book> implements IBookStore
+  19: private static final Pattern TITLE_PATTERN = Pattern.compile("[\\w ]{1,120}");
+  21: @Inject
+  22: public BookStore(IResourceStorageFactory storageFactory)
+  26: @Override
+  27: @ConfigurationUpdate
+  28: public IResourceId create(Book book) throws ResourceStoreException
+  33: @Override
+  34: @ConfigurationUpdate
+  35: public Integer update(String id, Integer version, Book book) throws ResourceStoreException, ResourceModifiedException, ResourceNotFoundException
+  41: @Override
+  42: public List<Book> readAll() throws ResourceStoreException
+  46: private static void validateTitle(Book book) throws ResourceStoreException
+--- кандидаты в образцы для src/loans/rest/RestLoanStore.java (выбери ОДИН и впиши его в <twin path>)
+path: src/books/rest/RestBookStore.java  (всего строк 32)
+собрано: объявление типа, аннотаций 3, полей 1, сигнатур 2; отброшено 5 строк — импорты, комментарии, ТЕЛА методов, вложенные типы
+  13: @ApplicationScoped
+  14: public class RestBookStore implements IRestBookStore
+  16: private final IBookStore bookStore;
+  18: @Inject
+  19: public RestBookStore(IBookStore bookStore)
+  23: @Override
+  24: public Response createBook(Book book)
+
+Слева от строки — её номер в ЕЁ файле. Нужно тело метода или аргументы конструктора —
+read(path: <путь этого образца>, offset: <номер минус 2>, limit: 12). До восьми чтений на порцию.
+$END_SAMPLE_CONTENT
+$END_SAMPLE_DOCUMENT
+
+$START_NEIGHBOURS_DOCUMENT
+path: соседние порции этой же работы
+УЖЕ РЕШЁННЫЕ МОДУЛИ: их типы и объявления — то, на что твои модули вправе ссылаться в `<needs>`.
+Пусто — значит твоя порция первая.
+$START_NEIGHBOURS_CONTENT
+(твоя порция первая)
+$END_NEIGHBOURS_CONTENT
+$END_NEIGHBOURS_DOCUMENT
+
+$START_REQUIREMENT_DOCUMENT
+path: .agent/frd.xml
+ТРЕБОВАНИЕ: use case твоих модулей, их шаги, ветвления, поля и коды отказов.
+По нему пишется `<post>`: гарантия называет шаг требования вида UC2/3.
+$START_REQUIREMENT_CONTENT
+<frd grammar="1" goal="add Loan as a new configuration type with renew and versioning">
+<usecase id="UC1" actor="api-client" goal="renew a loan">
+    <pre>loan with the given id exists</pre>
+    <post>loan renewed with a new due date and incremented version</post>
+    <step n="1">client sends POST /loanstore/loans/{id}/renew</step>
+    <step n="2">system checks the loan is not overdue</step>
+    <step n="3">system increments version by one and moves the due date</step>
+    <step n="4">system returns the renewed loan</step>
+    <ext id="2a" error="LOAN_OVERDUE" outcome="renewal rejected, client receives an error"/>
+  </usecase>
+<delta op="Loan model" form="Added" node="src/loans/model/Loan.java" new="yes" from="none" to="Loan data model with id, version, dueOn"/>
+<delta op="CRUD loans" form="Added" node="src/loans/ILoanStore.java" new="yes" from="none" to="persistence interface: read, renew, readAll"/>
+<delta op="MongoDB loan persistence" form="Added" node="src/loans/mongo/LoanStore.java" new="yes" from="none" to="MongoDB-backed renew with versioning and the overdue rule"/>
+<delta op="REST /loanstore/loans" form="Added" node="src/loans/rest/RestLoanStore.java" new="yes" from="none" to="REST implementation delegating to ILoanStore"/>
+<scenario id="S1" uc="UC1" before="POST /loanstore/loans/{id}/renew does not exist" after="renews the loan and increments version" nodes="src/loans/rest/RestLoanStore.java src/loans/ILoanStore.java src/loans/mongo/LoanStore.java src/loans/model/Loan.java"/>
+<field name="id" in="Loan" type="string" domain="auto-generated unique identifier" required="yes" error="none" source="brd.md (R1)"/>
+<field name="version" in="Loan" type="integer" domain="starts at 1, incremented by 1 on each renewal" required="yes" error="none" source="brd.md (R2)"/>
+<field name="dueOn" in="Loan" type="date" domain="moved 14 days forward on each renewal" required="yes" error="LOAN_OVERDUE" source="brd.md (R3)"/>
+<failure code="LOAN_OVERDUE" status="409" client="renewal rejected" operator="check the due date" from="UC1/2a"/>
+<actor name="api-client" kind="system" via="REST /loanstore/loans"/>
+</frd>
+
+$END_REQUIREMENT_CONTENT
+$END_REQUIREMENT_DOCUMENT
+
+$END_DATA
+
+$START_CONSTRAINTS
+- The file contains exactly the same modules, in the same number, as the skeleton.
+- `path`, `delta`, `candidates` and `<facts>` are copied character-for-character.
+- `<twin path="…">` is exactly ONE path taken from the `candidates` of the same line.
+- `<needs>` contains only FILE PATHS; every `<need>` has a `why`.
+- `io` is one of: none · http · db · file · queue · llm.
+- `<sig>` and `<owns>` are written in English; `<hides>`, `<pre>`, `<post>`, `<fail>`, `why` are written in Russian.
+$END_CONSTRAINTS
+
+$START_SELFCHECK
+Before writing, answer yourself for every module in one line:
+    <module path> — without which it cannot be written: <list> — and why these are DECLARATIONS, not calls
+“It calls X” is not an answer: the caller depends on the callee, never the other way round.
+If any answer names a module that calls YOU, remove it from `<needs>`.
+$END_SELFCHECK
+
+$START_OUTPUT
+path: .agent/staging/tree~1.xml
+schema:
+  <tree task="…" goal="…">
+    <module path="…" delta="Added" io="db">
+      <hides>one design decision the module conceals</hides>
+      <owns type="Loan"/>
+      <twin kind="twin" path="…" candidates="…"></twin>
+      <needs><need path="src/loans/ILoanStore.java" why="реализует интерфейс"/></needs>
+      <contract><sig>…</sig><pre>…</pre><post>… (UC1/3)</post><fail>… or «нет»</fail></contract>
+    </module>
+  </tree>
+check: tree({path, slice}) — раздел на каждый модуль порции, у каждого секрет, io, образец, контракт; needs это ПУТЬ
+BEFORE SUBMITTING: walk every `<need>` and strike out any that point to a module that calls you.
+`needs` means “without which I cannot be written”; cycles are forbidden.
+return: call workflow_result according to the OUTPUT_FORMAT of your ROLE
+$END_OUTPUT
