@@ -10,7 +10,7 @@
 // EXTERNAL_DEPENDENCY: core/xml.mjs — attrs/elem.
 // Invariants: `role` — из словаря; значение порождает ровно один модуль; объявление (модель, интерфейс)
 //             в потоке не участвует и участвовать не обязано — его доказывает `needs` дерева.
-// Interface:  ROLES, flowsSkeleton, parseFlows, checkFlows
+// Interface:  ROLES, flowsSkeleton, treeFor, parseFlows, checkFlows
 
 import { attrs, elem } from "../../../core/xml.mjs"
 import { parseTree } from "../tree/tree.mjs"
@@ -73,6 +73,51 @@ export function parseFlows(xml) {
     }))
   }
   return Object.freeze({ flows: Object.freeze(flows) })
+}
+
+// FUNCTION_CONTRACT: treeFor — дерево, суженное до модулей ОДНОГО use case
+//   Input:        { tree, frd, uc } — текст дерева; требование; id use case
+//   Dependencies: parseTree
+//   Antecedent:   любые значения; сценариев у use case нет — возвращается дерево целиком
+//   Consequent:   success: текст дерева, где оставлены модули, через которые проходит ЭТОТ use case,
+//                          и те, без которых их не написать (их `needs`) — иначе роль не увидит
+//                          типов, которые сама же назовёт
+//                 failure: none — тотальна
+//   Purity:       pure
+//
+// ДЕРЕВО ЦЕЛИКОМ В КАЖДОМ НАРЯДЕ 9C — 112 441 СИМВОЛ ИЗ 234 647. Измерено на eddi 21.08.2026: семь
+// потоков получали все двенадцать модулей, хотя UC1 касается четырёх. Порция видит своё и то, на что
+// своё опирается, — остальное для неё шум ровно того рода, который слабая модель читает по диагонали.
+export function treeFor({ tree = "", frd = {}, uc = "" } = {}) {
+  const src = String(tree || "")
+  const blocks = [...src.matchAll(/ {2}<module[\s\S]*?<\/module>/g)].map((m) => m[0])
+  if (!blocks.length || !uc) return src
+
+  const own = new Set()
+  for (const sc of frd.scenarios || []) {
+    if (sc.uc !== uc) continue
+    for (const n of String(sc.nodes || "").split(/\s+/).filter(Boolean)) own.add(n)
+  }
+  if (!own.size) return src
+
+  // ДВА КРУГА ВИДИМОСТИ, А НЕ ОДИН. Модули самого use case едут ЦЕЛИКОМ: по ним роль пишет строки
+  // потока. Те, без которых их не написать (`needs`), едут ОДНОЙ СТРОКОЙ — роль про них ничего не
+  // пишет, ей нужно только знать, что такой модуль есть и чем он владеет. Полное замыкание съедало
+  // выигрыш нарезки: 16 063 → 13 094 симв, то есть почти ничего.
+  const { modules } = parseTree(src)
+  const near = new Set()
+  for (let grew = true; grew;) {
+    grew = false
+    for (const m of modules) {
+      if (!own.has(m.path) && !near.has(m.path)) continue
+      for (const n of m.needs) if (!own.has(n.path) && !near.has(n.path)) { near.add(n.path); grew = true }
+    }
+  }
+  const head = src.slice(0, src.indexOf(">") + 1)
+  const full = blocks.filter((b) => [...own].some((p) => b.includes(`path="${p}"`)))
+  const brief = modules.filter((m) => near.has(m.path)).map((m) =>
+    `  <module path="${m.path}" io="${m.io}"${m.owns ? ` owns="${m.owns}"` : ""} brief="через этот use case не проходит; здесь он только для ссылки"/>`)
+  return `${head}\n${[...full, ...brief].join("\n")}\n</tree>\n`
 }
 
 // FUNCTION_CONTRACT: checkFlows — закрывает ли поток требование, и сходятся ли значения

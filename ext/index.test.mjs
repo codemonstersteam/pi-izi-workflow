@@ -1547,10 +1547,10 @@ test("D29b: наряд выше потолка — отказ, и он НАЗЫ�
 })
 
 test("D29b: прямые сборки наряда идут через sized, и каждая отказывает по-своему", () => {
-  // ОДИННАДЦАТЬ мест — шаги 2, 4, 11, ЧЕТЫРЕ на шаге 6 (у каждого пласта свой наряд,
-  // steps/intake/passes-data-flow.md), ДВА на шаге 10в (критик плана и его фиксер) и ДВА на шаге 9:
-  // словарь границы и общий цикл порций, через который идут и дерево, и потоки.
-  assert.equal([...IZI.matchAll(/= await sized\(/g)].length, 11, "одиннадцать прямых сборок наряда")
+  // ДВЕНАДЦАТЬ мест — шаги 2, 4, 11, ЧЕТЫРЕ на шаге 6 (у каждого пласта свой наряд,
+  // steps/intake/passes-data-flow.md), ДВА на шаге 10в (критик плана и его фиксер) и ТРИ на шаге 9:
+  // словарь границы плюс два хода общего цикла порций — последовательный и одновременный.
+  assert.equal([...IZI.matchAll(/= await sized\(/g)].length, 12, "двенадцать прямых сборок наряда")
   assert.match(IZI, /const order = await sized\("design\/values", /, "наряд словаря собран мимо меры")
   assert.match(IZI, /const o = await sized\(`design\/\$\{id\}`, tpl, slots/, "наряд порции собран мимо меры")
   assert.match(IZI, /const order = await sized\("planreview", criticTpl, \{/)
@@ -1571,9 +1571,9 @@ test("D29b: прямые сборки наряда идут через sized, и
   const scoutFn = IZI.slice(IZI.indexOf("async function scout("), IZI.indexOf("// FUNCTION_CONTRACT: scope"))
   assert.match(scoutFn, /if \(order\.over\) return \{ ok: false, why: order\.why \};/)
   assert.doesNotMatch(scoutFn, /exit\(/)
-  // …а остальные — blocked с диагнозом гардрейла. Их шесть: шаги 2, 6, 11, критик плана 10в и ДВА на
-  // шаге 9 — словарь границы и цикл порций; фиксер 10в отказывает своей строкой (`fix.over`).
-  assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 6)
+  // …а остальные — blocked с диагнозом гардрейла. Их семь: шаги 2, 6, 11, критик плана 10в и ТРИ на
+  // шаге 9 — словарь границы и оба хода цикла порций; фиксер 10в отказывает своей строкой (`fix.over`).
+  assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 7)
   assert.match(IZI, /if \(fix\.over\) exit\(err\("blocked"/, "наряд фиксера без меры против окна")
 
   // Потолок не переписан в этом файле: он приходит из core/budgets.mjs через budgets().

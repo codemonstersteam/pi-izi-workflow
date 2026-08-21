@@ -1156,7 +1156,9 @@ async function designing(from = 6, fromCut = "") {
       const sample = await twin({ slice: n });
       return {
         SKELETON: await readText({ path: `${STEP9}/tree~${n}.xml` }), TWIN: sample.text,
-        NEIGHBOURS: near.text || "(твоя порция первая)", FRD, PREVIOUS, FEEDBACK: feedback,
+        // Требование едет СУЖЕННЫМ до дельт этой порции и её use case: целиком оно давало 77%
+        // дублированного входа шага (измерено на eddi 21.08.2026).
+        NEIGHBOURS: near.text || "(твоя порция первая)", FRD: mine.frd || FRD, PREVIOUS, FEEDBACK: feedback,
         MINE: (mine.mine || []).join(" · "), STAGING: `${STAGING_DIR}/tree~${n}.xml`,
         CHECK: "tree({path, slice}) — раздел на каждый модуль порции, у каждого секрет, io, образец, контракт; needs это ПУТЬ",
       };
@@ -1175,11 +1177,21 @@ async function designing(from = 6, fromCut = "") {
   log(`design/flows: потоков ${sk.flows}, шагов ${sk.steps}, use case ${sk.ucs.length} — closes проставлен скриптом`);
   await portions({
     count: sk.ucs.length, id: "flows", tpl: flowTpl, role: "flow-designer", KEY, FRD, fromCut,
-    order: async (n, PREVIOUS, feedback) => ({
-      SKELETON: await readText({ path: `${STEP9}/flows~${sk.ucs[n - 1]}.xml` }), TREE, FRD,
-      UC: sk.ucs[n - 1], PREVIOUS, FEEDBACK: feedback, STAGING: `${STAGING_DIR}/flows~${sk.ucs[n - 1]}.xml`,
-      CHECK: "flows({path, uc}) — все шаги и ветвления этого use case закрыты, модуль из дерева, роль из словаря",
-    }),
+    // ПОТОКИ НЕЗАВИСИМЫ ДРУГ ОТ ДРУГА — в отличие от порций дерева, где соседи читают уже написанное.
+    // Семь use case пишутся одновременно, и это делит ВРЕМЯ шага на семь: экономия здесь не в
+    // токенах, а в минутах, а минуты — то, чего одними токенами не купить.
+    together: true,
+    order: async (n, PREVIOUS, feedback) => {
+      const uc = sk.ucs[n - 1];
+      // Дерево и требование едут суженными до ЭТОГО use case: целиком они давали 211 246 символов
+      // на семь нарядов, нарезкой — 78 485 и 43 337.
+      const own = await flows({ uc });
+      return {
+        SKELETON: await readText({ path: `${STEP9}/flows~${uc}.xml` }), TREE: own.tree || TREE, FRD: own.frd || FRD,
+        UC: uc, PREVIOUS, FEEDBACK: feedback, STAGING: `${STAGING_DIR}/flows~${uc}.xml`,
+        CHECK: "flows({path, uc}) — все шаги и ветвления этого use case закрыты, модуль из дерева, роль из словаря",
+      };
+    },
     judge: (n) => flows({ path: `${STAGING_DIR}/flows~${sk.ucs[n - 1]}.xml`, uc: sk.ucs[n - 1] }),
     staging: (n) => `${STAGING_DIR}/flows~${sk.ucs[n - 1]}.xml`,
     join: () => flowsJoin({ ucs: sk.ucs }),
@@ -1211,14 +1223,46 @@ async function designing(from = 6, fromCut = "") {
 //      переписываются ВСЕ порции — незнакомая находка едет по самому дорогому маршруту;
 //   ③ правка ставится на СВОЙ прошлый ответ (`PREVIOUS`), а не пишется заново: роль, переписывающая
 //      файл ради строки, теряет остальное.
-async function portions({ count, id, tpl, role, order, judge, staging, join, whole, name, fromCut = "" }) {
+async function portions({ count, id, tpl, role, order, judge, staging, join, whole, name, fromCut = "", together = false }) {
   let feedback = fromCut || NO_FEEDBACK;
   const carried = Boolean(String(feedback).trim()) && feedback !== NO_FEEDBACK;
   let attempt = 0;
 
   for (;;) {
     if (attempt >= LOOPS) exit(err("escalate", { subject: feedback, evidence: `шаг 9 (${id}): цикл исчерпан за ${LOOPS} попыток` }));
-    for (let n = 1; n <= count; n++) {
+
+    // ПОРЦИИ, КОТОРЫЕ ДРУГ О ДРУГЕ НЕ ЗНАЮТ, ПИШУТСЯ ОДНОВРЕМЕННО. Потоки — именно такие: use case
+    // независим от соседа, и его наряд несёт своё дерево и своё требование. Порции ДЕРЕВА так
+    // нельзя: каждая читает блок NEIGHBOURS — то, что уже решили соседние, — и параллель отдала бы
+    // им пустой блок, то есть отняла бы единственный способ узнать имена соседей.
+    // Один вызов роли на этом шаге — 4-9 минут; семь подряд это час, семь разом — те же 4-9 минут.
+    if (together) {
+      const todo = [];
+      for (let n = 1; n <= count; n++) {
+        const mineText = await readText({ path: staging(n) });
+        const first = !carried && attempt === 0;
+        if (first && mineText.trim() && (await judge(n)).ok) { log(`design/${id}: ${name(n)} зелена с прошлого прогона — роль не звалась, 0 токенов`); continue; }
+        todo.push(n);
+      }
+      if (todo.length) {
+        const orders = {};
+        for (const n of todo) {
+          const slots = await order(n, await readText({ path: staging(n) }), feedback);
+          const o = await sized(`design/${id}`, tpl, slots, `design/${id}`);
+          if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд ${name(n)} не помещается в окно модели` }));
+          orders[String(n)] = o.text;
+        }
+        log(`design/${id}: ${todo.length} порций пишутся ОДНОВРЕМЕННО — ${todo.map((n) => name(n)).join(" · ")}`);
+        const done = await parallel(`design-${id}`, Object.fromEntries(
+          Object.entries(orders).map(([n, text]) => [n, () => agent(text, { role, outputSchema: ENVELOPE })])));
+        for (const [n, env] of Object.entries(done)) {
+          if (env && env.track === "err" && env.kind !== "question") exit(err(env.kind, { subject: env.subject, evidence: env.evidence }));
+          const mine = await judge(Number(n));
+          log(mine.ok ? `design/${id}: ${name(Number(n))} зелена` : `design/${id}: ${name(Number(n))} красная — ${String(mine.blockers || mine.why).split("\n")[0].slice(0, 90)}`);
+          if (!mine.ok) { feedback = mine.blockers || mine.why; attempt++; }
+        }
+      }
+    } else for (let n = 1; n <= count; n++) {
       const first = !carried && attempt === 0;
       const mineText = await readText({ path: staging(n) });
       const named = String(feedback).includes(`~${n}`) || (mineText && String(feedback)

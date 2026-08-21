@@ -10,7 +10,7 @@
 // EXTERNAL_DEPENDENCY: core/xml.mjs — attrs/elem/tokens, один разбор атрибутов на всю полосу.
 // Invariants: модуль изменения — это дельта требования ИЛИ узел сценария, третьего пути нет;
 //             у каждого типа ровно один владелец; `needs` указывает ПУТЬ, а не имя класса.
-// Interface:  modulesOfChange, sampleOf, shapeOf, rankedCandidates, digestOf, treeSkeleton, parseTree, checkTree, IO_KINDS
+// Interface:  modulesOfChange, sampleOf, shapeOf, rankedCandidates, digestOf, frdFor, treeSkeleton, parseTree, checkTree, IO_KINDS
 
 import { attrs, elem, tokens } from "../../../core/xml.mjs"
 import { orderOf } from "../order.mjs"
@@ -147,6 +147,55 @@ export function sampleOf(path, map, prefer = "") {
   if (twins.length) return Object.freeze({ kind: "twin", path: twins[0] })
   if (near.length) return Object.freeze({ kind: "neighbour", path: near[0] })
   return Object.freeze({ kind: "none", path: "" })
+}
+
+// FUNCTION_CONTRACT: frdFor — требование, суженное до того, что нужно ЭТОЙ порции
+//   Input:        { xml, modules, uc } — текст frd.xml; модули порции (для 9B) ЛИБО id use case (9C)
+//   Dependencies: —
+//   Antecedent:   любые значения; ни одного совпадения — возвращается заголовок и общие блоки
+//   Consequent:   success: текст FRD, где оставлены цель, поля, отказы, величины и ТОЛЬКО те use case
+//                          и дельты, которых порция касается
+//                 failure: none — тотальна
+//   Purity:       pure
+//
+// ТРЕБОВАНИЕ ЦЕЛИКОМ В КАЖДОМ НАРЯДЕ — ЭТО 77% ВХОДА ШАГА. Измерено на eddi 21.08.2026: десять
+// нарядов шага 9 несут 327 812 символов, из них 253 591 — один и тот же FRD и одно и то же дерево,
+// разосланные по кругу. Порции 9B нужны её дельты и те use case, через которые её модули проходят;
+// порции 9C — ровно её use case. Общие блоки (поля, отказы, величины) остаются везде: они и есть
+// «общие ограничения», без них роль выдумает своё число.
+export function frdFor({ xml = "", modules = [], uc = "" } = {}) {
+  const src = String(xml || "")
+  if (!src.trim()) return ""
+  const head = (src.match(/<frd\b[^>]*>/) || ["<frd>"])[0]
+  const mine = new Set(modules)
+
+  const scen = [...src.matchAll(/<scenario\b[^>]*\/>/g)].map((m) => m[0])
+  const wanted = new Set(uc ? [uc] : [])
+  if (!uc) {
+    for (const sc of scen) {
+      const nodes = (sc.match(/nodes="([^"]*)"/) || ["", ""])[1].split(/\s+/).filter(Boolean)
+      if (nodes.some((n) => mine.has(n))) wanted.add((sc.match(/uc="([^"]*)"/) || ["", ""])[1])
+    }
+  }
+
+  const keep = []
+  for (const u of src.matchAll(/<usecase\b[^>]*>[\s\S]*?<\/usecase>/g)) {
+    const id = (u[0].match(/id="([^"]*)"/) || ["", ""])[1]
+    if (wanted.has(id)) keep.push(u[0])
+  }
+  for (const d of src.matchAll(/<delta\b[^>]*\/>/g)) {
+    const node = (d[0].match(/node="([^"]*)"/) || ["", ""])[1]
+    if (!modules.length || mine.has(node)) keep.push(d[0])
+  }
+  for (const sc of scen) {
+    const id = (sc.match(/uc="([^"]*)"/) || ["", ""])[1]
+    if (wanted.has(id)) keep.push(sc)
+  }
+  // Общие ограничения едут ВСЕГДА: поля с доменами, коды отказов со статусами, величины.
+  for (const re of [/<field\b[^>]*\/>/g, /<failure\b[^>]*\/>/g, /<nfr\b[^>]*\/>/g, /<actor\b[^>]*\/>/g]) {
+    for (const m of src.matchAll(re)) keep.push(m[0])
+  }
+  return `${head}\n${keep.join("\n")}\n</frd>\n`
 }
 
 // FUNCTION_CONTRACT: digestOf — полезная нагрузка файла-образца, без его тела

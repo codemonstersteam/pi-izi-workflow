@@ -86,8 +86,8 @@ import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/pl
 // PLAN.md из карточек удалены 21.08.2026. Пережили переделку три вещи, и каждая уехала туда, где
 // ей место: чтение формата плана, топологическая сортировка и вид гейта.
 import { SECTION_KEYS, sectionsOf } from "../steps/plan/sections.mjs"
-import { modulesOfChange, sampleOf, rankedCandidates, treeSkeleton, parseTree, checkTree, digestOf } from "../steps/plan/tree/tree.mjs"
-import { flowsSkeleton, parseFlows, checkFlows } from "../steps/plan/flows/flows.mjs"
+import { modulesOfChange, sampleOf, rankedCandidates, treeSkeleton, parseTree, checkTree, digestOf, frdFor } from "../steps/plan/tree/tree.mjs"
+import { flowsSkeleton, parseFlows, checkFlows, treeFor } from "../steps/plan/flows/flows.mjs"
 import { wavesOf, planDoc, checkBook } from "../steps/plan/book/book.mjs"
 import { newDecision, renderDecisions, parseDecisions } from "../steps/plan/decisions/decisions.mjs"
 import { orderOf } from "../steps/plan/order.mjs"
@@ -1799,7 +1799,7 @@ export const tree = {
     properties: {
       ok: { type: "boolean" }, why: { type: "string" }, blockers: { type: "string" }, missing: { type: "boolean" },
       at: { type: "string" }, modules: { type: "number" }, portions: { type: "number" }, mine: { type: "array", items: { type: "string" } },
-      neighbours: { type: "string" }, twin: { type: "string" },
+      neighbours: { type: "string" }, twin: { type: "string" }, frd: { type: "string" },
     },
     required: ["ok"],
     additionalProperties: false,
@@ -1818,7 +1818,13 @@ export const tree = {
     if (!path && slice) {
       const mine = portionOf(all, slice)
       const twin = mine.map((q) => sampleOf(q, map)).find((t) => t.path && t.kind !== "self")
-      return { ok: true, mine, portions, modules: mine.length, at: `${STEP9_DIR}/tree~${slice}.xml`, twin: twin ? twin.path : "" }
+      // ТРЕБОВАНИЕ ЕДЕТ СУЖЕННЫМ. Целиком оно в десяти нарядах шага 9 давало 77% дублированного
+      // входа (измерено на eddi, 21.08.2026). Порции нужны её дельты и те use case, через которые её
+      // модули проходят; общие ограничения — поля, отказы, величины — остаются всегда.
+      return {
+        ok: true, mine, portions, modules: mine.length, at: `${STEP9_DIR}/tree~${slice}.xml`,
+        twin: twin ? twin.path : "", frd: frdFor({ xml: readIfExists(root, FRD_PATH), modules: mine }),
+      }
     }
 
     // СКЕЛЕТ РЕЖЕТСЯ НА ПОРЦИИ ЗДЕСЬ ЖЕ. Одна порция — один файл и один вызов роли: наряд на все 12
@@ -1970,6 +1976,7 @@ export const flows = {
     properties: {
       ok: { type: "boolean" }, why: { type: "string" }, blockers: { type: "string" }, missing: { type: "boolean" },
       at: { type: "string" }, flows: { type: "number" }, steps: { type: "number" }, ucs: { type: "array", items: { type: "string" } },
+      tree: { type: "string" }, frd: { type: "string" },
     },
     required: ["ok"],
     additionalProperties: false,
@@ -1981,6 +1988,15 @@ export const flows = {
     const tree_ = readIfExists(root, TREE_PATH)
     const ucs = (frd.usecases || []).map((u) => u.id)
 
+    // Наряд ОДНОЙ порции: её скелет, дерево, суженное до её модулей, и требование, суженное до её
+    // use case. Дерево целиком давало 112 441 символ на семь нарядов, требование — 98 805.
+    if (!path && uc) {
+      return {
+        ok: true, at: `${STEP9_DIR}/flows~${uc}.xml`, ucs: [uc],
+        tree: treeFor({ tree: readIfExists(root, TREE_PATH), frd, uc }),
+        frd: frdFor({ xml: readIfExists(root, FRD_PATH), uc }),
+      }
+    }
     if (!path) {
       const sk = flowsSkeleton({ frd })
       mkdirSync(at(root, STAGING_DIR), { recursive: true })
