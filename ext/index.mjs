@@ -86,7 +86,7 @@ import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/pl
 // PLAN.md из карточек удалены 21.08.2026. Пережили переделку три вещи, и каждая уехала туда, где
 // ей место: чтение формата плана, топологическая сортировка и вид гейта.
 import { SECTION_KEYS, sectionsOf } from "../steps/plan/sections.mjs"
-import { modulesOfChange, sampleOf, treeSkeleton, parseTree, checkTree } from "../steps/plan/tree/tree.mjs"
+import { modulesOfChange, sampleOf, rankedCandidates, treeSkeleton, parseTree, checkTree, digestOf } from "../steps/plan/tree/tree.mjs"
 import { flowsSkeleton, parseFlows, checkFlows } from "../steps/plan/flows/flows.mjs"
 import { wavesOf, planDoc, checkBook } from "../steps/plan/book/book.mjs"
 import { newDecision, renderDecisions, parseDecisions } from "../steps/plan/decisions/decisions.mjs"
@@ -1799,7 +1799,7 @@ export const tree = {
     properties: {
       ok: { type: "boolean" }, why: { type: "string" }, blockers: { type: "string" }, missing: { type: "boolean" },
       at: { type: "string" }, modules: { type: "number" }, portions: { type: "number" }, mine: { type: "array", items: { type: "string" } },
-      neighbours: { type: "string" },
+      neighbours: { type: "string" }, twin: { type: "string" },
     },
     required: ["ok"],
     additionalProperties: false,
@@ -1811,6 +1811,15 @@ export const tree = {
     const map = readIfExists(root, GRAPH_PATH)
     const all = [...modulesOfChange({ frd }).keys()]
     const portions = Math.max(1, Math.ceil(all.length / TREE_CAP))
+
+    // ДАННЫЕ СПРАШИВАЮТ У ТОГО, КТО ИХ ОТДАЁТ. Список модулей порции и её образец нужны наряду ДО
+    // всякого суда, а суд на пустом скелете возвращает блокеры и данных не отдаёт вовсе: первый
+    // живой прогон нового шага собрал наряд с пустым MINE именно так (21.08.2026).
+    if (!path && slice) {
+      const mine = portionOf(all, slice)
+      const twin = mine.map((q) => sampleOf(q, map)).find((t) => t.path && t.kind !== "self")
+      return { ok: true, mine, portions, modules: mine.length, at: `${STEP9_DIR}/tree~${slice}.xml`, twin: twin ? twin.path : "" }
+    }
 
     // СКЕЛЕТ РЕЖЕТСЯ НА ПОРЦИИ ЗДЕСЬ ЖЕ. Одна порция — один файл и один вызов роли: наряд на все 12
     // модулей это 63 735 символов и 5-9 минут с обрывами, четыре модуля держатся устойчиво.
@@ -1890,6 +1899,62 @@ export const neighbours = {
       m.contract.post ? `  отдаёт: ${m.contract.post}` : "",
     ].filter(Boolean).join("\n")).join("\n")
     return { ok: true, text, count: written.length }
+  },
+}
+
+// ОБРАЗЕЦ ЕДЕТ В НАРЯД ПУТЁМ И ВЫЖИМКОЙ, А НЕ ТЕЛОМ. Измерено на живом прогоне: дизайнер, получивший
+// ПУТЬ, сам открыл три файла и назвал шесть настоящих классов репозитория. Тело того же файла — это
+// 35 КБ из 55 КБ наряда (первый прогон нового шага 9, 21.08.2026): оно вытесняет задачу в середину,
+// которую слабая модель читает по диагонали, и платит за то, что роль могла бы и не открывать.
+export const twin = {
+  description: "Step 9B: the samples for ONE portion — a digest per module, never one for the four. A portion holds four kinds at once (a data model, a store interface, a REST interface, a Mongo implementation), and one sample for all of them teaches the wrong form to three: the digest of `AgentConfiguration` says nothing about `AbstractResourceStore` or `@ConfigurationUpdate`. Each digest is the PATH plus the file's payload as declarations — the type with its extends/implements, its annotations, its fields and its method signatures, each carrying the LINE NUMBER it stands on. Never the body: on the first live run of this step a twin's body was 35KB of a 55KB order. The map's own `sig` is no substitute — reconnaissance truncates it to «public class X». Line numbers are what makes a digest enough: what a signature cannot show, the role reads back POINTWISE. Costs no tokens.",
+  input: { type: "object", properties: { slice: { type: "number" }, path: { type: "string" } }, additionalProperties: false },
+  output: { type: "object", properties: { ok: { type: "boolean" }, text: { type: "string" }, at: { type: "string" }, lines: { type: "number" }, samples: { type: "number" } }, required: ["ok"], additionalProperties: false },
+  run({ slice = 0, path = "" } = {}, context) {
+    const root = runRoot(context)
+    const one = (p) => {
+      if (!p || !existsSync(at(root, p))) return { at: "", lines: 0, text: `${p ? `${p} — файла нет в репозитории` : "образца не нашлось"}` }
+      const body = readFileSync(at(root, p), "utf8")
+      const d = digestOf(body)
+      return {
+        at: p, lines: d.lines.length,
+        text: [
+          `path: ${p}  (всего строк ${body.split("\n").length})`,
+          `собрано: объявление типа, аннотаций ${d.took.annotations}, полей ${d.took.fields}, сигнатур ${d.took.methods}; отброшено ${d.took.dropped} строк — импорты, комментарии, ТЕЛА методов, вложенные типы`,
+          ...d.lines,
+        ].join("\n"),
+      }
+    }
+    if (path) { const r = one(path); return { ok: true, at: r.at, lines: r.lines, samples: 1, text: r.text } }
+
+    // ВЫЖИМКА НА КАЖДЫЙ МОДУЛЬ ПОРЦИИ. Кандидаты у модулей свои и разные — они стоят в скелете, — и
+    // один образец на четыре противоречил бы самому скелету: он показывал бы один файл, а требовал
+    // выбрать из пяти. Берётся первый кандидат каждого модуля: он же первый в списке, из которого
+    // роль выбирает `<twin path>`.
+    const frd = frdAt(root)
+    const map = readIfExists(root, GRAPH_PATH)
+    const mine = portionOf([...modulesOfChange({ frd }).keys()], slice)
+    // ДВА КАНДИДАТА НА МОДУЛЬ, А НЕ ОДИН. Формула выбора близнеца для НОВОЙ сущности не сходится —
+    // это доказано трижды (docs/plan-design.md §3), поэтому выбирает роль. Но выбирать вслепую из
+    // одних путей она не может: выжимки показывают, чем эти файлы отличаются, а `<twin path>` она
+    // ставит сама. Свой модуль уже существует — образец ему он сам, и второго не нужно.
+    const parts = mine.map((m) => {
+      const own = sampleOf(m, map)
+      if (own.kind === "self") return [`--- ${m}: модуль уже существует, образец — он сам`, one(m).text].join("\n")
+      const two = rankedCandidates(m, map).slice(0, 2)
+      if (!two.length) return `--- ${m}: образца в репозитории не нашлось — пиши по требованию`
+      return [`--- кандидаты в образцы для ${m} (выбери ОДИН и впиши его в <twin path>)`, ...two.map((q) => one(q).text)].join("\n")
+    })
+    return {
+      ok: true, at: "", samples: mine.length,
+      lines: parts.length,
+      text: [
+        ...parts,
+        "",
+        "Слева от строки — её номер в ЕЁ файле. Нужно тело метода или аргументы конструктора —",
+        "read(path: <путь этого образца>, offset: <номер минус 2>, limit: 12). Не больше двух чтений на порцию.",
+      ].join("\n"),
+    }
   },
 }
 
@@ -3197,8 +3262,8 @@ export default function extension(pi) {
   registerWorkflowExtension({
     version: "1.25.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
-    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/orderLine/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/values/tree/treeJoin/neighbours/flows/flowsJoin/planbook/decision/planReview/planFix/planRoute/planFeedback/clearStaged/nodeFacts/frdAdopt/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/, steps/planreview/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, orderLine, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, values, tree, treeJoin, neighbours, flows, flowsJoin, planbook, decision, planReview, planFix, planRoute, planFeedback, clearStaged, nodeFacts, frdAdopt, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
+    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/orderLine/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/values/tree/treeJoin/twin/neighbours/flows/flowsJoin/planbook/decision/planReview/planFix/planRoute/planFeedback/clearStaged/nodeFacts/frdAdopt/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/, steps/planreview/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, orderLine, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, values, tree, treeJoin, twin, neighbours, flows, flowsJoin, planbook, decision, planReview, planFix, planRoute, planFeedback, clearStaged, nodeFacts, frdAdopt, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

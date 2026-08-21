@@ -1148,12 +1148,14 @@ async function designing(from = 6, fromCut = "") {
     // ПОРЦИЯ ВИДИТ ТОЛЬКО СВОИ ЧЕТЫРЕ МОДУЛЯ. Имена и объявления соседей приходят ВЫЧИСЛЕННЫМ блоком:
     // роль не может их узнать иначе, и без него гардрейл считал соседа по `needs` призраком.
     order: async (n, PREVIOUS, feedback) => {
-      const mine = await tree({ path: `${STEP9}/tree~${n}.xml`, slice: n });
+      // За данными идут к тому, кто их отдаёт: `tree({slice})` без пути ничего не судит и возвращает
+      // модули порции и её образец. Образец едет ПУТЁМ И ВЫЖИМКОЙ — тело файла заняло бы 63% наряда
+      // и вытеснило бы задачу в середину, которую слабая модель читает по диагонали.
+      const mine = await tree({ slice: n });
       const near = await neighbours({ slice: n });
-      const skeleton = await readText({ path: `${STEP9}/tree~${n}.xml` });
-      const twinPath = (skeleton.match(/candidates="([^" ]+)/) || ["", ""])[1];
+      const sample = await twin({ slice: n });
       return {
-        SKELETON: skeleton, TWIN: twinPath ? await readText({ path: twinPath }) : "(образца в репозитории не нашлось)",
+        SKELETON: await readText({ path: `${STEP9}/tree~${n}.xml` }), TWIN: sample.text,
         NEIGHBOURS: near.text || "(твоя порция первая)", FRD, PREVIOUS, FEEDBACK: feedback,
         MINE: (mine.mine || []).join(" · "), STAGING: `${STAGING_DIR}/tree~${n}.xml`,
         CHECK: "tree({path, slice}) — раздел на каждый модуль порции, у каждого секрет, io, образец, контракт; needs это ПУТЬ",

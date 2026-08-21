@@ -10,7 +10,7 @@
 // EXTERNAL_DEPENDENCY: core/xml.mjs — attrs/elem/tokens, один разбор атрибутов на всю полосу.
 // Invariants: модуль изменения — это дельта требования ИЛИ узел сценария, третьего пути нет;
 //             у каждого типа ровно один владелец; `needs` указывает ПУТЬ, а не имя класса.
-// Interface:  modulesOfChange, sampleOf, treeSkeleton, parseTree, checkTree, IO_KINDS
+// Interface:  modulesOfChange, sampleOf, shapeOf, rankedCandidates, digestOf, treeSkeleton, parseTree, checkTree, IO_KINDS
 
 import { attrs, elem, tokens } from "../../../core/xml.mjs"
 import { orderOf } from "../order.mjs"
@@ -27,6 +27,21 @@ const kindOf = (path) => {
 const dirOf = (path) => String(path || "").split("/").slice(0, -1).join("/")
 const tailOf = (path) => String(path || "").split("/").slice(-2, -1)[0] || ""
 const baseOf = (path) => (String(path || "").split("/").pop() || "").replace(/\.[^.]+$/, "")
+
+// ФОРМА ИМЕНИ — ИМЯ БЕЗ СУЩНОСТИ. `IRestGlossaryStore` в каталоге `configs/glossaries` — это
+// `IRest*Store`, и его близнец `IRestAgentStore` в `configs/agents` — тоже. А `IAgentStore` это
+// `I*Store`, другая форма: интерфейс хранилища, а не внешний адрес. Без этого сравнения eddi выдал
+// REST-интерфейсу образцом обычное хранилище — форма важнее рода, потому что род у обоих «Store».
+// Сущность узнаётся по КАТАЛОГУ: слово имени, чей корень совпадает с именем каталога, и есть она.
+export const shapeOf = (path) => {
+  const base = baseOf(path)
+  const dirs = String(path || "").split("/").slice(0, -1).map((d) => d.toLowerCase())
+  const words = base.match(/[A-Z][a-z0-9]*|[A-Z]+(?![a-z])/g) || [base]
+  return words.filter((w) => {
+    const stem = w.toLowerCase().replace(/(ies|es|s)$/, "")
+    return !dirs.some((d) => d.startsWith(stem) || stem.startsWith(d.replace(/(ies|es|s)$/, "")))
+  }).join("*") || base
+}
 const isPath = (x) => String(x || "").includes("/") && /\.[A-Za-z0-9]+$/.test(String(x || ""))
 const text = (body, tag) => {
   const m = String(body || "").match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`))
@@ -74,6 +89,15 @@ export function modulesOfChange({ frd = {} } = {}) {
 // Кандидаты в близнецы: столько же сегментов, ровно один различающийся каталог, и дальше либо тот же
 // род, либо тот же последний каталог. Один разрез на двоих — `sampleOf` выбирает из этого списка,
 // `treeSkeleton` по нему же считает семью.
+export function rankedCandidates(path, map) {
+  const shape = shapeOf(path)
+  const kind = kindOf(path)
+  // Порядок: та же ФОРМА имени · тот же род · остальные. Форма важнее рода — `IRest*Store` и
+  // `I*Store` оба кончаются на «Store», но учат разному.
+  return [...candidatesOf(path, map)].sort((a, b) =>
+    (shapeOf(b) === shape) - (shapeOf(a) === shape) || (kindOf(b) === kind) - (kindOf(a) === kind))
+}
+
 function candidatesOf(path, map) {
   const p = String(path || "")
   const seg = p.split("/")
@@ -106,10 +130,16 @@ export function sampleOf(path, map, prefer = "") {
   // каталог, который набрал большинство по всем модулям работы (treeSkeleton), и он перевешивает.
   if (prefer) {
     const mine = twins.filter((q) => q.split("/").includes(prefer))
-    if (mine.length) return Object.freeze({ kind: "twin", path: mine.find((q) => kindOf(q) === kind) || mine[0] })
+    if (mine.length) return Object.freeze({ kind: "twin", path: mine.find((q) => shapeOf(q) === shapeOf(p)) || mine.find((q) => kindOf(q) === kind) || mine[0] })
     const nearPrefer = near.filter((q) => q.split("/").includes(prefer))
     if (nearPrefer.length) return Object.freeze({ kind: "neighbour", path: nearPrefer[0] })
   }
+  // ФОРМА ПЕРЕВЕШИВАЕТ РОД: `IRest*Store` и `I*Store` кончаются одинаково, но учат разному.
+  const shape = shapeOf(p)
+  const twinShape = twins.find((q) => shapeOf(q) === shape)
+  if (twinShape) return Object.freeze({ kind: "twin", path: twinShape })
+  const nearShape = near.find((q) => shapeOf(q) === shape)
+  if (nearShape) return Object.freeze({ kind: "neighbour", path: nearShape })
   const twinSame = twins.find((q) => kindOf(q) === kind)
   if (twinSame) return Object.freeze({ kind: "twin", path: twinSame })
   const nearSame = near.find((q) => kindOf(q) === kind)
@@ -117,6 +147,89 @@ export function sampleOf(path, map, prefer = "") {
   if (twins.length) return Object.freeze({ kind: "twin", path: twins[0] })
   if (near.length) return Object.freeze({ kind: "neighbour", path: near[0] })
   return Object.freeze({ kind: "none", path: "" })
+}
+
+// FUNCTION_CONTRACT: digestOf — полезная нагрузка файла-образца, без его тела
+//   Input:        text — исходник образца; { max } — сколько сигнатур брать (по умолчанию 24)
+//   Dependencies: —
+//   Antecedent:   любое значение; пустой текст даёт пустую выжимку, а не отказ
+//   Consequent:   success: { lines, took } — `lines` это ОБЪЯВЛЕНИЯ: аннотации типа, строка самого
+//                          типа с extends/implements, поля и сигнатуры методов без тел; `took` —
+//                          счёт того, что взято и что отброшено, чтобы наряд сказал это вслух
+//                 failure: none — тотальна
+//   Purity:       pure
+//
+// ЧИТАТЬ ВЕСЬ ФАЙЛ ДОРОГО, А НЕ ЧИТАТЬ — ГАДАТЬ. Тело близнеца это 35 КБ из 55 КБ наряда (первый
+// живой прогон нового шага, 21.08.2026): оно вытесняет задачу в середину, которую слабая модель
+// читает по диагонали. Выжимка из КАРТЫ тоже не годится — там `sig` усечён разведкой до
+// «public class X», без `extends` и аннотаций, то есть без единственного, ради чего образец и нужен.
+// Поэтому файл читает СКРИПТ и оставляет ровно то, из чего пишется `<sig>`, `<needs>` и `io`:
+// объявление типа целиком, его аннотации, поля и сигнатуры методов. Тела, импорты, комментарии и
+// вложенные классы отбрасываются, и их число называется — чтобы «выжимка» не притворялась файлом.
+export function digestOf(text = "", { max = 24 } = {}) {
+  // СИГНАТУРА БЫВАЕТ РАЗОРВАНА НА СТРОКИ, и это не редкость, а норма Java: `throws` уезжает на
+  // следующую. Первая версия выжимки искала `)` и `{` в ОДНОЙ строке и потеряла у близнеца ровно
+  // `update` и `delete` — те два метода, что несут `@ConfigurationUpdate` на изменяющих операциях,
+  // то есть главное соглашение, ради которого образец и берут (сверено с файлом 21.08.2026).
+  const raw = String(text || "").split("\n")
+  const src = []
+  const at = []
+  for (let i = 0; i < raw.length; i++) {
+    let line = raw[i]
+    const from = i + 1
+    const open = (t) => (t.match(/\(/g) || []).length - (t.match(/\)/g) || []).length
+    while (i + 1 < raw.length && (open(line) > 0 || /\)\s*$/.test(line.trim()) && /^\s*throws\b/.test(raw[i + 1]))) {
+      line = `${line.replace(/\s+$/, "")} ${raw[++i].trim()}`
+    }
+    src.push(line)
+    at.push(from)
+  }
+  const took = { annotations: 0, fields: 0, methods: 0, dropped: 0 }
+  const out = []
+  let pending = []
+  let depth = 0
+
+  // НОМЕР СТРОКИ ЕДЕТ С КАЖДЫМ ОБЪЯВЛЕНИЕМ. Выжимка отвечает на «как здесь пишут такие файлы», но
+  // не на всё: имя коллекции стоит в теле конструктора, а правило проверки — в теле метода. С
+  // номером роль дочитывает ТОЧЕЧНО (`read` с диапазоном), без него — открывает файл целиком, и мы
+  // возвращаемся к 35 КБ в наряде, ради экономии которых выжимка и заведена.
+  for (const [k, rawLine] of src.entries()) {
+    const raw = rawLine
+    const no = at[k]
+    const line = raw.trim()
+    const opens = (raw.match(/\{/g) || []).length
+    const closes = (raw.match(/\}/g) || []).length
+
+    if (!line || line.startsWith("//") || line.startsWith("*") || line.startsWith("/*") || line.startsWith("import ")) {
+      depth += opens - closes
+      continue
+    }
+    // Аннотация копится и уезжает вместе с тем, что она украшает: `@ApplicationScoped` без своего
+    // класса не говорит ничего.
+    if (line.startsWith("@")) { pending.push(`${String(no).padStart(4)}: ${line}`); depth += opens - closes; continue }
+
+    const isType = /\b(class|interface|record|enum)\s+\w/.test(line)
+    // ВЛОЖЕННЫЙ ТИП ОТБРАСЫВАЕТСЯ. `AgentConfiguration` держит двенадцать `public static class` —
+    // они заняли всю выжимку и не сказали ни слова о том, как этот файл написан.
+    if (isType && depth > 0) { took.dropped++; pending = []; depth += opens - closes; continue }
+    const isMethod = depth <= 1 && /\)\s*(\{|;|throws)/.test(line) && !line.startsWith("return") && !/^(if|for|while|switch|catch)\b/.test(line)
+      && !(depth === 1 && /=/.test(line) && line.indexOf("=") < line.indexOf("("))
+    // Поле с инициализатором — всё ещё поле: `Pattern.compile(...)` не делает строку методом.
+    const isField = depth === 1 && /;\s*$/.test(line) && /\b(private|protected|public|final|static)\b/.test(line)
+      && (!line.includes("(") || line.indexOf("=") > 0 && line.indexOf("=") < line.indexOf("("))
+
+    if (isType || isMethod || isField) {
+      if (out.length < max) {
+        out.push(...pending, `${String(no).padStart(4)}: ${line.replace(/\s*\{\s*$/, "")}`)
+        took.annotations += pending.length
+        if (isMethod) took.methods++
+        else if (isField) took.fields++
+      } else took.dropped++
+    } else if (line !== "}" && depth > 0) took.dropped++
+    pending = []
+    depth += opens - closes
+  }
+  return Object.freeze({ lines: Object.freeze(out), took: Object.freeze(took) })
 }
 
 // FUNCTION_CONTRACT: treeSkeleton — состав дерева, посчитанный СКРИПТОМ до всякой роли

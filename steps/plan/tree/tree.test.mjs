@@ -2,7 +2,7 @@
 // Предмет здесь один — отношение `needs`, и каждый тест держит ровно одно его свойство.
 import test from "node:test"
 import assert from "node:assert/strict"
-import { modulesOfChange, sampleOf, treeSkeleton, parseTree, checkTree, IO_KINDS } from "./tree.mjs"
+import { modulesOfChange, sampleOf, shapeOf, rankedCandidates, treeSkeleton, parseTree, checkTree, digestOf, IO_KINDS } from "./tree.mjs"
 import { parseFrd } from "../../intake/frd.mjs"
 
 const FRD = parseFrd(`<frd grammar="1" goal="add a document store">
@@ -137,4 +137,85 @@ test("целое: тип пишется везде одним написание
   // …но у ИЗМЕНЯЕМОГО файла объявление уже в репозитории, а <sig> показывает дельту: требовать там
   // имени класса значит требовать переписать чужой файл целиком.
   assert.deepEqual(whole(mute.replace('path="src/model/Doc.java" delta="Added"', 'path="src/model/Doc.java" delta="Changed"')), [])
+})
+
+// ВЫЖИМКА ОБРАЗЦА — ЭТО ОБЪЯВЛЕНИЯ, А НЕ ФАЙЛ. Первый живой прогон нового шага собрал наряд, где тело
+// близнеца заняло 35 КБ из 55 КБ; выжимка ИЗ КАРТЫ не помогла — там `sig` усечён разведкой до
+// «public class X», без `extends` и аннотаций, то есть без единственного, ради чего образец нужен.
+test("выжимка берёт объявление типа с аннотациями, поля и сигнатуры — и называет отброшенное", () => {
+  const java = [
+    "package app.loans;", "", "import java.util.List;", "/** doc */",
+    "@ApplicationScoped",
+    "public class LoanStore extends AbstractStore<Loan> implements ILoanStore {",
+    "    private static final Pattern NAME = Pattern.compile(\"[a-z]+\");",
+    "    @Inject",
+    "    public LoanStore(IStorageFactory f) {",
+    "        this.f = f;",
+    "    }",
+    "    @Override",
+    "    public List<Loan> readAll() throws StoreException {",
+    "        if (x) { return List.of(); }",
+    "        return storage.all();",
+    "    }",
+    "    public static class Nested {",
+    "        private String hidden;",
+    "    }",
+    "}",
+  ].join("\n")
+  const d = digestOf(java)
+  const text = d.lines.join("\n")
+
+  assert.match(text, /@ApplicationScoped/, "аннотация типа потеряна — по ней роль узнаёт форму файла")
+  assert.match(text, /public class LoanStore extends AbstractStore<Loan> implements ILoanStore/, "объявление типа обрублено")
+  assert.match(text, /private static final Pattern NAME/, "поле потеряно")
+  assert.match(text, /public List<Loan> readAll\(\) throws StoreException/, "сигнатура метода потеряна")
+
+  assert.doesNotMatch(text, /return storage\.all/, "в выжимку попало ТЕЛО метода")
+  assert.doesNotMatch(text, /class Nested/, "вложенный тип занял место объявлений — на eddi их двенадцать")
+  assert.doesNotMatch(text, /import java/, "импорт занял строку выжимки")
+  assert.ok(d.took.dropped > 0, "выжимка не сказала, сколько отбросила — тогда она притворяется файлом")
+  assert.equal(d.took.methods, 2)
+  assert.equal(d.took.fields, 1)
+
+  assert.deepEqual(digestOf("").lines, [], "пустой файл — пустая выжимка, а не бросок")
+})
+
+// ФОРМА ИМЕНИ ПЕРЕВЕШИВАЕТ РОД. `IRestGlossaryStore` и `IAgentStore` кончаются одинаково — «Store», —
+// но учат разному: первый это внешний адрес, второй контракт хранения. На живых артефактах eddi
+// отбор по роду выдал REST-интерфейсу образцом обычное хранилище (21.08.2026).
+test("образец ищется по ФОРМЕ имени: сущность вычитается по каталогу", () => {
+  assert.equal(shapeOf("src/configs/glossaries/IRestGlossaryStore.java"), "I*Rest*Store")
+  assert.equal(shapeOf("src/configs/agents/IRestAgentStore.java"), "I*Rest*Store", "две формы одного вида разошлись")
+  assert.equal(shapeOf("src/configs/agents/IAgentStore.java"), "I*Store", "интерфейс хранения смешался с REST")
+
+  const map = `<map>
+    <module path="src/configs/agents/IAgentStore.java"/>
+    <module path="src/configs/agents/IRestAgentStore.java"/>
+  </map>`
+  const first = rankedCandidates("src/configs/glossaries/IRestGlossaryStore.java", map)[0]
+  assert.equal(first, "src/configs/agents/IRestAgentStore.java", "первым предложен образец другой формы")
+  assert.equal(sampleOf("src/configs/glossaries/IRestGlossaryStore.java", map).path, "src/configs/agents/IRestAgentStore.java")
+})
+
+// РАЗОРВАННАЯ СИГНАТУРА — НОРМА JAVA, А НЕ РЕДКОСТЬ: `throws` уезжает на следующую строку. Первая
+// версия выжимки потеряла у близнеца ровно `update` и `delete` — те два метода, что несут
+// `@ConfigurationUpdate` на изменяющих операциях, то есть главное соглашение образца.
+test("выжимка собирает сигнатуру, разорванную на строки, и несёт номер её первой строки", () => {
+  const java = [
+    "@ApplicationScoped",                                        // 1
+    "public class Store extends AbstractStore<Doc> {",           // 2
+    "    @Override",                                             // 3
+    "    @ConfigurationUpdate",                                  // 4
+    "    public Integer update(String id, Integer version, Doc d)", // 5
+    "            throws StoreException, NotFoundException {",    // 6
+    "        return super.update(id, version, d);",              // 7
+    "    }",                                                     // 8
+    "}",                                                         // 9
+  ].join("\n")
+  const text = digestOf(java).lines.join("\n")
+  assert.match(text, /@ConfigurationUpdate/, "аннотация изменяющей операции потеряна")
+  assert.match(text, /public Integer update\(String id, Integer version, Doc d\) throws StoreException, NotFoundException/,
+    "сигнатура, разорванная на строки, не собрана — потеряется ровно то, ради чего берут образец")
+  assert.match(text, /^\s*5: public Integer update/m, "номер строки не тот: роль дочитает не туда")
+  assert.doesNotMatch(text, /return super/, "в выжимку попало тело")
 })
