@@ -92,12 +92,13 @@ $START_CONSTRAINTS
 8. **Machines read English, the operator reads Russian.** Code, comments, contracts, order templates,
    host-function descriptions and test names are English — a model reads them. Russian stays where
    the operator reads: the `subject` of a question, a `blocked` diagnosis, `log()`, `docs/*.md`,
-   `backlog.md`. **Role files are the exception, and they are Russian** — every one of them since
-   commit `36663ef`: a role is executed by a 27B model on a Russian request, and an instruction it
-   must obey word for word is written in the language of the artifact it produces. The rule that once
-   said otherwise was a constant with no consumer and no lint behind it; it is deleted, not relaxed.
-   This says nothing about artifacts either: a role's LAW "the artifact speaks the language of the ORDER" is untouched —
-   a Russian `TASK.md` still yields a Russian BRD, and the guardrail for that is `core/lang.mjs`.
+   `backlog.md`. **У файла роли язык означает ЗРЕЛОСТЬ, а не вкус автора**
+   (решение оператора 21.08.2026; подробно — `standards/role.md`, ограничение 5). Машина пишет роль и
+   её наряд по-русски; оператор, проработав шаг вручную, переводит их на английский — и перевод здесь
+   отметка о ревизии, а не косметика: переводя, читают каждую строку и выбрасывают всё, что не
+   инструкция. Русский файл роли читается как «через руки не проходил».
+   Артефактов это не касается: LAW роли «артефакт говорит языком ЗАКАЗА» не тронут — русский
+   `TASK.md` даёт русский BRD и при английской роли, а гардрейл языка — `core/lang.mjs`.
 $END_CONSTRAINTS
 
 $START_TESTS

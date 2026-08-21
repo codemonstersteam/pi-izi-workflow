@@ -70,8 +70,22 @@ $START_CONSTRAINTS
    order. This has happened in a live run.
 4. **The order carries the data; the role does not go looking for files.** If the role has `read`,
    say explicitly what it may read and why — otherwise it will browse.
-5. **The artifact speaks the order's language**, not the role's. Write the role in English and say
-   this out loud; a Russian request must yield a Russian artifact.
+5. **ЯЗЫК РОЛИ — ЭТО ЕЁ ЗРЕЛОСТЬ, А НЕ ВКУС.** Решение оператора 21.08.2026, и оно описывает уже
+   сложившийся факт: роли, которые месяцами правили руками (`scout`, `intake`, `critic`,
+   `plan-critic`, `plan-fixer`), давно английские; роли, написанные машиной и с тех пор не тронутые
+   (`gilb`, `valuer`, `flow-designer`), русские.
+
+   | язык файла | что это значит |
+   |---|---|
+   | русский | роль и её наряд написаны МАШИНОЙ и через руки оператора не проходили |
+   | английский | оператор проработал шаг вручную: перевёл, вычитал каждую строку, оставил только инструкции |
+
+   Перевод здесь не косметика, а **отметка о ревизии**: переводя, оператор обязан прочитать каждую
+   строку и выбросить всё, что не является инструкцией. Поэтому «перевести роль» и «доработать
+   роль» — одно действие, и второго признака зрелости в репозитории нет.
+
+   **Артефакта это не касается: он говорит языком ЗАКАЗА**, а не роли. Русский `TASK.md` даёт
+   русский BRD и при английской роли; гардрейл языка — `core/lang.mjs`.
 6. **The role never self-certifies.** "Done" is the guardrail's exit code. A role that found a
    blocker succeeded — a negative verdict is data, not an error.
 7. **A line of a role is an INSTRUCTION, not an account.** What to do and in what form — nothing
