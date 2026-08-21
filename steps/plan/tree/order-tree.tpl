@@ -35,6 +35,14 @@ $START_PREVIOUS_CONTENT
 $END_PREVIOUS_CONTENT
 $END_PREVIOUS_DOCUMENT
 
+$START_FEEDBACK
+Blockers from the last validation of the staging file (empty = first attempt).
+Each blocker names a module by its path. Fix exactly those; change nothing else.
+$START_CONTENT
+{FEEDBACK}
+$END_CONTENT
+$END_FEEDBACK
+
 $START_SAMPLE_DOCUMENT
 path: файлы репозитория, решающие ту же задачу
 ОБРАЗЦЫ: по два кандидата на каждый твой модуль. Отсюда берутся базовый класс, аннотации и форма
@@ -83,14 +91,6 @@ Before writing, answer yourself for every module in one line:
 “It calls X” is not an answer: the caller depends on the callee, never the other way round.
 If any answer names a module that calls YOU, remove it from `<needs>`.
 $END_SELFCHECK
-
-$START_FEEDBACK
-Blockers from the last validation of the staging file (empty = first attempt).
-Each blocker names a module by its path. Fix exactly those; change nothing else.
-$START_CONTENT
-{FEEDBACK}
-$END_CONTENT
-$END_FEEDBACK
 
 $START_OUTPUT
 path: {STAGING}

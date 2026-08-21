@@ -34,6 +34,14 @@ $START_PREVIOUS_CONTENT
 $END_PREVIOUS_CONTENT
 $END_PREVIOUS_DOCUMENT
 
+$START_FEEDBACK
+Блокеры последней проверки staging-файла (пусто = первая попытка).
+Каждый называет строку её `closes`. Чини ровно их, больше ничего не меняй.
+$START_FEEDBACK_CONTENT
+{FEEDBACK}
+$END_FEEDBACK_CONTENT
+$END_FEEDBACK
+
 $START_MODULES_DOCUMENT
 path: .agent/tree.xml
 МОДУЛИ РАБОТЫ: путь, что каждый прячет, что гарантирует и какой отказ порождает.
@@ -83,14 +91,6 @@ $START_SELFCHECK
 «Всё сходится» ответом не является: назови значения и модули поимённо.
 Если у значения оказалось два порождающих — переименуй одно из них.
 $END_SELFCHECK
-
-$START_FEEDBACK
-Блокеры последней проверки staging-файла (пусто = первая попытка).
-Каждый называет строку её `closes`. Чини ровно их, больше ничего не меняй.
-$START_FEEDBACK_CONTENT
-{FEEDBACK}
-$END_FEEDBACK_CONTENT
-$END_FEEDBACK
 
 $START_OUTPUT
 path: {STAGING}
