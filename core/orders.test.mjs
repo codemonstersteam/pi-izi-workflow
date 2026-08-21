@@ -147,7 +147,11 @@ test("полоса: адресат блокера, зелёная порция �
   assert.match(loop, /const first = !carried && attempt === 0/, "первый проход считается по счётчику, а не по обратной связи")
   assert.match(loop, /if \(first && mineText\.trim\(\)\)/, "ворота зелени не ограничены первым проходом")
   assert.match(loop, /const blind = !first &&/, "блокер без путей не разведён — круг уйдёт в пустоту")
-  assert.match(loop, /const slots = await order\(n, mineText, feedback\)/, "прошлый ответ роли не уезжает в наряд")
+  // Прошлый ответ уезжает в наряд обоих родов: обычного (как PREVIOUS) и починочного (как РАБОТА).
+  assert.match(loop, /await order\(n, mineText, feedback\)/, "прошлый ответ роли не уезжает в наряд")
+  assert.match(loop, /await fix\(n, mineText, feedback\)/, "наряд починки не получает прошлый ответ")
+  // НА ПОЧИНКЕ — СВОЙ НАРЯД. Пустой скелет там мёртвый груз: роль правит свой ответ, а не поля.
+  assert.match(loop, /const repairing = Boolean\(mineText\.trim\(\)\) && !first/, "починка не отличается от первого захода")
 })
 
 // ШАГ БЕЗ ОТМЕТКИ МОЛЧА ЛОМАЕТ ВОЗОБНОВЛЕНИЕ. Лестница (core/runlog.mjs::resumeAt) входит в ПЕРВЫЙ

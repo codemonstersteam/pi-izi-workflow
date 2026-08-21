@@ -88,6 +88,7 @@ import { parseValues, valuesSkeleton, normalize, checkValues } from "../steps/pl
 import { SECTION_KEYS, sectionsOf } from "../steps/plan/sections.mjs"
 import { modulesOfChange, sampleOf, rankedCandidates, treeSkeleton, parseTree, checkTree, digestOf, frdFor } from "../steps/plan/tree/tree.mjs"
 import { flowsSkeleton, parseFlows, checkFlows, treeFor } from "../steps/plan/flows/flows.mjs"
+import { repairTask } from "../steps/plan/repair.mjs"
 import { wavesOf, planDoc, checkBook } from "../steps/plan/book/book.mjs"
 import { newDecision, renderDecisions, parseDecisions } from "../steps/plan/decisions/decisions.mjs"
 import { orderOf } from "../steps/plan/order.mjs"
@@ -2046,6 +2047,19 @@ export const flowsJoin = {
 
 // ПЛАН СОБИРАЕТСЯ СКРИПТОМ И НЕ СТОИТ НИ ОДНОГО ТОКЕНА. Отказ сборки не пишет план И СНОСИТ
 // предыдущий: план, переживший дыру, — это гейт, утверждающий работу, которой уже нет.
+// ВЕРДИКТ ГАРДРЕЙЛА — ЭТО ЗАДАЧА, А НЕ ЖАЛОБА. Наряд починки открывается нумерованным списком
+// находок, у каждой впереди АДРЕС правки: строка потока по её `closes` либо путь модуля. Роль не
+// ищет место по всему файлу и не гадает, к чему относится замечание.
+export const repair = {
+  description: "Turn a guardrail verdict into the TASK of a repair order: one numbered item per blocker, each opening with the ADDRESS of the edit — a flow row by its `closes`, or a module path. Nothing is paraphrased: the guardrail already had to name the way out (standards/guardrail.md), and a retelling would only spoil it. Costs no tokens.",
+  input: { type: "object", properties: { blockers: { type: "string" } }, required: ["blockers"], additionalProperties: false },
+  output: { type: "object", properties: { ok: { type: "boolean" }, text: { type: "string" }, count: { type: "number" } }, required: ["ok"], additionalProperties: false },
+  run({ blockers }) {
+    const t = repairTask(blockers)
+    return { ok: true, text: t.lines.join("\n"), count: t.count }
+  },
+}
+
 export const planbook = {
   description: "Step 9D: assemble task/<KEY>/PLAN.md from the tree, the flows, the requirement and the decisions log. A SCRIPT, not a role: the plan holds no decision that is not already in the tree or the flows — it indexes them. Waves come from `needs` (never from the flows: a data flow is a round trip and therefore a circle). Refuses when the tree is circular, when a module or a `fit` value did not reach the document, or when a placeholder was left in it — and REMOVES the previous PLAN.md on any refusal. Costs no tokens.",
   input: { type: "object", properties: {}, additionalProperties: false },
@@ -3279,8 +3293,8 @@ export default function extension(pi) {
   registerWorkflowExtension({
     version: "1.25.0",
     headline: "izi: task → brd → survey-plan → scope → graph → intake → weight → ripple → design → plan → review host functions",
-    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/orderLine/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/values/tree/treeJoin/twin/neighbours/flows/flowsJoin/planbook/decision/planReview/planFix/planRoute/planFeedback/clearStaged/nodeFacts/frdAdopt/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/, steps/planreview/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
-    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, orderLine, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, values, tree, treeJoin, twin, neighbours, flows, flowsJoin, planbook, decision, planReview, planFix, planRoute, planFeedback, clearStaged, nodeFacts, frdAdopt, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
+    description: "readText/answers/brdForm/frdForm/carried/reviewForm/budgets/orderLine/herdrStatus/newRun/checkTask/checkBrd/promote/setPending/clearPending/survey/cells/digest/reuse/remember/checkPart/buildGraph/graphMap/checkFrd/weight/ripple/values/tree/treeJoin/twin/repair/neighbours/flows/flowsJoin/planbook/decision/planReview/planFix/planRoute/planFeedback/clearStaged/nodeFacts/frdAdopt/gate1/branch/tickets/plan/review, plus the gilb, scout, intake, designer and critic role directories (steps/brd/, steps/scope/, steps/intake/, steps/design/, steps/review/, steps/planreview/) and the izi_answer tool (pi.registerTool, not a sandbox function).",
+    functions: { readText, answers, brdForm, frdForm, carried, reviewForm, budgets, orderLine, herdrStatus, newRun, checkTask, checkBrd, promote, setPending, clearPending, survey, focus, cells, digest, reuse, remember, checkPart, buildGraph, graphMap, checkFrd, weight, ripple, values, tree, treeJoin, twin, repair, neighbours, flows, flowsJoin, planbook, decision, planReview, planFix, planRoute, planFeedback, clearStaged, nodeFacts, frdAdopt, gate1, branch, tickets, plan, review, runlogRead, runlogMark, runlogTicket, runlogPending },
     // steps/brd/ carries gilb.md, steps/scope/ carries scout.md, steps/intake/ carries intake.md and
     // steps/design/ carries designer.md (role files, named by ROLE not by step — see steps/brd/gilb.md's
     // own header) alongside their cores/orders/tests;

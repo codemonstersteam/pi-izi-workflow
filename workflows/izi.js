@@ -1112,7 +1112,9 @@ const rework = async (steps, note) => {
 async function designing(from = 6, fromCut = "") {
   const KEY = (await checkTask({})).key || "";
   const treeTpl = await readText({ path: "steps/plan/tree/order-tree.tpl" });
+  const treeFixTpl = await readText({ path: "steps/plan/tree/order-tree.fix.tpl" });
   const flowTpl = await readText({ path: "steps/plan/flows/order-flow.tpl" });
+  const flowFixTpl = await readText({ path: "steps/plan/flows/order-flow.fix.tpl" });
   const FRD = await readText({ path: ".agent/frd.xml" });
 
   // --- 9A: словарь границы -----------------------------------------------------------------------
@@ -1165,6 +1167,21 @@ async function designing(from = 6, fromCut = "") {
     },
     judge: (n) => tree({ path: `${STAGING_DIR}/tree~${n}.xml`, slice: n }),
     staging: (n) => `${STAGING_DIR}/tree~${n}.xml`,
+    fixTpl: treeFixTpl,
+    // НА ПОЧИНКЕ СКЕЛЕТ — МЁРТВЫЙ ГРУЗ: роль правит СВОЙ прошлый ответ, а не пустые поля. И задача
+    // у неё другая: не «заполни шесть мест», а «сделай ровно эти находки», каждая со своим адресом.
+    fix: async (n, PREVIOUS, feedback) => {
+      const mine = await tree({ slice: n });
+      const near = await neighbours({ slice: n });
+      const sample = await twin({ slice: n });
+      const todo = await repair({ blockers: feedback });
+      return {
+        TASKLIST: todo.text, COUNT: String(todo.count), PREVIOUS, TWIN: sample.text,
+        NEIGHBOURS: near.text || "(твоя порция первая)", FRD: mine.frd || FRD,
+        MINE: (mine.mine || []).join(" · "), STAGING: `${STAGING_DIR}/tree~${n}.xml`,
+        CHECK: "tree({path, slice}) — раздел на каждый модуль порции, у каждого секрет, io, образец, контракт; needs это ПУТЬ",
+      };
+    },
     join: () => treeJoin({ portions: cut.portions }),
     whole: () => tree({ path: `${STAGING_DIR}/tree.xml`, composed: true }),
     name: (n) => `порция ${n} из ${cut.portions}`,
@@ -1195,6 +1212,18 @@ async function designing(from = 6, fromCut = "") {
     },
     judge: (n) => flows({ path: `${STAGING_DIR}/flows~${sk.ucs[n - 1]}.xml`, uc: sk.ucs[n - 1] }),
     staging: (n) => `${STAGING_DIR}/flows~${sk.ucs[n - 1]}.xml`,
+    fixTpl: flowFixTpl,
+    fix: async (n, PREVIOUS, feedback) => {
+      const uc = sk.ucs[n - 1];
+      const own = await flows({ uc });
+      const todo = await repair({ blockers: feedback });
+      return {
+        TASKLIST: todo.text, COUNT: String(todo.count), PREVIOUS, UC: uc,
+        TREE: own.tree || TREE, VALUES: own.values || "", FRD: own.frd || FRD,
+        STAGING: `${STAGING_DIR}/flows~${uc}.xml`,
+        CHECK: "flows({path, uc}) — все шаги и ветвления этого use case закрыты, модуль из дерева, роль из словаря",
+      };
+    },
     join: () => flowsJoin({ ucs: sk.ucs }),
     whole: () => flows({ path: `${STAGING_DIR}/flows.xml`, composed: true }),
     name: (n) => `use case ${sk.ucs[n - 1]}`,
@@ -1224,7 +1253,7 @@ async function designing(from = 6, fromCut = "") {
 //      переписываются ВСЕ порции — незнакомая находка едет по самому дорогому маршруту;
 //   ③ правка ставится на СВОЙ прошлый ответ (`PREVIOUS`), а не пишется заново: роль, переписывающая
 //      файл ради строки, теряет остальное.
-async function portions({ count, id, tpl, role, order, judge, staging, join, whole, name, fromCut = "", together = false }) {
+async function portions({ count, id, tpl, fixTpl, role, order, fix, judge, staging, join, whole, name, fromCut = "", together = false }) {
   let feedback = fromCut || NO_FEEDBACK;
   const carried = Boolean(String(feedback).trim()) && feedback !== NO_FEEDBACK;
   let attempt = 0;
@@ -1248,8 +1277,13 @@ async function portions({ count, id, tpl, role, order, judge, staging, join, who
       if (todo.length) {
         const orders = {};
         for (const n of todo) {
-          const slots = await order(n, await readText({ path: staging(n) }), feedback);
-          const o = await sized(`design/${id}`, tpl, slots, `design/${id}`);
+          const was = await readText({ path: staging(n) });
+          // Наряд ПОЧИНКИ, когда есть и прошлый ответ, и вердикт: в нём нет скелета, а задача —
+          // нумерованный список находок с адресами, а не «заполни поля».
+          const repairing = Boolean(was.trim()) && carried;
+          const o = repairing
+            ? await sized(`design/${id}/fix`, fixTpl, await fix(n, was, feedback), `design/${id}/fix`)
+            : await sized(`design/${id}`, tpl, await order(n, was, feedback), `design/${id}`);
           if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд ${name(n)} не помещается в окно модели` }));
           orders[String(n)] = o.text;
         }
@@ -1277,8 +1311,10 @@ async function portions({ count, id, tpl, role, order, judge, staging, join, who
       }
       if (!first) log(`design/${id}: ${name(n)} — адресат блокера${blind ? " (адресата не назвали — переписываются все)" : ""}, переписывается`);
 
-      const slots = await order(n, mineText, feedback);
-      const o = await sized(`design/${id}`, tpl, slots, `design/${id}`);
+      const repairing = Boolean(mineText.trim()) && !first;
+      const o = repairing
+        ? await sized(`design/${id}/fix`, fixTpl, await fix(n, mineText, feedback), `design/${id}/fix`)
+        : await sized(`design/${id}`, tpl, await order(n, mineText, feedback), `design/${id}`);
       if (o.over) exit(err("blocked", { subject: o.why, evidence: `наряд ${name(n)} не помещается в окно модели` }));
       const env = await agent(o.text, { role, outputSchema: ENVELOPE });
       // ВОПРОС РОЛИ — РЕЛЬСА, А НЕ ОШИБКА. Роль спрашивает только о необратимом, о чём требование

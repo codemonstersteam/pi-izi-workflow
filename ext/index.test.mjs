@@ -1547,12 +1547,16 @@ test("D29b: наряд выше потолка — отказ, и он НАЗЫ�
 })
 
 test("D29b: прямые сборки наряда идут через sized, и каждая отказывает по-своему", () => {
-  // ДВЕНАДЦАТЬ мест — шаги 2, 4, 11, ЧЕТЫРЕ на шаге 6 (у каждого пласта свой наряд,
-  // steps/intake/passes-data-flow.md), ДВА на шаге 10в (критик плана и его фиксер) и ТРИ на шаге 9:
-  // словарь границы плюс два хода общего цикла порций — последовательный и одновременный.
-  assert.equal([...IZI.matchAll(/= await sized\(/g)].length, 12, "двенадцать прямых сборок наряда")
+  // ЧЕТЫРНАДЦАТЬ мест — шаги 2, 4, 11, ЧЕТЫРЕ на шаге 6 (у каждого пласта свой наряд,
+  // steps/intake/passes-data-flow.md), ДВА на шаге 10в (критик плана и его фиксер) и ПЯТЬ на шаге 9:
+  // словарь границы плюс два хода цикла порций, и в каждом ходе — наряд первого захода и наряд
+  // ПОЧИНКИ, у которых разные шаблоны и разные слоты. Считаются ВСЕ вызовы, а не только присваивания:
+  // наряд починки выбирается тернарным оператором, и `= await sized` его бы не увидел.
+  assert.equal([...IZI.matchAll(/await sized\(/g)].length, 14, "четырнадцать прямых сборок наряда")
   assert.match(IZI, /const order = await sized\("design\/values", /, "наряд словаря собран мимо меры")
-  assert.match(IZI, /const o = await sized\(`design\/\$\{id\}`, tpl, slots/, "наряд порции собран мимо меры")
+  // Наряд порции собирается в двух видах, и оба идут через меру: первый заход и ПОЧИНКА.
+  assert.match(IZI, /await sized\(`design\/\$\{id\}`, tpl, await order\(/, "наряд первого захода собран мимо меры")
+  assert.match(IZI, /await sized\(`design\/\$\{id\}\/fix`, fixTpl, await fix\(/, "наряд починки собран мимо меры")
   assert.match(IZI, /const order = await sized\("planreview", criticTpl, \{/)
   assert.match(IZI, /const fix = await sized\("planreview\/fix", tpl, \{/)
   assert.match(IZI, /const order = await sized\("brd", orderTpl, \{/)
@@ -1572,7 +1576,8 @@ test("D29b: прямые сборки наряда идут через sized, и
   assert.match(scoutFn, /if \(order\.over\) return \{ ok: false, why: order\.why \};/)
   assert.doesNotMatch(scoutFn, /exit\(/)
   // …а остальные — blocked с диагнозом гардрейла. Их семь: шаги 2, 6, 11, критик плана 10в и ТРИ на
-  // шаге 9 — словарь границы и оба хода цикла порций; фиксер 10в отказывает своей строкой (`fix.over`).
+  // шаге 9 — словарь границы и оба хода цикла порций (наряд починки отказывает той же строкой, что и
+  // наряд первого захода: мера у них одна); фиксер 10в отказывает своей строкой (`fix.over`).
   assert.equal([...IZI.matchAll(/if \(o(?:rder)?\.over\) exit\(err\("blocked"/g)].length, 7)
   assert.match(IZI, /if \(fix\.over\) exit\(err\("blocked"/, "наряд фиксера без меры против окна")
 
