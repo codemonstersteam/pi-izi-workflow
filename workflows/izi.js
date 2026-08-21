@@ -1062,6 +1062,15 @@ async function rippling() {
   log(`ripple: design=${r.design} узлов ${r.nodes} из ${r.total} (затравок ${r.seeds}, mode=${r.mode})`);
 }
 
+// Признак «обратной связи нет» — ОДИН литерал на всю полосу: он же умолчание параметра, он же мерка,
+// по которой считается первый проход. Второй литерал означал бы два ответа на один вопрос.
+const NO_FEEDBACK = "(none — first attempt)";
+
+// Каталоги шага 9. Скелеты и порции считает скрипт и кладёт в STEP9; ответы роли живут в STAGING —
+// артефакт, написанный ролью, обязан быть отличим от того, что посчитала машина.
+const STEP9 = ".agent/step9";
+const STAGING_DIR = ".agent/staging";
+
 // FUNCTION_CONTRACT: rework — mark every step the band is about to replay, and hear the journal out
 //   Input:        steps — the step numbers to reopen; note — free text: a guardrail's blocker or the
 //                 operator's own words
