@@ -104,11 +104,21 @@ $END_CONSTRAINTS
 $START_TESTS
 ```
 N_units(pure module) = 1 happy path + Σ antecedent branches with a DISTINGUISHABLE consequent
+                       + 1 silence per external operand
 ```
 
+The formula lives in `standards/workflow-design.md` and is quoted here, not owned here. **Silence is
+a mandatory branch** (`standards/guardrail.md`): with the operand absent a rule must stay SILENT —
+not red (a dead-end blocker the role cannot close) and not green (rubbish went through).
+
 - More than three units on one module means the module is under-decomposed: split it, do not write
-  the fourth test.
+  the fourth test. A guardrail is no exception and gets no waiver: a judge carrying 49 branches is a
+  dump, not a module. Cut it into a judge PER RULE, each with its own units, and leave the step's
+  `judge.mjs` as the head that adds them up.
 - Heads, io pipes and adapters are not unit-tested — a live run of the slice proves them.
+- **A STEP is proven by a component test, not by units and not by a live run** — the rail's own path
+  (fixture → order → recorded model answer → guardrail → promotion), offline, in milliseconds. How to
+  write one: `standards/component-test.md`. Worked example: `steps/plan/tree/component/`.
 - A new rule needs a **seam**: a lint or test that turns red when the rule is broken. Prove the seam
   by reintroducing the defect, watching it go red, then restoring it.
 - A test that no code change can turn red is a comment. Do not write it.

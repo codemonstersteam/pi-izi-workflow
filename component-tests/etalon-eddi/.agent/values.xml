@@ -1,0 +1,52 @@
+<values grammar="2">
+  <value id="v1" text="GET /glossarystore/glossaries" closes="UC1/in"/>
+  <value id="v2" text="200 (glossaries)" closes="UC1/post"/>
+  <value id="v3" text="POST /glossarystore/glossaries (terms)" closes="UC2/in"/>
+  <value id="v4" text="201 (id, version, terms)" closes="UC2/post"/>
+  <value id="v5" text="400 TERM_KEY_INVALID" closes="UC2/2a"/>
+  <value id="v6" text="PUT /glossarystore/glossaries/{id} (terms)" closes="UC3/in"/>
+  <value id="v7" text="200 (terms, version)" closes="UC3/post"/>
+  <value id="v8" text="400 TERM_KEY_INVALID" closes="UC3/2a"/>
+  <value id="v9" text="404 GLOSSARY_NOT_FOUND" closes="UC3/3a"/>
+  <value id="v10" text="DELETE /glossarystore/glossaries/{id}" closes="UC4/in"/>
+  <value id="v11" text="204" closes="UC4/post"/>
+  <value id="v12" text="404 GLOSSARY_NOT_FOUND" closes="UC4/2a"/>
+  <value id="v13" text="bound glossaries (agent config)" closes="UC5/in"/>
+  <value id="v14" text="resolved glossary terms (merged)" closes="UC5/post"/>
+  <value id="v15" text="422 GLOSSARY_DELETED" closes="UC5/2a"/>
+  <value id="v16" text="rendered prompt (unresolved placeholders)" closes="UC5/4a"/>
+  <value id="v17" text="bound glossaries (agent)" closes="UC6/in"/>
+  <value id="v18" text="ZIP (glossary JSON, descriptors)" closes="UC6/post"/>
+  <value id="v19" text="import ZIP (glossary files)" closes="UC7/in"/>
+  <value id="v20" text="glossaries (upgraded, created, bound)" closes="UC7/post"/>
+  <value id="v21" text="Glossary model"/>
+  <value id="v22" text="CRUD glossaries"/>
+  <value id="v23" text="REST /glossarystore/glossaries"/>
+  <value id="v24" text="MongoDB glossary persistence"/>
+  <value id="v25" text="resolveGlossaryTerms()"/>
+  <value id="v26" text="exportAgent"/>
+  <value id="v27" text="importInitialAgents"/>
+  <value id="v28" text="readGlossaries()"/>
+  <value id="v29" text="execute()"/>
+  <value id="v30" text="r11"/>
+  <value id="v31" text="close()"/>
+  <value id="v32" text="readAgent()"/>
+  <value id="v33" text="readSnippets()"/>
+  <value id="v34" text="readWorkflows()"/>
+  <value id="v35" text="getAgentZipArchive(String agentFilename)"/>
+  <value id="v36" text="exportAgent(String agentId, Integer agentVersion, String selectedResourceIds)"/>
+  <value id="v37" text="previewExport(String agentId, Integer agentVersion)"/>
+  <value id="v38" text="importInitialAgents()"/>
+  <value id="v39" text="previewImport(InputStream zippedAgentConfigFiles, String targetAgentId)"/>
+  <value id="v40" text="create(List&lt;T&gt; configs, ImportTransaction transaction)"/>
+  <value id="v41" text="update(T config, String localId, Integer localVersion, ImportTransaction transaction)"/>
+  <value id="v42" text="listRemoteAgents(String sourceUrl, String sourceAuth)"/>
+  <value id="v43" text="previewSyncBatch(String sourceUrl, List&lt;SyncMapping&gt; mappings, String sourceAuth)"/>
+  <value id="v44" text="executeSyncBatch(String sourceUrl, List&lt;SyncRequest&gt; requests, String sourceAuth)"/>
+  <value id="v45" text="ZipResourceSource(Path unzippedDirectory, IJsonSerialization jsonSerialization)"/>
+  <value id="v46" text="getId()"/>
+  <value id="v47" text="getType()"/>
+  <value id="v48" text="execute(IConversationMemory memory, Object component)"/>
+  <value id="v49" text="configure(Map&lt;String, Object&gt; configuration, Map&lt;String, Object&gt; extensions)"/>
+  <value id="v50" text="getExtensionDescriptor()"/>
+</values>

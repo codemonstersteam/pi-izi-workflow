@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url"
 const HARNESS = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
 test("установка везёт исполняемое и НЕ везёт перевод для человека", () => {
-  const planted = join(HARNESS, "steps", "design", "valuer-ru.md")
+  const planted = join(HARNESS, "steps", "plan", "values", "valuer-ru.md")
   const mine = !existsSync(planted)
   if (mine) writeFileSync(planted, "Перевод для вычитки — временный файл теста.\n")
 
@@ -36,7 +36,7 @@ test("установка везёт исполняемое и НЕ везёт п
 
     assert.equal(existsSync(join(dst, "steps", "plan", "values", "valuer.md")), true, "роль едет в проект")
     assert.equal(existsSync(join(dst, "workflows", "izi.js")), true, "программа едет в проект")
-    assert.equal(existsSync(join(dst, "steps", "design", "valuer-ru.md")), false, "перевод остаётся в харнесе")
+    assert.equal(existsSync(join(dst, "steps", "plan", "values", "valuer-ru.md")), false, "перевод остаётся в харнесе")
   } finally {
     rmSync(dst, { recursive: true, force: true })
     if (mine) rmSync(planted, { force: true })

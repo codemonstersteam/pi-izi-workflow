@@ -26,7 +26,7 @@ const kindOf = (path) => {
 }
 const dirOf = (path) => String(path || "").split("/").slice(0, -1).join("/")
 const tailOf = (path) => String(path || "").split("/").slice(-2, -1)[0] || ""
-const baseOf = (path) => (String(path || "").split("/").pop() || "").replace(/\.[^.]+$/, "")
+export const baseOf = (path) => (String(path || "").split("/").pop() || "").replace(/\.[^.]+$/, "")
 
 // ФОРМА ИМЕНИ — ИМЯ БЕЗ СУЩНОСТИ. `IRestGlossaryStore` в каталоге `configs/glossaries` — это
 // `IRest*Store`, и его близнец `IRestAgentStore` в `configs/agents` — тоже. А `IAgentStore` это
@@ -42,7 +42,7 @@ export const shapeOf = (path) => {
     return !dirs.some((d) => d.startsWith(stem) || stem.startsWith(d.replace(/(ies|es|s)$/, "")))
   }).join("*") || base
 }
-const isPath = (x) => String(x || "").includes("/") && /\.[A-Za-z0-9]+$/.test(String(x || ""))
+export const isPath = (x) => String(x || "").includes("/") && /\.[A-Za-z0-9]+$/.test(String(x || ""))
 const text = (body, tag) => {
   const m = String(body || "").match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`))
   return m ? m[1].trim() : ""

@@ -57,19 +57,19 @@ re-read the file and confirm the answer actually arrived before calling the agen
 $END_OPERATOR_CHANNEL
 
 $START_STEP_SHAPE
-A step is one vertical slice: one input → one artifact → its own guardrail.
-
-```
-steps/<id>/
-  <role>.md        role file — the FILENAME is the role name pi resolves
-  order.tpl        the order; placeholders match prompt() keys exactly, both ways
-  <core>.mjs       pure rules, exported, unit-tested
-  <core>.test.mjs
-```
+A step is one vertical slice: one input → one artifact → its own guardrail. Its FORM — what it
+exports, what lives inside it, and where the line between deciding and doing runs — is
+`standards/workflow-design.md`, and it is not restated here. What belongs to the HOST is:
 
 - The guardrail decides, not the role: a step closes on a script's verdict.
 - Check the staging path **before** promoting it to the output path.
 - `prompt(template, values)` requires an exact bidirectional match — an unused key fails the launch.
+- The role file's FILENAME is the role name pi resolves; the directory is registered through
+  `roleDirectories`, so a role travels with the extension and not with the project.
+- `parallel` demands a LITERAL string name and a LITERAL object of tasks — the host validates the
+  workflow SOURCE before running it. A dynamically built swarm does not start at all.
+- `checkpoint` takes ONE object `{name, prompt, context}`, `prompt` ≤ 1024 bytes, and the NAME keys
+  the pause: two turns under one name are one pause, and the second question never reaches anybody.
 $END_STEP_SHAPE
 
 $START_SUCCESS

@@ -1,0 +1,423 @@
+<ripple grammar="1" mode="major" seeds="5" nodes="29">
+  <module path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" seed="yes" pkg="ai.labs.eddi.backup" component="c1" level="4">
+    <role>Interface and data records defining the contract for reading agent, workflow, and snippet sources during backup operations</role>
+    <api name="close()" kind="lib" scope="internal"/>
+    <api name="readAgent()" kind="lib" scope="internal"/>
+    <api name="readSnippets()" kind="lib" scope="internal"/>
+    <api name="readWorkflows()" kind="lib" scope="internal"/>
+    <decl kind="interface" name="IResourceSource" sig="public interface IResourceSource"/>
+    <decl kind="method" name="readAgent()" sig="AgentSourceData readAgent()"/>
+    <decl kind="method" name="readWorkflows()" sig="List&lt;WorkflowSourceData&gt; readWorkflows()"/>
+    <decl kind="method" name="readSnippets()" sig="List&lt;SnippetSourceData&gt; readSnippets()"/>
+    <decl kind="method" name="close()" sig="default void close()"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/IRestExportService.java" pkg="ai.labs.eddi.backup" component="c1" level="2">
+    <role>JAX-RS interface for exporting agents as zip archives</role>
+    <api name="GET /backup/export/{agentFilename}" kind="http" scope="public" via="@GET Response getAgentZipArchive(@PathParam(&quot;agentFilename&quot;)"/>
+    <decl kind="interface" name="IRestExportService" sig="public interface IRestExportService"/>
+    <decl kind="method" name="getAgentZipArchive(@PathParam(&quot;agentFilename&quot;)" sig="Response getAgentZipArchive(@PathParam(&quot;agentFilename&quot;)"/>
+    <decl kind="method" name="exportAgent(@PathParam(&quot;agentId&quot;)" sig="Response exportAgent(@PathParam(&quot;agentId&quot;)"/>
+    <decl kind="method" name="previewExport(@PathParam(&quot;agentId&quot;)" sig="ExportPreview previewExport(@PathParam(&quot;agentId&quot;)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/IRestImportService.java" pkg="ai.labs.eddi.backup" component="c1" level="2">
+    <role>JAX-RS interface for importing agents and syncing with remote EDDI instances</role>
+    <api name="POST /backup/import/initialAgents" kind="http" scope="public" via="@POST List&lt;AgentDeploymentStatus&gt; importInitialAgents()"/>
+    <api name="POST /backup/import/sync" kind="http" scope="public" via="@POST Response executeSync(@QueryParam(&quot;sourceUrl&quot;)"/>
+    <api name="POST /backup/import/sync/preview" kind="http" scope="public" via="@POST ImportPreview previewSync(@QueryParam(&quot;sourceUrl&quot;)"/>
+    <decl kind="interface" name="IRestImportService" sig="public interface IRestImportService"/>
+    <decl kind="method" name="importInitialAgents()" sig="List&lt;AgentDeploymentStatus&gt; importInitialAgents()"/>
+    <decl kind="method" name="listRemoteAgents(@QueryParam(&quot;sourceUrl&quot;)" sig="List&lt;DocumentDescriptor&gt; listRemoteAgents(@QueryParam(&quot;sourceUrl&quot;)"/>
+    <decl kind="method" name="previewSync(@QueryParam(&quot;sourceUrl&quot;)" sig="ImportPreview previewSync(@QueryParam(&quot;sourceUrl&quot;)"/>
+    <decl kind="method" name="previewSyncBatch(@QueryParam(&quot;sourceUrl&quot;)" sig="List&lt;ImportPreview&gt; previewSyncBatch(@QueryParam(&quot;sourceUrl&quot;)"/>
+    <decl kind="method" name="executeSync(@QueryParam(&quot;sourceUrl&quot;)" sig="Response executeSync(@QueryParam(&quot;sourceUrl&quot;)"/>
+    <decl kind="method" name="executeSyncBatch(@QueryParam(&quot;sourceUrl&quot;)" sig="Response executeSyncBatch(@QueryParam(&quot;sourceUrl&quot;)"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/IZipArchive.java" pkg="ai.labs.eddi.backup" component="c1" level="3" cut="1">
+    <role>Interface defining zip and unzip operations for backup archive management</role>
+    <api name="createZip()" kind="lib" scope="internal"/>
+    <api name="unzip()" kind="lib" scope="internal"/>
+    <decl kind="interface" name="IZipArchive" sig="public interface IZipArchive"/>
+    <decl kind="method" name="createZip(String sourceDirPath, String targetZipPath)" sig="void createZip(String sourceDirPath, String targetZipPath)"/>
+    <decl kind="method" name="createZip(String sourceDirPath, String targetZipPath, java.nio.file.Path allowedBaseDir)" sig="void createZip(String sourceDirPath, String targetZipPath, java.nio.file.Path allowedBaseDir)"/>
+    <decl kind="method" name="unzip(InputStream zipFile, File targetDir)" sig="void unzip(InputStream zipFile, File targetDir)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/AbstractBackupService.java" pkg="ai.labs.eddi.backup.impl" component="c1" level="3">
+    <role>Abstract base class for backup services providing URI extraction and legacy normalization utilities</role>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/CallbackMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/CallbackMatcher.java" pkg="ai.labs.eddi.backup.impl" component="c1" level="4">
+    <role>Regex-based string matching utility with per-match callback pattern</role>
+    <decl kind="class" name="CallbackMatcher" sig="public class CallbackMatcher"/>
+    <decl kind="interface" name="Callback" sig="public interface Callback"/>
+    <decl kind="class" name="CallbackMatcherException" sig="public static class CallbackMatcherException"/>
+    <decl kind="method" name="foundMatch(MatchResult matchResult)" sig="String foundMatch(MatchResult matchResult)"/>
+    <decl kind="method" name="CallbackMatcher(Pattern regex)" sig="public CallbackMatcher(Pattern regex)"/>
+    <decl kind="method" name="replaceMatches(CharSequence charSequence, Callback callback)" sig="public String replaceMatches(CharSequence charSequence, Callback callback)"/>
+    <decl kind="method" name="CallbackMatcherException(String message, Throwable cause)" sig="public CallbackMatcherException(String message, Throwable cause)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/AbstractBackupService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java" pkg="ai.labs.eddi.backup.impl" component="c1" level="2">
+    <role>Reads agent resource data from a remote EDDI instance REST API via HttpClient, producing IResourceSource records for the import pipeline</role>
+    <decl kind="class" name="RemoteApiResourceSource" sig="public class RemoteApiResourceSource"/>
+    <decl kind="method" name="readAgent()" sig="public AgentSourceData readAgent()"/>
+    <decl kind="method" name="readWorkflows()" sig="public List&lt;WorkflowSourceData&gt; readWorkflows()"/>
+    <decl kind="method" name="readSnippets()" sig="public List&lt;SnippetSourceData&gt; readSnippets()"/>
+    <io kind="http" dir="out" system="remote-eddi" target="/agentstore/agents/descriptors, /agentstore/agents/{id}, /workflowstore/workflows/{id}, /llmstore/llms/{id}, /snippetstore/snippets/descriptors, /snippetstore/snippets/{id}, /dictionarystore/dictionaries/{id}, /rulestore/rulesets/{id}, /apicallstore/apicalls/{id}, /propertysetterstore/propertysetters/{id}, /outputstore/outputsets/{id}, /mcpcallsstore/mcpcalls/{id}, /ragstore/rags/{id}"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IRestAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" seed="yes" pkg="ai.labs.eddi.backup.impl" component="c1" level="1">
+    <role>JAX-RS CDI service for exporting agents and their resources as ZIP archives, with preview and selective export capabilities</role>
+    <decl kind="class" name="RestExportService" sig="public class RestExportService"/>
+    <decl kind="method" name="getAgentZipArchive(String agentFilename)" sig="public Response getAgentZipArchive(String agentFilename)"/>
+    <decl kind="method" name="exportAgent(String agentId, Integer agentVersion, String selectedResourceIds)" sig="public Response exportAgent(String agentId, Integer agentVersion, String selectedResourceIds)"/>
+    <decl kind="method" name="previewExport(String agentId, Integer agentVersion)" sig="public ExportPreview previewExport(String agentId, Integer agentVersion)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/AbstractBackupService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/CallbackMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IRestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IZipArchive.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/IDocumentDescriptorStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java" seed="yes" pkg="ai.labs.eddi.backup.impl" component="c1" level="1">
+    <role>JAX-RS CDI service for importing agents from ZIP archives, supporting initial agent import, preview, merge, and upgrade strategies</role>
+    <decl kind="class" name="RestImportService" sig="public class RestImportService"/>
+    <decl kind="method" name="importInitialAgents()" sig="public List&lt;AgentDeploymentStatus&gt; importInitialAgents()"/>
+    <decl kind="method" name="previewImport(InputStream zippedAgentConfigFiles, String targetAgentId)" sig="public ImportPreview previewImport(InputStream zippedAgentConfigFiles, String targetAgentId)"/>
+    <decl kind="method" name="create(List&lt;T&gt; configs, ImportTransaction transaction)" sig="List&lt;URI&gt; create(List&lt;T&gt; configs, ImportTransaction transaction)"/>
+    <decl kind="method" name="update(T config, String localId, Integer localVersion, ImportTransaction transaction)" sig="URI update(T config, String localId, Integer localVersion, ImportTransaction transaction)"/>
+    <decl kind="method" name="listRemoteAgents(String sourceUrl, String sourceAuth)" sig="public List&lt;DocumentDescriptor&gt; listRemoteAgents(String sourceUrl, String sourceAuth)"/>
+    <decl kind="method" name="previewSyncBatch(String sourceUrl, List&lt;SyncMapping&gt; mappings, String sourceAuth)" sig="public List&lt;ImportPreview&gt; previewSyncBatch(String sourceUrl, List&lt;SyncMapping&gt; mappings, String sourceAuth)"/>
+    <decl kind="method" name="executeSyncBatch(String sourceUrl, List&lt;SyncRequest&gt; requests, String sourceAuth)" sig="public Response executeSyncBatch(String sourceUrl, List&lt;SyncRequest&gt; requests, String sourceAuth)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/AbstractBackupService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/CallbackMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/SourceUrlValidator.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IRestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IZipArchive.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IRestAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/IDocumentDescriptorStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+    <dep path="src/main/java/ai/labs/eddi/engine/runtime/client/factory/RestInterfaceFactory.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/ResourceUtilities.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/SourceUrlValidator.java" pkg="ai.labs.eddi.backup.impl" component="c1" level="2">
+    <role>Security utility for validating source URLs against SSRF by checking loopback and private IP addresses</role>
+    <decl kind="class" name="SourceUrlValidator" sig="public final class SourceUrlValidator"/>
+    <decl kind="method" name="validate(String sourceUrl, boolean allowHttp)" sig="public static void validate(String sourceUrl, boolean allowHttp)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java" pkg="ai.labs.eddi.backup.impl" component="c1" level="3" cut="1">
+    <role>CDI bean that matches source resources against a target agent's resource tree by structural position and type, producing ImportPreview with content diffs</role>
+    <decl kind="class" name="StructuralMatcher" sig="public class StructuralMatcher"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IRestAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/IDocumentDescriptorStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java" pkg="ai.labs.eddi.backup.impl" component="c1" level="2">
+    <role>CDI bean that executes an upgrade by syncing source content into existing target agent resources, creating new versions</role>
+    <decl kind="class" name="UpgradeExecutor" sig="public class UpgradeExecutor"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IRestAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/IDocumentDescriptorStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/ResourceUtilities.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java" seed="yes" pkg="ai.labs.eddi.backup.impl" component="c1" level="2">
+    <role>reads agent, workflow, and snippet backup data from an unzipped ZIP directory, implementing IResourceSource for restore operations</role>
+    <api name="readAgent()" kind="lib" scope="internal"/>
+    <api name="readSnippets()" kind="lib" scope="internal"/>
+    <api name="readWorkflows()" kind="lib" scope="internal"/>
+    <decl kind="class" name="ZipResourceSource" sig="public class ZipResourceSource"/>
+    <decl kind="method" name="ZipResourceSource(Path unzippedDirectory, IJsonSerialization jsonSerialization)" sig="public ZipResourceSource(Path unzippedDirectory, IJsonSerialization jsonSerialization)"/>
+    <decl kind="method" name="readAgent()" sig="public AgentSourceData readAgent()"/>
+    <decl kind="method" name="readWorkflows()" sig="public List&lt;WorkflowSourceData&gt; readWorkflows()"/>
+    <decl kind="method" name="readSnippets()" sig="public List&lt;SnippetSourceData&gt; readSnippets()"/>
+    <decl kind="method" name="close()" sig="public void close()"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/AbstractBackupService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/IAgentStore.java" pkg="ai.labs.eddi.configs.agents" component="c1" level="2" cut="2">
+    <role>Repository interface for agent configuration persistence and workflow-based descriptor lookup</role>
+    <decl kind="interface" name="IAgentStore" sig="public interface IAgentStore"/>
+    <decl kind="method" name="getAgentDescriptorsContainingWorkflow(String workflowId, Integer workflowVersion, boolean includePreviousVersions)" sig="List&lt;DocumentDescriptor&gt; getAgentDescriptorsContainingWorkflow(String workflowId, Integer workflowVersion, boolean includePreviousVersions)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/IRestAgentStore.java" pkg="ai.labs.eddi.configs.agents" component="c1" level="4" cut="1">
+    <role>REST resource interface for agent configuration CRUD, JSON schema retrieval, and descriptor operations</role>
+    <api name="GET /agentstore/agents/{id}" kind="http" scope="public" via="@GET AgentConfiguration readAgent(@PathParam(&quot;id&quot;)"/>
+    <api name="GET /agentstore/agents/descriptors" kind="http" scope="public" via="@GET List&lt;DocumentDescriptor&gt; readAgentDescriptors(@QueryParam(&quot;filter&quot;)"/>
+    <api name="GET /agentstore/agents/jsonSchema" kind="http" scope="public" via="@GET Response readJsonSchema()"/>
+    <api name="POST /agentstore/agents" kind="http" scope="public" via="@POST Response createAgent(AgentConfiguration agentConfiguration)"/>
+    <api name="POST /agentstore/agents/{id}" kind="http" scope="public" via="@POST Response duplicateAgent(@PathParam(&quot;id&quot;)"/>
+    <api name="POST /agentstore/agents/descriptors" kind="http" scope="public" via="@POST List&lt;DocumentDescriptor&gt; readAgentDescriptors(@QueryParam(&quot;filter&quot;)"/>
+    <api name="PUT /agentstore/agents/{id}" kind="http" scope="public" via="@PUT Response updateAgent(@PathParam(&quot;id&quot;)"/>
+    <api name="PUT /agentstore/agents/{id}/updateResourceUri" kind="http" scope="public" via="@PUT Response updateResourceInAgent(@PathParam(&quot;id&quot;)"/>
+    <decl kind="interface" name="IRestAgentStore" sig="public interface IRestAgentStore"/>
+    <decl kind="method" name="readJsonSchema()" sig="Response readJsonSchema()"/>
+    <decl kind="method" name="readAgentDescriptors(@QueryParam(&quot;filter&quot;)" sig="List&lt;DocumentDescriptor&gt; readAgentDescriptors(@QueryParam(&quot;filter&quot;)"/>
+    <decl kind="method" name="readAgentDescriptors(@QueryParam(&quot;filter&quot;)" sig="List&lt;DocumentDescriptor&gt; readAgentDescriptors(@QueryParam(&quot;filter&quot;)"/>
+    <decl kind="method" name="readAgent(@PathParam(&quot;id&quot;)" sig="AgentConfiguration readAgent(@PathParam(&quot;id&quot;)"/>
+    <decl kind="method" name="updateAgent(@PathParam(&quot;id&quot;)" sig="Response updateAgent(@PathParam(&quot;id&quot;)"/>
+    <decl kind="method" name="updateResourceInAgent(@PathParam(&quot;id&quot;)" sig="Response updateResourceInAgent(@PathParam(&quot;id&quot;)"/>
+    <decl kind="method" name="createAgent(AgentConfiguration agentConfiguration)" sig="Response createAgent(AgentConfiguration agentConfiguration)"/>
+    <decl kind="method" name="duplicateAgent(@PathParam(&quot;id&quot;)" sig="Response duplicateAgent(@PathParam(&quot;id&quot;)"/>
+    <decl kind="method" name="deleteAgent(@PathParam(&quot;id&quot;)" sig="Response deleteAgent(@PathParam(&quot;id&quot;)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/RagContextProvider.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java" pkg="ai.labs.eddi.configs.agents.model" component="c1" level="5" cut="4">
+    <role>Agent configuration data model with nested types for capabilities, identity, security, memory, guardrails, session management, and HITL</role>
+    <decl kind="class" name="AgentConfiguration" sig="public class AgentConfiguration"/>
+    <decl kind="class" name="ChannelConnector" sig="public static class ChannelConnector"/>
+    <decl kind="class" name="Capability" sig="public static class Capability"/>
+    <decl kind="class" name="AgentIdentity" sig="public static class AgentIdentity"/>
+    <decl kind="class" name="SecurityConfig" sig="public static class SecurityConfig"/>
+    <decl kind="class" name="UserMemoryConfig" sig="public static class UserMemoryConfig"/>
+    <decl kind="class" name="Guardrails" sig="public static class Guardrails"/>
+    <decl kind="class" name="DreamConfig" sig="public static class DreamConfig"/>
+    <decl kind="class" name="MemoryPolicy" sig="public static class MemoryPolicy"/>
+    <decl kind="class" name="StrictWriteDiscipline" sig="public static class StrictWriteDiscipline"/>
+    <decl kind="class" name="SessionManagement" sig="public static class SessionManagement"/>
+    <decl kind="class" name="AutoSnapshot" sig="public static class AutoSnapshot"/>
+    <decl more="139"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IRestAgentStore.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/IDocumentDescriptorStore.java" pkg="ai.labs.eddi.configs.descriptors" component="c1" level="4" cut="5">
+    <role>Java interface defining the contract for document descriptor persistence operations</role>
+    <api name="IDocumentDescriptorStore" kind="lib" scope="internal"/>
+    <decl kind="interface" name="IDocumentDescriptorStore" sig="public interface IDocumentDescriptorStore"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/ResourceUtilities.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/PromptSnippetService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/ResourceUtilities.java" pkg="ai.labs.eddi.configs.descriptors" component="c1" level="3">
+    <role>Static utility class for validating URIs and creating document descriptors</role>
+    <decl kind="class" name="ResourceUtilities" sig="public class ResourceUtilities"/>
+    <decl kind="method" name="validateUri(String resourceUriString)" sig="public static IResourceStore.IResourceId validateUri(String resourceUriString)"/>
+    <decl kind="method" name="createMalFormattedResourceUriException(String containingResourceUri)" sig="public static List&lt;DocumentDescriptor&gt; createMalFormattedResourceUriException(String containingResourceUri)"/>
+    <decl kind="method" name="createDocumentDescriptor(URI resource)" sig="public static DocumentDescriptor createDocumentDescriptor(URI resource)"/>
+    <decl kind="method" name="createConversationDescriptorDocument(URI resource, URI agentResourceURI, String userId)" sig="public static ConversationDescriptor createConversationDescriptorDocument(URI resource, URI agentResourceURI, String userId)"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/IDocumentDescriptorStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java" pkg="ai.labs.eddi.configs.descriptors.model" component="c1" level="5" cut="7">
+    <role>POJO model for document descriptors with name, description, and originId fields</role>
+    <decl kind="class" name="DocumentDescriptor" sig="public class DocumentDescriptor"/>
+    <decl kind="method" name="getName()" sig="public String getName()"/>
+    <decl kind="method" name="setName(String name)" sig="public void setName(String name)"/>
+    <decl kind="method" name="getDescription()" sig="public String getDescription()"/>
+    <decl kind="method" name="setDescription(String description)" sig="public void setDescription(String description)"/>
+    <decl kind="method" name="getOriginId()" sig="public String getOriginId()"/>
+    <decl kind="method" name="setOriginId(String originId)" sig="public void setOriginId(String originId)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IRestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IRestAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/IDocumentDescriptorStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/ResourceUtilities.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/PromptSnippetService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/snippets/IPromptSnippetStore.java" pkg="ai.labs.eddi.configs.snippets" component="c1" level="4" cut="2">
+    <role>Persistence interface defining CRUD operations for prompt snippets</role>
+    <decl kind="interface" name="IPromptSnippetStore" sig="public interface IPromptSnippetStore"/>
+    <decl kind="method" name="readAll()" sig="List&lt;PromptSnippet&gt; readAll()"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/PromptSnippetService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java" pkg="ai.labs.eddi.configs.snippets" component="c1" level="4" cut="1">
+    <role>JAX-RS interface defining REST endpoints for prompt snippet management</role>
+    <api name="DELETE /snippetstore/snippets/{id}" kind="http" scope="public" via="@DELETE Response deleteSnippet(@PathParam(&quot;id&quot;)"/>
+    <api name="GET /snippetstore/snippets/{id}" kind="http" scope="public" via="@GET PromptSnippet readSnippet(@PathParam(&quot;id&quot;)"/>
+    <api name="GET /snippetstore/snippets/descriptors" kind="http" scope="public" via="@GET List&lt;DocumentDescriptor&gt; readSnippetDescriptors(@QueryParam(&quot;filter&quot;)"/>
+    <api name="POST /snippetstore/snippets" kind="http" scope="public" via="@POST Response createSnippet(PromptSnippet snippet)"/>
+    <api name="PUT /snippetstore/snippets/{id}" kind="http" scope="public" via="@PUT Response updateSnippet(@PathParam(&quot;id&quot;)"/>
+    <decl kind="interface" name="IRestPromptSnippetStore" sig="public interface IRestPromptSnippetStore"/>
+    <decl kind="method" name="readSnippetDescriptors(@QueryParam(&quot;filter&quot;)" sig="List&lt;DocumentDescriptor&gt; readSnippetDescriptors(@QueryParam(&quot;filter&quot;)"/>
+    <decl kind="method" name="readSnippet(@PathParam(&quot;id&quot;)" sig="PromptSnippet readSnippet(@PathParam(&quot;id&quot;)"/>
+    <decl kind="method" name="updateSnippet(@PathParam(&quot;id&quot;)" sig="Response updateSnippet(@PathParam(&quot;id&quot;)"/>
+    <decl kind="method" name="createSnippet(PromptSnippet snippet)" sig="Response createSnippet(PromptSnippet snippet)"/>
+    <decl kind="method" name="deleteSnippet(@PathParam(&quot;id&quot;)" sig="Response deleteSnippet(@PathParam(&quot;id&quot;)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java" pkg="ai.labs.eddi.configs.snippets.model" component="c1" level="5" cut="2">
+    <role>Data model class for prompt snippet configuration entities</role>
+    <decl kind="class" name="PromptSnippet" sig="public class PromptSnippet"/>
+    <decl kind="method" name="PromptSnippet()" sig="public PromptSnippet()"/>
+    <decl kind="method" name="PromptSnippet(String name, String category, String description, String content, List&lt;String&gt; tags, boolean templateEnabled)" sig="public PromptSnippet(String name, String category, String description, String content, List&lt;String&gt; tags, boolean templateEnabled)"/>
+    <decl kind="method" name="getName()" sig="public String getName()"/>
+    <decl kind="method" name="setName(String name)" sig="public void setName(String name)"/>
+    <decl kind="method" name="getCategory()" sig="public String getCategory()"/>
+    <decl kind="method" name="setCategory(String category)" sig="public void setCategory(String category)"/>
+    <decl kind="method" name="getDescription()" sig="public String getDescription()"/>
+    <decl kind="method" name="setDescription(String description)" sig="public void setDescription(String description)"/>
+    <decl kind="method" name="getContent()" sig="public String getContent()"/>
+    <decl kind="method" name="setContent(String content)" sig="public void setContent(String content)"/>
+    <decl kind="method" name="getTags()" sig="public List&lt;String&gt; getTags()"/>
+    <decl more="3"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/IResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RemoteApiResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/StructuralMatcher.java"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/PromptSnippetService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/engine/runtime/client/configuration/IResourceClientLibrary.java" pkg="ai.labs.eddi.engine.runtime.client.configuration" component="c1" level="4" cut="1">
+    <role>Interface defining the contract for resource client operations including init, read, duplicate and delete</role>
+    <decl kind="interface" name="IResourceClientLibrary" sig="public interface IResourceClientLibrary"/>
+    <decl kind="method" name="init()" sig="void init()"/>
+    <decl kind="method" name="getResource(URI uri, Class&lt;T&gt; clazz)" sig="&lt;T&gt; T getResource(URI uri, Class&lt;T&gt; clazz)"/>
+    <decl kind="method" name="duplicateResource(URI uri)" sig="Response duplicateResource(URI uri)"/>
+    <decl kind="method" name="deleteResource(URI uri, boolean permanent)" sig="Response deleteResource(URI uri, boolean permanent)"/>
+    <decl kind="method" name="ResourceClientLibraryException(String message, Exception e)" sig="public ResourceClientLibraryException(String message, Exception e)"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/RagContextProvider.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/engine/runtime/client/factory/RestInterfaceFactory.java" pkg="ai.labs.eddi.engine.runtime.client.factory" component="c1" level="0" cut="1">
+    <role>CDI-scoped factory that builds REST client interface proxies using a base URI derived from the quarkus.http.port config property</role>
+    <api name="get(clazz, serverUrl)" kind="lib" scope="internal"/>
+    <api name="get(clazz)" kind="lib" scope="internal"/>
+    <decl kind="class" name="RestInterfaceFactory" sig="public class RestInterfaceFactory"/>
+    <decl kind="class" name="RestInterfaceFactoryException" sig="public static class RestInterfaceFactoryException"/>
+    <decl kind="method" name="RestInterfaceFactory(@ConfigProperty(name = &quot;quarkus.http.port&quot;, defaultValue = &quot;7070&quot;)" sig="public RestInterfaceFactory(@ConfigProperty(name = &quot;quarkus.http.port&quot;, defaultValue = &quot;7070&quot;)"/>
+    <decl kind="method" name="RestInterfaceFactory()" sig="public RestInterfaceFactory()"/>
+    <decl kind="method" name="get(Class&lt;T&gt; clazz)" sig="public &lt;T&gt; T get(Class&lt;T&gt; clazz)"/>
+    <decl kind="method" name="get(Class&lt;T&gt; clazz, String serverUrl)" sig="public &lt;T&gt; T get(Class&lt;T&gt; clazz, String serverUrl)"/>
+    <decl kind="method" name="RestInterfaceFactoryException(String message, Exception e)" sig="public RestInterfaceFactoryException(String message, Exception e)"/>
+    <dep path="src/main/java/ai/labs/eddi/backup/impl/RestImportService.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" seed="yes" pkg="ai.labs.eddi.modules.llm.impl" component="c1" level="2">
+    <role>CDI-scoped lifecycle task that orchestrates LLM conversation execution including RAG context, tool calls, token tracking, streaming downgrades, and response handling</role>
+    <decl kind="class" name="LlmTask" sig="public class LlmTask"/>
+    <decl kind="method" name="getId()" sig="public TaskId getId()"/>
+    <decl kind="method" name="getType()" sig="public String getType()"/>
+    <decl kind="method" name="execute(IConversationMemory memory, Object component)" sig="public void execute(IConversationMemory memory, Object component)"/>
+    <decl kind="method" name="configure(Map&lt;String, Object&gt; configuration, Map&lt;String, Object&gt; extensions)" sig="public Object configure(Map&lt;String, Object&gt; configuration, Map&lt;String, Object&gt; extensions)"/>
+    <decl kind="method" name="getExtensionDescriptor()" sig="public ExtensionDescriptor getExtensionDescriptor()"/>
+    <decl kind="field" name="ID" sig="public static final String ID = &quot;ai.labs.llm&quot;"/>
+    <decl kind="field" name="TASK_ID" sig="public static final TaskId TASK_ID = new TaskId(ID)"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/StreamingLegacyChatExecutor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/RagContextProvider.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/TokenCounterFactory.java"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/PromptSnippetService.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IRestAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/engine/runtime/client/configuration/IResourceClientLibrary.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/PromptSnippetService.java" pkg="ai.labs.eddi.modules.llm.impl" component="c1" level="3" cut="1">
+    <role>CDI-scoped service that loads, caches (Caffeine), and serves prompt snippets with template marker escaping and version extraction</role>
+    <decl kind="class" name="PromptSnippetService" sig="public class PromptSnippetService"/>
+    <decl kind="method" name="getAll()" sig="public Map&lt;String, Object&gt; getAll()"/>
+    <decl kind="method" name="invalidateCache()" sig="public void invalidateCache()"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/IDocumentDescriptorStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/IPromptSnippetStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/RagContextProvider.java" pkg="ai.labs.eddi.modules.llm.impl" component="c1" level="3">
+    <role>CDI-scoped service that retrieves RAG context by resolving agent configuration, building embedding queries, and formatting retrieval results with character caps</role>
+    <decl kind="class" name="RagContextProvider" sig="public class RagContextProvider"/>
+    <decl kind="method" name="retrieveContext(IConversationMemory memory, LlmConfiguration.Task task, String userQuery)" sig="public String retrieveContext(IConversationMemory memory, LlmConfiguration.Task task, String userQuery)"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java"/>
+    <dep path="src/main/java/ai/labs/eddi/configs/agents/IRestAgentStore.java"/>
+    <dep path="src/main/java/ai/labs/eddi/engine/runtime/client/configuration/IResourceClientLibrary.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/StreamingLegacyChatExecutor.java" pkg="ai.labs.eddi.modules.llm.impl" component="c1" level="3">
+    <role>Non-scoped executor for streaming chat with retry logic, timeout resolution, metadata extraction, and streaming response capturing</role>
+    <decl kind="method" name="onPartialResponse(String partialResponse)" sig="public void onPartialResponse(String partialResponse)"/>
+    <decl kind="method" name="onCompleteResponse(ChatResponse completeResponse)" sig="public void onCompleteResponse(ChatResponse completeResponse)"/>
+    <decl kind="method" name="onError(Throwable error)" sig="public void onError(Throwable error)"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/TokenCounterFactory.java" pkg="ai.labs.eddi.modules.llm.impl" component="c1" level="3">
+    <role>CDI-scoped factory that provides TokenCountEstimator instances per model type with caching and an approximate tokenizer fallback</role>
+    <decl kind="class" name="TokenCounterFactory" sig="public class TokenCounterFactory"/>
+    <decl kind="method" name="getEstimator(String modelType, String modelName)" sig="public TokenCountEstimator getEstimator(String modelType, String modelName)"/>
+    <decl kind="method" name="estimateTokenCountInText(String text)" sig="public int estimateTokenCountInText(String text)"/>
+    <decl kind="method" name="estimateTokenCountInMessage(ChatMessage message)" sig="public int estimateTokenCountInMessage(ChatMessage message)"/>
+    <decl kind="method" name="estimateTokenCountInMessages(Iterable&lt;ChatMessage&gt; messages)" sig="public int estimateTokenCountInMessages(Iterable&lt;ChatMessage&gt; messages)"/>
+    <dep path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java"/>
+  </module>
+</ripple>
