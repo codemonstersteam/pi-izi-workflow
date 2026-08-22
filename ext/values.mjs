@@ -137,5 +137,10 @@ export function portion(raw) {
   const STATUS = ["todo", "green", "red"]
   if (!STATUS.includes(raw.status)) return fail("portion", `порция ${raw.id}: status «${raw.status}» вне словаря: ${STATUS.join(" · ")}`)
   if (!Number.isInteger(raw.round) || raw.round < 1) return fail("portion", `порция ${raw.id}: round «${raw.round}» — целое от 1`)
-  return ok({ id: raw.id, staging: raw.staging, status: raw.status, round: raw.round, blockers: raw.blockers || "" })
+  // `classes` — КЛАССЫ находок последнего вердикта этой порции. Живут в состоянии потому, что по
+  // ним наряд ПОЧИНКИ решает, какие источники присылать роли: находке «нет verify у R7» не нужны ни
+  // правило про якоря, ни правило про образец, и лишний блок вытесняет задачу в середину наряда,
+  // которую слабая модель читает по диагонали (docs/plan-design.md §1).
+  if (raw.classes !== undefined && !Array.isArray(raw.classes)) return fail("portion", `порция ${raw.id}: classes не список`)
+  return ok({ id: raw.id, staging: raw.staging, status: raw.status, round: raw.round, blockers: raw.blockers || "", classes: raw.classes || [] })
 }

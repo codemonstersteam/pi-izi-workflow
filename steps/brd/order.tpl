@@ -1,55 +1,51 @@
 $START_TASK
 Turn the raw business request into a measurable BRD.
+
+This is the FIRST pass: nothing has been written yet, and there is nothing to repair. Collect every
+gap and ask every clarifying question AT ONCE — a second exchange costs the operator another wait.
 $END_TASK
 
 $START_DATA
-$START_DOCUMENT
+
+$START_REQUEST_DOCUMENT
 path: TASK.md
-the operator's raw request, bytes as they are — do not go looking for the file
-$END_DOCUMENT
-$START_CONTENT
+THE OPERATOR'S RAW REQUEST, bytes as they are. Do not go looking for the file — it is right here.
+This is also what fixes the LANGUAGE of your artifact: the BRD is written in the language of this
+text, every `fit:` included.
+$START_REQUEST_CONTENT
 {TASK}
-$END_CONTENT
-$START_DOCUMENT
+$END_REQUEST_CONTENT
+$END_REQUEST_DOCUMENT
+
+$START_ANSWERS_DOCUMENT
 path: .agent/answers.md
-operator answers to your earlier questions, accumulated
-$END_DOCUMENT
-$START_CONTENT
+OPERATOR ANSWERS to your earlier questions, accumulated across exchanges. Only what stands inside
+`<answer_N>` is a fact. A number inside `<question_N>` is your own alternative from last time — it
+proves nothing and cannot justify a `fit:`.
+$START_ANSWERS_CONTENT
 {ANSWERS}
-$END_CONTENT
+$END_ANSWERS_CONTENT
+$END_ANSWERS_DOCUMENT
+
 $END_DATA
 
+$START_FORM
+subjects[]: {SUBJECTS_MIN}..{SUBJECTS_MAX} of them; each one — {SUBJECT_RULE}
+An anchor is a NOUN FROM THE REQUEST, not your evaluation of it: `record`, not `retention`. Step 3
+greps it across the repository, and an evaluation matches no file.
+
+analogue: the existing mechanism this work is modelled on — {ANALOGUE_RULE}. No model to follow —
+say so: `none — <why>`. "There is no model" is a conclusion, not a skipped line.
+
+open-questions: 0. A BRD is not delivered with open questions: whatever you could not resolve is a
+question to the operator, not a line in the artifact.
+$END_FORM
+
 $START_CONSTRAINTS
-- analogue: the existing mechanism this work is modelled on — {ANALOGUE_RULE}. No model to follow —
-  `none — <why>`
-- subjects[]: {SUBJECTS_MIN}..{SUBJECTS_MAX} of them; each one — {SUBJECT_RULE}
-- an anchor is a NOUN from the request, not your evaluation of it: `record`, not `retention` —
-  step 3 greps it over the repository, and an evaluation matches no file
 - `verify:` of a restriction checks the call the restriction APPLIES TO. If another `R` forbids
-  changing that same call, the two contradict: the restriction's scope is wrong or unstated, and
-  an unstated scope is a question, never your choice
+  changing that same call, the two contradict: the restriction's scope is wrong or unstated, and an
+  unstated scope is a question, never your choice.
 $END_CONSTRAINTS
-
-$START_PREVIOUS
-$START_DOCUMENT
-path: {STAGING}
-ТВОЙ ПРОШЛЫЙ ОТВЕТ — тот самый файл, который забраковала проверка (пусто = первая попытка).
-Это ПОЧИНКА, а не новый ответ: правь названные ниже места ЭТОГО текста, остальное оставь как есть.
-Написанное заново ломает то, что проверку уже прошло.
-$END_DOCUMENT
-$START_CONTENT
-{PREVIOUS}
-$END_CONTENT
-$END_PREVIOUS
-
-$START_FEEDBACK
-Evidence from the last red check on `.agent/staging/brd.md`, if this is a redelegation. Empty means
-this is the first attempt — nothing to fix yet. Non-empty: repair EXACTLY the `R` it names before
-anything else — a question about another requirement leaves this blocker where it is.
-$START_CONTENT
-{FEEDBACK}
-$END_CONTENT
-$END_FEEDBACK
 
 $START_OUTPUT
 path: {STAGING}
@@ -61,6 +57,6 @@ schema:
   subjects[]: <term> · <term> · …
   open-questions: 0
 check: {CHECK}
-return: call workflow_result — the shape and the choice of rail are declared by your ROLE's
-OUTPUT_FORMAT
+DO IT NOW: write the file at the staging path with the `write` tool; only then call
+`workflow_result` — the shape and the choice of rail are declared by your ROLE's OUTPUT_FORMAT.
 $END_OUTPUT

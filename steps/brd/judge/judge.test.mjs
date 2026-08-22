@@ -8,7 +8,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { newFit, newRequirement, newSubjects, adviceFor, newBrd, numbersIn, BRD_FORM, parseBrd, analogueTerm } from "./brd.mjs"
+import { newFit, newRequirement, newSubjects, adviceFor, newBrd, numbersIn, BRD_FORM, parseBrd, analogueTerm } from "../brd.mjs"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BRD = (fit) => `R1 Размер ответа ограничен\n   fit:    ${fit}\n   verify: GET /x\n\nsubjects[]: a · b · c\nanalogue: PromptSnippet\nopen-questions: 0\n`
@@ -220,7 +220,7 @@ test("the predicate fit from live run ed1d4094 no longer fails", () => {
 // steps/brd/gilb.md, not steps/brd/role.md — the extension declares steps/brd/ as roleDirectories
 // (ext/index.mjs), and pi-extensible-workflows resolves the role by the file name (<role>.md), not by
 // the step directory; role.md would install as the role "role", not "gilb".
-const ROLE_PATH = join(HERE, "gilb.md")
+const ROLE_PATH = join(HERE, "..", "gilb.md")
 test("the role knows about invented-default", () => {
   assert.match(readFileSync(ROLE_PATH, "utf8"), /invented-default/)
 })
@@ -243,8 +243,16 @@ test("G9: the example teaches TRANSLATION, not labelling — no invented categor
   // REJECTED in a LAW does not teach labelling; a word standing in the example's `subjects[]` does,
   // and that is still what turns this red.
   const example = role.slice(role.indexOf("$START_EXAMPLE"))
-  assert.doesNotMatch(example, /retention/i)           // the label; the task text says «записи» → `record`
+  // ЯКОРЬ ПРОВЕРЯЕТСЯ ПО `subjects[]`, А НЕ ЗАПРЕТОМ СЛОВА.
+  // Первая версия запрещала слово `retention` во всём примере — это работало, пока пример был
+  // русским и `retention` мог попасть только в якоря. На английском запросе то же слово законно
+  // стоит и в формулировке требования, и в тексте вопроса, а якорем при этом не является. Запрет
+  // слова краснел на переводе — то есть на отметке о ревизии, а не на дефекте
+  // (standards/component-test.md, ограничение 8). Проверяется теперь то, что и проверялось:
+  // якорь — существительное ИЗ ЗАПРОСА, а не оценка.
   assert.match(role, /subjects\[\]: audit · record · rotation/)
+  const anchors = (example.match(/subjects\[\]: ([^\n]+)/) || ["", ""])[1].split("·").map((x) => x.trim())
+  assert.ok(!anchors.includes("retention"), "оценка «retention» стоит в якорях — пример учит разметке вместо перевода")
   // …and the prohibition names the machine check that catches it, as every prohibition here must.
   assert.match(role, /hitsFor/)
 })
@@ -255,8 +263,24 @@ test("G9: the example teaches TRANSLATION, not labelling — no invented categor
 // top of a role that demonstrates the violation is paid for in redelegation loops at LOOPS = 3.
 test("the role no longer demonstrates what the guardrail forbids", () => {
   const role = readFileSync(ROLE_PATH, "utf8")
-  assert.doesNotMatch(role, /substring match|case-insensitive substring/i, "LAW 1 carries no English predicate")
-  assert.doesNotMatch(role, /unchanged/i, "the example's fit does not model an untranslated form word")
+  // ПРИМЕР ОБЯЗАН БЫТЬ ОДНОЯЗЫЧЕН САМ С СОБОЙ: артефакт пишется на языке ЗАПРОСА, и `fit:` примера
+  // обязан быть на языке запроса ЭТОГО ЖЕ примера.
+  // Первая версия запрещала слова `substring match` и `unchanged`. Это работало, пока и роль, и
+  // пример были русскими: английское слово в `fit:` там всегда означало дрейф. Оператор перевёл
+  // роль, запрос примера стал английским — и английский `fit:` в нём стал ПРАВИЛЬНЫМ, а шов
+  // покраснел на переводе. Слово заменено на инвариант, который оно подменяло, и новая форма ловит
+  // больше: разноязычный пример, которого прежняя не видела вовсе.
+  {
+    const ex = role.slice(role.indexOf("$START_EXAMPLE"), role.indexOf("$END_EXAMPLE"))
+    const ask = (ex.match(/^>\s*(.+)$/m) || ["", ""])[1]
+    const fits = [...ex.matchAll(/^\s*fit:\s*(.+)$/gm)].map(([, v]) => v)
+    assert.ok(ask && fits.length >= 2, "пример потерял запрос или критерии — шов ослеп")
+    const cyr = (t) => (String(t).match(/[а-яё]/gi) || []).length > 0
+    for (const f of fits) {
+      assert.equal(cyr(f), cyr(ask),
+        `пример разноязычен: запрос ${cyr(ask) ? "русский" : "английский"}, а fit «${f.slice(0, 50)}» — нет. Артефакт пишется на языке ЗАПРОСА`)
+    }
+  }
   // The prohibition is ONE line, and it names its check (standards/role.md §2). Two lines meant two
   // thresholds, and a small model cannot obey both.
   const forbidden = role.slice(role.indexOf("$START_FORBIDDEN"), role.indexOf("$END_FORBIDDEN"))
@@ -264,11 +288,15 @@ test("the role no longer demonstrates what the guardrail forbids", () => {
   assert.equal(drift.length, 1, `[language-drift] is stated on ${drift.length} lines of FORBIDDEN`)
   // …and the sentence that explained the role's own language away is gone: every role has been
   // Russian since 36663ef, so it described a state of affairs that no longer exists.
-  assert.doesNotMatch(role, /при английской роли/)
-  // A field name is not Latin-by-shape: unlike a path or a code it does not stand in the request, and
-  // at step 2 the role has no repository to read it from. LAW 4 licensing it taught the guess.
-  assert.doesNotMatch(role, /Латиницей пишется только:[^\n]*имя поля/)
-  assert.match(role, /только если оно стоит в запросе/)
+  // ИМЯ ПОЛЯ — НЕ ЛАТИНИЦА ПО ФОРМЕ. В отличие от пути или кода оно не стоит в запросе, а
+  // репозитория у роли на шаге 2 нет: разрешив его списком «что можно оставить латиницей», LAW 4
+  // однажды научила роль ГАДАТЬ имена. Проверяется смысл, а не русская формулировка: список
+  // допустимой латиницы имени поля НЕ содержит, а правило про имя поля в роли ЕСТЬ.
+  const latin = (role.match(/Latin script:[^\n]*|Латиницей пишется только:[^\n]*/) || [""])[0]
+  assert.ok(latin, "в LAW 4 нет списка того, что остаётся латиницей — шов ослеп")
+  assert.doesNotMatch(latin, /field name|имя поля/i, "список допустимой латиницы разрешает имя поля — это учит гадать")
+  assert.match(role, /field name[^\n]*(appears in the request|stands in the request)|имя поля[^\n]*стоит в запросе/i,
+    "правило про имя поля пропало: без него роль снова начнёт их выдумывать")
 })
 
 // The order is a file the host reads, not code, and two of its properties degrade silently — each at
@@ -281,7 +309,7 @@ test("the role no longer demonstrates what the guardrail forbids", () => {
 // договора — полосы — в такой сверке нет. Здесь остаётся то, чего та проверка не знает: правило
 // приезжает ПОДСТАНОВКОЙ, а не копией (G9e).
 test("order.tpl: правило якорей ПОДСТАВЛЯЕТСЯ, а не копируется", () => {
-  const tpl = readFileSync(join(HERE, "order.tpl"), "utf8")
+  const tpl = readFileSync(join(HERE, "..", "order.tpl"), "utf8")
   assert.ok(!tpl.includes(BRD_FORM.subjectRule), "the rule must arrive by substitution, not as a copy")
 })
 
@@ -514,4 +542,85 @@ test("numbersIn: цифры внутри класса символов и ква
   assert.deepEqual([...numbersIn("1,5 сек")], ["1.5"])
   // Обозначения защищены как раньше.
   assert.deepEqual([...numbersIn("ISO-8601")], [])
+})
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// ЮНИТЫ НОВЫХ ПОДМОДУЛЕЙ ШАГА (тикет T12). Выше — контроль диапазона на чистом ядре, купленный
+// живыми прогонами и потому не переписанный. Ниже — то, чего у старой формы не было вовсе:
+// суд ВХОДА и тотальность судьи.
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { inputs, CLASSES as IN_CLASSES } from "../inputs.mjs"
+import { judgeBrd } from "../judge.mjs"
+import { sha1of } from "../../../ext/state.mjs"
+
+const root = (task = "task: DOS-535\nтребование\n") => {
+  const d = mkdtempSync(join(tmpdir(), "izi-brd-u-"))
+  mkdirSync(join(d, ".agent"), { recursive: true })
+  if (task !== null) writeFileSync(join(d, "TASK.md"), task)
+  return d
+}
+
+test("inputs happy: задача на месте, ключ есть, отпечаток совпал", () => {
+  const cwd = root()
+  const at = { task: { path: "TASK.md", sha1: sha1of(readFileSync(join(cwd, "TASK.md"), "utf8")) } }
+  assert.equal(inputs({ cwd, key: "DOS-535", at }), null)
+})
+
+test("inputs: TASK.md нет — класс no-task, и отказ называет, кто его кладёт", () => {
+  const r = inputs({ cwd: root(null), key: "DOS-535", at: {} })
+  assert.equal(r.cls, "no-task")
+  assert.match(r.why, /оператор/)
+})
+
+test("inputs: ключа нет — класс no-key, и отказ объясняет, чем ключ важен", () => {
+  const r = inputs({ cwd: root(), key: "", at: {} })
+  assert.equal(r.cls, "no-key")
+  assert.match(r.why, /ветк|тикет|план/)
+})
+
+test("inputs: задачу правили после шага 1 — класс task-changed, и сказано, что переиграть", () => {
+  const cwd = root()
+  const at = { task: { path: "TASK.md", sha1: sha1of("другой текст") } }
+  const r = inputs({ cwd, key: "DOS-535", at })
+  assert.equal(r.cls, "task-changed")
+  assert.match(r.why, /переиграй task/)
+})
+
+test("inputs МОЛЧАНИЕ: отпечатка в состоянии нет — сверять не с чем", () => {
+  assert.equal(inputs({ cwd: root(), key: "DOS-535", at: {} }), null)
+})
+
+test("inputs: все объявленные классы достижимы — ни один не мёртв", () => {
+  const seen = new Set([
+    inputs({ cwd: root(null), key: "K", at: {} }).cls,
+    inputs({ cwd: root(), key: "", at: {} }).cls,
+    inputs({ cwd: root(), key: "K", at: { task: { path: "TASK.md", sha1: "нет" } } }).cls,
+  ])
+  for (const c of IN_CLASSES) assert.ok(seen.has(c), `класс «${c}» объявлен, но ни одна ветвь его не возвращает`)
+})
+
+// --- тотальность судьи -------------------------------------------------------------------------
+test("judge: роль вернула прозу — вердикт invalid, а не молчание", () => {
+  const b = judgeBrd({ text: "Извините, требование неоднозначно.", sources: ["задача"] })
+  assert.equal(b.length, 1)
+  assert.equal(b[0].cls, "invalid")
+  assert.match(b[0].text, /Извините/, "блокер не показал начало ответа")
+})
+
+test("judge: пустой ответ — вердикт invalid", () => {
+  assert.equal(judgeBrd({ text: "", sources: [] })[0].cls, "invalid")
+})
+
+test("judge: находки разложены по КЛАССАМ — по ним наряд починки выбирает источники", () => {
+  const brd = [
+    "R1 хранить термины",
+    "   fit:    не дольше 137 миллисекунд",
+    "   verify: mvn test",
+    "analogue: PromptSnippet — тот же механизм",
+    "subjects[]: glossary · term · agent",
+    "open-questions: 0",
+  ].join("\n")
+  const b = judgeBrd({ text: brd, sources: ["задача без чисел"] })
+  assert.ok(b.some((x) => x.cls === "invented-default"), `класса invented-default нет среди ${b.map((x) => x.cls)}`)
 })

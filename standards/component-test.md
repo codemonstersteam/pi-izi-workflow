@@ -1,160 +1,176 @@
 # Standard: writing component tests
 
 $START_GOAL
-A step is proven the way it actually runs — artifacts in, order assembled, role answered, guardrail
-judged, artifact promoted — in milliseconds, offline, without a live run.
+Шаг доказан так, как он работает — артефакты на входе, наряд собран, роль ответила, гардрейл судил,
+артефакт продвинут — за миллисекунды, офлайн, без живого прогона. И **состав сценариев считается, а
+не назначается**: забыть ветвь нельзя, потому что шов краснеет.
 $END_GOAL
 
 $START_CONTEXT
-`standards/code.md` covers units: one pure function, one antecedent branch. Units cannot reach a
-STEP. The rail (`workflows/izi.js`) executes inside the host sandbox and is imported by nobody, so
-until a component test exists the only proof that a step works is a live run — a separate `pi`
-session, 4–9 minutes per role call, and a journal to read afterwards.
+`standards/code.md` — про юниты: одна чистая функция, одна ветвь антецедента. Юнит до ШАГА не
+дотягивается. Полоса исполняется в песочнице хоста и никем не импортируется, поэтому без
+компонентного теста единственным доказательством работы шага был живой прогон — отдельная сессия
+`pi`, 4–9 минут на вызов роли и журнал, который потом надо читать.
 
-A component test closes that gap. It is the same path the rail walks, driven from `node --test`:
+**Формула** (codemonsters.team, «Мифология тестирования: компонентные тесты»):
 
 ```
-fixture on disk → script skeleton → order slots → order text → RECORDED role answer
-                → guardrail of the portion → join → guardrail of the whole → promoted artifact
+N = 1 (штатное поведение) + Σ (различимых ветвей в адаптере i)
 ```
 
-Three things are real in it — the input artifacts, the guardrails, the promotion. One thing is
-recorded — the model's answer. Nothing is simulated.
+Единица — сценарий на валидных данных. Слагаемые — по сценарию на каждую различимую ветвь ОТКАЗА в
+адаптере внешней зависимости. Адаптер — это граница с тем, чем шаг не управляет: файловая система,
+модель, оператор.
 
-Worked example, and the shape every new one copies: `steps/plan/tree/component/`.
+**Что НЕ считается здесь.** Контроль диапазона значений — работа юнита: пустая формулировка, число
+вне предела, слово вне словаря. Гардрейл на семнадцать различимых блокеров даёт семнадцать юнитов и
+ни одного лишнего сценария. Компонентный тест считает ветви АДАПТЕРОВ, а не правил.
+
+Разобранный образец, с которого копируется форма: `steps/task/component/task.component.test.mjs`.
 $END_CONTEXT
 
 $START_LAYOUT
-One component test per step, INSIDE the step's own directory — a step is one folder and everything
-about it lives there (`standards/workflow-design.md`, `$START_SHAPE`):
+**Один компонентный тест на шаг, ВНУТРИ шага, и он же — единственное описание его поведения.**
 
 ```
-steps/<step>/
-  <step>.step.mjs                head of the step: id, next, fold
-  inputs.mjs cut.mjs order.mjs route.mjs      the fivesome
-  judge.mjs  judge/<RULE>.mjs                 a judge PER RULE
-  order-<step>.tpl                            order templates, read module-relative
-  <role>.md                                   the role — where roleDirectories points
-  judge/<RULE>.test.mjs                       units, one file per judge
+steps/<шаг>/
+  <шаг>.step.mjs                             голова: id, next, fold
+  inputs.mjs cut.mjs order.mjs route.mjs     пятёрка
+  judge.mjs  judge/<ПРАВИЛО>.mjs             судья на правило
+  <роль>.md  order-<шаг>.tpl                 роль и наряд, если шаг зовёт модель
+  judge/<ПРАВИЛО>.test.mjs                   юниты — по файлу на судью
   component/
-    fixture/                     THE INPUT ARTIFACTS OF THE STEP, side by side
-      .agent/frd.xml             …exactly the files the step reads, nothing else
-      src/…                      …including the repository files it samples
-    order.txt                    the assembled order, for a human to read
-    answer-<model>.txt           the RECORDED answer of that model to THIS order
-    <step>.component.test.mjs    the test
+    fixture/<сценарий>/                      КАТАЛОГ на сценарий, а не строка в коде
+    <шаг>.component.test.mjs                 таблица + тесты + шов формулы
 ```
 
-The test imports the step it proves as `../<step>.step.mjs` — a neighbour, not a journey through the
-extension. Anything else in the import list is a dependency the step should not have had.
+**Второго файла с описанием не заводится.** Ни `.feature`, ни `overview.md`, ни таблицы рядом:
+описание, лежащее отдельно от исполнения, расходится с ним молча, а разъехавшееся описание хуже
+отсутствующего. Внутри теста лежит `SCENARIOS` — она и есть документ.
 
-`fixture/` is copied into a fresh `mkdtempSync` directory per test — the step runs against
-`context.run.cwd`, never against this repository (`CLAUDE.md`, constraint 6). A test that writes
-into the repo is a defect, not a shortcut.
-
-`order.txt` is not read by the test. It exists so the operator can read what actually leaves for the
-model, and it is regenerated whenever the template or the slots change.
+**Фикстура — каталог на диске.** Не строка в коде: каталог читается глазами и монтируется в
+контейнер. Пустой каталог (когда содержание фикстуры — ОТСУТСТВИЕ файла) несёт `README.md`,
+объясняющий это: git не хранит пустых каталогов, и после клона тест упал бы на своём стенде, а не на
+шаге.
 $END_LAYOUT
 
-$START_CONTRACTS
-**The test DRIVES the step the way the rail does — `next` then `fold`, in a loop.** It does not
-reassemble slots, staging paths or portion arithmetic: all of that lives inside the step, and a test
-that rebuilds any of it proves its own copy instead of the step.
+$START_TABLE
+Таблица — данные, и у неё две дороги: человек читает, машина исполняет.
 
 ```js
-import * as step from "../<step>.step.mjs"
+export const STEP = Object.freeze({
+  id: "task", title: "ключ задачи",
+  role: null,                          // имя роли либо null — шаг без модели
+  in: ["TASK.md", ".agent/answers.md"],
+  out: ["state.key", "state.at.task"],
+  adapters: ["файловая система", "канал ответов оператора"],
+})
 
-const drive = (state, answer) => {
-  const trace = []
-  for (let it = step.next(state); it.do !== "done"; it = step.next(state)) {
-    trace.push(it)
-    if (it.do === "err") return { state, trace }
-    state = step.fold(state, { do: it.do, result: answer(it, trace.length) }).value
-  }
-  return { state, trace }
-}
+export const SCENARIOS = Object.freeze([
+  { n: 1, kind: "happy", branch: null, fixture: "good",
+    name:  "ключ объявлен в задаче",
+    given: "TASK.md с непустым требованием и строкой `task: DOS-535`",
+    when:  "шаг отработал",
+    then:  ["ключ лёг в состояние", "отпечаток входа лёг", "модель не звалась"],
+    expect:{ done: true, key: "DOS-535", stamped: "task", calledModel: false } },
+
+  { n: 3, kind: "adapter", branch: "empty", fixture: "empty",
+    name:  "TASK.md пуст по словам",
+    given: "TASK.md из одних пробелов и переводов строк",
+    when:  "шаг отработал",
+    then:  ["отказ blocked класса empty", "ключ НЕ лёг"],
+    expect:{ do: "err", code: "blocked", cls: "empty", key: "" } },
+])
 ```
 
-A copy of the loop is unavoidable — the sandbox has no `import`, and `agent`/`parallel`/`checkpoint`
-exist only inside it, so a shared driver module cannot exist (`standards/workflow.md`, constraint 1).
-Therefore the copy is GUARDED: the words a step emits, the keys of `PRIMITIVES` in the rail, and the
-branches of this `drive` are three sets checked pairwise by a seam
-(`standards/workflow-design.md`, rule 3).
+- `branch` — **КЛАСС отказа** либо слово инструкции: ключ, по которому шов связывает строку с кодом.
+- `then` — то же, что `expect`, но словами: его читает человек, и он же печатается Gherkin'ом.
+- `expect` — то, что проверяет машина.
 
-**AAA, and the arrange block is documentation.** Head the arrange with a list of the input artifacts
-and one line each on what the step takes from them — that list is the step's real input contract,
-and the reader has no other place to find it. Assert the fixture is complete before acting: a
-missing file must read as `фикстура неполна: нет .agent/ripple.xml`, not as a guardrail blocker
-fifty lines later.
+`gherkin()` в том же файле печатает таблицу; печать включается по отсутствию `NODE_TEST_CONTEXT`,
+поэтому под раннером идут тесты, а при прямом запуске — читаемый текст.
+$END_TABLE
 
-**The stub is a RECORDED answer, never an invented one.** Obtain it by sending the order THIS code
-assembles to the real model, and keep it verbatim:
+$START_SEAM
+**Формула обязана быть исполняемой.** Последний тест файла собирает классы отказа ИЗ КОДА
+подмодулей шага и сверяет с таблицей в обе стороны:
 
-```bash
-node -e 'import("./ext/index.mjs").then(…)' > /tmp/order.txt   # the order the rail would send
-curl -sS https://openrouter.ai/api/v1/chat/completions -H "Authorization: Bearer $OPENROUTER_API_KEY" …
+- класс, который шаг умеет вернуть, но которого нет в `SCENARIOS`, — **красный**: ветвь не проверена
+  ничем;
+- строка `SCENARIOS`, называющая класс, которого в коде нет, — **красный**: переименовали и забыли.
+
+Чтобы шов был возможен, **каждый отказ обязан нести КЛАСС**, а не свободную строку. Подмодуль
+объявляет свои классы одним местом:
+
+```js
+export const CLASSES = Object.freeze(["no-task"])
 ```
 
-Record in the test's header which model answered, at what temperature, and what it cost in tokens
-(input, output, of which reasoning). An invented answer proves our expectations of the model; a
-recorded one proves the model. The difference is the entire value of the file.
+Безымянный отказ нельзя ни адресовать, ни сосчитать — и это же требует `standards/guardrail.md`: у
+блокера есть код правила.
+$END_SEAM
 
-**The stub does what the role does with its hands**: writes the answer to the staging path and
-returns the envelope the role would return. It does not parse, fix or normalise anything.
-$END_CONTRACTS
+$START_ETALON
+**Эталон — мера, а не иллюстрация.** У шага, чей артефакт есть в эталонном пакете
+(`component-tests/etalon-eddi/`), заглушкой служит ЭТОТ артефакт, и он же служит проверкой:
+
+1. заглушка роли — файл эталона, а не выдуманный документ;
+2. **гардрейл обязан принять эталон**: если правило уедет, красным станет документ, который
+   конвейер однажды принял на живом прогоне;
+3. продвинутый артефакт сверяется с эталоном **побайтово** — шаг не вправе переписать, дополнить
+   или нормализовать ответ роли.
+
+Третье утверждение стоит отдельно от второго: гардрейл может принять, а шаг — испортить по дороге.
+
+Судить эталон надо **настоящими источниками** — задачей и ответами оператора того же прогона, а не
+пустым списком: с пустым списком правила, которым нужен операнд, молчат, и зелёный вердикт ничего
+не доказывает.
+$END_ETALON
 
 $START_CONSTRAINTS
-0. **The step judges its own INPUT first.** The arrange block asserts the fixture is complete, and
-   the step itself is asserted to refuse BY NAME when an input artifact is missing or its sha1 moved
-   — «вход зелен» is a comment until something checks the content
-   (`standards/workflow-design.md`, rule 11).
-1. **The verdict is the judge — not the file's existence.** `existsSync(artifact)` answers "did
-   something get written", and in a stand where promotion is not locked behind the verdict a REJECTED
-   answer still lands. Assert on `blockers` first, and separately that the artifact did NOT appear on
-   the rejected rail (`CLAUDE.md`, constraint 2). Cost of ignoring this: an ablation run scored six
-   role variants "ПРИНЯТО" while one of them had invented two non-existent files.
-2. **Three rails for a step with a role, four when its portions run in parallel.** Accepted answer ·
-   rejected answer · the model REFUSING (a dropped connection). The rejected test spoils the recorded
-   answer at exactly the defect the step exists to prevent, and asserts the spoiling APPLIED
-   (`assert.notEqual(broken, ANSWER)`) — a corruption that silently missed its target turns the test
-   into a green comment. The refusal test asserts three things at once: the step did NOT close, the
-   artifact was NOT written, and **the repair budget was NOT spent** — a dropped connection is not
-   the role's mistake, and charging a round for it burns the step's budget on the network.
-   When portions run in parallel (`scope`, `plan/flows`) the refusal splits in two: ONE portion of
-   seven dropped — its neighbours keep their verdicts and their rounds, and the step stays open — and
-   all of them dropped. A step without a role has two rails: accepted and rejected.
-3. **The rejected test carries the repair path too.** A guardrail verdict is a work order: assert
-   that the repair task names an ADDRESS, and that the repair order carries the previous answer and
-   does not carry dead weight (a skeleton the role is not building any more).
-4. **Assert the ORDER, not only the artifact.** Name the things the role cannot answer without — the
-   sample's declaration, the annotation that carries the convention, line numbers on the digest, the
-   rule the whole step was rewritten for — and assert no slot stayed unfilled (`{SKELETON}` in the
-   text is data that never arrived).
-5. **A seam guards the MEANING of a rule, not its wording.** Role files change language as they
-   mature (`standards/role.md`, constraint 5); a seam matching a Russian phrase turns red on a
-   translation, which is a revision mark and not a defect. Match either form, or match the structure.
-6. **Assert what the step exists to decide.** The last assertions are not plumbing: they read the
-   promoted artifact and check the decision itself — that `needs` holds declarations and not calls,
-   that the order of work is acyclic, that the first wave is what it must be. That is the assertion
-   the live run used to be needed for.
-7. **Offline and fast.** No network, no `pi`, no host. If a component test cannot run on a plane, it
-   is a live run wearing a test's name.
+1. **Вердикт судит гардрейл, а не наличие файла.** `existsSync(артефакт)` отвечает на вопрос
+   «что-то записалось». Утверждай о `blockers` первым, и ОТДЕЛЬНО — что артефакт НЕ появился на
+   отбитой рельсе. Цена игнорирования: прогон, где шесть вариантов роли получили «ПРИНЯТО», а один
+   из них выдумал два несуществующих файла.
+2. **Шаг судит СВОЙ вход.** Первый ход — `inputs`: артефакт существует, разбирается, и его sha1
+   совпал с тем, что записал продвинувший шаг. «Вход зелен» — комментарий, пока никто не сверил
+   содержимое.
+3. **Заглушка — ЗАПИСАННЫЙ ответ, не выдуманный.** Берётся из эталонного пакета, из
+   `.agent/runs/<runId>/runlog.xml` живого прогона либо снимается `curl`'ом на наряд, который
+   собирает ЭТОТ ЖЕ код. В шапке файла записывается модель, температура и цена в токенах.
+   Выдуманный ответ проверяет наши ожидания от модели; записанный проверяет модель.
+4. **Заглушка делает то, что роль делает руками:** пишет ответ по staging-пути и возвращает конверт
+   с ПУТЁМ. Текста в конверте нет и быть не может — документ по RPC не едет.
+5. **Обрыв связи — отдельный сценарий, и он проверяет ТРИ вещи разом:** шаг не закрылся, артефакт
+   не написан, **круг починки НЕ потрачен**. Обрыв не ошибка роли, и платить за него бюджетом
+   нельзя: три обрыва подряд дали бы `escalate` там, где роль не ошиблась ни разу.
+6. **Порча делается в тесте, в открытую, на именованном дефекте** — и утверждается, что она
+   ПРИМЕНИЛАСЬ (`assert.notEqual(broken, ANSWER)`). Порча, промахнувшаяся мимо цели, превращает
+   тест в зелёный комментарий.
+7. **Наряд починки проверяется тоже:** он несёт нумерованную находку с АДРЕСОМ правки и прошлый
+   ответ роли — и НЕ несёт скелета, который на починке мёртвый груз.
+8. **Шов сторожит СМЫСЛ правила, а не формулировку.** Роли меняют язык по мере созревания
+   (`standards/role.md` §5); шов, привязанный к русской фразе, краснеет на переводе — это отметка о
+   ревизии, а не дефект.
+9. **Офлайн и быстро.** Ни сети, ни `pi`, ни хоста. Компонентный тест, который нельзя прогнать в
+   самолёте, — это живой прогон под чужим именем.
 $END_CONSTRAINTS
 
 $START_FORBIDDEN
-- **Do not re-record the answer to make a test green.** That is `standards/code.md`'s "do not edit a
-  test to make it green" with extra steps. A recorded answer is re-taken only when the ORDER
-  deliberately changed — and then the header's numbers and the reason are updated with it.
-- Do not hand-edit the recorded answer. Spoil it in the test, in the open, at a named defect.
-- Do not let the component test replace units — it cannot tell WHICH function decided wrongly.
-- Do not write one for a head or an adapter: there is no decision inside to judge.
-- Do not stub a guardrail. The guardrail is the thing under test.
+- Не переснимай ответ, чтобы тест позеленел. Это «не редактируй тест ради зелени» с лишним шагом.
+  Записанный ответ переснимается, только когда НАРЯД изменился намеренно — и тогда обновляются
+  цифры в шапке и причина.
+- Не правь записанный ответ руками. Порти его в тесте, в открытую, на названном дефекте.
+- Не заводи второй документ с описанием шага. Он разъедется молча.
+- Не позволяй компонентному тесту заменить юниты: он не скажет, КАКАЯ функция решила неверно.
+- Не пиши компонентный на голову или адаптер: внутри нет решения, которое можно судить.
+- Не заглушай гардрейл. Гардрейл — то, что здесь проверяется.
 $END_FORBIDDEN
 
 $START_SUCCESS
-- `node --test` green as a whole, the component test among it, with no network.
-- The folder holds fixture, assembled order, recorded answer and test — a reader who opens only that
-  folder can see what goes in, what comes back, and who judged it.
-- Both rails covered, and the rejected rail proven by a corruption that is asserted to have applied.
-- The rail and the test assemble the order from the SAME module.
+- `node --test` зелен целиком, компонентный среди них, без сети.
+- В каталоге шага лежат фикстуры, роль, наряд, судьи и тест — читатель, открывший только его,
+  видит, что входит, что возвращается и кто судил.
+- Шов формулы зелен, и КАЖДЫЙ его случай доказан реинтродукцией: убрал сценарий — покраснел.
+- Эталон принят гардрейлом и совпал с продвинутым артефактом побайтово.
 $END_SUCCESS
