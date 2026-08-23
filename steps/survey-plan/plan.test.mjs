@@ -6,7 +6,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { newPlan, cellId, CELL_FILES, CELL_BYTES, SPINE_CELL } from "./plan.mjs"
+import { newPlan, cellId, CELL_FILES, CELL_BYTES, SPINE_CELL, HOME_DENSITY } from "./plan.mjs"
 
 const file = (path, bytes = 100, subjects = []) => ({ path, bytes, subjects })
 
@@ -88,4 +88,49 @@ test("no files at all — err(no-files): there is nothing to map", () => {
   const r = newPlan({ files: [], spine: [], subjects: ["fruit"] })
   assert.equal(r.ok, false)
   assert.equal(r.error.cls, "no-files")
+})
+
+// The two SORTS of a marked cell (ticket T06). Two units, because there are two distinguishable
+// consequents: the cell is the subject's home and travels whole, or it is a passer-by and its marked
+// files are cut out one by one. The SILENCE branch — no `.agent/anchors.json`, so no `marked` list —
+// lives in the second unit: the plan must be the one the day before, cell for cell.
+
+test("density: a passer-by cell is split into a micro-cell per marked file, the remainder stays", () => {
+  const many = (dir, n) => Array.from({ length: n }, (_, i) => file(`${dir}/f${i}.java`, 100))
+  const files = [...many("alpha", 20), ...many("beta", 20)]
+  const marked = ["alpha/f3.java", "alpha/f7.java"]        // 2 of 20 — density 0.1
+
+  const plan = newPlan({ files, spine: [], subjects: [], marked }).value
+  const byId = Object.fromEntries(plan.cells.map((c) => [c.id, c.files.map((f) => f.path)]))
+
+  // The id of a micro-cell comes from the FILE's path, exactly as a cell's comes from its directory's
+  assert.deepEqual(byId["alpha~f3.java"], ["alpha/f3.java"])
+  assert.deepEqual(byId["alpha~f7.java"], ["alpha/f7.java"])
+  assert.equal(byId.alpha.length, 18)                     // the remainder keeps the cell's own id…
+  assert.ok(!byId.alpha.some((p) => marked.includes(p)))  // …and none of the marked files
+  assert.deepEqual(byId.beta.length, 20)                  // a cell with no marks does not move at all
+
+  // NOTHING IS LOST: this step cuts, the focus (3b) decides what is read.
+  const covered = plan.cells.flatMap((c) => c.files.map((f) => f.path))
+  assert.equal(covered.length, files.length)
+  assert.equal(new Set(covered).size, files.length)
+  assert.ok(marked.every((p) => covered.includes(p)))
+})
+
+test("borders: above HOME_DENSITY the cell is whole; exactly at it, it splits; no marked list — silence", () => {
+  const many = (dir, n) => Array.from({ length: n }, (_, i) => file(`${dir}/f${i}.java`, 100))
+  const files = [...many("alpha", 20), ...many("beta", 20), file("solo/one.java", 100)]
+  const ids = (marked) => newPlan({ files, spine: [], subjects: [], marked }).value.cells.map((c) => c.id)
+
+  const half = many("alpha", 20).map((f) => f.path).slice(0, 20 * HOME_DENSITY)
+  assert.ok(ids(half).includes("alpha~f0.java"))          // exactly one half is NOT a home: it splits
+  assert.deepEqual(ids([...half, "alpha/f10.java"]), ["alpha", "beta", "solo"])   // one more — whole
+
+  // A cell of one marked file is its own micro-cell already (1/1 > HOME_DENSITY): no empty remainder
+  assert.deepEqual(ids(["solo/one.java"]), ["alpha", "beta", "solo"])
+
+  // SILENCE: no anchors.json → no marked list → the cut of the day before, cell for cell.
+  const bare = newPlan({ files, spine: [], subjects: [] }).value
+  assert.deepEqual(bare.cells.map((c) => c.id), ids([]))
+  assert.deepEqual(bare.cells.map((c) => c.files.length), [20, 20, 1])
 })

@@ -7,13 +7,19 @@
 //             (`.agent/graph-parts/<id>.xml`, `.izi/parts/<id>.xml`), so it never holds a `/`. The
 //             path→id mapping is declared here and only here (`cellId`), and steps/scope/cache.mjs
 //             stores parts under that name.
+// EXTERNAL_DEPENDENCY: `marked` — the paths of `.agent/anchors.json::marked`, written by step 2D.
+//             The io reads that artifact and passes the array in; the file is ABSENT on every run
+//             older than it, and its absence reads here as `marked: []` — the cut of the day before,
+//             cell for cell. Silence, not a refusal: an old run is a legal run.
 // Invariants: CELL_FILES/CELL_BYTES are fixed at load; the cells cover every file outside the spine
-//             with no overlap and no loss — held by the shape of the tree walk, not by a check
-//             afterwards; a spine file never enters a survey cell; newPlan is pure — the result
-//             depends on the arguments alone; cell ids are unique (`take` below) and derived from the
-//             PATH, never from the order of iteration.
+//             with no overlap and no loss — held by the shape of the tree walk and by splitting a
+//             sparse cell into a micro-cell PLUS its remainder, not by a check afterwards; a spine
+//             file never enters a survey cell; newPlan is pure — the result depends on the arguments
+//             alone; cell ids are unique (`take` below) and derived from the PATH, never from the
+//             order of iteration.
 // Interface:  CELL_FILES — the ceiling of files in a cell
 //             CELL_BYTES — the ceiling of bytes in a cell
+//             HOME_DENSITY — the share of marked files above which a cell goes to the swarm WHOLE
 //             SPINE_CELL — the id of the spine cell
 //             cellId(dirPath) -> string
 //             newPlan(input) -> Result<Plan, "no-files">
@@ -22,6 +28,29 @@ import { ok, err } from "../../core/result.mjs"
 
 export const CELL_FILES = 20
 export const CELL_BYTES = 200 * 1024
+
+// HOME_DENSITY — the border between the two SORTS of a marked cell (ticket T06).
+//
+// Above it the cell is the SUBJECT'S HOME: most of what is inside is about the work, and the
+// neighbours a scout reads for free are context, not ballast — it goes to the swarm whole. At or
+// below it the cell is a passer-by, and each marked file inside is cut out into its own MICRO-CELL,
+// with the unmarked remainder left behind as a cell of its own. Nothing is dropped: this step cuts,
+// step 3b (focus) decides what is read.
+//
+// MEASURED, eddi 23.08.2026 — steps/brd/normalize-concept-research.md ch. 4, reproduced by running
+// this module over the tree (1854 files, the 512 KB read boundary of steps/brd/hits/hits.mjs): 62 files
+// marked by the analogue `PromptSnippet` sit in 24 cells; whole, those cells are 256 files and
+// 3.19 MB against 1.46 MB of the marked files themselves — dilution ×2.18, and THIRTEEN of the 24
+// cells are bought for a single file. With the split: 8 home cells + 27 micro-cells, 71 files and
+// 1.53 MB — dilution ×1.05, not one marked file lost and not one unmarked file dropped (the plan
+// still covers all 1854; what the swarm skips is the focus's decision, step 3b).
+//
+// THE RULE IS ONLY AS SELECTIVE AS THE MARKS IT IS GIVEN. `.agent/anchors.json::marked` is today the
+// UNION of every anchor's files — on eddi 1154 of 1854, because `agent` alone marks 48% — and on that
+// input the same rule reads ×1.18 → ×1.06 while the plan grows from 283 cells to 458: a file whose
+// only mark is a background word is cut away from the neighbours that explain it. What keeps this
+// honest is the selectivity corridor of step 2 (steps/brd, ticket T03), not a second threshold here.
+export const HOME_DENSITY = 0.5
 
 // SPINE_CELL — the id of the spine cell: a readable name instead of a position.
 //
@@ -86,12 +115,13 @@ function flatten(node, out = []) {
 }
 
 // FUNCTION_CONTRACT: newPlan — the swarm's cells from a repository tree
-//   Input:        { files, spine, subjects, cellFiles, cellBytes }
+//   Input:        { files, spine, subjects, marked, cellFiles, cellBytes }
 //                 files — [{ path, bytes, subjects?, sha1? }], EVERY scanned file; `subjects` marks
 //                         the anchors that hit, it is NOT a condition of inclusion; `sha1` is the key
 //                         of step 4's cache (steps/scope/cache.mjs), which the plan only carries
 //                 spine — [{ path, bytes }], build manifests and configuration; empty → no spine cell
-//   Dependencies: tree, flatten, cellId
+//                 marked — paths of `.agent/anchors.json::marked`; absent or empty → no cell is split
+//   Dependencies: tree, flatten, cellId, HOME_DENSITY
 //   Antecedent:   files is non-empty OR spine is — otherwise there is nothing to map. The number of
 //                 cells is unbounded: pi's concurrency limit is step 4's BATCH size, not a cell cap
 //   Consequent:   success: { files, bytes, subjects, gaps, cells } — cells[0] has kind "spine" and id
@@ -101,17 +131,21 @@ function flatten(node, out = []) {
 //                          subdirectories first (each by the same rule), then its own files, cut by
 //                          cellFiles OR cellBytes. An id is derived from the PATH, not from the
 //                          order, so an added file changes exactly the cells whose subtree it landed
-//                          in; `gaps` are the anchors that matched no file at all
+//                          in; `gaps` are the anchors that matched no file at all. A cell whose
+//                          marked share is at or below HOME_DENSITY is SPLIT: one micro-cell per
+//                          marked file, id `cellId(<the file's own path>)`, plus the unmarked
+//                          remainder under the cell's own id
 //                 failure: "no-files" — zero files: an empty repository has nothing to map
 //   Purity:       pure
-//   Interface:    newPlan({ files, spine, subjects, cellFiles, cellBytes }) -> Result<Plan, "no-files">
+//   Interface:    newPlan({ files, spine, subjects, marked, cellFiles, cellBytes })
+//                     -> Result<Plan, "no-files">
 //
 // BUG_FIX_CONTEXT: backlog W2 — a cell used to be a slice of the FLAT sorted list, and its id an
 //   ordinal. One added file shifted the composition of every later cell, so there was nothing to
 //   cache: editing one line recomputed the whole graph. Measured on eddi: the flat cut gives 100
 //   cells of 184 KB with unstable ids, the subtree cut 291 cells with a median of 32 KB. The seam is
 //   "add a file to one subtree, the other cells' ids do not move" (plan.test.mjs).
-export function newPlan({ files = [], spine = [], subjects = [], cellFiles = CELL_FILES, cellBytes = CELL_BYTES }) {
+export function newPlan({ files = [], spine = [], subjects = [], marked = [], cellFiles = CELL_FILES, cellBytes = CELL_BYTES }) {
   const inSpine = new Set(spine.map((f) => f.path))
   const rest = files.filter((f) => !inSpine.has(f.path)).sort((a, b) => a.path.localeCompare(b.path))
   if (!rest.length && !spine.length) {
@@ -156,6 +190,26 @@ export function newPlan({ files = [], spine = [], subjects = [], cellFiles = CEL
   }
   pack(tree(rest))
 
+  // THE TWO SORTS OF A MARKED CELL. Ids are already claimed by the walk above, so this pass changes
+  // the COMPOSITION of a cell, never the id of one that stays: the remainder keeps the cell's own id
+  // and a micro-cell takes the id of its FILE — path-derived like every other, so `.izi/parts`
+  // survives an edit next door exactly as before.
+  //   > HOME_DENSITY  — the subject's home, whole (and a one-file marked cell lands here: 1/1)
+  //   ≤ HOME_DENSITY  — a passer-by: every marked file becomes its own cell, the rest stays behind
+  //   no marks at all  — untouched, including the case of no `marked` list at all
+  // The comparison is `hits > files × HOME_DENSITY` and not a division: at exactly one half a cell is
+  // NOT a home — half the reading would be ballast — and integer arithmetic says so without a float.
+  const marks = new Set(Array.isArray(marked) ? marked : [])
+  const hit = (f) => marks.has(f.path)
+  const sorted = []
+  for (const c of chunks) {
+    const hits = c.files.filter(hit)
+    if (!hits.length || hits.length > c.files.length * HOME_DENSITY) { sorted.push(c); continue }
+    for (const f of hits) sorted.push({ id: take(cellId(f.path)), files: [f] })
+    const left = c.files.filter((f) => !hit(f))
+    if (left.length) sorted.push({ id: c.id, files: left })     // empty is unreachable: it would be 100% marked
+  }
+
   const file = (f) => Object.freeze({
     path: f.path,
     bytes: f.bytes,
@@ -178,7 +232,7 @@ export function newPlan({ files = [], spine = [], subjects = [], cellFiles = CEL
     gaps: Object.freeze(subjects.filter((s) => !covered.has(s))),
     cells: Object.freeze([
       ...(spine.length ? [cell(SPINE_CELL, "spine", spine)] : []),
-      ...chunks.map((c) => cell(c.id, "survey", c.files)),
+      ...sorted.map((c) => cell(c.id, "survey", c.files)),
     ]),
   }))
 }

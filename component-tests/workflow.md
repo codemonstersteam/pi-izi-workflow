@@ -29,8 +29,8 @@ TASK.md
   │ ✅ 1 task     ключ задачи                                    скрипт · разобран ниже
   ▼
 brd.md
-  │ 🟢 2 brd      сырое требование → измеримые R1..RN            роль gilb 🤖
-  │               наряд steps/brd/order.tpl
+  │ 🟢 2 brd      заказ → вердикт · следствия · якоря           роль gate 🤖
+  │               наряд steps/brd/order.gate.tpl
   ▼
 survey-plan.json · focus.json
   │ 🟢 3 survey   дерево файлов → клетки для роя                 скрипт

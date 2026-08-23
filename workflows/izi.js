@@ -88,6 +88,14 @@ const run = async (id, state) => {
   }
 };
 
+// ШАГ 2 — ДВА ПОДШАГА, КАК ШАГ 9 — ТРИ. Обёртка выстраивает порядок и ничего не решает о
+// содержании: таблица действий ложится на диск и живёт дальше, а ворота судят ЕЁ, а не сырой заказ.
+// Круги починки у подшагов свои: провал ворот нормализацию не переигрывает.
+async function brd(state) {
+  const rows = await run("brd/normalize", state); if (rows.track === "err") return rows;
+  return await run("brd/gate", rows.value);
+}
+
 async function plan(state) {
   const values = await run("plan/values", state);      if (values.track === "err") return values;
   const tree   = await run("plan/tree", values.value); if (tree.track === "err")   return tree;
@@ -100,8 +108,8 @@ try {
   const state0 = started.state;
 
   const task   = await run("task", state0);          if (task.track === "err")   return task;
-  const brd    = await run("brd", task.value);       if (brd.track === "err")    return brd;
-  const scope  = await run("scope", brd.value);      if (scope.track === "err")  return scope;
+  const gate   = await brd(task.value);              if (gate.track === "err")   return gate;
+  const scope  = await run("scope", gate.value);     if (scope.track === "err")  return scope;
   const graph  = await run("graph", scope.value);    if (graph.track === "err")  return graph;
   const intake = await run("intake", graph.value);   if (intake.track === "err") return intake;
   const weight = await run("weight", intake.value);  if (weight.track === "err") return weight;

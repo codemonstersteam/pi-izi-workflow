@@ -8,6 +8,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { newFrd, parseFrd, checkFrd, unreadable, spentAnswers, FRD_FORM, RULE_PASS, forPass, passOfBlocker, entryPass } from "./frd.mjs"
 import { changeWidth } from "../ripple/ripple.mjs"
+import { parseRows } from "../brd/normalize/normalize.mjs"
 
 // Fixture: a DIFFERENT domain from any live input (parcels, not fruits) — the same reason the role's
 // own EXAMPLE is foreign: a fixture indistinguishable from live input stops testing the code.
@@ -1393,4 +1394,114 @@ test("newFrd: предметы, аналог и каталоги доезжаю�
   assert.equal(newFrd({ xml: FRD, nodes: NODES, tests: TESTS, entries: ENTRIES, edges: EDGES,
     sources: SOURCES, subjects: ["courier"], dirs, analogue: "couriers — по образцу" }).ok,
     true, "аналог не гасит F14 — вход `analogue` до суда не доехал")
+})
+
+// --- ТРИ ДОКУМЕНТА НА ВХОДЕ: значения приезжают ТАБЛИЦЕЙ, а не переспросом --------------------------
+// После переделки шага 2 ворота значений не несут ПРИНЦИПИАЛЬНО: `brd.md` — вердикт, следствия,
+// аналог и якоря. Значения живут в `.agent/normalized.md`, строка на требование
+// `verb | object | instrument | values` (steps/brd/data-flow.md, «Что уходит дальше»). Без этого
+// файла в словаре происхождения значение, стоящее в ЗАКАЗЕ и не переписанное в BRD, цитировать
+// нечем — и F5 превращает решение оператора в вопрос, на который он уже ответил.
+//
+// Разбор строк ИМПОРТИРУЕТСЯ у того, кто их пишет: два разбора одного формата разойдутся на первой
+// же правке (standards/code.md §1).
+const NORMALIZED = readFileSync(new URL("../../component-tests/etalon-eddi/.agent/normalized.md", import.meta.url), "utf8")
+const EDDI_TASK = readFileSync(new URL("../../component-tests/etalon-eddi/TASK.md", import.meta.url), "utf8")
+
+// Блок «Решения, уже принятые оператором» заказа eddi и строка нормализации, которая несёт каждое:
+// кусок решения (по нему решение находится в заказе) · `verb` + `object` строки таблицы.
+const EDDI_DECISIONS = [
+  ["версионирование Глоссария повторяет", "implement CRUD with versioning"],
+  ["при импорте — merge по resource URI", "import Glossary"],
+  ["Термин — только пара key + value", "define Term structure"],
+  ["ключ Термина — до 64 символов", "constrain Term key"],
+  ["Глоссарий — reference в agent config", "reference Glossary"],
+  ["REST путь — /glossarystore/glossaries", "expose REST endpoint"],
+  ["подстановка разрешается только по глоссариям", "restrict substitution scope"],
+  ["при совпадении key побеждает последняя загрузка", "resolve key collisions"],
+  ["поля Glossary ресурса", "define Glossary resource fields"],
+  ["длина value не ограничена", "constrain Term value"],
+  ["ключ в template data model", "enable prompt substitution"],
+  ["кэширование — Caffeine", "cache Glossary data"],
+  ["удалённый глоссарий, подключённый к агенту", "trigger rendering error"],
+  ["имя файла в ZIP экспорта агента", "export Glossary"],
+]
+
+// Значение атрибута — ПРОСТЫЕ СЛОВА (роль, закон 7a): `<` в `fit` съедает элемент целиком, и проверка
+// скажет, что его нет. Роль снимает знак сама; здесь то же самое, иначе фикстура проверяла бы F0.
+const asFit = (values) => values.replace(/[<>&"]/g, "")
+
+test("значение из колонки `values` цитируется и проходит: на eddi ни одно из 14 решений оператора не становится вопросом", () => {
+  const rows = parseRows(NORMALIZED)
+  const decisions = EDDI_TASK.split("\n").filter((l) => l.startsWith("- "))
+  assert.equal(decisions.length, EDDI_DECISIONS.length, "блок решений оператора в заказе eddi изменился")
+
+  const quoted = []
+  for (const [decision, identity] of EDDI_DECISIONS) {
+    assert.equal(decisions.filter((l) => l.includes(decision)).length, 1, `решение «${decision}» не найдено в заказе ровно один раз`)
+    const row = rows.find((r) => `${r.verb} ${r.object}` === identity)
+    assert.ok(row, `решение «${decision}» не несёт ни одна строка нормализации — искали «${identity}»`)
+    quoted.push(row.values)
+  }
+
+  // Так это и приезжает в артефакт на пласте C: колонка `values` становится `fit`, а происхождение —
+  // именем файла, который её содержит.
+  const nfrs = quoted.map((v, i) => `<nfr subject="v${i + 1}" fit="${asFit(v)}" source="normalized.md"/>`).join("\n  ")
+  const xml = `<frd grammar="1" goal="глоссарий бота">
+  <usecase id="UC1" actor="api" goal="список глоссариев">
+    <pre>глоссарии заведены</pre><post>вернулся список глоссариев</post>
+    <step n="1">GET /glossarystore/glossaries</step>
+  </usecase>
+  ${nfrs}
+</frd>`
+
+  const f5 = (xml, sources) => {
+    const r = newFrd({ xml, sources, pass: "C" })
+    return (r.ok ? [] : r.error.detail.split("\n")).map((l) => l.trim()).filter((l) => l.startsWith("F5"))
+  }
+  assert.deepEqual(f5(xml, [EDDI_TASK, NORMALIZED]), [], "значение из таблицы всё ещё требует вопроса оператору")
+
+  // ...и таблица несёт значения САМА: без заказа рядом четырнадцать `fit` по-прежнему обоснованы —
+  // сними «normalized.md» из FRD_FORM.sources, и здесь встанут четырнадцать F5.
+  assert.deepEqual(f5(xml, [NORMALIZED]), [], "таблица нормализации не покрывает значения без заказа рядом")
+})
+
+test("normalized.md как источник: нет файла — молчание, нет значения нигде — [invented-default]", () => {
+  const one = (fit, source, sources) => {
+    const xml = `<frd grammar="1" goal="g">
+      <usecase id="UC1" actor="api" goal="g"><pre>p</pre><post>o</post><step n="1">s</step></usecase>
+      <nfr subject="ttl" fit="${fit}" source="${source}"/>
+    </frd>`
+    const r = newFrd({ xml, sources, pass: "C" })
+    return (r.ok ? [] : r.error.detail.split("\n")).map((l) => l.trim()).filter((l) => l.startsWith("F5"))
+  }
+
+  // МОЛЧАНИЕ. Прогон без `normalized.md` — старый или чужой проект — подаёт остальные источники, и
+  // правило судит по ним: ни красноты на пустом месте, ни пропуска мусора.
+  assert.deepEqual(one("не больше 30 дней", "TASK.md", ["черновик живёт 30 дней"]), [])
+
+  // Значение, которого нет НИ В ОДНОМ источнике, остаётся блокером — таблица не индульгенция.
+  assert.match(one("не больше 45 дней", "normalized.md", [NORMALIZED]).join("\n"),
+    /F5 нфт ttl \[invented-default\]: число 45/)
+  // ...и отказ называет таблицу среди мест, где число искали: иначе роль не знает, куда его вписать.
+  assert.match(one("не больше 45 дней", "normalized.md", [NORMALIZED]).join("\n"), /normalized\.md/)
+})
+
+test("наряды A и C подают третий документ — таблицу значений — своим блоком и своим слотом", () => {
+  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  for (const x of ["a", "c"]) {
+    const t = TPL(x)
+    assert.match(t, /path: \.agent\/normalized\.md/, `наряд ${x} не объявляет документ`)
+    assert.match(t, /\{NORMALIZED\}/, `наряд ${x} не несёт слота документа`)
+    // Парные теги: у документа свой $START_DOCUMENT и свой $START_CONTENT, как у соседей.
+    assert.equal((t.match(/\$START_DOCUMENT/g) || []).length, (t.match(/\$END_DOCUMENT/g) || []).length)
+    assert.equal((t.match(/\$START_CONTENT/g) || []).length, (t.match(/\$END_CONTENT/g) || []).length)
+    const data = t.slice(t.indexOf("$START_DATA"), t.indexOf("$END_DATA"))
+    assert.equal((data.match(/\$START_DOCUMENT/g) || []).length, 3, `наряд ${x} подаёт не три документа`)
+  }
+  // Пласт A берёт из таблицы `verb` + `object` и НЕ трогает значения — их пишет пласт C.
+  assert.match(TPL("a"), /`verb` and `object`/)
+  assert.match(TPL("c"), /source="normalized\.md"/)
+  // Словарь происхождения подставляется в наряд C, а не переписывается в нём.
+  assert.ok(FRD_FORM.sources.includes("normalized.md"))
 })

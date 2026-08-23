@@ -13,6 +13,20 @@ $START_CONTENT
 $END_CONTENT  
 
 $START_DOCUMENT  
+path: .agent/normalized.md  
+The request normalized into rows, one per requirement: `verb | object | instrument | values`.  
+Column `values` IS the measurement the operator already decided. Quote it into `fit` and `domain`
+WORD FOR WORD as it stands in the row, and write `source="normalized.md"`.  
+A value standing in that column is never a question: asking it re-asks what is already answered.  
+
+    ROW     export | Glossary | agent ZIP archive | as {id}.glossary.json plus {id}.descriptor.json
+    VALUE   fit="agent ZIP export carries {id}.glossary.json plus {id}.descriptor.json" source="normalized.md"
+$END_DOCUMENT  
+$START_CONTENT  
+{NORMALIZED}  
+$END_CONTENT  
+
+$START_DOCUMENT  
 path: .agent/answers.md  
 Accumulated answers from the operator. The VALUE of an answer is a legal source of a number.  
 $END_DOCUMENT  

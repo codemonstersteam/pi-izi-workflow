@@ -1,0 +1,215 @@
+$START_TASK
+Judge this request: is it solvable, does it make sense, does it belong to THIS repository.
+Then write its consequences and the anchors the pipeline will search by.
+$END_TASK
+
+$START_DATA
+
+$START_REQUEST_DOCUMENT
+path: TASK.md
+THE OPERATOR'S RAW REQUEST, bytes as they are. It also fixes the LANGUAGE of your artifact.
+$START_REQUEST_CONTENT
+task: DOS-535
+
+В E.D.D.I появляется новый тип конфигурации — глоссарий (`Glossary`): словарь терминов бота,
+CRUD с версионированием, по образцу Prompt Snippet, с типом ресурса `eddi://ai.labs.glossary`.
+Термины должны подставляться в промпты как `{{glossary.<term>}}` наравне со сниппетами, и глоссарий
+должен уезжать вместе с агентом при экспорте и приезжать при импорте — включая сравнение с уже
+существующим и апгрейд.
+
+Решения, уже принятые оператором (не спрашивать заново):
+- версионирование Глоссария повторяет механизм Prompt Snippet, своего не описывать;
+- при импорте — merge по resource URI, новая версия побеждает (upgrade существующего);
+- Термин — только пара key + value, без description и без category;
+- ключ Термина — до 64 символов, lowercase, алфавитно-цифровой и подчёркивание;
+- Глоссарий — reference в agent config, как snippets;
+- REST путь — /glossarystore/glossaries, паттерн карты *store/*, а не /glossaries;
+- подстановка разрешается только по глоссариям, привязанным к агенту; глобальных не подставляем;
+- при совпадении key побеждает последняя загрузка: порядок подключения в configuration set и есть приоритет;
+- поля Glossary ресурса — только id + version + terms;
+- длина value не ограничена;
+- ключ в template data model — glossary; синтаксис Qute стандартный: {glossary.<term>};
+- кэширование — Caffeine, TTL тот же, что у PromptSnippetService, своего не выдумывать;
+- удалённый глоссарий, подключённый к агенту, — ошибка при рендеринге промпта;
+- имя файла в ZIP экспорта агента — {id}.glossary.json плюс {id}.descriptor.json.
+
+$END_REQUEST_CONTENT
+$END_REQUEST_DOCUMENT
+
+$START_ROWS_DOCUMENT
+path: .agent/normalized.md
+THE REQUEST TRANSLATED INTO THE LANGUAGE OF CODE, one row per requirement, four columns:
+`<verb> | <object> | <instrument> | <values>`. WRITE YOUR R LINES FROM THIS TABLE — one consequence
+per row: what CHANGES in this repository if that row is granted. The `values` column is not your
+work: a later step measures it (LAW 2).
+$START_ROWS_CONTENT
+add | Glossary | configuration type | dictionary of bot terms, CRUD with versioning, like Prompt Snippet, resource type `eddi://ai.labs.glossary`
+substitute | terms | prompts | as `{{glossary.<term>}}` alongside snippets
+export | Glossary | agent | alongside agent
+import | Glossary | agent | alongside agent, including comparison with existing and upgrade
+version | Glossary | mechanism | repeats Prompt Snippet mechanism
+merge | Glossary | import | by resource URI, new version wins (upgrade existing)
+define | Term | structure | only key + value pair, no description and no category
+constrain | Term key | format | up to 64 characters, lowercase, alphanumeric and underscore
+reference | Glossary | agent config | like snippets
+define | REST path | endpoint | `/glossarystore/glossaries`, *store/* pattern, not `/glossaries`
+restrict | substitution | scope | only to glossaries bound to agent; no global substitution
+resolve | key conflict | priority | last load wins: connection order in configuration set is priority
+define | Glossary resource fields | structure | only id + version + terms
+constrain | value length | limit | unlimited
+define | template data model key | syntax | `glossary`; standard Qute syntax: `{glossary.<term>}`
+cache | Glossary | Caffeine | TTL same as PromptSnippetService
+handle | removed Glossary | prompt rendering | error when bound to agent
+export | Glossary | agent ZIP archive | as {id}.glossary.json plus {id}.descriptor.json
+$END_ROWS_CONTENT
+$END_ROWS_DOCUMENT
+
+$START_HITS_DOCUMENT
+path: computed by script over 1854 files of this repository, 0 tokens
+HOW OFTEN EACH WORD OF THE REQUEST OCCURS HERE. Substring match, case-insensitive, path and text.
+This is the only fact about the repository you get at this step — nobody has read the code yet.
+WHAT AN ANCHOR IS FOR, because that is what decides your choice: the next step MARKS every file whose
+text contains the anchor, and the step after it NARROWS the survey to those files when the repository
+is too large to read whole. So an anchor must point AT THE PLACE THE WORK LANDS — the thing that gets
+changed — not at the technology used to do it.
+
+AN ANCHOR IS ONE LOWERCASE COMMON NOUN naming a thing your own R lines CREATE or CHANGE. Build the
+list FROM YOUR R LINES, created things first: a created thing is not in the table and its count is
+zero — that is the work. A changed thing is already in the table — copy the word as it stands there.
+A word with no work on it is not an anchor, however high its count.
+A COMPOUND NAME GIVES TWO ANCHORS — the thing and its kind: `queue screen` → `queue` · `screen`.
+
+    request:  the nightly backup must skip archived tenants, write a report of what it skipped
+              and show that report on a new screen
+    table:    backup:19  tenant:14  archive:6  name:11
+    subjects[]: report · screen · backup · tenant · archive
+
+    `report` and `screen` are created, so they lead and carry no count. `name` stands in the table with 11
+    and is not an anchor: nothing in this request changes it.
+
+Zero on the NEW entity is EXPECTED — it does not exist yet, that is the work. Include it anyway: the
+swarm must know what it is looking to create. Zero on the ANALOGUE is a defect — you named something
+this repository does not have.
+$START_HITS_CONTENT
+glossaries · files 1 · weight 7.53
+Glossary · files 1 · weight 7.53
+glossarystore · files 1 · weight 7.53
+substitution · files 11 · weight 5.13
+versioning · files 11 · weight 5.13
+alphanumeric · files 14 · weight 4.89
+repeats · files 16 · weight 4.75
+underscore · files 21 · weight 4.48
+constrain · files 28 · weight 4.19
+PromptSnippetService · files 29 · weight 4.16
+comparison · files 30 · weight 4.12
+terms · files 32 · weight 4.06
+archive · files 33 · weight 4.03
+priority · files 33 · weight 4.03
+rendering · files 33 · weight 4.03
+mechanism · files 39 · weight 3.86
+substitute · files 39 · weight 3.86
+Caffeine · files 40 · weight 3.84
+unlimited · files 40 · weight 3.84
+syntax · files 44 · weight 3.74
+alongside · files 46 · weight 3.70
+category · files 58 · weight 3.46
+zip · files 61 · weight 3.41
+PromptSnippet · files 62 · weight 3.40
+Qute · files 67 · weight 3.32
+upgrade · files 69 · weight 3.29
+pair · files 72 · weight 3.25
+snippets · files 76 · weight 3.19
+wins · files 77 · weight 3.18
+define · files 79 · weight 3.16
+Snippet · files 85 · weight 3.08
+conflict · files 86 · weight 3.07
+restrict · files 88 · weight 3.05
+ttl · files 88 · weight 3.05
+export · files 92 · weight 3.00
+CRUD · files 94 · weight 2.98
+characters · files 99 · weight 2.93
+prompts · files 101 · weight 2.91
+including · files 107 · weight 2.85
+lowercase · files 107 · weight 2.85
+merge · files 107 · weight 2.85
+removed · files 110 · weight 2.82
+plus · files 120 · weight 2.74
+standard · files 129 · weight 2.67
+global · files 160 · weight 2.45
+dictionary · files 162 · weight 2.44
+structure · files 175 · weight 2.36
+connection · files 179 · weight 2.34
+pattern · files 180 · weight 2.33
+Prompt · files 195 · weight 2.25
+like · files 203 · weight 2.21
+fields · files 225 · weight 2.11
+endpoint · files 233 · weight 2.07
+cache · files 235 · weight 2.07
+template · files 239 · weight 2.05
+existing · files 253 · weight 1.99
+length · files 265 · weight 1.95
+bound · files 271 · weight 1.92
+last · files 273 · weight 1.92
+descriptor · files 290 · weight 1.86
+description · files 292 · weight 1.85
+Term · files 292 · weight 1.85
+reference · files 296 · weight 1.83
+order · files 299 · weight 1.82
+load · files 355 · weight 1.65
+handle · files 356 · weight 1.65
+resolve · files 361 · weight 1.64
+bot · files 373 · weight 1.60
+format · files 373 · weight 1.60
+limit · files 418 · weight 1.49
+scope · files 468 · weight 1.38
+service · files 492 · weight 1.33
+path · files 595 · weight 1.14
+error · files 614 · weight 1.11
+configuration · files 631 · weight 1.08
+resource · files 652 · weight 1.05
+REST · files 662 · weight 1.03
+uri · files 666 · weight 1.02
+version · files 668 · weight 1.02
+json · files 674 · weight 1.01
+add · files 720 · weight 0.95
+key · files 771 · weight 0.88
+type · files 853 · weight 0.78
+agent · files 895 · weight 0.73
+value · files 960 · weight 0.66
+store · files 967 · weight 0.65
+data · files 1006 · weight 0.61
+config · files 1108 · weight 0.51
+model · files 1127 · weight 0.50
+set · files 1279 · weight 0.37
+$END_HITS_CONTENT
+$END_HITS_DOCUMENT
+
+$START_ANSWERS_DOCUMENT
+path: .agent/answers.md
+OPERATOR ANSWERS, accumulated. Only what stands inside `<answer_N>` is a fact.
+$START_ANSWERS_CONTENT
+(no operator answers yet — this is the first entry into step 2)
+$END_ANSWERS_CONTENT
+$END_ANSWERS_DOCUMENT
+
+$END_DATA
+
+$START_FORM
+subjects[]: 3..7 of them, taken from your own R lines, created first:
+  every thing your R lines CREATE — one lowercase noun each, count zero, listed anyway;
+  then every thing your R lines CHANGE — copied from the hit table as it stands there.
+verdict: one of `solvable` · `unclear` · `not-this-repo`.
+open-questions: 0 — whatever you could not resolve is a question, not a line in the artifact.
+$END_FORM
+
+$START_OUTPUT
+path: .agent/staging/brd.md
+schema:
+  verdict: <one of three>
+  R<N> <what changes>
+  analogue: <OneWord> — <what makes it the model>
+  subjects[]: <term> · <term> · <term>
+  open-questions: 0
+check: T1 verdict · T2 consequence · T3 created entity in anchors · T4 analogue with hits · T5 selectivity
+DO IT NOW: write the file at the staging path with `write`, then call `workflow_result` once.
+$END_OUTPUT

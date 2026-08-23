@@ -21,6 +21,7 @@ import { verdict as newVerdict, portion as newPortion } from "./values.mjs"
 
 export const STEPS = [
   "task", "brd", "scope", "graph", "intake", "weight", "ripple",
+  "brd/normalize", "brd/gate",
   "plan/values", "plan/tree", "plan/flows",
 ]
 

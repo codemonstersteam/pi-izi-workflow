@@ -14,6 +14,16 @@ $START_CONTENT
 $END_CONTENT  
 
 $START_DOCUMENT  
+path: .agent/normalized.md  
+The request normalized into rows, one per requirement: `verb | object | instrument | values`.  
+`verb` and `object` are what a use case is made of — the action and the thing it acts on.  
+Leave `values` alone here: numbers, formats and limits are written by a later pass.  
+$END_DOCUMENT  
+$START_CONTENT  
+{NORMALIZED}  
+$END_CONTENT  
+
+$START_DOCUMENT  
 path: .agent/answers.md  
 Accumulated answers from the operator to your previous questions.  
 $END_DOCUMENT  

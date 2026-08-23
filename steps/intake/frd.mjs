@@ -70,7 +70,15 @@ export const FRD_FORM = Object.freeze({
   // A closed vocabulary of provenance. `appgraph.xml` is here because step 6 is the first one holding
   // BOTH operands: a number read off the map (a status from an annotation, a limit from a signature)
   // is a fact of the repository, not an invented default.
-  sources: Object.freeze(["TASK.md", "answers.md", "brd.md", "appgraph.xml"]),
+  //
+  // `normalized.md` — the order's own table, one row per requirement, column `values` carrying the
+  // measurement the operator already decided (steps/brd/normalize/normalize.mjs::parseRows). It is a
+  // source because after step 2's rework the GATE writes no values at all: `brd.md` carries the
+  // verdict, the consequences, the analogue and the anchors, and nothing else. Without this file in
+  // the vocabulary every value of the request that the BRD did not repeat has nothing to be quoted
+  // from — and F5 turns the operator's own decision into a question he already answered. On the eddi
+  // order that is the whole «Решения, уже принятые оператором» block: fourteen values.
+  sources: Object.freeze(["TASK.md", "answers.md", "brd.md", "normalized.md", "appgraph.xml"]),
 })
 
 // OP_STUB — the fillers a role writes into `op` when it has nothing to put there. A dash is not an
@@ -319,7 +327,7 @@ function provenance(at, value, source, known) {
       // role kept the number and changed `source` to the name of the analogue it had read it from —
       // a second violation of the same rule. Naming the three legal exits is not politeness; a rule
       // and the way out of it are one decision, and it belongs in one place, this one.
-      out.push(`F5 ${at} [invented-default]: число ${invented.join(", ")} не встречается ни в задаче, ни в ответах оператора, ни в BRD, ни в карте — назови формат вместо его меры, или сними число, или оставь <question>: источником может быть только файл из списка, но не память`)
+      out.push(`F5 ${at} [invented-default]: число ${invented.join(", ")} не встречается ни в задаче, ни в ответах оператора, ни в BRD, ни в таблице значений normalized.md, ни в карте — назови формат вместо его меры, или сними число, или оставь <question>: источником может быть только файл из списка, но не память`)
     }
   }
   return out
@@ -1017,7 +1025,10 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
 //   Dependencies: parseFrd, checkFrd, numbersIn
 //   Antecedent:   xml — any value; nodes — Set<path> from the map; tests — its subset marked
 //                 `kind="test"` (steps/intake/map.mjs::parseMap); sources — the texts a number may
-//                 come from (TASK.md, the VALUES of operator answers, the BRD, the map itself); an
+//                 come from (TASK.md, the VALUES of operator answers, the BRD, the normalized table
+//                 of the order, the map itself); an ABSENT text is simply not in the array — an old
+//                 run with no `normalized.md` supplies the other four and the rule judges by them,
+//                 neither reddening nor letting rubbish through; an
 //                 empty array means "no sources supplied" and F5's number rule stays silent; rewind —
 //                 forwarded to checkFrd's F9 unchanged, [] when this is not a rewind
 //   Consequent:   success: the frozen FRD plus `unknown` — how many deltas the role could not

@@ -11,9 +11,9 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { newSlices } from "./slices.mjs"
-import { newFocus, names, coverageOf, checkFocus } from "./focus.mjs"
+import { newFocus, names, coverageOf, checkFocus, homeOf } from "./focus.mjs"
 import { newPlan } from "../survey-plan/plan.mjs"
-import { MAP_PRICE, MAP_EST_SLACK } from "../intake/map.mjs"
+import { MAP_PRICE, MAP_EST_SLACK, MAP_CAP_BYTES } from "../intake/map.mjs"
 
 const FX = JSON.parse(readFileSync(new URL("./fixture-eddi.json", import.meta.url), "utf8"))
 const ENTRY = FX.entry                       // …/configs/agents/IRestCapabilityRegistry.java — cone of 5
@@ -306,8 +306,145 @@ test("M2: ход дома идёт ДО фазы аналога — иначе �
   const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 8])))
   const edges = cells[2].files.map((f) => ({ from: f.path, to: "src/snippets/PromptSnippet.java" }))
   const slices = [{ id: "s", entry: "src/snippets/PromptSnippet.java", kind: "route", nodes: ["src/snippets/PromptSnippet.java"] }]
+  const spread = {
+    anchors: [{ word: "agent", files: ["src/configs/agents/AgentConfiguration.java"], packages: { "src/configs/agents": 1 } }],
+    analogue: { word: "PromptSnippet", files: ["src/snippets/PromptSnippet.java"], packages: { "src/snippets": 1 } },
+  }
   // места хватает на хребет и ДВЕ клетки: дом обязан быть одной из них
-  const r = newFocus({ slices, anchors: ["agent"], analogue: "PromptSnippet", cells, edges, decls, apis: {}, cap: 4600 })
+  const r = newFocus({ slices, anchors: ["agent"], spread, cells, edges, decls, apis: {}, cap: 4600 })
   assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
   assert.equal(r.value.cells.includes("home"), true, "фаза аналога забрала бюджет раньше дома предмета")
+})
+
+// T07 — РОЗЕТКИ ПРИХОДЯТ ГОТОВЫМИ. Файлы аналога считает шаг 2 грепом по ТЕКСТУ и кладёт в
+// `.agent/anchors.json`; фокус их читает. Замер, купивший правку (normalize-concept-research.md,
+// глава 4): матч по ПУТИ дал 10 файлов и 0 из 10 файлов эталона DOS-535, грeп по тексту — 62 файла и
+// 10 из 10 за 0,56 с.
+const SOCKET = "src/main/java/ai/labs/eddi/configs/snippets/PromptSnippet.java"
+const SILENT = "src/main/java/ai/labs/eddi/backup/impl/UpgradeExecutor.java"   // имени аналога в пути НЕТ
+
+test("T07: розетка берётся из anchors.json, а не по совпадению с путём", () => {
+  const cells = [
+    { id: "spine", kind: "spine", files: [{ path: "pom.xml" }] },
+    { id: "named", kind: "code", files: [{ path: SOCKET }] },
+    { id: "silent", kind: "code", files: [{ path: SILENT }] },
+    { id: "far", kind: "code", files: Array.from({ length: 3 }, (_, i) => ({ path: `src/other/O${i}.java` })) },
+  ]
+  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 8])))
+  const slices = [{ id: "s", entry: SOCKET, kind: "route", nodes: [SOCKET] }]
+  // ни один якорь не называет `UpgradeExecutor`: если он окажется в фокусе, туда его привела розетка
+  const spread = { anchors: [], analogue: { word: "PromptSnippet", files: [SOCKET, SILENT], packages: {} } }
+  const r = newFocus({ slices, anchors: ["snippet"], spread, cells, edges: [], decls, apis: {}, cap: 5200 })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.equal(r.value.cells.includes("silent"), true, "файл аналога без его имени в пути не доехал — это и есть 0 из 10")
+  assert.equal(r.value.cells.includes("far"), false, "потолок вместил всё — проверка ничего не различает")
+
+  // Ребро остаётся вторым ходом: вызывающий, который имени аналога не пишет, приезжает по нему.
+  const byEdge = newFocus({
+    slices, anchors: ["snippet"], cells, decls, apis: {}, cap: 5200,
+    spread: { anchors: [], analogue: { word: "PromptSnippet", files: [SOCKET], packages: {} } },
+    edges: [{ from: SILENT, to: SOCKET }],
+  })
+  assert.equal(byEdge.value.cells.includes("silent"), true, "обратный ход по рёбрам снят вместе с путевым матчем")
+})
+
+test("T07: тестовая розетка последней — иначе тесты аналога съедают бюджет кода", () => {
+  // Имя аналога чаще всего пишут его собственные тесты: на eddi из 62 помеченных файлов больше
+  // половины лежит в тестовых клетках, и по ЧИСЛУ ФАЙЛОВ они дешевле кода, который меняет заказ.
+  // Замер 23.08.2026: без этого порядка фокус доносит 5 файлов эталона DOS-535 из 10.
+  const cells = [
+    { id: "spine", kind: "spine", files: [{ path: "pom.xml" }] },
+    { id: "work", kind: "code", files: Array.from({ length: 4 }, (_, i) => ({ path: `src/main/service/W${i}.java` })) },
+    { id: "suite", kind: "code", files: Array.from({ length: 3 }, (_, i) => ({ path: `src/test/service/W${i}Test.java` })) },
+  ]
+  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 8])))
+  const slices = [{ id: "s", entry: "src/main/service/W0.java", kind: "route", nodes: ["src/main/service/W0.java"] }]
+  // и код, и его тесты пишут имя аналога — это и есть 62 помеченных файла eddi в 25 клетках
+  const spread = { anchors: [], analogue: { word: "PromptSnippet", files: [...cells[1].files, ...cells[2].files].map((f) => f.path), packages: {} } }
+  // Потолок вмещает хребет и ОДНУ из двух клеток: тестовая дешевле по числу файлов (3 против 4),
+  // поэтому «дешёвая первой» берёт её и на код места не остаётся.
+  const r = newFocus({ slices, anchors: ["w0"], spread, cells, edges: [], decls, apis: {}, cap: 7100 })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.equal(r.value.cells.includes("work"), true, "дешёвые тесты аналога вытеснили код, который меняет заказ")
+  assert.equal(r.value.cells.includes("suite"), false, "потолок вместил обе клетки — проверка ничего не различает")
+})
+
+test("T07: три молчания — нет anchors.json, analogue: null, пустые якоря", () => {
+  const cells = [
+    { id: "spine", kind: "spine", files: [{ path: "pom.xml" }] },
+    { id: "named", kind: "code", files: [{ path: SOCKET }] },
+    { id: "silent", kind: "code", files: [{ path: SILENT }] },
+  ]
+  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 8])))
+  const slices = [{ id: "s", entry: SOCKET, kind: "route", nodes: [SOCKET] }]
+  const run = (spread) => newFocus({ slices, anchors: ["snippet"], spread, cells, edges: [], decls, apis: {}, cap: 4200 })
+
+  for (const [what, spread] of [
+    ["артефакта нет вовсе", undefined],
+    ["роль написала analogue: none", { files: 3, marked: [], anchors: [{ word: "snippet", files: [SOCKET], packages: { "src/main/java/ai/labs/eddi/configs/snippets": 1 } }], analogue: null }],
+    ["якорей в артефакте нет", { files: 3, marked: [], anchors: [], analogue: null }],
+  ]) {
+    const r = run(spread)
+    // молчание — это РАБОТА по одним якорям, а не отказ
+    assert.equal(r.ok, true, `${what}: ${r.ok ? "" : r.error.detail}`)
+    assert.equal(r.value.cells.includes("named"), true, `${what}: якорь перестал выбирать клетку`)
+    assert.equal(r.value.cells.includes("silent"), false, `${what}: розетка взялась из ниоткуда`)
+    assert.deepEqual(checkFocus({ focus: r.value, anchors: ["snippet"] }), [], `${what}: предмет потерян`)
+  }
+})
+
+// T07 — ПОКРЫТИЕ ПО ДОМУ ПРЕДМЕТА. «взято 2, отброшено 21» не отвечает на вопрос «тот ли модуль
+// прочитан»; «дом configs/agents 13/13 взят» отвечает.
+test("T07: coverageOf называет дом предмета числом, и вердикт выносится по дому", () => {
+  const HOME = "src/main/java/ai/labs/eddi/configs/agents"
+  const plan = cellsFor({
+    home: [`${HOME}/AgentConfiguration.java`, `${HOME}/rest/RestAgentStore.java`, `${HOME}/mongo/AgentStore.java`],
+    mention: ["src/main/java/ai/labs/eddi/engine/rest/RestAgentSetup.java"],
+  })
+  const cellOf = new Map()
+  for (const c of plan) for (const f of c.files) cellOf.set(f.path, c)
+  const spread = { anchors: [{ word: "agent", files: [`${HOME}/AgentConfiguration.java`], packages: { [HOME]: 13, "src/main/java/ai/labs/eddi/engine/rest": 20 } }], analogue: null }
+
+  // дом взят целиком — предмет покрыт, и это ВИДНО числом
+  const all = coverageOf({ anchors: ["agent"], cellOf, slices: [], taken: new Set(plan), chosen: [], spread })
+  assert.deepEqual(all.covered.map((c) => [c.subject, c.home, c.homeTaken, c.homeFiles]), [["agent", HOME, 3, 3]])
+
+  // взято УПОМИНАНИЕ, дом отброшен: по слову это «покрыт», по дому — нет
+  const mentionOnly = coverageOf({ anchors: ["agent"], cellOf, slices: [], taken: new Set([plan[1]]), chosen: [], spread })
+  assert.deepEqual(mentionOnly.covered, [], "предмет числится покрытым, прочитав одно упоминание")
+  assert.deepEqual(mentionOnly.uncovered.map((u) => [u.subject, u.why, u.home, u.homeTaken, u.homeFiles]), [["agent", "home", HOME, 0, 3]])
+  assert.deepEqual(checkFocus({ focus: mentionOnly, anchors: ["agent"] }), [])
+
+  // дом выбирается по ПЛОТНОСТИ из артефакта, а не по числу файлов в плане: `engine/rest` несёт 20
+  // помеченных файлов против 13, и всё же дом предмета `agent` — `configs/agents`
+  assert.equal(homeOf({ subject: "agent", spread }), HOME)
+
+  // `packages` — СВОДКА, резанная шагом 2 до десяти строк: на eddi дом `configs/agents` (5
+  // помеченных файлов) в неё не вошёл, а `docs` (55) вошёл. Дом считается по полному `files`.
+  const cut = { anchors: [{ word: "agent", files: [`${HOME}/AgentConfiguration.java`, `${HOME}/mongo/AgentStore.java`], packages: { docs: 55, "src/test/java/app": 44 } }], analogue: null }
+  assert.equal(homeOf({ subject: "agent", spread: cut }), HOME, "дом ищется в резаной сводке — на eddi он туда не попадает")
+  // артефакта нет — дома нет, и покрытие считается по слову ровно как до тикета
+  assert.equal(homeOf({ subject: "agent" }), "")
+  const silent = coverageOf({ anchors: ["agent"], cellOf, slices: [], taken: new Set([plan[1]]), chosen: [] })
+  assert.deepEqual(silent.covered.map((c) => [c.subject, c.cells, c.droppedCells, c.home]), [["agent", 1, 1, undefined]])
+})
+
+test("T07: карта влезает в MAP_CAP_BYTES, сколько бы розеток ни принёс anchors.json", () => {
+  // 60 клеток по 20 файлов — вчетверо больше реального потолка; розетки называют КАЖДУЮ клетку,
+  // поэтому фаза розеток обязана проверять бюджет на каждом ходе, а не после всех.
+  const big = Array.from({ length: 60 }, (_, i) => ({
+    id: `c${i}`, kind: "code",
+    files: Array.from({ length: 20 }, (_, j) => ({ path: `src/main/java/pkg${i}/agents/F${j}.java` })),
+  }))
+  const cells = [{ id: "spine", kind: "spine", files: [{ path: "pom.xml" }] }, ...big]
+  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 12])))
+  const all = big.flatMap((c) => c.files.map((f) => f.path))
+  const edges = all.map((p) => ({ from: p, to: all[0] }))
+  const slices = [{ id: "s", entry: all[0], kind: "route", nodes: all }]
+  const spread = { anchors: [], analogue: { word: "PromptSnippet", files: all, packages: {} } }
+  const r = newFocus({ slices, anchors: ["agent"], spread, cells, edges, decls, apis: {} })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.ok(r.value.estBytes <= Math.floor(MAP_CAP_BYTES / MAP_EST_SLACK), `оценка ${r.value.estBytes} выше бюджета`)
+  assert.ok(r.value.estBytes <= MAP_CAP_BYTES, `оценка ${r.value.estBytes} выше потолка ${MAP_CAP_BYTES}`)
+  assert.ok(r.value.dropped.cells > 0, "ничего не отброшено — потолок ничего не ограничил")
 })

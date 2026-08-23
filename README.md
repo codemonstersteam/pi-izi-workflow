@@ -54,7 +54,7 @@ intake → weight → ripple → design → plan`. Остальные семь �
 
 ```
 | Оператор кладёт требование в TASK.md
-| Роль gilb делает измеримый BRD           → .agent/brd.md
+| Роль gate решает, решаемо ли, и чем грепать → .agent/brd.md
 | Скрипт режет дерево репозитория на клетки → .agent/survey-plan.json
 | Рой скаутов описывает клетки              → .agent/graph-parts/
 | Скрипт сливает части в карту              → .agent/appgraph.xml

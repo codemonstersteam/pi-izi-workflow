@@ -69,6 +69,9 @@ $END_LAW
 $START_INPUT
 The order contains:
 - BRD;
+- the NORMALIZED table of the request — one row per requirement, `verb | object | instrument | values`.
+  `verb` + `object` give the use case, `instrument` gives `touched`, `values` gives `fit` and `domain`
+  with `source="normalized.md"`. A value standing in the `values` column is quoted, never asked;
 - operator answers as pairs `<question_N>` / `<answer_N>` inside `<exchange>` (value lives only in `<answer_N>`);
 - full map (`appgraph.xml`);
 - the TYPES table — every name of the BRD, the task or the answers that this repository already declares, resolved by script over ALL its files (`name · path · kind · what it declares`);

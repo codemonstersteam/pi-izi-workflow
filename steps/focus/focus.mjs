@@ -10,7 +10,20 @@
 //             the map's own arithmetic over nodes AND edges, and cells are taken WHOLE; what did not fit is COUNTED
 //             and returned, never silently absent.
 // Interface:  names(anchor, path) -> boolean   — the anchor→file rule of THIS step
-//             newFocus({ slices, anchors, cells, edges, cap }) -> Result<Focus, …>
+//             isHomeDir(dir, subject) -> boolean — one directory IS the subject's package
+//             homeOf({ subject, spread }) -> string — the subject's home PACKAGE, or ""
+//             coverageOf({ anchors, cellOf, slices, taken, chosen, spread }) -> { covered, uncovered }
+//             checkFocus({ focus, anchors }) -> blockers[]
+//             newFocus({ slices, anchors, spread, cells, edges, cap }) -> Result<Focus, …>
+//
+// `spread` IS `.agent/anchors.json` PARSED — the map of the walk, written by steps/brd/spread/spread.mjs at
+// step 2 with a grep over the TEXT of the tree, and read here rather than recomputed:
+//   { files, marked[], anchors: [{ word, files[], packages: { dir: n }, share }],
+//     analogue: { word, files[], packages } | null }
+// It is an OPTIONAL operand and every use of it is silent when it is absent: no artifact at all, an
+// `analogue: null` (the BRD said `analogue: none`) and an empty `anchors[]` are three legal inputs,
+// and under each of them this module decides by the anchors alone exactly as it did before the
+// artifact existed. Absence is a case, not a refusal (standards/code.md §2).
 
 import { ok, err } from "../../core/result.mjs"
 import { MAP_CAP_BYTES, MAP_PRICE, MAP_EST_SLACK } from "../intake/map.mjs"
@@ -50,24 +63,90 @@ export function names(anchor, path) {
 
 const kb = (n) => `${Math.round(n / 1024)} КБ`
 
+// ДОМ ПРЕДМЕТА — КАТАЛОГ, НАЗВАННЫЙ ПРЕДМЕТОМ, а не содержащий это слово. Правило живёт здесь одно
+// на весь модуль: по нему выбирает клетку фаза дома в `newFocus` и по нему же называет пакет
+// `coverageOf`. Единственная вольность — множественное число: пакет `configs/agents/` и есть дом
+// предмета `agent`.
+//
+// BUG_FIX_CONTEXT: первая редакция сверяла каталог тем же `names` (вхождение подстроки), и домом
+//   якоря `agent` на eddi оказался `docs/your-first-agent/` — две страницы документации, дешевле
+//   тринадцатифайлового `configs/agents`. Ход, купленный дому, ушёл в документацию.
+const homeWord = (a) => String(a || "").trim().toLowerCase().replace(/(es|s)$/, "")
+export const isHomeDir = (d, a) => homeWord(d) === homeWord(a) && Boolean(homeWord(a))
+
+// FUNCTION_CONTRACT: homeOf — какой ПАКЕТ дерева и есть дом предмета
+//   Input:        { subject — слово BRD; spread — разобранный `.agent/anchors.json` или null }
+//   Dependencies: isHomeDir
+//   Antecedent:   любые значения; артефакта нет, якоря нет, пакетов нет → пустая строка
+//   Consequent:   success: путь пакета, чей последний сегмент НАЗВАН предметом и в котором помечено
+//                          больше всего файлов; "" — такого пакета нет, и это законный ответ
+//                          (`Glossary` до его создания, `PromptSnippet` в пакете `snippets`)
+//                 failure: none — тотальна
+//   Purity:       pure
+//   Interface:    homeOf({ subject, spread }) -> string
+//
+// ПЛОТНОСТЬ БЕРЁТСЯ ИЗ АРТЕФАКТА, а не пересчитывается по клеткам: счёт ПОМЕЧЕННЫХ грепом по тексту
+// файлов на каталог — та же величина, которой шаг 3 режет клетки. Из нескольких домов выбирается
+// ПЛОТНЕЙШИЙ, а не самый дешёвый и не самый короткий путь: `configs/agents` — дом предмета `agent`,
+// `engine/runtime/client/agent` — сосед, у которого случился такой подкаталог.
+//
+// СЧИТАЕТСЯ ПО `files`, А `packages` — ЗАПАСНОЙ ВХОД. `packages` артефакта это СВОДКА: шаг 2 режет её
+// до десяти строк, чтобы она влезла в наряд целиком.
+//
+// BUG_FIX_CONTEXT: eddi, `component-tests/etalon-eddi/.agent/anchors.json` 23.08.2026. В десятку
+//   пакетов предмета `agent` (895 файлов) вошли `docs` 55, тестовые пакеты и `planning` — а дом,
+//   `configs/agents` с пятью помеченными файлами, не вошёл, и строка покрытия по дому исчезала ровно
+//   там, ради чего писалась. Полный список `files` в артефакте есть всегда; сводка — производная.
+export function homeOf({ subject = "", spread = null } = {}) {
+  const word = String(subject || "").trim()
+  if (!word) return ""
+  const list = (spread && Array.isArray(spread.anchors) ? spread.anchors : []).filter(Boolean)
+  const mine = list.find((a) => String(a.word || "").trim().toLowerCase() === word.toLowerCase())
+  const files = mine && Array.isArray(mine.files) ? mine.files : []
+  let counts = mine && mine.packages && typeof mine.packages === "object" ? mine.packages : {}
+  if (files.length) {
+    counts = {}
+    for (const f of files) {
+      const dir = String(f || "").split("/").slice(0, -1).join("/")
+      if (dir) counts[dir] = (counts[dir] || 0) + 1
+    }
+  }
+  let best = "", n = -1
+  for (const [dir, count] of Object.entries(counts)) {
+    if (!String(dir).split("/").some((seg) => isHomeDir(seg, word))) continue
+    const c = Number(count) || 0
+    if (c > n || (c === n && String(dir) < best)) { best = String(dir); n = c }
+  }
+  return best
+}
+
+// ФАЙЛЫ АНАЛОГА ЧИТАЮТСЯ, А НЕ ВЫЧИСЛЯЮТСЯ. Это единственная точка входа к ним в модуле.
+const analogueFilesOf = (spread) => {
+  const a = spread && spread.analogue
+  return a && Array.isArray(a.files) ? [...new Set(a.files.map((p) => String(p || "")).filter(Boolean))] : []
+}
+
 // FUNCTION_CONTRACT: newFocus — the run's focus, chosen and declared
 //   Input:        slices  — [{ id, entry, kind, nodes }] as newSlices returns them
 //                 orphans — [string], the nodes no cone reached
 //                 anchors — [string], the BRD's anchors (plan.subjects) — NAMES, not paths
-//                 analogue — the existing mechanism this work is modelled on (BRD `analogue:`), or
-//                           "" / "none …" when the BRD declared there is none
+//                 spread  — разобранный `.agent/anchors.json` (шаг 2): файлы каждого якоря, их
+//                           пакеты с плотностью и ОТДЕЛЬНО файлы аналога. Операнд необязательный:
+//                           нет артефакта, `analogue: null` и пустой `anchors[]` — три законных
+//                           входа, под каждым фаза розеток и дом предмета МОЛЧАТ
 //                 cells   — the plan's cells: [{ id, kind, files: [{ path }] }]
 //                 edges   — [{ from, to }] of graph-computed.xml: the estimate prices them, because
 //                           on a monolith they are the larger half of the map
 //                 decls   — { path -> count } and apis — { path -> count }, from the same computed
 //                           facts; the estimate prices what the map will carry, not an average
 //                 cap     — the reading ceiling; MAP_CAP_BYTES when absent
-//   Dependencies: ok, err (core/result.mjs), names, kb
+//   Dependencies: ok, err (core/result.mjs), names, isHomeDir, analogueFilesOf, coverageOf, kb
 //   Antecedent:   any values; missing ones read as empty. `cells` empty is the "no plan" case, not
 //                 an empty focus
-//   Consequent:   success: { why, chosen, cells, files, estBytes, dropped, slices, entries } where
-//                          `why` is "whole-plan" | "anchors", `chosen` the slice ids taken and
-//                          `dropped` — { slices, cells } — what the ceiling left out
+//   Consequent:   success: { why, chosen, cells, files, estBytes, dropped, covered, uncovered,
+//                          slices, entries } where `why` is "whole-plan" | "anchors", `chosen` the
+//                          slice ids taken, `dropped` — { slices, cells } — what the ceiling left
+//                          out, and `covered`/`uncovered` — coverageOf's verdict per subject
 //                 failure: "no-plan"   — step 3 left no cells
 //                          "no-entry"  — the plan does not fit and not one entry exists
 //                          "no-anchor" — entries exist, and not one of them is NAMED by an anchor:
@@ -75,7 +154,7 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 //                                        anchors, not a choice among 84 candidates
 //                          "over-cap"  — even the cheapest named cone does not fit beside the spine
 //   Purity:       pure
-//   Interface:    newFocus({ slices, anchors, analogue, cells, edges, cap }) -> Result
+//   Interface:    newFocus({ slices, anchors, spread, cells, edges, cap }) -> Result
 //
 // WHY NO QUESTION TO THE OPERATOR, and the two reasons are not the same reason.
 //
@@ -98,16 +177,32 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 
 // FUNCTION_CONTRACT: coverageOf — какие предметы требования прочитаны, а какие нет, и почему
 //   Input:        { anchors — слова BRD (`subjects[]`); cellOf — Map<путь, клетка>; slices — срезы;
-//                   taken — Set взятых клеток; chosen — взятые срезы }
-//   Dependencies: names (тот же матчер, каким срез и клетка ВЫБИРАЮТСЯ — один ответ, не два)
+//                   taken — Set взятых клеток; chosen — взятые срезы;
+//                   spread — разобранный `.agent/anchors.json` или null }
+//   Dependencies: names (тот же матчер, каким срез и клетка ВЫБИРАЮТСЯ — один ответ, не два), homeOf
 //   Antecedent:   любые значения; пустые якоря дают два пустых списка
 //   Consequent:   success: { covered, uncovered } — каждый непустой якорь ровно в ОДНОМ из списков.
-//                          `covered`  — по предмету взята хотя бы одна клетка;
+//                          У предмета, чей ДОМ известен, вердикт выносится по дому: взят хотя бы один
+//                          его файл — `covered`, ни одного — `uncovered` с `why:"home"`. Обе строки
+//                          несут `home` (пакет), `homeFiles` (сколько его файлов в плане) и
+//                          `homeTaken` (сколько из них прочитает рой) — «дом `configs/agents` 13/13».
+//                          Дома нет (нет артефакта, нет пакета с таким именем) — вердикт прежний, по
+//                          слову: `covered` — взята хотя бы одна клетка предмета;
 //                          `uncovered` с `why:"cap"` — файлы предмета в репозитории ЕСТЬ, но ни одна
 //                          их клетка не влезла; с `why:"none"` — предмет не называет ничего, и это
 //                          нормально для типа, которого ещё нет (`glossary` до его создания)
 //                 failure: none — тотальна
 //   Purity:       pure
+//
+// ПОКРЫТИЕ НАЗЫВАЕТСЯ ПО ДОМУ ПРЕДМЕТА, А НЕ ПО СЛОВУ.
+//
+// BUG_FIX_CONTEXT: тот же проигрыш eddi 19.08.2026, прочитанный до конца. Строка «взято 2, отброшено
+//   21» честна и всё равно не отвечает на единственный вопрос, который внизу полосы задают: ТОТ ли
+//   модуль прочитан. `agent` числился покрытым двумя случайными клетками (`engine/rest/RestAgentSetup`
+//   и readiness-тест), а `configs/agents` — пакет, где живёт носитель требования R6
+//   `AgentConfiguration.java`, — лежал среди отброшенных, и назвать его было нечем: счёт по слову не
+//   знает, какой из 52 каталогов дом. Плотность из `.agent/anchors.json` знает, и «дом
+//   `configs/agents` 0/13» краснеет глазами оператора там, где «взято 2» выглядело работой.
 //
 // BUG_FIX_CONTEXT: живой прогон eddi 19.08.2026. `focus.json`: `chosen:["s242"]`,
 //   `dropped:{slices:30, cells:66}` — и НИ СЛОВА о том, что среди выброшенного лежал предмет `agent`,
@@ -115,14 +210,20 @@ const kb = (n) => `${Math.round(n / 1024)} КБ`
 //   `agent` в пути. Молчание стоило трёх остановок внизу полосы: роль спрашивала у оператора путь
 //   AgentConfiguration.java, F2/F3/F8 краснели на существующем файле, шаг 8 встал `unknown-node`.
 //   Потолок чтения при этом прав — брать всё нельзя; неправо было МОЛЧАНИЕ.
-export function coverageOf({ anchors = [], cellOf = new Map(), slices = [], taken = new Set(), chosen = [] } = {}) {
+export function coverageOf({ anchors = [], cellOf = new Map(), slices = [], taken = new Set(), chosen = [], spread = null } = {}) {
   const covered = [], uncovered = []
   const takenCells = taken instanceof Set ? taken : new Set()
   const chosenIds = new Set((chosen || []).map((s) => (s && s.id) || s).filter(Boolean))
+  const paths = [...(cellOf instanceof Map ? cellOf.keys() : [])]
   for (const raw of anchors || []) {
     const a = String(raw || "").trim()
     if (!a) continue
-    const files = [...(cellOf instanceof Map ? cellOf.keys() : [])].filter((p) => names(a, p))
+    // Дом считается по ПЛАНУ, а не по помеченным файлам: рой читает клетки, и «13/13» — это файлы
+    // пакета, которые в фокус попали, из тех, что в плане вообще есть.
+    const dir = homeOf({ subject: a, spread })
+    const homeFiles = dir ? paths.filter((p) => String(p).startsWith(`${dir}/`)) : []
+    const homeTaken = homeFiles.filter((p) => takenCells.has(cellOf.get(p))).length
+    const files = paths.filter((p) => names(a, p))
     const cells = new Set(files.map((p) => cellOf.get(p)).filter(Boolean))
     const named = (slices || []).filter((x) => x && names(a, x.entry))
     const mine = [...cells].filter((c) => takenCells.has(c))
@@ -137,7 +238,13 @@ export function coverageOf({ anchors = [], cellOf = new Map(), slices = [], take
     //   отброшено 21» читается как «предмет затронут, но прочитан НЕ ВЕСЬ».
     const lost = [...cells].filter((c) => !takenCells.has(c)).length
     const lostCones = named.filter((x) => !chosenIds.has(x.id)).length
-    if (mine.length || cones.length) covered.push(Object.freeze({ subject: a, cells: mine.length, slices: cones.length, droppedCells: lost, droppedSlices: lostCones }))
+    const line = { subject: a, cells: mine.length, slices: cones.length, droppedCells: lost, droppedSlices: lostCones }
+    if (homeFiles.length) {
+      const home = { home: dir, homeFiles: homeFiles.length, homeTaken }
+      if (homeTaken) covered.push(Object.freeze({ ...line, ...home }))
+      else uncovered.push(Object.freeze({ ...line, ...home, cells: cells.size, slices: named.length, why: "home" }))
+    }
+    else if (mine.length || cones.length) covered.push(Object.freeze(line))
     else if (cells.size || named.length) uncovered.push(Object.freeze({ subject: a, cells: cells.size, slices: named.length, why: "cap" }))
     else uncovered.push(Object.freeze({ subject: a, cells: 0, slices: 0, why: "none" }))
   }
@@ -168,7 +275,7 @@ export function checkFocus({ focus = {}, anchors = [] } = {}) {
   return B
 }
 
-export function newFocus({ slices = [], anchors = [], analogue = "", cells = [], edges = [], decls = {}, apis = {}, cap = MAP_CAP_BYTES } = {}) {
+export function newFocus({ slices = [], anchors = [], spread = null, cells = [], edges = [], decls = {}, apis = {}, cap = MAP_CAP_BYTES } = {}) {
   // The budget is the ceiling MINUS the measured error of the estimate below (steps/intake/map.mjs::
   // MAP_EST_SLACK). Comparing to the ceiling itself is what killed run fa8def32: the estimate was
   // 10% low, the map missed by 3%, and the swarm had already been paid for.
@@ -212,7 +319,7 @@ export function newFocus({ slices = [], anchors = [], analogue = "", cells = [],
   if (bytesOf(plan) <= budget) {
     const wholeCellOf = new Map()
     for (const c of plan) for (const f of c.files || []) wholeCellOf.set(f.path, c)
-    const whole = coverageOf({ anchors, cellOf: wholeCellOf, slices, taken: new Set(plan), chosen: slices })
+    const whole = coverageOf({ anchors, cellOf: wholeCellOf, slices, taken: new Set(plan), chosen: slices, spread })
     return ok(Object.freeze({
       why: "whole-plan",
       chosen: slices.map((s) => s.id),
@@ -275,8 +382,8 @@ export function newFocus({ slices = [], anchors = [], analogue = "", cells = [],
   //
   // The change's own name does not exist in the repository yet, so no anchor can find the files it
   // lands in. The BRD names what it is modelled on (`analogue`), that thing DOES exist, and the work
-  // is to plug the new one into every socket the old one sits in. So: the files the analogue names,
-  // then one step BACKWARDS along the edges — who calls them.
+  // is to plug the new one into every socket the old one sits in. So: the files of the analogue, then
+  // one step BACKWARDS along the edges — who calls them.
   //
   // Measured on eddi (runs 9a98f081 / 256e1830, same TASK.md): all 10 existing files of the
   // benchmark's oracle are among the 50 callers of the snippet code, and not one of them is an entry
@@ -299,11 +406,8 @@ export function newFocus({ slices = [], anchors = [], analogue = "", cells = [],
   // Дом — каталог, НАЗВАННЫЙ предметом, а не содержащий это слово. Единственная вольность —
   // множественное число: пакет `configs/agents/` и есть дом предмета `agent`.
   //
-  // BUG_FIX_CONTEXT: первая редакция сверяла каталог тем же `names` (вхождение подстроки), и домом
-  //   якоря `agent` на eddi оказался `docs/your-first-agent/` — две страницы документации, дешевле
-  //   тринадцатифайлового `configs/agents`. Ход, купленный дому, ушёл в документацию.
-  const home = (a) => String(a || "").trim().toLowerCase().replace(/(es|s)$/, "")
-  const isHomeDir = (d, a) => home(d) === home(a) && Boolean(home(a))
+  // Само правило «каталог НАЗВАН предметом» и его BUG_FIX_CONTEXT живут наверху модуля (`isHomeDir`):
+  // им же `coverageOf` называет пакет предмета, и двух ответов на один вопрос быть не должно.
   const atHome = (c, a) => (c.files || []).some((f) => (String(f.path).split("/").slice(0, -1)).some((d) => isHomeDir(d, a)))
   // Тестовая клетка стоит в карте строки (M1) и потому дёшева — но требованию она не носитель.
   // Без этого порядка подешевевшие тесты вытесняют код: замер того же прогона после M1 — 70 файлов
@@ -346,17 +450,41 @@ export function newFocus({ slices = [], anchors = [], analogue = "", cells = [],
   // 10. Moved ahead of them, the three real anchor sets of the three live runs give the SAME answer:
   // 9 of 10, 14 cells, 104 KB, all three. That is the point of the phase — the focus stops depending
   // on which words a role happened to write, and starts depending on what the work is modelled on.
-  const an = /^none\b/i.test(String(analogue).trim()) ? "" : String(analogue).trim()
-  const analogueFiles = new Set(an ? [...cellOf.keys()].filter((p) => names(an, p)) : [])
-  const callers = analogueFiles.size
-    ? [...new Set((edges || []).filter((e) => analogueFiles.has(e.to)).map((e) => e.from))]
+  //
+  // РОЗЕТКИ ПРИХОДЯТ ГОТОВЫМИ, ЗДЕСЬ ИХ НЕ ИЩУТ. Файлы аналога считает шаг 2 грепом по ТЕКСТУ дерева
+  // и кладёт в `.agent/anchors.json`; фокус их ЧИТАЕТ. Матч по пути снят.
+  //
+  // BUG_FIX_CONTEXT: замер по eddi 22.08.2026 (steps/brd/normalize-concept-research.md, глава 4;
+  //   эталон — 10 файлов работы DOS-535). Прежняя строка отбирала файлы аналога `names(an, p)`, то
+  //   есть по совпадению с ПУТЁМ: 10 отобранных файлов, из них файлов эталона — 0, precision 0%. Ни
+  //   один из семи файлов `backup/` слова `PromptSnippet` в имени не несёт, и обратный ход по рёбрам
+  //   стартовал не оттуда, откуда надо. Грeп того же слова по ТЕКСТУ даёт 62 файла и 10 эталонных из
+  //   10 за 0,56 с — и это уже готовая карта обхода, до всякого графа. Считать её здесь второй раз
+  //   нечем: у чистого ядра нет ни диска, ни текста файлов, только пути.
+  const socket = new Set(analogueFilesOf(spread))
+  // ТЕСТОВАЯ РОЗЕТКА ПОСЛЕДНЕЙ — то же правило, что у якорей (`rankFor`), и здесь оно стоит дороже.
+  // Имя аналога чаще всего пишут именно его тесты: на eddi 24 клетки из 62 помеченных файлов —
+  // тестовые, и по числу файлов они дешевле кода, который меняет заказ.
+  //
+  // BUG_FIX_CONTEXT: замер по eddi 23.08.2026 (`sandbox/runbox/eddi`, аналог `PromptSnippet` — 62
+  //   файла грепом по тексту). Порядок «дешёвая первой» на нарезке по плотности (T06) доносит 5
+  //   файлов эталона DOS-535 из 10: дешёвые тестовые клетки выбирают бюджет раньше `backup/impl`
+  //   (9 файлов, ПЯТЬ файлов эталона), и сердце задачи остаётся снаружи. Тесты последними — 10 из 10
+  //   в том же бюджете. Порядок ПО ПЛОТНОСТИ розеток был написан и снят: на тех же входах он давал
+  //   ровно тот же ответ, а код без замера — не страховка, а площадь.
+  const socketCells = [...new Set([...socket].map((p) => cellOf.get(p)).filter(Boolean))]
+    .sort((a, b) => (isTestCell(a) ? 1 : 0) - (isTestCell(b) ? 1 : 0) || cheapFirst(a, b))
+  // Обратный ход по рёбрам оставлен ВТОРЫМ ходом, а не снят: греп по тексту находит того, кто пишет
+  // имя аналога, а ребро находит того, кто вызывает его молча — через интерфейс или инъекцию. Рёбер
+  // ещё нет (шаг 3б идёт до карты роя, а `graph-computed.xml` может быть пуст) — фаза молчит.
+  const callers = socket.size
+    ? [...new Set((edges || []).filter((e) => socket.has(e.to)).map((e) => e.from))]
     : []
-  const callerCells = [...new Set(callers.map((p) => cellOf.get(p)).filter(Boolean))]
-    .sort((a, b) => (a.files || []).length - (b.files || []).length || a.id.localeCompare(b.id))
-  let droppedCallers = 0
-  for (const c of callerCells) {
+  const callerCells = [...new Set(callers.map((p) => cellOf.get(p)).filter(Boolean))].sort(cheapFirst)
+  let droppedSockets = 0
+  for (const c of [...socketCells, ...callerCells]) {
     if (taken.has(c)) continue
-    if (!add((c.files || []).map((f) => f.path))) droppedCallers++
+    if (!add((c.files || []).map((f) => f.path))) droppedSockets++
   }
 
   // БЮДЖЕТ ДЕЛИТСЯ ПО ЯКОРЯМ, А НЕ ПО ДЕШЕВИЗНЕ. Обход идёт по кругу: каждому якорю его самая дешёвая
@@ -416,7 +544,7 @@ export function newFocus({ slices = [], anchors = [], analogue = "", cells = [],
   }
 
   const files = filesOf(cs)
-  const cover = coverageOf({ anchors, cellOf, slices, taken, chosen })
+  const cover = coverageOf({ anchors, cellOf, slices, taken, chosen, spread })
   return ok(Object.freeze({
     why: "anchors",
     covered: cover.covered,
@@ -425,7 +553,7 @@ export function newFocus({ slices = [], anchors = [], analogue = "", cells = [],
     cells: cs.map((c) => c.id),
     files,
     estBytes: bytesOf(cs),
-    dropped: Object.freeze({ slices: droppedSlices, cells: droppedCells + droppedCallers }),
+    dropped: Object.freeze({ slices: droppedSlices, cells: droppedCells + droppedSockets }),
     slices,
     entries: slices.length,
   }))
