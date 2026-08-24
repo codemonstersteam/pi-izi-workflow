@@ -1,19 +1,17 @@
-R1 add | Glossary | configuration type | with resource type eddi://ai.labs.glossary
-R2 implement | CRUD | Glossary | with versioning like Prompt Snippet
-R3 substitute | terms | prompts | as {{glossary.<term>}}
-R4 export | Glossary | agent ZIP archive | as {id}.glossary.json plus {id}.descriptor.json
-R5 import | Glossary | agent ZIP archive | with merge by resource URI and upgrade
-R6 version | Glossary | mechanism | like Prompt Snippet
-R7 merge | Glossary | import | by resource URI with new version wins
-R8 define | Term | structure | as key + value only
-R9 validate | Term key | format | up to 64 chars, lowercase, alphanumeric and underscore
-R10 reference | Glossary | agent config | like snippets
-R11 expose | REST endpoint | Glossary | at /glossarystore/glossaries
-R12 restrict | substitution | Glossary | to agent-bound only
-R13 resolve | key conflict | Glossary | last load wins based on configuration set order
-R14 define | Glossary resource | fields | id + version + terms only
-R15 allow | Term value | length | unlimited
-R16 define | template key | data model | glossary with syntax {glossary.<term>}
-R17 cache | Glossary | Caffeine | with TTL same as PromptSnippetService
-R18 error | prompt rendering | removed Glossary | when bound to agent
-R19 name | export file | agent ZIP | as {id}.glossary.json plus {id}.descriptor.json
+R1 create | configuration type | Glossary | dictionary of bot terms, with resource type eddi://ai.labs.glossary
+R2 provide | CRUD | Glossary | with versioning, following Prompt Snippet pattern
+R3 provide | versioning | Glossary | same mechanism as Prompt Snippet, no own implementation
+R4 add | substitution | prompt | as {{glossary.<term>}} alongside snippets
+R5 add | export | Glossary | as {id}.glossary.json plus {id}.descriptor.json in agent ZIP archive
+R6 add | import | Glossary | with merge by resource URI, new version wins, upgrade existing
+R7 define | Term | Glossary entry | only key + value, no description, no category
+R8 validate | Term key | Glossary | up to 64 characters, lowercase, alphanumeric and underscore
+R9 add | reference | Glossary | in agent config, like snippets
+R10 create | REST endpoint | Glossary | at /glossarystore/glossaries, *store/* pattern, not /glossaries
+R11 restrict | substitution | Glossary | only to glossaries bound to agent, no global substitution
+R12 resolve | key conflict | Glossary | last load wins, configuration set order is priority
+R13 define | resource fields | Glossary | only id + version + terms
+R14 define | Term value | Glossary | no length limit
+R15 map | template data model key | Glossary | as glossary with Qute syntax {glossary.<term>}
+R16 add | caching | Glossary | Caffeine, same TTL as PromptSnippetService, no own implementation
+R17 raise | error | remote glossary | when bound to agent, on prompt rendering

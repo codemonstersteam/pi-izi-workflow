@@ -1,20 +1,25 @@
 # кандидаты в якоря — слова колонки `object` таблицы требований, со счётом файлов.
 # порог BRD_FORM.anchorMaxFiles = 32: слово, встреченное более чем в 32 файлах, якорем не становится.
 # аналог стоит в subjects[] безусловно — его счёт порогом не судится.
-Glossary · files 1  ← якорь
+configuration · files 631  отсечён порогом
+type · files 853  отсечён порогом
 CRUD · files 94  отсечён порогом
-terms · files 32  ← якорь
+versioning · files 11  ← якорь
+substitution · files 11  ← якорь
+export · files 92  отсечён порогом
+import · files —  (в таблице попаданий нет: слишком короткое или служебное)
 Term · files 292  отсечён порогом
 key · files 771  отсечён порогом
+reference · files 296  отсечён порогом
 REST · files 662  отсечён порогом
 endpoint · files 233  отсечён порогом
-substitution · files 11  ← якорь
 conflict · files 86  отсечён порогом
 resource · files 652  отсечён порогом
+fields · files 225  отсечён порогом
 value · files 960  отсечён порогом
 template · files 239  отсечён порогом
-prompt · files 195  отсечён порогом
-rendering · files 33  отсечён порогом
-export · files 92  отсечён порогом
-file · files 432  отсечён порогом
+data · files 1006  отсечён порогом
+model · files 1127  отсечён порогом
+caching · files 108  отсечён порогом
+error · files 614  отсечён порогом
 PromptSnippet · files 62  ← аналог

@@ -1,1 +1,1 @@
-analogue: PromptSnippet — files 62; the existing feature with versioning, caching, export/import, and agent config reference that Glossary will replicate
+analogue: PromptSnippet — files 62; the existing configuration type whose versioning mechanism, prompt substitution pattern, agent reference structure, and caching behavior the new Glossary feature will replicate
