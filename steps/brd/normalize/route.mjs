@@ -5,7 +5,7 @@
 // Interface:  promote
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { NORMALIZED, STAGED_NORMALIZED } from "../paths.mjs"
+import { NORMALIZED, STAGED_NORMALIZED, STAGED_CLEAN } from "../paths.mjs"
 
 // FUNCTION_CONTRACT: promote — продвинуть таблицу действий
 //   Input:        state — состояние прогона (нужен cwd)
@@ -14,9 +14,13 @@ import { NORMALIZED, STAGED_NORMALIZED } from "../paths.mjs"
 //   Consequent:   success: { at }; failure: { why }
 //   Purity:       io (fs)
 export function promote(state) {
-  const from = join(state.cwd, STAGED_NORMALIZED)
-  if (!existsSync(from)) return { why: `${STAGED_NORMALIZED} не существует — продвигать нечего` }
+  // ЛОЖИТСЯ ТАБЛИЦА ВТОРОГО ПРОХОДА. Первый проход пишет таблицу, второй её чистит, и продвигается
+  // ТОЛЬКО очищенная: продвинуть черновик первого прохода значит закрыть подшаг документом, который
+  // гардрейл чистки не видел.
+  const from = join(state.cwd, STAGED_CLEAN)
+  if (!existsSync(from)) return { why: `${STAGED_CLEAN} не существует — продвигать нечего` }
   writeFileSync(join(state.cwd, NORMALIZED), readFileSync(from, "utf8"))
   rmSync(from, { force: true })     // под staging остаётся ровно то, что гардрейл ОТБИЛ
+  rmSync(join(state.cwd, STAGED_NORMALIZED), { force: true })   // вход чистки прожил свой проход
   return { at: NORMALIZED }
 }

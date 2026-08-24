@@ -89,11 +89,11 @@ const run = async (id, state) => {
 };
 
 // ШАГ 2 — ДВА ПОДШАГА, КАК ШАГ 9 — ТРИ. Обёртка выстраивает порядок и ничего не решает о
-// содержании: таблица действий ложится на диск и живёт дальше, а ворота судят ЕЁ, а не сырой заказ.
-// Круги починки у подшагов свои: провал ворот нормализацию не переигрывает.
+// содержании: таблица действий ложится на диск и живёт дальше, а якоря собираются ПО НЕЙ, а не по
+// сырому заказу. Круги починки у подшагов свои: провал якорей нормализацию не переигрывает.
 async function brd(state) {
   const rows = await run("brd/normalize", state); if (rows.track === "err") return rows;
-  return await run("brd/gate", rows.value);
+  return await run("brd/anchors", rows.value);
 }
 
 async function plan(state) {
@@ -103,13 +103,16 @@ async function plan(state) {
 }
 
 try {
-  const started = await stepStart({ cwd: args.cwd, run: args.run, key: args.key || "" });
+  // КАТАЛОГ И НОМЕР ПРОГОНА ПОЛОСА НЕ ЗНАЕТ И ЗНАТЬ НЕ ДОЛЖНА: их даёт хост через контекст функции
+  // расширения. `prompts/izi.md` запрещает передавать `args` вовсе, и чтение `args.cwd` здесь
+  // убивало прогон на первом же вызове — `Invalid input for stepStart`, 63 мс, ноль токенов.
+  const started = await stepStart({ key: (args && args.key) || "" });
   if (started.track === "err") return started;
   const state0 = started.state;
 
   const task   = await run("task", state0);          if (task.track === "err")   return task;
-  const gate   = await brd(task.value);              if (gate.track === "err")   return gate;
-  const scope  = await run("scope", gate.value);     if (scope.track === "err")  return scope;
+  const step2  = await brd(task.value);              if (step2.track === "err")  return step2;
+  const scope  = await run("scope", step2.value);    if (scope.track === "err")  return scope;
   const graph  = await run("graph", scope.value);    if (graph.track === "err")  return graph;
   const intake = await run("intake", graph.value);   if (intake.track === "err") return intake;
   const weight = await run("weight", intake.value);  if (weight.track === "err") return weight;

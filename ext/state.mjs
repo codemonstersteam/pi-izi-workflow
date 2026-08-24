@@ -7,7 +7,7 @@
 //             параметром — иначе служба и её журнал ссылались бы друг на друга.
 // Invariants: невалидное состояние НЕ СОЗДАЁТСЯ — возвращается отказ; put не мутирует вход;
 //             `at` держит путь И ОТПЕЧАТОК, потому что «шаг закрыт» ничего не говорит о содержимом.
-// Interface:  STEPS, DEFAULT_BUDGETS, start, put, close, resume, verdicts, sha1of
+// Interface:  STEPS, DEFAULT_BUDGETS, start, put, finish, close, resume, verdicts, sha1of
 //
 // СЛОВАРЬ ИМЁН ШАГОВ ЖИВЁТ ЗДЕСЬ, и мост берёт его отсюда. Два владельца словаря означали бы, что
 // `closed` пишется одним написанием, а зовётся другим, и шаг никогда не считается закрытым — при
@@ -21,7 +21,7 @@ import { verdict as newVerdict, portion as newPortion } from "./values.mjs"
 
 export const STEPS = [
   "task", "brd", "scope", "graph", "intake", "weight", "ripple",
-  "brd/normalize", "brd/gate",
+  "brd/normalize", "brd/anchors",
   "plan/values", "plan/tree", "plan/flows",
 ]
 
@@ -150,6 +150,29 @@ export function put(state, patch = {}) {
 //                          вопрос сброшены — следующий шаг начинает с чистого состава
 //                 failure: Result.err("state", …) с именем файла
 //   Purity:       io (fs)
+// FUNCTION_CONTRACT: finish — подшаг кончился: его состав работы умирает вместе с ним
+//   Input:        state — состояние прогона
+//   Dependencies: put
+//   Antecedent:   — (тотальна; на состоянии без порций возвращает его же)
+//   Consequent:   success: состояние без порций и без вопроса; failure: Result.err, как у put
+//   Purity:       io (через put: проверка cwd)
+//   Interface:    finish(state) -> Result<State>
+//
+//   ПОРЦИЯ ПРИНАДЛЕЖИТ ОДНОМУ ПОДШАГУ, а `state.portions` — общий список, и имени владельца порция
+//   не несёт (ext/values.mjs::portion). Прогон 24.08.2026 на eddi показал цену: подшаг 2A кончил,
+//   оставив две свои порции со статусом `green`; `brd/anchors` прочитал `portions[0]`, увидел не
+//   `todo` и вернул `done`, НЕ СДЕЛАВ НИЧЕГО (steps/brd/anchors/anchors.step.mjs:71,81). Три звена
+//   из пяти промолчали без единого блокера, `.agent/brd.md` не собрался. Та же ветка стоит в
+//   `steps/plan/values/values.step.mjs:46`.
+//
+//   ВОПРОС ГАСИТСЯ ВМЕСТЕ С ПОРЦИЯМИ и по той же причине: `anchors.step.mjs:67` проверяет
+//   `state.question` ДО порций, и чужой неотвеченный вопрос увёл бы следующий подшаг на рельс паузы.
+//   Правило написано ЗДЕСЬ один раз; исполняют его двое — `close` (шаг закрыт с артефактом) и
+//   `ext/bridge.mjs::stepNext` (шаг сказал `done`).
+export function finish(state) {
+  return put(state, { portions: [], question: null })
+}
+
 export function close(state, step, artifacts = {}) {
   if (!STEPS.includes(step)) return err("state", `шаг «${step}» вне словаря: ${STEPS.join(" · ")}`)
   const at = { ...state.at }
@@ -158,7 +181,9 @@ export function close(state, step, artifacts = {}) {
     if (!existsSync(abs)) return err("state", `${rel} не существует — шаг ${step} объявил артефакт, которого нет`)
     at[name] = { path: rel, sha1: sha1of(readFileSync(abs, "utf8")) }
   }
-  const next = put(state, { closed: [...new Set([...state.closed, step])], at, portions: [], question: null })
+  const cleared = finish(state)
+  if (!cleared.ok) return cleared
+  const next = put(cleared.value, { closed: [...new Set([...state.closed, step])], at })
   if (!next.ok) return next
   writeFileSync(join(state.cwd, STATE_PATH), `${JSON.stringify(next.value, null, 2)}\n`)
   return next

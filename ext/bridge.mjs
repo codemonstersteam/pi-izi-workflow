@@ -12,7 +12,7 @@
 // Interface:  MODULES, stepStart, stepNext, stepFold
 
 import { ok, err } from "../core/result.mjs"
-import { STEPS, start, put, resume } from "./state.mjs"
+import { STEPS, start, put, finish, resume } from "./state.mjs"
 import { instruction } from "./values.mjs"
 import * as trace from "./runlog.mjs"
 
@@ -81,7 +81,14 @@ export async function stepNext({ id, state } = {}) {
   const built = instruction(raw)
   if (!built.ok) return { do: "err", code: "crashed", subject: `шаг ${id}: ${built.error.detail}` }
   trace.begin(s.value.cwd, s.value.run, id)
-  return built.value
+  // ПОДШАГ СКАЗАЛ `done` — ЕГО СОСТАВ РАБОТЫ УМИРАЕТ ЗДЕСЬ. Полоса на `done` отдаёт `it.state`
+  // следующему шагу (workflows/izi.js::run), и порции с вопросом уехали бы к чужому подшагу как
+  // свои. Мост — единственное место, где это видно для ЛЮБОГО шага: он один знает, ЧЕЙ это ход.
+  // Правило живёт в `ext/state.mjs::finish`, там же записано, чем оно оплачено.
+  if (built.value.do !== "done") return built.value
+  const over = finish(built.value.state)
+  if (!over.ok) return { do: "err", code: "crashed", subject: `шаг ${id}: ${over.error.detail}` }
+  return { ...built.value, state: over.value }
 }
 
 // FUNCTION_CONTRACT: stepFold — куда кладётся ответ

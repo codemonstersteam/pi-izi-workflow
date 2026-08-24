@@ -29,18 +29,22 @@ const ANSWER = readFileSync(join(HERE, "answer-normalize.txt"), "utf8")
 //
 // ФОРМУЛА (codemonsters.team, «Мифология тестирования: компонентные тесты»):
 //     N = 1 (штатное) + Σ (различимых ветвей в адаптере i)
-// Адаптера ДВА: файловая система (TASK.md) и МОДЕЛЬ (роль normalizer). Оператора среди них нет:
-// нормализация переписывает заказ, а не решает о нём, и спрашивать ей не о чем. Ветвей семь,
-// значит сценариев восемь. Различимые блокеры судьи таблицы сюда НЕ входят: контроль формы строки —
-// работа юнита (steps/brd/normalize/normalize.test.mjs).
+// Адаптера ДВА: файловая система (TASK.md) и МОДЕЛЬ (роль normalizer, которую подшаг зовёт ДВАЖДЫ —
+// проход 1 пишет таблицу, проход 2 её чистит). Оператора среди них нет: нормализация переписывает
+// заказ, а не решает о нём, и спрашивать ей не о чем. Ветвей восемь, значит сценариев девять.
+// Различимые блокеры судей сюда НЕ входят: контроль формы строки и сохранность литералов — работа
+// юнитов (normalize.test.mjs, clean.test.mjs). Исключение то же, что и раньше: класс, на котором
+// стоит сценарий про НАРЯД ПОЧИНКИ, а не про само правило.
 
 export const STEP = Object.freeze({
   id: "brd/normalize",
-  title: "проза заказа → таблица действий",
+  title: "проза заказа → таблица действий → чистка дублей",
   role: "normalizer",
+  roleClean: "cleaner",
   in: ["TASK.md", "state.key", "state.at.task"],
   out: [".agent/normalized.md", "state.at.normalized", "state.verdicts[]"],
-  adapters: ["файловая система (TASK.md)", "модель (роль normalizer)"],
+  adapters: ["файловая система (TASK.md)", "модель (роль normalizer, ДВА прохода)"],
+  passes: ["1 — таблица по прозе заказа", "2 — чистка: слить дубли, убрать выдуманное"],
 })
 
 export const SCENARIOS = Object.freeze([
@@ -48,11 +52,12 @@ export const SCENARIOS = Object.freeze([
     name: "роль вернула таблицу живого прогона",
     given: "TASK.md заказа eddi и ключ задачи в состоянии",
     when: "роль ответила записанной таблицей из 16 строк",
-    then: ["гардрейл ПРИНЯЛ записанный ответ",
+    then: ["гардрейл ПРИНЯЛ записанный ответ на ОБОИХ проходах",
+           "чистке нечего было слить — она вернула ту же таблицу",
            "таблица легла в .agent/normalized.md и совпала с ответом ПОБАЙТОВО",
            "отпечаток лёг в at.normalized — ворота узнают, что таблицу не правили",
-           "черновик из staging убран"],
-    expect: { done: true, stamped: "normalized", etalon: true, verdicts: 1, rows: 16 } },
+           "оба черновика из staging убраны"],
+    expect: { done: true, stamped: "normalized", etalon: true, verdicts: 2, rows: 16 } },
 
   { n: 2, kind: "adapter", branch: "no-task", fixture: "no-task",
     name: "TASK.md нет вовсе",
@@ -104,7 +109,17 @@ export const SCENARIOS = Object.freeze([
     given: "конверт track:err kind:crashed",
     when: "подшаг разобрал ответ",
     then: ["подшаг не закрылся на обрыве", "таблица не написана", "КРУГ НЕ ПОТРАЧЕН"],
-    expect: { round: 1, verdicts: 1, retried: true } },
+    expect: { round: 1, verdicts: 2, retried: true } },
+
+  { n: 9, kind: "adapter", branch: "duplicate-row", fixture: "good",
+    name: "ПРОХОД ЧИСТКИ вернул таблицу с дублем — наряд починки чистки несёт находку и свой прошлый ответ",
+    given: "проход 1 зелен, проход 2 вернул таблицу, где один глагол над одним объектом стоит дважды",
+    when: "подшаг выдал следующий наряд",
+    then: ["вердикт назвал находку duplicate-row с номерами ОБЕИХ строк",
+           "наряд починки адресован ЧИСТКЕ: несёт её прошлый ответ, а не таблицу прохода 1",
+           "таблица НЕ продвинута — подшаг не закрылся дублем",
+           "круг прохода 1 не тронут: чинится чистка, а не нормализация"],
+    expect: { fixOrder: true, promoted: false } },
 ])
 
 // FUNCTION_CONTRACT: gherkin — таблица как текст для человека
@@ -184,22 +199,38 @@ test(`подшаг 2A · сценарий 1 [happy] ${SCENARIOS[0].name}`, () =>
 
   const said = run.trace.find((i) => i.do === "say")
   assert.ok(said, "подшаг не сказал, что посчитал")
-  assert.match(said.line, /одна порция/)
+  assert.match(said.line, /два прохода/)
 
-  const order = run.trace.find((i) => i.do === "role")
-  assert.ok(order, "наряда не было")
+  const orders = run.trace.filter((i) => i.do === "role")
+  assert.equal(orders.length, 2, "проходов должно быть два: таблица и её чистка")
+  const [order, clean] = orders
   assert.equal(order.role, "normalizer")
   assert.ok(!/\{[A-Z_]+\}/.test(order.text), "слот остался незаполненным — данные не доехали")
   assert.match(order.text, /Термин/, "в наряд не приехал заказ — роли нечего нормализовать")
 
+  // РОЛЬ ЧИСТКИ СВОЯ И ПУСТАЯ. `normalizer` для неё не годится: та запрещает сливать две строки в
+  // одну — ровно то, ради чего проход существует. Файл роли пуст (`overrideSystemPrompt: true`),
+  // поэтому в модель уходит только наряд; шов на существование файла — ext/vocabulary.test.mjs.
+  assert.equal(clean.role, "cleaner", "проход чистки послан ролью прохода таблицы")
+  assert.notEqual(clean.role, order.role, "оба прохода зовут одну роль — противоречие наряду чистки")
+  assert.equal(clean.staging, ".agent/staging/normalized.clean.md", "чистка пишет по СВОЕМУ пути")
+  assert.ok(!/\{[A-Z_]+\}/.test(clean.text), "в наряде чистки остался незаполненный слот")
+  // ПРАЙМИНГ ЖИВЁТ В РОЛИ, А НЕ В НАРЯДЕ (core/form.mjs: роль — «что мне вообще позволено», наряд —
+  // «что именно сегодня»), поэтому наряд чистки опознаётся по СВОЕЙ работе, а не по заголовку.
+  assert.match(clean.text, /^GOAL$/m, "наряд чистки не открывается целью")
+  assert.match(clean.text, /duplicates merged and its invented rows deleted/, "второй наряд — не наряд чистки")
+  assert.match(clean.text, /assign \| resource type \| Glossary/, "в наряд чистки не приехала таблица прохода 1")
+
   assert.equal(run.last.do, "done", `подшаг не дошёл: ${JSON.stringify(run.last).slice(0, 160)}`)
-  assert.equal(run.state.verdicts.length, 1)
-  assert.equal(run.state.verdicts[0].ok, true, `ГАРДРЕЙЛ ОТБИЛ ЗАПИСАННЫЙ ОТВЕТ — правило уехало:\n${run.state.verdicts[0].blockers}`)
+  assert.equal(run.state.verdicts.length, 2, "вердикт на каждый проход")
+  assert.ok(run.state.verdicts.every((v) => v.ok), `ГАРДРЕЙЛ ОТБИЛ ЗАПИСАННЫЙ ОТВЕТ — правило уехало:\n${(run.state.verdicts.find((v) => !v.ok) || {}).blockers}`)
   assert.equal(run.state.at.normalized.path, ".agent/normalized.md")
   assert.equal(laid(run.state), ANSWER, "продвинутая таблица РАЗОШЛАСЬ с ответом роли — подшаг переписал ответ")
   assert.equal(run.state.at.normalized.sha1, sha1of(ANSWER))
   assert.equal(parseRows(laid(run.state)).length, SCENARIOS[0].expect.rows)
-  assert.ok(!existsSync(join(run.state.cwd, ".agent/staging/normalized.md")), "принятый черновик остался в staging")
+  for (const rel of [".agent/staging/normalized.md", ".agent/staging/normalized.clean.md"]) {
+    assert.ok(!existsSync(join(run.state.cwd, rel)), `принятый черновик остался в staging: ${rel}`)
+  }
 })
 
 for (const n of [2, 3, 4]) {
@@ -263,10 +294,42 @@ test(`подшаг 2A · сценарий 8 [crashed] ${SCENARIOS[7].name}`, () 
     writeFileSync(join(s0.cwd, it.staging), ANSWER)
     return { track: "ok", artifact: it.staging }
   })
-  assert.equal(n, 2, "после обрыва подшаг не переспросил роль")
-  assert.equal(run.state.verdicts.length, 1, "обрыв попал в вердикты — его судили как ответ")
+  assert.equal(n, 3, "после обрыва подшаг не переспросил роль — ходов роли должно быть три: обрыв, проход 1, чистка")
+  assert.equal(run.state.verdicts.length, 2, "обрыв попал в вердикты — его судили как ответ")
   assert.equal(run.state.verdicts[0].round, 1, "ОБРЫВ СЪЕЛ КРУГ ПОЧИНКИ")
   assert.equal(laid(run.state), ANSWER)
+})
+
+test(`подшаг 2A · сценарий 9 [duplicate-row] ${SCENARIOS[8].name}`, () => {
+  const s0 = arrange("good")
+  // Порча ровно на том правиле, ради которого проход чистки существует: чистка вернула таблицу,
+  // где одно требование стоит двумя строками. Значения обеих взяты из ANSWER — выдуманного нет,
+  // и находка обязана быть ровно одна, про дубль.
+  const rows = ANSWER.trim().split("\n")
+  const dirty = `${rows.join("\n")}\n${rows[0]}\n`
+  let n = 0
+  // Четыре хода: состав, проход 1, чистка с дублем, НАРЯД ПОЧИНКИ ЧИСТКИ — ради него сценарий и есть.
+  const run = drive(s0, (it) => {
+    if (it.do !== "role") return null
+    writeFileSync(join(s0.cwd, it.staging), ++n === 1 ? ANSWER : dirty)
+    return { track: "ok", artifact: it.staging }
+  }, 4)
+
+  const v = run.state.verdicts.find((x) => !x.ok)
+  assert.ok(v, "гардрейл чистки пропустил дубль")
+  assert.match(v.blockers, /^duplicate-row rows \d+ and \d+:/m, "находка без кода правила и номеров ОБЕИХ строк")
+  assert.equal(laid(run.state), null, "таблица продвинута при красном вердикте чистки")
+
+  const one = run.state.portions.find((p) => p.id === "1")
+  assert.equal(one.round, 1, "круг ПРОХОДА 1 потрачен на находку чистки — проходы чинятся врозь")
+
+  const fix = run.trace.filter((i) => i.do === "role")[2]
+  assert.ok(fix, "наряда починки чистки не было")
+  assert.equal(fix.role, "cleaner", "починку чистки послали ролью прохода таблицы")
+  assert.equal(fix.staging, ".agent/staging/normalized.clean.md")
+  assert.match(fix.text, /Findings: 1/, "наряд починки не открывается числом находок")
+  assert.match(fix.text, /^\s*1\. \[rows \d+ and \d+\]/m, "у находки нет АДРЕСА — роль пойдёт искать место по всем строкам")
+  assert.match(fix.text, /YOUR TABLE/, "наряд починки не несёт прошлый ответ ЧИСТКИ")
 })
 
 // --- ШОВ: формула исполняема ------------------------------------------------------------------------
@@ -292,7 +355,7 @@ test("подшаг 2A · формула: на каждую ветвь кода �
   // Классы ПРАВИЛ судьи таблицы — территория юнитов: контроль формы строки считает юнит, а не
   // сценарий (standards/component-test.md). `columns` тем не менее в таблице есть: на нём стоит
   // сценарий про НАРЯД ПОЧИНКИ, а не про само правило.
-  const units = new Set(["clipped-value"])
+  const units = new Set(["clipped-value", "lost-value", "invented-value"])
   for (const cls of declared) {
     if (units.has(cls)) continue
     assert.ok(covered.has(cls), `класс «${cls}» подшаг умеет вернуть, а сценария на него НЕТ`)
@@ -305,6 +368,8 @@ test("подшаг 2A · формула: на каждую ветвь кода �
   assert.equal(SCENARIOS.filter((s) => s.kind === "happy").length, 1, "штатное поведение должно быть ровно одно")
   assert.equal(SCENARIOS.length, 1 + SCENARIOS.filter((s) => s.kind === "adapter").length, "в таблице строка, которая ни штатная, ни ветвь адаптера")
   assert.equal(STEP.adapters.length, 2, "у подшага 2A два адаптера — файлы и модель")
+  assert.equal(STEP.passes.length, 2, "подшаг 2A ходит к модели ДВАЖДЫ — таблица и её чистка")
+  assert.notEqual(STEP.role, STEP.roleClean, "у проходов должны быть РАЗНЫЕ роли")
 })
 
 if (!process.env.NODE_TEST_CONTEXT) process.stdout.write(gherkin())

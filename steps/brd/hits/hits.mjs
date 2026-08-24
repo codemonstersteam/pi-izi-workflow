@@ -7,10 +7,12 @@
 //             второй список пропусков означал бы, что шаги 2 и 3 ходят по разным деревьям.
 // Invariants: ТОТАЛЕН. Греп — это НЕ разведка: разведка это рой ролей на шагах 3-4, который читает
 //             код и строит карту. Здесь только подстрочный поиск, секунда на 37 МБ и 0 токенов.
-// Interface:  MAX_BYTES, MAX_CANDIDATES, BACKGROUND, candidatesOf, hitsOf, tableOf, vocabularyOf
+// Interface:  MAX_BYTES, MAX_CANDIDATES, BACKGROUND, candidatesOf, hitsOf, tableOf, parseTable,
+//             tableAt, vocabularyOf
 //
-// КОНВЕЙЕР ИЗ ЧЕТЫРЁХ СТУПЕНЕЙ (тикет T02, brd-backlog.md):
-//   .agent/normalized.md --candidatesOf--> слова --hitsOf--> {файлов, idf} --tableOf--> слот {HITS}
+// КОНВЕЙЕР ИЗ ПЯТИ СТУПЕНЕЙ (тикеты T02 и A01, backlog-anchors.md):
+//   .agent/normalized.md --candidatesOf--> слова --hitsOf--> {файлов, idf} --tableOf--> строки
+//   --tableAt--> .agent/hits.txt, откуда их читают И наряд, И судья: счёт ОДИН за проход шага
 // Вход первой ступени — НОРМАЛИЗОВАННАЯ ТАБЛИЦА, а не сырой TASK.md, и это измеренная разница, а не
 // вкус: по русскому заказу слово `export` не попадает в кандидаты ВОВСЕ, по таблице — попадает и
 // даёт 92 файла (`steps/brd/normalize-concept-research.md`, глава 4).
@@ -20,9 +22,10 @@
 // found="no"», — то есть обещала модели контроль, которого больше не существовало. Вернулась сюда,
 // к тому шагу, которому и нужна.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
 import { skipDir, skipFile } from "../../survey-plan/skip.mjs"
+import { HITS } from "../paths.mjs"
 
 export const MAX_BYTES = 512 * 1024      // файл крупнее не читается: это не исходник, а данные
 
@@ -127,6 +130,89 @@ export function tableOf(result = {}, top = 0) {
   rows.sort((a, b) => b.weight - a.weight || a.files - b.files || a.word.localeCompare(b.word))
   const shown = top > 0 ? rows.slice(0, top) : rows
   return shown.map((r) => `${r.word} · files ${r.files} · weight ${r.weight.toFixed(2)}`).join("\n")
+}
+
+// ═════ СТУПЕНЬ 5: ТАБЛИЦА ЛОЖИТСЯ НА ДИСК И СЧИТАЕТСЯ ОДИН РАЗ ЗА ПРОХОД ═══════════════════════
+//
+// BUG_FIX_CONTEXT (тикет A01, backlog-anchors.md): счёт звался ДВАЖДЫ за круг — сборкой наряда
+// (`gate/order.mjs::hitTable`) и судом (`gate/cut.mjs::hitsFor`), потому что между ходами состояние
+// документов не носит (standards/workflow-design.md, правило 6). Хуже цены другое: после прогона на
+// диске не оставалось ответа на вопрос «почему выбраны эти якоря» — чтобы его увидеть, надо было
+// пересчитать. Теперь оба потребителя ходят СЮДА, а таблица лежит в `.agent/hits.txt` рядом с
+// артефактом, который по ней собран.
+
+// FUNCTION_CONTRACT: parseTable — разобрать таблицу попаданий обратно в числа
+//   Input:        text — байты `.agent/hits.txt`: строки `слово · files N · weight W`
+//   Dependencies: —
+//   Antecedent:   — (тотальна; МОЛЧАНИЕ: не таблица — пустые словари, а не выдуманные числа)
+//   Consequent:   success: { hits: { слово: сколько файлов }, idf: { слово: вес } }
+//                 failure: none — строка не той формы пропускается
+//   Purity:       pure
+//   Interface:    parseTable(text?: string) -> { hits, idf }
+//   ФОРМАТ ЧИТАЕТСЯ ТЕМ ЖЕ МОДУЛЕМ, ЧТО ЕГО ПИШЕТ (`tableOf`), и на это стоит юнит-кругорейс: файл,
+//   который репозиторий и пишет, и читает, обязан пережить `parseTable(tableOf(x))`
+//   (standards/code.md, $START_TESTS).
+export function parseTable(text = "") {
+  const hits = {}
+  const idf = {}
+  for (const line of String(text).split("\n")) {
+    const m = line.match(/^(\S+)\s+·\s+files\s+(\d+)\s+·\s+weight\s+(-?\d+(?:\.\d+)?)\s*$/)
+    if (!m) continue
+    hits[m[1]] = Number(m[2])
+    idf[m[1]] = Number(m[3])
+  }
+  return { hits, idf }
+}
+
+// FUNCTION_CONTRACT: tableAt — таблица попаданий ПРОХОДА: посчитать один раз, положить на диск,
+//                    дальше читать
+//   Input:        cwd — корень прогона (пути разрешаются от него, никогда от этого репозитория —
+//                 CLAUDE.md, ограничение 6); rows — таблица действий `.agent/normalized.md`;
+//                 recount — пересчитать и переписать файл, даже если он есть
+//   Dependencies: candidatesOf, hitsOf, tableOf, parseTable, HITS
+//   Antecedent:   — (тотальна; МОЛЧАНИЕ: таблицы действий нет — `{ hits: null }`, файл не пишется,
+//                 и правила про якоря промолчат, а не покраснеют по догадке)
+//   Consequent:   success: { text — строки таблицы; hits — { слово: сколько файлов } | null;
+//                            at — путь, по которому таблица лежит, либо null }
+//                 failure: none
+//   Purity:       io (fs — обход дерева прогона, чтение и запись `.agent/hits.txt`)
+//   Interface:    tableAt(cwd: string, opts?: { rows?: string, recount?: boolean })
+//                   -> { text: string, hits: object|null, at: string|null }
+//
+//   ШОВ СВЕЖЕСТИ — ПЕРВЫЙ НАРЯД ПРОХОДА, И ТОЛЬКО ОН. Файл принадлежит ПРОХОДУ шага: он пересчи-
+//   тывается там, где наряд собирается впервые (кругов починки ещё не было — `order.mjs`, `recount:
+//   !fix`), и читается всеми остальными ходами того же прохода. Почему именно здесь:
+//     · вход счёта — `.agent/normalized.md` и дерево прогона. Правку таблицы действий ПОСЕРЕДИНЕ
+//       прохода ловит не этот модуль, а `gate/inputs.mjs` классом `normalized-changed`: подшаг
+//       отказывается работать, а не считает по документу, которого больше нет. Значит внутри
+//       прохода операнд неизменен, и второй счёт вернул бы то же самое;
+//     · чужой файл от ПРОШЛОГО прогона живёт максимум до первого наряда — его переписывают, не
+//       спросив: доверять дате и sha1 файла, который никто не продвигал, дороже, чем 0,56 с грепа;
+//     · суд (`fold`) не пересчитывает НИКОГДА: он обязан судить по тем числам, которые видела роль.
+//       Пересчёт на суде — это второй текст одного требования, и разъехались бы они молча.
+//   Файл, который не разобрался ни в одну строку, считается отсутствующим: пустая таблица как факт
+//   («ни одно слово не встретилось») неотличима от испорченного файла, а правило T4 по ней обвинило
+//   бы роль в том, чего она не писала.
+export function tableAt(cwd, { rows = "", recount = false } = {}) {
+  if (!String(rows).trim() || !cwd) return { text: "", hits: null, at: null }
+  const abs = join(cwd, HITS)
+  if (!recount && existsSync(abs)) {
+    let text = ""
+    try { text = readFileSync(abs, "utf8") } catch { text = "" }
+    const back = parseTable(text)
+    if (Object.keys(back.hits).length) return { text: text.trim(), hits: back.hits, at: HITS }
+  }
+  const r = hitsOf(cwd, candidatesOf(rows))
+  const text = tableOf(r)
+  try {
+    mkdirSync(dirname(abs), { recursive: true })
+    writeFileSync(abs, `${text}\n`)
+  } catch {
+    // Диск не дал записать — счёт всё равно ВЕРЕН и наряд собирается по нему; на диске таблицы
+    // нет, и это видно по `at: null`. Следующий ход посчитает заново, а не примет пустоту за факт.
+    return { text, hits: r.hits, at: null }
+  }
+  return { text, hits: r.hits, at: HITS }
 }
 
 // FUNCTION_CONTRACT: candidatesOf — слова, которые СТОИТ проверить грепом

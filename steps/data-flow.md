@@ -21,8 +21,8 @@ TASK.md
   │ 🟢 1 task      ключ задачи, сверка отпечатка заказа        скрипт
   ▼
 .agent/normalized.md · .agent/brd.md · .agent/anchors.json
-  │ 🟡 2 brd       заказ → таблица действий → якоря → карта    роли normalize + gate 🤖
-  │                наряды steps/brd/normalize/order.normalize.tpl · order.gate.tpl
+  │ 🟡 2 brd       заказ → таблица действий → якоря → карта    роли normalize + analogue 🤖
+  │                наряды steps/brd/normalize/order.normalize.tpl · anchors/order.analogue.tpl
   ▼
 .agent/survey-plan.json · .agent/focus.json
   │ 🟢 3 survey    дерево файлов → клетки, помеченные якорями  скрипт
@@ -74,14 +74,14 @@ TASK.md
 2A normalize  TASK.md → .agent/normalized.md          роль, наряд steps/brd/normalize/order.normalize.tpl
               строка на требование: verb | object | instrument | values
 2B hits       таблица → слово · files · weight         скрипт, 0,56 с
-2C gate       таблица + попадания → .agent/brd.md      роль, наряд steps/brd/gate/order.gate.tpl
-              verdict · R1..Rn · analogue · subjects[]
+2C anchors    таблица + попадания → .agent/brd.md      роль, наряд steps/brd/anchors/order.analogue.tpl
+              R1..Rn · analogue · subjects[]; роль пишет ОДНУ строку, артефакт собирает скрипт
 2D spread     якоря и аналог → .agent/anchors.json     скрипт, 0,56 с
               файлы, пакеты, плотность; отдельно файлы аналога
 ```
 
-Роль решает здесь ровно два вопроса: **что здесь аналог** и **решаема ли задача в этом
-репозитории**. Всё остальное — арифметика по дереву файлов.
+Роль решает здесь ровно один вопрос: **что здесь аналог**. Всё остальное — арифметика по дереву
+файлов.
 
 Гардрейл: вердикт из трёх · R-строка не пересказ заказа · созданная сущность в якорях · `analogue`
 с ненулевым счётом · селективность каждого якоря в коридоре (доля помеченных файлов).

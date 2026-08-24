@@ -1,0 +1,1 @@
+analogue: PromptSnippet — files 62; the existing feature with versioning, caching, export/import, and agent config reference that Glossary will replicate

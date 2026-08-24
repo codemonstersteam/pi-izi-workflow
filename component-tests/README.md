@@ -50,7 +50,10 @@ cd component-tests/etalon-eddi && node .agent/mvp/check.mjs
 | шаг | модуль | компонентных | записанный ответ роли |
 |---|---|---|---|
 | [`task` (1)](../steps/task/component/task.component.test.mjs) | ✅ | **6 + шов формулы** | роли нет — модель не зовётся ни в одном сценарии |
-| `brd` (2) | ⏳ | — | `.agent/brd.md` живого прогона |
+| [`brd/normalize` (2A)](../steps/brd/normalize/component/normalize.component.test.mjs) | ✅ | **5 + шов формулы** | `answer-normalize.txt` |
+| `brd/hits` (2B) | — | юниты | роли нет — скрипт, 0 токенов |
+| [`brd/anchors` (2C)](../steps/brd/anchors/component/anchors.component.test.mjs) | ✅ | **5 + шов формулы** | `answer-analogue.txt` — ОДНА строка аналога |
+| `brd/spread` (2D) | — | юниты | роли нет — греп по тексту, 0 токенов |
 | `scope` (3–4) | ⏳ | — | `graph-parts/*.xml` живого прогона |
 | `graph` (5) | ✅ | 3 | роли нет |
 | `intake` (6) | ⏳ | — | нужен curl по пластам |
@@ -62,6 +65,11 @@ cd component-tests/etalon-eddi && node .agent/mvp/check.mjs
 
 Форма сценариев у шагов, которые ещё не разобраны с оператором, — `standards/workflow-design.md`,
 `$START_TESTS`: шаг с ролью три, шаг с параллельными порциями четыре, шаг без роли два.
+
+**Шаг 2 разобран на четыре подшага** (`steps/brd/data-flow.md`). Ручная приёмка каждого на настоящей
+задаче eddi — [`steps/brd/test-plan.md`](steps/brd/test-plan.md), а снятые с живой модели наряды,
+сырые ответы и артефакты лежат в `steps/brd/<n>-<имя>/`. Производное там СОБРАНО кодом подшага
+(`4-anchors/build.mjs`), а не скопировано.
 
 **Шаг 1 разобран и переведён на формулу компонентных тестов**
 (`N = 1 + Σ различимых ветвей в адаптере`, codemonsters.team): у него шесть сценариев, потому что

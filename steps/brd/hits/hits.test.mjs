@@ -10,10 +10,11 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { candidatesOf, hitsOf, tableOf, MAX_CANDIDATES, BACKGROUND } from "./hits.mjs"
+import { candidatesOf, hitsOf, tableOf, parseTable, tableAt, MAX_CANDIDATES, BACKGROUND } from "./hits.mjs"
+import { HITS } from "../paths.mjs"
 
 // A normalized table, the real shape of `.agent/normalized.md`: verb | object | instrument | values.
 const TABLE = [
@@ -153,4 +154,71 @@ test("no measurement — an empty slot", () => {
   assert.equal(tableOf(), "")
   assert.equal(tableOf({}), "")
   assert.equal(tableOf({ hits: {}, idf: {}, files: 0 }), "")
+})
+
+// --- stage 5, tableAt: the table on disk, counted ONCE per pass -------------------------------------
+
+// A pass writes `.agent/hits.txt` and everything else in that pass READS it. The unit distinguishes
+// the two branches by CONTENT, not by timing: a planted file carries a word no grep of the fixture
+// could ever produce, so a read is visible and a recount is visible.
+const PLANTED = "zzzplanted · files 7 · weight 1.00\n"
+
+// Happy path — no file: the count runs and its result LANDS ON DISK, byte for byte what the caller
+// got. Before ticket A01 the count ran twice per round and left nothing behind: the answer to "why
+// these anchors" had to be recomputed to be seen.
+test("no hit table on disk — the count runs and the result is written", () => {
+  const cwd = repo({ "a.java": "class GlossaryStore {}", "b.java": "plain" })
+  const t = tableAt(cwd, { rows: TABLE })
+  assert.equal(t.at, HITS)
+  assert.ok(t.hits.Glossary >= 1, "счёт не посчитал слово таблицы действий")
+  const onDisk = readFileSync(join(cwd, HITS), "utf8")
+  assert.equal(onDisk.trim(), t.text.trim(), "на диске лежит не то, что получил вызывающий")
+  assert.match(onDisk, /Glossary · files \d+ · weight/)
+})
+
+// Branch — the file is there: it is READ, not recounted. `zzzplanted` stands in no file of the
+// fixture, so a count could never invent 7 for it.
+test("the hit table is on disk — it is read, not counted again", () => {
+  const cwd = repo({ "a.java": "class GlossaryStore {}" })
+  mkdirSync(join(cwd, ".agent"), { recursive: true })
+  writeFileSync(join(cwd, HITS), PLANTED)
+  const t = tableAt(cwd, { rows: TABLE })
+  assert.equal(t.hits.zzzplanted, 7, "файл не прочитан — счёт пошёл заново")
+  assert.equal("Glossary" in t.hits, false, "в ответе слова, которых в файле нет: это пересчёт")
+  assert.equal(readFileSync(join(cwd, HITS), "utf8"), PLANTED, "чтение переписало файл")
+})
+
+// Branch — `recount`: the FIRST order of a pass owns the table and rewrites whatever lay there from
+// a previous run. Trusting the date or the sha1 of a file nobody promoted costs more than 0.56 s of
+// grep.
+test("recount — the first order of the pass rewrites yesterday's table", () => {
+  // Два файла, а не один: слово, стоящее в ЕДИНСТВЕННОМ файле дерева, — это 100% и его снимает
+  // порог BACKGROUND. Фикстура на одном файле проверяла бы не то, что думает.
+  const cwd = repo({ "a.java": "class GlossaryStore {}", "b.java": "plain" })
+  mkdirSync(join(cwd, ".agent"), { recursive: true })
+  writeFileSync(join(cwd, HITS), PLANTED)
+  const t = tableAt(cwd, { rows: TABLE, recount: true })
+  assert.equal("zzzplanted" in t.hits, false, "вчерашняя таблица уцелела — проход считает по чужим числам")
+  assert.ok(t.hits.Glossary >= 1)
+  assert.equal(readFileSync(join(cwd, HITS), "utf8").includes("zzzplanted"), false)
+})
+
+// SILENCE: no table of actions — no count, no file, and `hits: null`, so the rules that judge by
+// NUMBERS stay quiet instead of accusing the role of what it did not write.
+test("no table of actions — the stage stays silent and writes nothing", () => {
+  const cwd = repo({ "a.java": "class GlossaryStore {}" })
+  assert.deepEqual(tableAt(cwd, { rows: "" }), { text: "", hits: null, at: null })
+  assert.deepEqual(tableAt(cwd), { text: "", hits: null, at: null })
+  assert.equal(existsSync(join(cwd, HITS)), false, "молчание оставило файл на диске")
+})
+
+// ROUND TRIP on the FORMAT this repository both writes and reads (standards/code.md): the hardest
+// legal value is a word with ZERO files — it leads the table and its weight is log(N) — plus a
+// CamelCase name, which must come back with its case intact.
+test("the hit table survives parseTable(tableOf(x)) on its hardest legal value", () => {
+  const measured = hitsOf(repo({ "a.java": "PromptSnippetService x", "b.java": "plain" }), ["PromptSnippet", "termstore"])
+  const back = parseTable(tableOf(measured))
+  assert.deepEqual(back.hits, { PromptSnippet: 1, termstore: 0 })
+  assert.equal(back.idf.termstore, Number(measured.idf.termstore.toFixed(2)))
+  assert.deepEqual(parseTable("прозой про попадания\n").hits, {}, "не таблица — не числа")
 })

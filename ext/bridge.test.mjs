@@ -2,12 +2,14 @@
 // известное имя → модуль, неизвестное → отказ с именем, битое состояние → отказ и модуль НЕ вызван.
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { MODULES, stepNext, stepFold, stepStart } from "./bridge.mjs"
-import { STEPS, start } from "./state.mjs"
+import { STEPS, start, put } from "./state.mjs"
 import { WORDS } from "./values.mjs"
+
+const why = (r) => (r && r.error ? r.error.detail : "")
 
 const root = () => {
   const d = mkdtempSync(join(tmpdir(), "izi-bridge-"))
@@ -61,4 +63,38 @@ test("stepStart на чистом каталоге даёт состояние �
   assert.equal(r.track, "ok")
   assert.equal(r.continued, false)
   assert.equal(r.from, STEPS[0])
+})
+
+// --- ШОВ: ПОРЦИИ НЕ ПЕРЕЖИВАЮТ СВОЙ ПОДШАГ ---------------------------------------------------------
+// Единственное место, где живёт связка двух шагов, — `workflows/izi.js::run` (`brd/normalize` →
+// `brd/anchors`), и её не покрывает ни один компонентный тест: те зовут `next`/`fold` модуля
+// напрямую, моста в их приводе нет. Поэтому шов стоит здесь.
+//
+// ЧЕМ ОПЛАЧЕН. Прогон 24.08.2026 на eddi: подшаг 2A кончил, оставив две свои порции `green`;
+// `brd/anchors` прочитал `portions[0]`, увидел не `todo` и вернул `done`, не сделав ничего
+// (anchors.step.mjs:71,81). Три звена из пяти промолчали, `.agent/brd.md` не собрался.
+test("шов связки: состояние, вернувшееся с `done`, не несёт чужих порций и чужого вопроса", async () => {
+  const cwd = root()
+  writeFileSync(join(cwd, "TASK.md"), "требование\n")
+  const s0 = start({ cwd, run: "r-hand-off", key: "DOS-535" }).value
+
+  // Состояние, каким его оставляет ЗАКОНЧИВШИЙ подшаг: свои порции зелены, свой вопрос отвечен не был.
+  const left = put(s0, {
+    at: { normalized: { path: ".agent/normalized.md", sha1: "a".repeat(40) } },
+    portions: [{ id: "1", staging: ".agent/staging/normalized.md", status: "green", round: 1 },
+               { id: "2", staging: ".agent/staging/normalized.clean.md", status: "green", round: 1 }],
+    question: { of: "1", name: "чужая-пауза", items: ["вопрос прошлого подшага"], retry: 1 },
+  })
+  assert.equal(left.ok, true, why(left))
+
+  // Шаг, который сказал бы `done` на таком состоянии: `graph` закрыт по `at.appgraph`, которого нет,
+  // значит он объявит СВОЮ работу. Берём `weight` — он тоже без порций — и смотрим на ВЫХОД моста.
+  const it = await stepNext({ id: "brd/normalize", state: left.value })
+  assert.equal(it.do, "done", `подшаг с продвинутым артефактом обязан сказать done: ${JSON.stringify(it).slice(0, 160)}`)
+  assert.deepEqual(it.state.portions, [], "порции закончившего подшага уехали к следующему как свои")
+  assert.equal(it.state.question, null, "неотвеченный вопрос закончившего подшага уехал к следующему")
+
+  // И следующий подшаг на этом состоянии объявляет СВОЙ состав работы, а не молчит.
+  const after = await stepNext({ id: "brd/anchors", state: it.state })
+  assert.notEqual(after.do, "done", "следующий подшаг принял чужие порции за свои и промолчал")
 })

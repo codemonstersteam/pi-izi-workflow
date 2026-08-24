@@ -4,6 +4,7 @@ model: execution
 thinking: low
 contextFiles: []
 tools: [read, edit, write]
+overrideSystemPrompt: true
 ---
 
 $START_ROLE

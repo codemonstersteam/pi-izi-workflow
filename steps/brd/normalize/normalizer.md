@@ -2,7 +2,9 @@
 description: Requirements normalization — the operator's prose rewritten as one row per requirement
 model: execution
 thinking: low
+contextFiles: []
 tools: [write]
+overrideSystemPrompt: true
 ---
 
 $START_ROLE

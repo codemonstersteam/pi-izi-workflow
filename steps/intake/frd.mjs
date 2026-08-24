@@ -19,7 +19,7 @@
 //             endsOf(frd) -> [{ token, uc, side, text }]  — the ends of every use case
 //             checkFrd({ frd, nodes, tests, entries, edges, known, pass }) -> string[]  — blockers, empty = green
 //             newFrd({ xml, nodes, tests, entries, edges, sources, pass }) -> Result<Frd, "invalid-frd">
-//             RULE_PASS / PASSES — какому пласту принадлежит правило (steps/intake/passes-data-flow.md)
+//             RULE_PASS / PASSES — какому пласту принадлежит правило (steps/intake/docs/passes-data-flow.md)
 //             passOfBlocker(blocker) -> "A"|"B"|"C"|"D"|"*"
 //             forPass(blockers, pass) -> string[]  — что этот проход имеет право показать роли
 //             entryPass(blockers) -> "A"|"B"|"C"|"D"  — откуда переигрывать после красного полного суда
@@ -72,12 +72,18 @@ export const FRD_FORM = Object.freeze({
   // is a fact of the repository, not an invented default.
   //
   // `normalized.md` — the order's own table, one row per requirement, column `values` carrying the
-  // measurement the operator already decided (steps/brd/normalize/normalize.mjs::parseRows). It is a
-  // source because after step 2's rework the GATE writes no values at all: `brd.md` carries the
-  // verdict, the consequences, the analogue and the anchors, and nothing else. Without this file in
-  // the vocabulary every value of the request that the BRD did not repeat has nothing to be quoted
-  // from — and F5 turns the operator's own decision into a question he already answered. On the eddi
-  // order that is the whole «Решения, уже принятые оператором» block: fourteen values.
+  // measurement the operator already decided (steps/brd/normalize/normalize.mjs::parseRows). Without
+  // this file in the vocabulary every value of the request has nothing to be quoted from — and F5
+  // turns the operator's own decision into a question he already answered. On the eddi order that is
+  // the whole «Решения, уже принятые оператором» block: fourteen values.
+  //
+  // SINCE TICKET A02 THE TWO FILES SAY THE SAME THING, and the win belongs to this step: `brd.md` is
+  // assembled by a script that copies the table row for row, so `R<n>` IS `verb | object | instrument
+  // | values` and its number IS the row's number. A value therefore travels WITH the requirement that
+  // carries it — no longer to be matched up in a neighbouring file by meaning. `normalized.md` stays
+  // in the vocabulary because a promoted BRD may predate that rework, and because the columns are
+  // named there; F11 below is untouched by any of it — it is the difference of two lists of NUMBERS,
+  // and the numbers are now the same numbers on both sides.
   sources: Object.freeze(["TASK.md", "answers.md", "brd.md", "normalized.md", "appgraph.xml"]),
 })
 
@@ -333,7 +339,7 @@ function provenance(at, value, source, known) {
   return out
 }
 
-// ПЛАСТ ПРАВИЛА. Шаг 6 идёт четырьмя проходами (steps/intake/passes-data-flow.md): A требование ·
+// ПЛАСТ ПРАВИЛА. Шаг 6 идёт четырьмя проходами (steps/intake/docs/passes-data-flow.md): A требование ·
 // B изменение · C величины и отказы · D покрытие. Правило судит ТОТ пласт, элементы которого читает,
 // и в проходе, где этих элементов ещё нет, обязано молчать.
 //

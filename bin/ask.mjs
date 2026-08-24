@@ -9,12 +9,18 @@
 //             ОТЧЁТ О ФАКТЕ, А НЕ О НАДЕЖДЕ: если модель позвала не `write`, это печатается вместе
 //             с аргументами того, что она позвала. Прошлая версия на python в этом случае печатала
 //             «не разбирается» — и полдня искали сеть, пока роль уходила на рельс вопроса.
-// Interface:  CLI: node bin/ask.mjs <роль.md> <наряд.txt> <файл-ответа.md> [метка]
+// Interface:  CLI: node bin/ask.mjs <роль.md> <наряд.txt> <файл-ответа.md> [метка] [--case=<каталог>]
+//
+// --case КЛАДЁТ ЗАПРОС ВО ВХОД ПОДШАГА: `<каталог>/in/request.<метка>.json` — то, что РЕАЛЬНО ушло
+// в сеть (роль в `system`, наряд в `user`, объявление инструментов, model/temperature/reasoning), и
+// `<каталог>/raw.<метка>.json` — сырой ответ. Наряд один расхождения роли не показывает: роль в
+// репозитории и роль, ушедшая в модель, — разные вещи, и видны они только в запросе. Без --case оба
+// файла ложатся в /tmp/sq, как раньше.
 //
 // ПОЧЕМУ ОТВЕТ ЧИТАЕТСЯ ЦЕЛИКОМ, А НЕ ПОСТРОЧНО: OpenRouter шлёт keep-alive — тысячи пробелов и
 // переводов строки ПЕРЕД телом. Это валидный JSON-пробел, `JSON.parse` его снимает; построчный
 // разбор на нём спотыкается.
-import { readFileSync, writeFileSync, existsSync } from "node:fs"
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs"
 
 export const MODEL = "qwen/qwen3.6-27b"
 export const URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -53,7 +59,9 @@ export function callsOf(message = {}) {
 }
 
 async function main() {
-  const [roleFile, orderFile, outFile, label = "ask"] = process.argv.slice(2)
+  const argv = process.argv.slice(2)
+  const caseDir = (argv.find((a) => a.startsWith("--case=")) || "").slice(7)
+  const [roleFile, orderFile, outFile, label = "ask"] = argv.filter((a) => !a.startsWith("--"))
   if (!roleFile || !orderFile || !outFile) {
     console.error("node bin/ask.mjs <роль.md> <наряд.txt> <файл-ответа.md> [метка]"); process.exit(64)
   }
@@ -66,7 +74,8 @@ async function main() {
                { role: "user", content: readFileSync(orderFile, "utf8") }] }
   // СВОЙ ФАЙЛ ЗАПРОСА НА КАЖДУЮ МЕТКУ: два прогона на одном имени затирают друг друга, и сравнение
   // остаётся убедительным на вид и недействительным по сути.
-  const reqFile = `/tmp/sq/req-${label}.json`
+  const reqFile = caseDir ? `${caseDir}/in/request.${label}.json` : `/tmp/sq/req-${label}.json`
+  try { mkdirSync(reqFile.slice(0, reqFile.lastIndexOf("/")), { recursive: true }) } catch {}
   try { writeFileSync(reqFile, JSON.stringify(body, null, 1)) } catch {}
 
   const t0 = Date.now()
@@ -75,6 +84,11 @@ async function main() {
     body: JSON.stringify(body) })
   const raw = await res.text()
   const sec = Math.round((Date.now() - t0) / 1000)
+  // СЫРОЙ ОТВЕТ ЛОЖИТСЯ НА ДИСК ДО РАЗБОРА, и на свою метку — как и запрос. Отчёт о факте печатает
+  // секунды и токены, но каталог приёмки обязан носить ОТВЕТ ЦЕЛИКОМ: разбор — наше прочтение, а
+  // спорят потом о байтах, которых после выхода процесса уже нет.
+  const rawFile = caseDir ? `${caseDir}/raw.${label}.json` : `/tmp/sq/raw-${label}.json`
+  try { writeFileSync(rawFile, raw) } catch {}
   let d
   try { d = JSON.parse(raw) } catch (e) {
     console.error(`${label}: ответ не JSON, ${res.status}, ${raw.length} байт, ${sec}с\n${raw.trim().slice(0, 400)}`)
@@ -102,6 +116,8 @@ async function main() {
   console.log(head)
   // РЕЛЬС ВИДЕН СРАЗУ. Роль, ушедшая на вопрос, — это результат замера, а не сбой стенда.
   for (const c of calls) if (c.name !== "write") console.log(`  ${c.name}: ${JSON.stringify(c.args, null, 1).slice(0, 900)}`)
+  console.log(`  запрос → ${reqFile}`)
+  console.log(`  сырой ответ ${raw.length} байт → ${rawFile}`)
   if (!write) { console.log(`  артефакт НЕ записан — файла ${outFile} нет`); process.exit(2) }
   console.log(`  ${content.length} симв → ${outFile}`)
 }

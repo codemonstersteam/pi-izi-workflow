@@ -8,7 +8,8 @@
 //             REQUIRED_SYSTEM, REQUIRED_USER) are fixed at module load and do not change
 //             at run time; layersOf/missingLayers/extraLayers/withoutExample are pure
 //             stateless functions whose result depends on their arguments alone.
-// Interface:  BRD_FORM — the mandatory fields and rules of the BRD artifact
+// Interface:  BRD_FORM — the mandatory fields and rules of the BRD artifact (including
+//             anchorMaxFiles, the file-count threshold an anchor candidate must stay under)
 //             ABSENT_DOC — what is substituted for an optional document that does not exist yet
 //             SYSTEM_LAYERS — the full list of a role's system-prompt layers
 //             USER_LAYERS — the full list of the user prompt's (the order's) layers
@@ -38,9 +39,27 @@
 
 export const BRD_FORM = {
   requirement: ["fit", "verify"],   // every R must carry both
-  openQuestions: "0",               // the line must exist and must be zero
+  // `openQuestions: "0"` STOOD HERE and was removed by ticket A06 (23.08.2026) together with the
+  // line itself: substep 2C's artifact is assembled by a script (steps/brd/anchors/assemble.mjs) out
+  // of three parts — the R lines, `analogue:` and `subjects[]` — and there is no `open-questions:`
+  // line for anyone to demand. Its only reader was steps/brd/brd.mjs::parseBrd, and its only judge
+  // was rule T1, deleted with `verdict`.
+  //
+  // THE CORRIDOR BELOW IS NO LONGER AN AGREEMENT WITH A MODEL, IT IS A SCRIPT'S OWN LIMIT, and that
+  // is why it stayed. No order substitutes it any more (a grep over `*.tpl` and the role files finds
+  // nothing): the model does not choose the anchors. Its one consumer is
+  // steps/brd/anchors/assemble.mjs::subjectsOf — `subjectsMax` cuts the picked words, `subjectsMin`
+  // is the `subjects-thin` refusal, so that substep 2D's map is never built on a single anchor.
   subjectsMin: 3,
   subjectsMax: 7,
+  // THE ONE UNDERIVED CONSTANT OF STEP 2, and it is named as such out loud. A word of the `object`
+  // column becomes an anchor when the hit table counts it in AT MOST this many files. Taken from the
+  // gap measured in the eddi order on 23.08.2026: `terms` 32 files, the next candidate `conflict` 86.
+  // Measured, not invented — steps/brd/data-flow.md, section 2C, carries the numbers: the model's own
+  // choice of anchors marked 1188 files of 1854 (64,1%), the script's four mark 104 (5,6%) and keep
+  // the same 62 of 62 coverage. It is calibrated by TWO reference orders, not one, before it is
+  // trusted as a rule. Its single consumer is steps/brd/anchors/assemble.mjs::subjectsOf.
+  anchorMaxFiles: 32,
   // The wording travels INTO THE ORDER by substitution, and the order is English. So the rule is
   // written in English too: translating it "in place", in the template, would bring back two texts of
   // one requirement — what this registry exists against.
@@ -55,7 +74,10 @@ export const BRD_FORM = {
   // `unchanged` was refused entry deliberately: no parser reads it, so declaring it a form word would
   // buy a whole class of untranslated English criteria — `формат ответа — unchanged` — the exemption
   // of a word that means nothing to any machine here.
-  formWords: ["fit", "verify", "subjects", "open-questions", "analogue", "none"],
+  //
+  // `open-questions` LOST ITS ENTRY by the same test (ticket A06): parseBrd stopped reading the line,
+  // so the word became exactly what `unchanged` is — English no machine here reads.
+  formWords: ["fit", "verify", "subjects", "analogue", "none"],
 }
 
 // An optional document may not exist (the first exchange with the operator). Absence is DECLARED

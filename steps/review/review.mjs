@@ -186,7 +186,7 @@ export const frdIds = (frd) => new Set([
 //   Dependencies: —
 //   Antecedent:   любые значения; отсутствие FRD читается как пустой артефакт
 //   Consequent:   success: "A" | "B" | "C" — проход, с которого полоса перезапускает шаг 6 и идёт
-//                          ВПЕРЁД до D (steps/intake/passes-data-flow.md). Элемент, которого в
+//                          ВПЕРЁД до D (steps/intake/docs/passes-data-flow.md). Элемент, которого в
 //                          артефакте нет вовсе, даёт "A": раньше чинить нечего, а «не знаю» полосе не
 //                          с чем делать
 //                 failure: none — тотальна

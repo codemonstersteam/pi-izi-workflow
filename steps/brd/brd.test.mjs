@@ -6,6 +6,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { numbersIn, parseBrd, analogueTerm } from "./brd.mjs"
+import { parseRows } from "./normalize/normalize.mjs"
 
 // --- numbersIn: обозначение формата против числа-меры -----------------------------------------------
 //
@@ -50,44 +51,58 @@ test("numbersIn МОЛЧАНИЕ: текста нет — пустое множ�
   assert.deepEqual([...numbersIn("")], [])
 })
 
-// --- parseBrd: разбор артефакта ворот -----------------------------------------------------------------
+// --- parseBrd: разбор артефакта подшага 2C -----------------------------------------------------------
+//
+// ФОРМА АРТЕФАКТА ИЗМЕНИЛАСЬ (тикет A05): его собирает СКРИПТ
+// (`steps/brd/anchors/assemble.mjs`) из трёх частей — R-строк, `analogue:` и `subjects[]`. Строк
+// `verdict:` и `open-questions:` в нём нет, и разбирать их больше нечем: поля сняты тикетом A06.
+// Номер `R<n>` РАВЕН номеру строки `.agent/normalized.md`, а текст `R<n>` — сама строка таблицы.
 
 const DOC = [
-  "verdict: solvable",
-  "R1 A new endpoint returns one fruit by its name",
-  "   and the list keeps working",
-  "R2 Existing calls remain unchanged",
-  "analogue: list — the existing list the new endpoint is modelled on",
-  "subjects[]: endpoint · card · fruit",
-  "open-questions: 0",
+  "R1 add | Glossary | configuration type | dictionary of bot terms, CRUD with versioning",
+  "R2 constrain | Term key | format | up to 64 characters, lowercase,",
+  "   alphanumeric and underscore",
+  "analogue: PromptSnippet — the existing configuration type the new one is modelled on",
+  "subjects[]: Glossary · terms · PromptSnippet",
 ].join("\n")
 
-test("parseBrd happy: вердикт, требования с адресом, аналог, якоря и открытые вопросы", () => {
+test("parseBrd happy: требования с адресом строкой таблицы, аналог и якоря", () => {
   const d = parseBrd(DOC)
-  assert.equal(d.verdict, "solvable")
   assert.equal(d.requirements.length, 2)
   assert.equal(d.requirements[0].id, "R1")
-  assert.equal(d.requirements[0].line, 2, "адрес требования — номер строки, по нему чинит наряд починки")
-  assert.match(d.requirements[0].statement, /and the list keeps working$/, "перенос строки не подклеился к формулировке")
-  assert.equal(d.analogue, "list — the existing list the new endpoint is modelled on")
-  assert.deepEqual(d.subjects, ["endpoint", "card", "fruit"])
-  assert.equal(d.openQuestions, "0")
+  assert.equal(d.requirements[0].line, 1, "адрес требования — номер строки, по нему чинит наряд починки")
+  assert.match(d.requirements[1].statement, /alphanumeric and underscore$/, "перенос строки не подклеился к формулировке")
+  assert.equal(d.analogue, "PromptSnippet — the existing configuration type the new one is modelled on")
+  assert.deepEqual(d.subjects, ["Glossary", "terms", "PromptSnippet"])
+})
+
+// КРУГЛЫЙ ХОД ЧЕРЕЗ ФОРМАТ ТАБЛИЦЫ. `R<n>` — это строка `.agent/normalized.md`, скопированная
+// целиком, и в этом весь выигрыш тикета A06: значение требования едет ВМЕСТЕ с требованием, а не
+// ищется по смыслу в соседнем файле. Читается оно тем единственным разбором, который знает, что
+// такое строка, — `normalize.mjs::parseRows`. Сломай копирование в `assemble.mjs::numbered` или
+// склей в `parseBrd` лишнюю строку — колонка `values` разъедется здесь.
+test("parseBrd: текст требования — строка таблицы, из него читаются колонки со значениями", () => {
+  const d = parseBrd(DOC)
+  const [row] = parseRows(d.requirements[0].statement)
+  assert.equal(row.verb, "add")
+  assert.equal(row.object, "Glossary")
+  assert.equal(row.instrument, "configuration type")
+  assert.equal(row.values, "dictionary of bot terms, CRUD with versioning")
 })
 
 // «Строки нет» и «строка пуста» — находки РАЗНЫХ правил, и парсер обязан их различать
 // (standards/code.md, ограничение 2: отсутствие — это случай, а не пустое значение).
 test("parseBrd: строки, которой не было, — null, а не пустое значение", () => {
   const d = parseBrd("R1 что-то одно")
-  assert.equal(d.verdict, null)
   assert.equal(d.analogue, null)
   assert.equal(d.subjects, null)
-  assert.equal(d.openQuestions, null)
 })
 
 test("parseBrd МОЛЧАНИЕ: текста нет — пустой разбор, а не исключение", () => {
   const d = parseBrd(undefined)
   assert.deepEqual(d.requirements, [])
-  assert.equal(d.verdict, null)
+  assert.equal(d.analogue, null)
+  assert.equal(d.subjects, null)
 })
 
 // --- analogueTerm: грепаемая голова строки -------------------------------------------------------------

@@ -1,0 +1,1 @@
+analogue: PromptSnippet — files 62; the existing configuration type with CRUD, versioning, caching, and export/import mechanisms that the Glossary will repeat

@@ -20,10 +20,16 @@ import { iziAnswer } from "./answer-tool.mjs"
 const ANY = { type: "object", additionalProperties: true }
 
 export const stepStart = {
-  description: "First act of a run: build the pipeline state, or CONTINUE the one the trace remembers. Time and the run id come from OUTSIDE — the sandbox has no Date. Returns {track, state, from, continued}.",
-  input: { type: "object", properties: { cwd: { type: "string" }, run: { type: "string" }, key: { type: "string" }, budgets: ANY }, required: ["cwd", "run"], additionalProperties: false },
+  description: "First act of a run: build the pipeline state, or CONTINUE the one the trace remembers. `cwd` and `run` come from the HOST CONTEXT — the sandbox has no Date and does not know the run id. Returns {track, state, from, continued}.",
+  input: { type: "object", properties: { cwd: { type: "string" }, run: { type: "string" }, key: { type: "string" }, budgets: ANY }, additionalProperties: false },
   output: ANY,
-  run: (input) => _stepStart(input),
+  // КАТАЛОГ И НОМЕР ПРОГОНА БЕРУТСЯ У ХОСТА, А НЕ У ПОЛОСЫ. Хост зовёт функцию расширения как
+  // `run(input, context)`, и `context.run` несёт `{ cwd, sessionId, runId, args, signal }`
+  // (pi-extensible-workflows/packages/core/src/types.ts:118-119). Раньше полоса читала их из
+  // `args`, а `prompts/izi.md` передавать `args` ЗАПРЕЩАЕТ — живой прогон 24.08.2026 умирал на
+  // `Invalid input for stepStart` за 63 мс и ноль токенов. Явное значение по-прежнему побеждает:
+  // на нём стоят юниты (ext/bridge.test.mjs) и стенд.
+  run: (input, ctx) => _stepStart({ cwd: ctx?.run?.cwd, run: ctx?.run?.runId, ...input }),
 }
 
 export const stepNext = {
@@ -40,33 +46,23 @@ export const stepFold = {
   run: (input) => _stepFold(input),
 }
 
-// КАТАЛОГИ РОЛЕЙ СЧИТАЮТСЯ ИЗ ДЕРЕВА, а не перечисляются поимённо.
-// BUG_FIX_CONTEXT: список был написан руками, и чистка T20 унесла из него два каталога. Хост
-// сканирует каждый URL при регистрации (validation.js::scanRoleFiles) и валит загрузку расширения на
-// несуществующем — а отказ на краю сказал бы «перезапусти pi», что неверно и уводит в сторону.
-// Здесь список СЧИТАЕТСЯ: каталог шага попадает в роли тогда и только тогда, когда в нём лежит *.md.
-import { readdirSync, statSync } from "node:fs"
+// КАТАЛОГИ РОЛЕЙ ОБЪЯВЛЕНЫ, а не считаются обходом дерева: `ext/roles.mjs`, и оба дефекта, которые
+// за этим стоят, записаны там. Коротко: хост берёт из отданного каталога КАЖДЫЙ `.md` и делает из
+// него роль по имени файла, поэтому обход по признаку «в каталоге есть *.md» тащил в реестр
+// проектные записки — три файла `data-flow.md` дали три роли «data-flow», и расширение перестало
+// грузиться вовсе.
 import { fileURLToPath } from "node:url"
-import { join } from "node:path"
+import { roleDirsOf } from "./roles.mjs"
 
 const STEPS_ROOT = fileURLToPath(new URL("../steps/", import.meta.url))
-const roleDirs = (dir, out = []) => {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (!e.isDirectory() || e.name === "component" || e.name === "judge" || e.name === "fixture") continue
-    const p = join(dir, e.name)
-    if (readdirSync(p).some((n) => n.endsWith(".md") && !n.endsWith("-ru.md"))) out.push(new URL(`file://${p}/`))
-    roleDirs(p, out)
-  }
-  return out
-}
 
 export default function extension(pi) {
   pi.registerTool(iziAnswer)
   registerWorkflowExtension({
     version: "2.0.0",
     headline: "izi: three verbs at the boundary — stepStart, stepNext, stepFold",
-    description: "The pipeline's whole host surface. A step module decides WHAT to do and the rail does it; the boundary carries one JSON object each way, because a callback does not cross a process boundary. Plus the izi_answer tool (pi.registerTool, not a sandbox function) — without it the operator cannot answer at all — and the role directories, computed from the steps tree.",
+    description: "The pipeline's whole host surface. A step module decides WHAT to do and the rail does it; the boundary carries one JSON object each way, because a callback does not cross a process boundary. Plus the izi_answer tool (pi.registerTool, not a sandbox function) — without it the operator cannot answer at all — and the role directories, declared in ext/roles.mjs.",
     functions: { stepStart, stepNext, stepFold },
-    roleDirectories: roleDirs(STEPS_ROOT),
+    roleDirectories: roleDirsOf(STEPS_ROOT),
   })
 }

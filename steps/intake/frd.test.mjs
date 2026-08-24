@@ -493,7 +493,7 @@ test("the form the order substitutes is the SAME data the guardrail judges by", 
   // Наряд и роль переведены на английский (правка вне этого набора) — шов пинает то же ПРАВИЛО.
   assert.match(tpl, /Every `<usecase>` gets its own `<scenario uc="…">`/)
   // Самоповерка есть у КАЖДОГО прохода — это то, что роль считает перед записью файла, и пункты
-  // разошлись по пластам вместе с правилами (steps/intake/passes-data-flow.md). Пусто хоть в одном
+  // разошлись по пластам вместе с правилами (steps/intake/docs/passes-data-flow.md). Пусто хоть в одном
   // проходе — и его роль впервые слышит о правиле от гардрейла, кругом позже.
   for (const x of ["a", "b", "c", "d"]) {
     const block = TPL(x).match(/\$START_SELFCHECK[\s\S]*?\$END_SELFCHECK/)

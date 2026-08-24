@@ -1,13 +1,18 @@
 // MODULE_CONTRACT: brd — АРТЕФАКТ ШАГА 2 КАК ЗНАЧЕНИЕ: как он читается и что в тексте считается числом
-// Purpose:    two decisions live here and nothing else. FIRST: how the gate's artifact is READ —
-//             `verdict`, `R<n>`, `analogue`, `subjects[]`, `open-questions` — so that every rule of
-//             the guardrail judges ONE parse instead of writing its own regular expression. SECOND:
-//             what counts as a NUMBER-AS-QUANTITY in a text, which is provenance, and provenance is
-//             judged at step 6 (steps/intake/frd.mjs), not here.
+// Purpose:    two decisions live here and nothing else. FIRST: how substep 2C's artifact is READ —
+//             `R<n>`, `analogue`, `subjects[]` — so that every consumer judges ONE parse instead of
+//             writing its own regular expression. SECOND: what counts as a NUMBER-AS-QUANTITY in a
+//             text, which is provenance, and provenance is judged at step 6
+//             (steps/intake/frd.mjs), not here.
 // io:         none
 // Invariants: pure and stateless — the result depends on the given text alone, never on history.
+//             `R<n>` IS the row of `.agent/normalized.md` — number and text alike: the artifact is
+//             assembled by a script (steps/brd/anchors/assemble.mjs), which copies the row whole.
+//             So `statement` reads `verb | object | instrument | values`, and a consumer that wants
+//             the columns splits it with steps/brd/normalize/normalize.mjs::parseRows — the one
+//             place that knows what a row is.
 // Interface:  numbersIn(text) -> Set<string>
-//             parseBrd(text) -> { verdict, requirements, subjects, openQuestions, analogue }
+//             parseBrd(text) -> { requirements, subjects, analogue }
 //             analogueTerm(text) -> string
 //
 // ЧТО ОТСЮДА УШЛО И ПОЧЕМУ (тикет 03). Здесь жили `newFit`, `newRequirement`, `newSubjects`,
@@ -15,7 +20,14 @@
 // Ворота их не пишут ПРИНЦИПИАЛЬНО: измеримый критерий собирает шаг 6, когда есть карта репозитория
 // и ответы оператора, а на шаге 2 нет ни того ни другого — требовать критерий здесь значило требовать
 // того, чего в артефакте быть не может (standards/guardrail.md: блокер, который нечем закрыть).
-// Гардрейл ушёл вместе с ролью `gilb`, которая его писала; правила ворот лежат в `judge/T1..T4.mjs`.
+// Гардрейл ушёл вместе с ролью `gilb`, которая его писала; правило подшага одно — `anchors/judge/T4`.
+//
+// ЧТО ОТСЮДА УШЛО И ПОЧЕМУ (тикет A06, 23.08.2026). Поля `verdict` и `openQuestions` вместе со своими
+// регулярками. Их разбирал ТОЛЬКО этот парсер, а судило снятое правило T1 — грeп по `steps/`, `ext/`,
+// `core/`, `workflows/` не нашёл ни одного шага, который бы по значению ветвился. Обещание
+// «`not-this-repo` останавливает полосу на входе» жило в `steps/brd/data-flow.md`, а не в коде, и
+// строк этих в артефакте больше нет: его собирает скрипт из трёх частей — R-строки, `analogue:`,
+// `subjects[]`.
 
 // H1. A NUMBER IN A CRITERION MUST HAVE A SOURCE — the rule this function serves, at step 6.
 //
@@ -102,16 +114,20 @@ export function analogueTerm(text) {
   return raw.split(/[—(,:]|\s+-\s+/)[0].trim()
 }
 
-// FUNCTION_CONTRACT: parseBrd — the gate's artifact read into fields
+// FUNCTION_CONTRACT: parseBrd — substep 2C's artifact read into fields
 //   Input:        text — the raw bytes of `.agent/brd.md` (or of the staged draft)
 //   Dependencies: —
 //   Antecedent:   ANY value — coerced with String(text || "") and split into lines; total
-//   Consequent:   success: { verdict, requirements: [{ id, statement, line }], subjects, openQuestions,
-//                          analogue }
+//   Consequent:   success: { requirements: [{ id, statement, line }], subjects, analogue }
 //                          · a line never seen → null, NOT "" and not [] — «строки нет» и «строка
 //                            пуста» это разные находки разных правил (standards/code.md, ограничение 2);
-//                          · `R<n> …` opens a requirement and becomes CURRENT; a following line that
-//                            opens no service field is appended to its wording;
+//                          · `R<n> …` opens a requirement and becomes CURRENT; its `statement` is the
+//                            row of `.agent/normalized.md` copied whole — `verb | object | instrument
+//                            | values` — so `values` travels WITH the requirement and step 6 no longer
+//                            has to match it up in a neighbouring file by meaning;
+//                          · a following line that opens no service field is appended to the wording:
+//                            the assembler writes one line per requirement, but a hand-written or an
+//                            older document may wrap;
 //                          · `subjects[]: …` splits on `·`/`,`/`;`, empties filtered out;
 //                          · `line` is the 1-based number of the `R<n>` header — the address a repair
 //                            order puts in front of the finding.
@@ -120,24 +136,18 @@ export function parseBrd(text) {
   const lines = String(text || "").split("\n")
   const requirements = []
   let cur = null
-  let verdict = null
   let subjects = null
-  let openQuestions = null
   let analogue = null
-  const service = /^\s*(R\d+|verdict|subjects|open-questions|analogue)\b/i
+  const service = /^\s*(R\d+|subjects|analogue)\b/i
   lines.forEach((line, i) => {
     const r = /^\s*(R\d+)\b[.:)\s]*(.*)$/.exec(line)
     if (r) { cur = { id: r[1], statement: r[2].trim(), line: i + 1 }; requirements.push(cur); return }
-    const v = /^\s*verdict\s*:\s*(.*)$/i.exec(line)
-    if (v) { verdict = v[1].trim(); return }
     const sub = /^\s*subjects\s*\[\s*\]\s*:\s*(.*)$/i.exec(line)
     if (sub) { subjects = sub[1].split(/[·,;]/).map((s) => s.trim()).filter(Boolean); return }
-    const oq = /^\s*open-questions\s*:\s*(.*)$/i.exec(line)
-    if (oq) { openQuestions = oq[1].trim(); return }
     const an = /^\s*analogue\s*:\s*(.*)$/i.exec(line)
     if (an) { analogue = an[1].trim(); return }
     // a wrapped line of the current requirement's wording
     if (cur && line.trim() && !service.test(line)) cur.statement = (cur.statement + " " + line.trim()).trim()
   })
-  return { verdict, requirements, subjects, openQuestions, analogue }
+  return { requirements, subjects, analogue }
 }
