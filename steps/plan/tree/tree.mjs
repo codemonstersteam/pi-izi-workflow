@@ -331,6 +331,13 @@ export function treeSkeleton({ frd = {}, ripple = "", map = "" } = {}) {
 
   const body = mods.map((m) => {
     const twin = sampleOf(m.node, map)
+    // СЛОВАРЬ ДЕРЕВА ≠ СЛОВАРЬ FRD — СКЕЛЕТ ПЕРЕВОДИТ, НЕ МОДЕЛЬ. FRD «Added» = контракт вырос
+    // (может быть на существующем файле); дерево «Added» = файл СОЗДАЁТСЯ. Перевод механический:
+    // узел есть в карте → Changed; new="yes" в FRD → Added. Роль видит правильную форму с первого
+    // круга — T6 остаётся страховкой от порчи РОЛИ, а не первым судьёй формы (приёмка 26.08:
+    // три Added на существующих файлах в зелёном FRD — это не ошибка модели, это два словаря).
+    const nodeExists = map.nodes ? map.nodes.has(m.node) : false
+    const treeDelta = m.op === "new" || !nodeExists ? "Added" : "Changed"
     // ОБРАЗЕЦ ВЫБИРАЕТ РОЛЬ, А СКРИПТ ПРЕДЛАГАЕТ. У новой сущности рода нет: `Glossary` не совпадает
     // ни с `PromptSnippet`, ни с `AgentConfiguration`. Три формулы выбора — «первый попавшийся»,
     // «большинство по кандидатам» и «слово из требования» — дали на eddi ТРИ РАЗНЫХ ответа
@@ -342,7 +349,7 @@ export function treeSkeleton({ frd = {}, ripple = "", map = "" } = {}) {
     const decls = [...own.matchAll(elem("decl"))].map((d) => d[0]).slice(0, 12)
     const apis = [...own.matchAll(elem("api"))].map((d) => d[0]).slice(0, 8)
     return [
-      `  <module path="${m.node}" delta="${m.delta || "Changed"}" io="">`,
+      `  <module path="${m.node}" delta="${treeDelta}" io="">`,
       `    <hides></hides>`,
       `    <owns type=""/>`,
       `    <twin kind="${twin.kind}" path="${twin.kind === "self" ? twin.path : ""}" candidates="${offer.join(" ")}"></twin>`,

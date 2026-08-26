@@ -134,3 +134,25 @@ test("borders: above HOME_DENSITY the cell is whole; exactly at it, it splits; n
   assert.deepEqual(bare.cells.map((c) => c.id), ids([]))
   assert.deepEqual(bare.cells.map((c) => c.files.length), [20, 20, 1])
 })
+
+test("T24: помеченный ТЕСТ не становится микро-клеткой — он остаётся в остатке клетки", () => {
+  const many = (dir, n, suf = ".java") => Array.from({ length: n }, (_, i) => file(`${dir}/f${i}${suf}`, 100))
+  // 2 кода и 2 теста помечены в клетке из 20 — плотность 0.2, прохожая
+  const files = [...many("gamma", 16), ...many("gamma", 2, "Test.java"), ...many("gamma", 2, "IT.java")]
+  const marked = ["gamma/f0.java", "gamma/f1.java", "gamma/f0Test.java", "gamma/f0IT.java"]
+
+  const plan = newPlan({ files, spine: [], subjects: [], marked }).value
+  const byId = Object.fromEntries(plan.cells.map((c) => [c.id, c.files.map((f) => f.path)]))
+
+  assert.deepEqual(byId["gamma~f0.java"], ["gamma/f0.java"], "код режется в микро-клетку как раньше")
+  assert.ok(!("gamma~f0Test.java" in byId), "тест вырезан в собственную клетку — T24 нарушен")
+  assert.ok(!("gamma~f0IT.java" in byId), "интеграционный тест вырезан в собственную клетку")
+  // каталог один — чанк лёг в корень, остаток держит его id
+  assert.ok(byId.root.includes("gamma/f0Test.java"), "тест остался в остатке клетки")
+  assert.ok(byId.root.includes("gamma/f0IT.java"))
+  assert.equal(byId.root.length, 18)
+
+  // НИЧЕГО НЕ ПОТЕРЯНО: покрытие полное, без перекрытий
+  const covered = plan.cells.flatMap((c) => c.files.map((f) => f.path))
+  assert.equal(new Set(covered).size, files.length)
+})

@@ -1,0 +1,7 @@
+<part cell="src~main~java~ai~labs~eddi~modules~llm~impl~PromptSnippetService.java" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/PromptSnippetService.java" io="none" tests="none">
+    <role>CDI @ApplicationScoped service that loads, caches (Caffeine), and serves prompt snippets with template marker escaping and cache invalidation</role>
+    <api name="getAll()" kind="lib" scope="internal"/>
+    <api name="invalidateCache()" kind="lib" scope="internal"/>
+  </module>
+</part>

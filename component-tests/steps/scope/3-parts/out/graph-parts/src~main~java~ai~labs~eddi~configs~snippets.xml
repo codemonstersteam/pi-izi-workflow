@@ -1,0 +1,27 @@
+<part cell="src~main~java~ai~labs~eddi~configs~snippets" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/configs/snippets/IPromptSnippetStore.java" io="none" api="none" tests="none">
+    <role>Persistence interface defining CRUD operations for prompt snippets</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/snippets/IRestPromptSnippetStore.java" io="none" tests="none">
+    <role>JAX-RS interface defining REST endpoints for prompt snippet management</role>
+    <api name="GET /snippetstore/snippets/descriptors" kind="http" scope="public"/>
+    <api name="GET /snippetstore/snippets/{id}" kind="http" scope="public"/>
+    <api name="PUT /snippetstore/snippets/{id}" kind="http" scope="public"/>
+    <api name="POST /snippetstore/snippets" kind="http" scope="public"/>
+    <api name="DELETE /snippetstore/snippets/{id}" kind="http" scope="public"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java" io="none" api="none" tests="none">
+    <role>Data model class for prompt snippet configuration entities</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/snippets/mongo/PromptSnippetStore.java" tests="none">
+    <role>CDI-scoped MongoDB-backed implementation of prompt snippet persistence</role>
+    <api name="create()" kind="lib" scope="internal"/>
+    <api name="update()" kind="lib" scope="internal"/>
+    <api name="delete()" kind="lib" scope="internal"/>
+    <api name="readAll()" kind="lib" scope="internal"/>
+    <io kind="db" dir="out" system="mongodb" target="prompt snippet documents"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/snippets/rest/RestPromptSnippetStore.java" io="none" api="none" tests="none">
+    <role>CDI-scoped REST resource implementation delegating to persistence layer for prompt snippet CRUD</role>
+  </module>
+</part>

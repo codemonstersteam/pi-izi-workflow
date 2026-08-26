@@ -1,0 +1,13 @@
+<part cell="root" kind="survey">
+  <module path="src/main/java/demo/Fruit.java" io="none" api="none" tests="none">
+    <role>data class representing a fruit with name and description fields</role>
+  </module>
+  <module path="src/main/java/demo/FruitResource.java" io="none">
+    <role>JAX-RS REST resource serving fruit data</role>
+    <api name="GET /fruits" kind="http" scope="public"/>
+    <test path="src/test/java/demo/FruitResourceTest.java"/>
+  </module>
+  <module path="src/test/java/demo/FruitResourceTest.java" io="none" api="none" tests="none">
+    <role>unit test for FruitResource</role>
+  </module>
+</part>

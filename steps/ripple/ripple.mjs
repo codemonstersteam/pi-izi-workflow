@@ -224,7 +224,7 @@ const openTag = (path, seed, rest, cut) => {
 //   `configs/agents/model/AgentConfiguration.java` (файл существует, вычисленный граф его несёт), а
 //   шаг 8 тут же отказал: `unknown-node — узла нет в карте`. Полоса встала между двумя своими же
 //   шагами, которые по-разному отвечали на вопрос «что такое узел».
-export function newRipple({ xml, frd, mode, map, repo = new Set(), cap = MAP_CAP_BYTES } = {}) {
+export function newRipple({ xml, frd, mode, map, repo = new Set(), cap = MAP_CAP_BYTES, analogue = "" } = {}) {
   const weight = String(mode == null ? "" : mode).trim()
   if (!weight) return err("no-mode", ".agent/mode пуст или отсутствует — шаг 7 не отработал, вес не угадывается")
   if (!DESIGN_TABLE[weight]) {
@@ -293,6 +293,22 @@ export function newRipple({ xml, frd, mode, map, repo = new Set(), cap = MAP_CAP
 
   const shown = new Set(seeds)
   for (const s of seeds) for (const n of near.get(s) || []) if (!tests.has(n)) shown.add(n)
+
+  // T55 — АНАЛОГ В РЯБИ. BRD назвал слово аналога — вся работа «по образцу», и узлы карты, чьё имя
+  // файла несёт это слово, приходят в подграф как КОНТЕКСТ, не как seed: аналог копируют, а не
+  // меняют, и T6 шага 9B требует от seed'а delta="Changed".
+  //
+  // BUG_FIX_CONTEXT: live run 25.08 (eddi, DOS-535). RestGlossaryStore/GlossaryService объявлены по
+  //   образцу PromptSnippetService/RestPromptSnippetStore, но те лежали вне радиуса-1 от семян
+  //   экспорта/импорта — дерево модулей не увидело их контрактов и потеряло близнецов для новых
+  //   модулей. Слово аналога пришло из BRD, матч механический: подстрока в ИМЕНИ файла.
+  if (analogue) {
+    const a = analogue.toLowerCase()
+    for (const n of nodes) {
+      if (tests.has(n) || shown.has(n)) continue
+      if (String(n).split("/").pop().toLowerCase().includes(a)) shown.add(n)
+    }
+  }
 
   // WIDTH — how many nodes the change makes WORK on, which is how many tickets step 10 will cut. It is
   // NOT `seeds`: a scenario's route may pass through a node the change never touches, and a transit

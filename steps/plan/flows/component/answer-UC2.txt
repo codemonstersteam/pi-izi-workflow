@@ -1,0 +1,14 @@
+<flows task="DOS-535">
+<flow id="S2" uc="UC2" goal="create a new glossary">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/IRestGlossaryStore.java" in="POST /glossarystore/glossaries (terms)" out="POST /glossarystore/glossaries (terms)" role="проношу" closes="UC2/1"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="POST /glossarystore/glossaries (terms)" out="Glossary (черновик создания)" role="порождаю" closes="UC2/1"/>
+    <step n="3" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="Glossary (черновик создания)" out="ключи термина проверены" role="порождаю" closes="UC2/2"/>
+    <step n="4" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="ключи термина проверены" out="Glossary (создан, version 1)" role="порождаю" closes="UC2/3"/>
+    <step n="5" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="Glossary (создан, version 1)" out="кэш глоссариев сброшен" role="порождаю" closes="UC2/3"/>
+    <step n="6" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="кэш глоссариев сброшен" out="201 (id, version, terms)" role="порождаю" closes="UC2/4"/>
+  </flow>
+<flow id="S2a" uc="UC2" branch="2a" goal="term key rejected on create">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="Glossary (черновик создания)" out="TERM_KEY_INVALID" role="отвергаю" closes="UC2/2a"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="TERM_KEY_INVALID" out="400 TERM_KEY_INVALID" role="порождаю" closes="UC2/2a"/>
+  </flow>
+</flows>

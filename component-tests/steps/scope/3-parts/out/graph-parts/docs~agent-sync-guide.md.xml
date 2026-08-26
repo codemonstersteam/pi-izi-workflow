@@ -1,0 +1,5 @@
+<part cell="docs~agent-sync-guide.md" kind="survey">
+  <module path="docs/agent-sync-guide.md" io="none" api="none" tests="none">
+    <role>Documentation for the Agent Sync live instance-to-instance synchronization feature, describing API endpoints, workflow steps, and structural matching behavior</role>
+  </module>
+</part>

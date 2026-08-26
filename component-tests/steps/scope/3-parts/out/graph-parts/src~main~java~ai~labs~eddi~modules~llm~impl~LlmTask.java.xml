@@ -1,0 +1,5 @@
+<part cell="src~main~java~ai~labs~eddi~modules~llm~impl~LlmTask.java" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/LlmTask.java" io="none" api="none" tests="none">
+    <role>CDI ApplicationScoped lifecycle task that executes LLM chat model calls within the conversation workflow, building prompts from templates, managing conversation history, and tracking token usage</role>
+  </module>
+</part>

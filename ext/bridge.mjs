@@ -14,6 +14,7 @@
 import { ok, err } from "../core/result.mjs"
 import { STEPS, start, put, finish, resume } from "./state.mjs"
 import { instruction } from "./values.mjs"
+import { recon } from "./recon.mjs"
 import * as trace from "./runlog.mjs"
 
 // ТАБЛИЦА ШАГОВ. Полная с самого начала, включая ещё не написанные: иначе каждый тикет волны 9
@@ -59,7 +60,30 @@ export async function stepStart(input = {}) {
   if (cont.ok) return { track: "ok", state: cont.value.state, from: cont.value.from, continued: true }
   const fresh = start({ cwd, run, key, budgets })
   if (!fresh.ok) return { track: "err", kind: "crashed", subject: fresh.error.detail }
-  return { track: "ok", state: fresh.value, from: STEPS[0], continued: false }
+
+  // T37 — RESUME ПО АРТЕФАКТАМ: скан .agent/ проставляет at-штампы завершённых шагов и
+  // portions текущего (staging/frd~A,B,C → green). Полоса стартует с первого шага БЕЗ штампа,
+  // а не с нуля. Диск — истина: sha1 проверяется downstream-шагами.
+  //
+  // CLOSED ПО ШТАМПАМ (приёмка 26.08): шаг с at-штампом УЖЕ отработал — без записи в closed
+  // его `done` при resume проходил через finish(), СТИРАЯ порции других шагов, которые recon
+  // только что выставил (task → brd → scope → graph, каждый чистил — intake начинал с нуля).
+  const found = recon(cwd)
+  let state = fresh.value
+  if (found.key && !state.key) state = { ...state, key: found.key }
+  if (Object.keys(found.at).length) {
+    // штамп → закрытый шаг: at-ключ соответствует шагу в STEPS (at.brd → "brd", at.ripple → "ripple")
+    const stampToStep = { task: "task", normalized: "brd/normalize", brd: "brd", plan: "scope/plan", focus: "scope/focus", parts: "scope/parts", computed: "scope", appgraph: "graph", frd: "intake", mode: "weight", ripple: "ripple", values: "plan/values", tree: "plan/tree", flows: "plan/flows" }
+    const done = [...new Set(Object.keys(found.at).map((k) => stampToStep[k]).filter(Boolean))]
+    const patched = put(state, { at: { ...state.at, ...found.at }, closed: [...new Set([...state.closed, ...done])] })
+    if (patched.ok) state = patched.value
+  }
+  if (found.portions.length) {
+    const patched = put(state, { portions: found.portions })
+    if (patched.ok) state = patched.value
+  }
+
+  return { track: "ok", state, from: STEPS[0], continued: false }
 }
 
 // FUNCTION_CONTRACT: stepNext — что шаг просит сделать дальше
@@ -85,7 +109,18 @@ export async function stepNext({ id, state } = {}) {
   // следующему шагу (workflows/izi.js::run), и порции с вопросом уехали бы к чужому подшагу как
   // свои. Мост — единственное место, где это видно для ЛЮБОГО шага: он один знает, ЧЕЙ это ход.
   // Правило живёт в `ext/state.mjs::finish`, там же записано, чем оно оплачено.
+  //
+  // НО НЕ ПРИ RESUME (T37, приёмка 26.08): шаг, говорящий `done` потому что его штамп УЖЕ стоит
+  // (closed содержит его), НЕ РАБОТАЛ — его порций у него нет, и очищать нечего. Живой круг:
+  // recon выставил intake-порции (3 green), а task/brd/scope/graph, проходя мимо со своим
+  // `done`, СТИРАЛИ их finish()-ом — intake начинал с нуля, перегоняя закрытое.
   if (built.value.do !== "done") return built.value
+  // ПОДШАГ ПРОВЕРЯЕТСЯ И РОДИТЕЛЕМ: closed содержит «brd», а говорит done «brd/anchors» —
+  // родитель закрыт, значит и подшаг отработал в прошлом прогоне (приёмка 26.08: brd/anchors
+  // чистил intake-порции, потому что в closed стоял только «brd», не «brd/anchors»).
+  const parent = String(id).split("/")[0]
+  const alreadyClosed = (s.value.closed || []).includes(id) || (s.value.closed || []).includes(parent)
+  if (alreadyClosed) return built.value
   const over = finish(built.value.state)
   if (!over.ok) return { do: "err", code: "crashed", subject: `шаг ${id}: ${over.error.detail}` }
   return { ...built.value, state: over.value }

@@ -9,6 +9,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { parseFrd } from "../intake/frd.mjs"
+import { analogueTerm } from "../brd/brd.mjs"
 import { parseMap } from "../intake/map.mjs"
 import { parseComputed } from "../scope/computed.mjs"
 import { newRipple } from "./ripple.mjs"
@@ -33,7 +34,9 @@ export function rippleOf(state) {
   // правило тогда судит по карте, как судило до этой правки.
   const computed = readAt(state.cwd, COMPUTED)
   const repo = computed ? new Set([...String(computed).matchAll(/\bpath="([^"]+)"/g)].map((m) => m[1])) : new Set()
-  const r = newRipple({ xml, frd: parseFrd(readAt(state.cwd, FRD)), mode: readAt(state.cwd, MODE), map, repo })
+  // T55 — слово аналога из BRD: узлы с его именем едут в подграф контекстом (не seed)
+  const analogue = analogueTerm(readAt(state.cwd, ".agent/brd.md"))
+  const r = newRipple({ xml, frd: parseFrd(readAt(state.cwd, FRD)), mode: readAt(state.cwd, MODE), map, repo, analogue })
   if (!r.ok) return { why: `${r.error.cls}:\n  ${r.error.detail}` }
   return { xml: r.value.xml, seeds: r.value.seeds.length, nodes: r.value.nodes.length, design: r.value.design, total: map.count }
 }

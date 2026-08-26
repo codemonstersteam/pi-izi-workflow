@@ -275,7 +275,7 @@ export function checkFocus({ focus = {}, anchors = [] } = {}) {
   return B
 }
 
-export function newFocus({ slices = [], anchors = [], spread = null, cells = [], edges = [], decls = {}, apis = {}, cap = MAP_CAP_BYTES } = {}) {
+export function newFocus({ slices = [], anchors = [], spread = null, cells = [], edges = [], decls = {}, apis = {}, cap = MAP_CAP_BYTES, normalized = "" } = {}) {
   // The budget is the ceiling MINUS the measured error of the estimate below (steps/intake/map.mjs::
   // MAP_EST_SLACK). Comparing to the ceiling itself is what killed run fa8def32: the estimate was
   // 10% low, the map missed by 3%, and the swarm had already been paid for.
@@ -372,20 +372,73 @@ export function newFocus({ slices = [], anchors = [], spread = null, cells = [],
   // Звонящие — один шаг НАЗАД по рёбрам: кто вызывает ядро аналога молча, через интерфейс.
   // Рёбер может не быть (graph-computed пуст) — фаза молчит, остаются розетки.
   if (socket.size) {
-    const socketCells = [...new Set([...socket].map((p) => cellOf.get(p)).filter(Boolean))]
-      .sort((a, b) => (isTestCell(a) ? 1 : 0) - (isTestCell(b) ? 1 : 0) || cheapFirst(a, b))
+    // ТЕСТОВЫЕ И ДОКОВЫЕ КЛЕТКИ КОНУС НЕ ПОКУПАЕТ ВООБЩЕ. Имя аналога чаще всего пишут его
+    // собственные тесты: на eddi 24 клетки из 62 розеток — тестовые, и бюджет их не останавливает
+    // (замер T22: 42 клетки конуса при цели ≤15); шесть клеток — документация, где слово аналога
+    // встретилось в прозе. Путь теста модулю даёт его дом-клетка (`<test path>`), команду сьюта —
+    // хребет; доки кода не несут. Отброшенное считается (dropped) — молчаливых потерь нет.
+    const codeCells = (list) => {
+      const out = []
+      for (const c of list) { if (isTestCell(c) || (c.files || []).every((f) => /\.md$/i.test(f.path))) droppedSockets++; else out.push(c) }
+      return out
+    }
+    const socketCells = codeCells([...new Set([...socket].map((p) => cellOf.get(p)).filter(Boolean))]
+      .sort((a, b) => (isTestCell(a) ? 1 : 0) - (isTestCell(b) ? 1 : 0) || cheapFirst(a, b)))
     const callers = [...new Set((edges || []).filter((e) => socket.has(e.to)).map((e) => e.from))]
-    const callerCells = [...new Set(callers.map((p) => cellOf.get(p)).filter(Boolean))].sort(cheapFirst)
+    const callerCells = codeCells([...new Set(callers.map((p) => cellOf.get(p)).filter(Boolean))].sort(cheapFirst))
     for (const c of [...socketCells, ...callerCells]) {
       if (taken.has(c)) continue
       if (!add((c.files || []).map((f) => f.path))) droppedSockets++
     }
+
+    // T59 — СЛОВА ПОСЛЕ КОНУСА. T51 задумывался «в дополнение к конусу», но стоял ПЕРЕД ним и,
+    // сортируясь «дешёвые первыми», заполнял потолок карты шумом — конус голодал (приёмка 25.08:
+    // без snippets/llm/memory, зато с .github и helm). Теперь порядок кода совпадает с названием
+    // его теста: конус покупает первым, слово — только клетки, которых конус не взял.
+    //
+    // T51 — ФАЙЛЫ ИЗ ТРЕБОВАНИЙ: конус от аналога выбирает файлы по совпадению с текстом аналога,
+    // но требование может называть файл КОСВЕННО — "agent config", "configuration set order".
+    // Замер 25.08: configs/agents (AgentConfiguration) НЕ выбрался конусом — PromptSnippet там
+    // не встречается, а R8 BRD говорит "agent config". Без этой клетки appgraph.xml не содержит
+    // AgentConfiguration → FRD не может создать дельту → план неполный. Файлы из требований
+    // покупаются СЛОВАМИ ИНСТРУМЕНТ-КОЛОНКИ normalized: колонка — фраза («agent config»), путь —
+    // сегменты (configs/agents/…). Порог 4 символа — замер колонки живого прогона: короче там
+    // только «new», «key», «uri», «own», «64» — ни одно не имя каталога.
+    //
+    // ДВА ЗАПРЕТА СЛОВА, ОБА ИЗ ЗАМЕРА ТОГО ЖЕ ПРОГОНА. (1) Слово матчит СЕГМЕНТЫ-КАТАЛОГИ,
+    // имя файла НЕ судится: весь инфра-шум пришёл через имена — config.yml у .github, configmap.yaml
+    // у helm/k8s, seed-demo-agent.sh у docker; нужное попадание (agents) — через каталог. (2) Клетка
+    // из одних DATA-файлов (json/yaml/yml) — не носитель требования, слово её не покупает:
+    // JSON-фикстуры agent-configs/agent-father слово «agent» тащило в карту мимо md-фильтра.
+    // Основание то же, что у M1 для тестовых клеток: данные — дешёвые строки карты, не код.
+    const instrumentWords = [...new Set(
+      (typeof normalized === "string" ? normalized : "")
+        .split("\n").map((l) => (l.split("|")[2] || "").trim()).filter(Boolean)
+        .join(" ").split(/[,\s]+/).map((w) => w.toLowerCase()).filter((w) => w.length >= 4)
+    )]
+    if (instrumentWords.length) {
+      const isDocsCell = (c) => (c.files || []).every((f) => /\.md$/i.test(f.path))
+      const isDataCell = (c) => (c.files || []).every((f) => /\.(json|ya?ml)$/i.test(f.path))
+      const segHit = (path) => String(path).toLowerCase().split("/").slice(0, -1)
+        .some((seg) => instrumentWords.some((w) => seg.includes(w)))
+      const instrumentCells = plan.filter((c) => !taken.has(c) && !isTestCell(c) && !isDocsCell(c) && !isDataCell(c) &&
+        (c.files || []).some((f) => segHit(f.path)))
+      for (const c of instrumentCells) {
+        if (taken.has(c)) continue
+        if (!add((c.files || []).map((f) => f.path))) droppedSockets++
+      }
+    }
+
     // Конусом считаются срезы, ЦЕЛИКОМ лежащие во взятых клетках: они и есть «chosen» фокуса.
-    chosen = slices.filter((s) => (s.nodes || []).every((n) => { const c = cellOf.get(n); return c && taken.has(c) })).map((s) => s.id)
+    chosen = slices.filter((s) => (s.nodes || []).every((n) => { const c = cellOf.get(n); return c && taken.has(c) }))
   } else {
   // ЗАПАСНОЙ ПУТЬ БЕЗ АНАЛОГА — прежние фазы, слово остаётся покупателем: BRD может сказать
   // `analogue: none`, и сузить нечем, кроме слов. Этот путь тот же, что был до T22, и его
-  // замеры (M2, дома, круговой обход) продолжают его сторожить.
+  // замеры (M2, дома, круговой обход) продолжают его сторожить. ОДНО правило сюда пришло из T24:
+  // тестовые и доковые клетки слова тоже не покупают — основания те же, что у конуса (путь теста
+  // даёт дом-клетка, сьют — хребет, доки кода не несут), и отброшенное считается.
+  const isDocsCell = (c) => (c.files || []).every((f) => /\.md$/i.test(f.path))
+  const buysCell = (c) => !isTestCell(c) && !isDocsCell(c)
   const isNamed = (path) => (anchors || []).some((a) => names(a, path))
   const namedFiles = plan.flatMap((c) => (c.files || []).map((f) => f.path)).filter(isNamed)
   if (!namedFiles.length) {
@@ -405,14 +458,15 @@ export function newFocus({ slices = [], anchors = [], spread = null, cells = [],
   const density = (c, a) => (c.files || []).filter((f) => String(f.path).split("/").slice(0, -1).some((d) => isHomeDir(d, a))).length
   for (const a of anchors || []) {
     const home = plan
-      .filter((c) => !taken.has(c) && atHome(c, a))
+      .filter((c) => !taken.has(c) && buysCell(c) && atHome(c, a))
       .sort((x, y) => density(y, a) - density(x, a) || (isTestCell(x) ? 1 : 0) - (isTestCell(y) ? 1 : 0) || (x.files || []).length - (y.files || []).length || x.id.localeCompare(y.id))[0]
     if (!home) continue
     if (!add((home.files || []).map((f) => f.path))) droppedHomes++
   }
 
   // РОЗЕТКИ И ЗДЕСЬ ИДУТ СРАЗУ ЗА ДОМАМИ: без аналога их не было — теперь артефакт есть и в этом
-  // пути (замер фазы тот же: 9–10 из 10). Список розеток построен выше, до развилки.
+  // пути (замер фазы тот же: 9–10 из 10). Список розеток построен выше, до развилки. T24: тестовые
+  // и доковые клетки отсеиваются и здесь.
   const socketCells = [...new Set([...socket].map((p) => cellOf.get(p)).filter(Boolean))]
     .sort((a, b) => (isTestCell(a) ? 1 : 0) - (isTestCell(b) ? 1 : 0) || cheapFirst(a, b))
   const callers = socket.size
@@ -421,10 +475,12 @@ export function newFocus({ slices = [], anchors = [], spread = null, cells = [],
   const callerCells = [...new Set(callers.map((p) => cellOf.get(p)).filter(Boolean))].sort(cheapFirst)
   for (const c of [...socketCells, ...callerCells]) {
     if (taken.has(c)) continue
+    if (!buysCell(c)) { droppedSockets++; continue }
     if (!add((c.files || []).map((f) => f.path))) droppedSockets++
   }
 
-  // БЮДЖЕТ ДЕЛИТСЯ ПО ЯКОРЯМ, А НЕ ПО ДЕШЕВИЗНЕ (замеры M2 — в прежнем виде).
+  // БЮДЖЕТ ДЕЛИТСЯ ПО ЯКОРЯМ, А НЕ ПО ДЕШЕВИЗНЕ (замеры M2 — в прежнем виде). T24: тестовые и
+  // доковые клетки словом не покупаются — считаются отброшенными, молчания нет.
   const queue = new Map()
   for (const a of anchors || []) {
     const named = plan.filter((c) => (c.files || []).some((f) => names(a, f.path)))
@@ -443,6 +499,7 @@ export function newFocus({ slices = [], anchors = [], spread = null, cells = [],
       if (!c) continue
       seen.add(c.id)
       progress = true
+      if (!buysCell(c)) { droppedCells++; continue }
       if (add((c.files || []).map((f) => f.path))) mine.set(a, (mine.get(a) || 0) + 1)
       else droppedCells++
     }
@@ -453,7 +510,8 @@ export function newFocus({ slices = [], anchors = [], spread = null, cells = [],
     .map((s) => ({ s, bytes: bytesOf([...new Set(s.nodes.map((n) => cellOf.get(n)).filter(Boolean))]) }))
     .sort((a, b) => a.bytes - b.bytes || a.s.entry.localeCompare(b.s.entry))
   for (const { s } of ordered) {
-    if (add(s.nodes)) chosen.push(s.id)
+    // ВНУТРИ chosen — СРЕЗЫ-ОБЪЕКТЫ: coverageOf читает и id, и дом по объекту; id остаются на возврате
+    if (add(s.nodes)) chosen.push(s)
     else droppedSlices++
   }
   } // запасной путь без аналога

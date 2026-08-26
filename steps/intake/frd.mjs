@@ -250,6 +250,7 @@ export function parseFrd(xml) {
     touchedRows: list("touched"),
     nfrs: list("nfr"),
     questions: list("question"),
+    owners: list("owner"),
     // carried — САМОПРОВЕРКА РОЛИ, СТАВШАЯ УЛИКОЙ. По строке на каждое требование BRD: чем оно
     // унесено в это требование (`by="UC1/2"`, `by="S3"`, `by="src/rest/Store.java"`). Роль проходит
     // требования по одному и называет носителя; судит строку скрипт (F11), поэтому
@@ -356,26 +357,41 @@ function provenance(at, value, source, known) {
 //   них шесть про сценарии, которых роль ещё не начинала писать, и одна `F6 карта отказов пуста` на
 //   артефакте, где ещё не было ни одной дельты. Модель чинила несуществующее и переписывала уже
 //   зелёное; три круга ушли на бухгалтерию.
-export const PASSES = Object.freeze(["A", "B", "C", "D"])
+//
+// T62 — ПЛАСТ B РАЗЛОЖЕН НА ТРИ РЕШЕНИЯ (приёмка 25.08: один вызов выбирал владельцев, формы и
+//   сценарии разом — ошибки выбора, самые дорогие, были невидимы в большом артефакте; замер:
+//   подстановка уехала в выдуманный сервис при живой роли конвертера, синк-четвёрка молча
+//   пропущена). B1 — выбор владельцев (таблица owner+question, судят F17a-d), B2 — формы дельт
+//   по готовым узлам (F3-семейство + F17e), B3 — сценарии и touched (F2/F4/F10/F14). Порядок
+//   «решение → суд» один: каждый следующий наряд несёт ПОДТВЕРЖДЁННОЕ предыдущим, машина подаёт.
+export const PASSES = Object.freeze(["scenarios", "owners", "contracts", "data-failures", "coverage", "critic"])
 export const RULE_PASS = Object.freeze({
-  F1: "A",   // цель, актёр, гарантия, шаги
-  F6c: "A",  // два конца с одним текстом — концы объявляет пласт A
-  F2: "B",   // touched резолвится в узел
-  F2b: "B",  // touched чем-то объяснён
-  F2c: "B",  // touched без why
-  F3: "B",   // форма, узел, новизна дельты
-  F3b: "B",  // движение from/to
-  F3c: "B",  // дельта без сценария
-  F4: "B",   // сценарии и их узлы
-  F4b: "B",  // use case без сценария
-  F7: "B",   // ни одной дельты
-  F10: "B",  // канал use case принадлежит его узлам
-  F14: "B",  // предмет со своим пакетом без модуля изменения
-  F5: "C",   // источник числа
-  F6: "C",   // карта отказов и её объявление
-  F6d: "C",  // отказ ссылается на существующую ветку
-  F8: "D",   // поле в чужой сущности, которую никто не пишет
-  F11: "D",  // требование BRD не унесено
+  F1: "scenarios",   // цель, актёр, гарантия, шаги
+  F6c: "scenarios",  // два конца с одним текстом — концы объявляет пласт A
+  F17a: "owners", // разность «шаги − владельцы/вопросы» пуста
+  F17b: "owners", // узел владельца существует или объявлен new
+  F17c: "owners", // спорный шаг без вопроса — двусмысленность решает оператор
+  F17d: "owners", // функция аналога не унаследована и не объяснена
+  F2: "contracts",  // touched резолвится в узел
+  F2b: "contracts", // touched чем-то объяснён
+  F2c: "contracts", // touched без why
+  F3: "contracts",  // форма, узел, новизна дельты
+  F3b: "contracts", // движение from/to
+  F3c: "contracts", // дельта без сценария
+  F4: "contracts",  // сценарии и их узлы
+  F4b: "contracts", // use case без сценария
+  F7: "contracts",  // ни одной дельты
+  F10: "contracts", // канал use case принадлежит его узлам
+  F14: "contracts", // предмет со своим пакетом без модуля изменения
+  F17e: "contracts", // дельта на узле, которого B1 не выбрал
+  F19: "contracts", // каждый владелец RTM обязан иметь дельту — contracts не сжимает work surface
+  F5: "data-failures",   // источник числа
+  F6: "data-failures",   // карта отказов и её объявление
+  F6d: "data-failures",  // отказ ссылается на существующую ветку
+  F15: "data-failures",  // статус «0» — заглушка, а не код отказа
+  F16: "data-failures",  // поле вне замкнутого перечня требования
+  F8: "coverage",   // поле в чужой сущности, которую никто не пишет
+  F11: "coverage",  // требование BRD не унесено
   F9: "*",   // предмет перемотки не удалён
   F0: "*",   // элемент пропадает из разбора — слепит любой проход
   F13: "*",  // ответ оператора теряется одинаково в любом проходе
@@ -389,7 +405,7 @@ export const RULE_PASS = Object.freeze({
 // B), а закрывается ДЕЛЬТОЙ, которую пишет только B. Отправить его починку в D значило бы выдать роли
 // блокер, закрыть который её наряд ей запрещает, — тупик, который `standards/guardrail.md` называет
 // прямо: «блокер, который нечем закрыть».
-export const RULE_FIX = Object.freeze({ F8: "B" })
+export const RULE_FIX = Object.freeze({ F8: "contracts" })
 
 // FUNCTION_CONTRACT: passOfBlocker — чей это пласт
 //   Dependencies: RULE_PASS, RULE_FIX
@@ -421,7 +437,7 @@ export function entryPass(blockers) {
   const lines = (Array.isArray(blockers) ? blockers : String(blockers == null ? "" : blockers).split("\n"))
     .map((x) => String(x).trim()).filter(Boolean)
   const fixers = new Set(lines.map((b) => passOfBlocker(b, true)))
-  return PASSES.filter((x) => fixers.has(x))[0] || "A"
+  return PASSES.filter((x) => fixers.has(x))[0] || PASSES[0]
 }
 
 // FUNCTION_CONTRACT: forPass — блокеры, которые этот проход имеет право показать роли
@@ -468,7 +484,7 @@ export function forPass(blockers, pass) {
 // links — рёбра ВЫЧИСЛЕННОГО графа шага 3 ({from, to}): чем один файл держится за другой. Карта роя
 // знает рёбра только внутри фокуса, и связки «реализация → интерфейс» в ней обычно нет: эндпоинт
 // объявлен интерфейсом, а класс подключается контейнером. Пусто — правила, стоящие на них, молчат.
-export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], known = null, rewind = [], types = new Map(), members = new Map(), routes = [], requirements = [], links = [], pass = "", subjects = [], analogue = "", dirs = new Set() }) {
+export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = new Set(), edges = [], known = null, rewind = [], types = new Map(), members = new Map(), routes = [], requirements = [], links = [], pass = "", subjects = [], analogue = "", dirs = new Set(), closed = [], b0 = null, answers = "", rtm = null }) {
   // Узлом изменения считается путь РЕПОЗИТОРИЯ, а не только клетка фокуса. Слова и их порядок —
   // core/node.mjs: `swarm` (рой читал) · `repo` (файл есть, не читан) · `new` · `none`.
   const kindOf = nodeKind({ nodes, paths: new Set(members instanceof Map ? members.keys() : []) })
@@ -621,6 +637,109 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
 
   // F7 — an FRD without a delta says nothing about the change.
   if (!frd.deltas.length) B.push("F7 ни одной <delta> — изменение контракта не названо")
+
+  // F17 — ПОДПЛАСТ B1: ВЫБОР ВЛАДЕЛЬЦЕВ СУДИТСЯ РАЗНОСТЬЮ СПИСКОВ И ФАКТАМИ B0.
+  //
+  // T62: до разложения выбор точки изменения был прозой внутри большого артефакта, и самые
+  // дорогие ошибки композиции (выдуманный сервис вместо живого владельца; молчаливо пропущенная
+  // функция аналога) не ловил никто — F7 требовал «хоть одну дельту», F14 «хоть один модуль из
+  // пакета». Здесь каждая функция требования получает владельца ИЛИ вопрос, спорность решает
+  // оператор, функция аналога наследуется или объясняется. b0 — кандидатная таблица скрипта
+  // (steps/intake/b0.mjs), ОДНА И ТА ЖЕ в наряде и в суде: модель видит то, по чему её судят.
+  // Ворот b0 — не только экономия: без кандидатной таблицы разность «шаги − владельцы» не имеет
+  // источника правды о шагах, и суд молчит, а не фантазирует.
+  if (b0 && Array.isArray(b0.steps)) {
+    const stepIds = frd.usecases.flatMap((u) => (u.steps || []).map((_, i) => `${u.id}/${i + 1}`))
+    const ownedSteps = new Set(frd.owners.map((o) => String(o.step || "")).filter(Boolean))
+    // ВОПРОС МОЖЕТ КРЫТЬ ГРУППУ ШАГОВ ОДНОГО СПОРА: step="UC5/1 UC5/2 UC5/3" — модель пишет один
+    // вопрос на связный спор, и это экономит паузы оператора (живой круг 25.08: судья ждал
+    // ровно один id и краснел на каждую строку группы). Id режутся пробелами.
+    const askedSteps = new Set(frd.questions.flatMap((q) => String(q.step || "").split(/\s+/)).filter(Boolean))
+
+    // F17a — разность «шаги − владельцы/вопросы» пуста (паттерн F11, уровень глубже)
+    for (const id of stepIds) {
+      if (ownedSteps.has(id) || askedSteps.has(id)) continue
+      B.push(`F17a шаг ${id} без владельца и без вопроса: назначь <owner step="${id}" node="…"/> из кандидатов наряда, или узел создаётся — <owner step="${id}" node="…" new="yes"/>, или выбор неясен — <question step="${id}" subject="…" why="…"/>`)
+    }
+
+    // F17b — узел владельца существует или честно объявлен новым
+    for (const o of frd.owners) {
+      if (!o.node) { B.push(`F17b <owner step="${o.step || "?"}"> без node — владелец обязан быть путём`); continue }
+      if (o.new === "yes") continue
+      if (!inRepo(o.node)) B.push(`F17b владелец «${o.node}» нет ни в карте, ни в репозитории — скопируй путь из кандидатов; файл создаётся — добавь new="yes"`)
+      else if (tests.has(o.node)) B.push(`F17b владелец «${o.node}» — тест: тест не носитель изменения, назови модуль`)
+    }
+
+    if (Array.isArray(b0.steps)) {
+      // F17c — спорный шаг без вопроса: равноправных кандидатов ≥2, и это решение оператора.
+      // ВЫХОД ЧЕРЕЗ ОТВЕТ: владелец, назначенный по ответу оператора, спор закрывает — ответ
+      // оператора называет модуль поимённо (T64: свежий круг пишет владельцев напрямую из
+      // {ANSWERED}). Суд сверяет basename владельца с текстом ответов — оба артефакта машинные,
+      // это не придирка к форме вопроса. Живой круг 25.08: 10 F17c на шагах, давно закрытых
+      // ответами, — петля починки на ровном месте.
+      const ownerOf = new Map()
+      for (const o of frd.owners) for (const sid of String(o.step || "").split(/\s+/).filter(Boolean)) ownerOf.set(sid, String(o.node || ""))
+      const answersText = String(answers || "").toLowerCase()
+      const answeredOwner = (id) => {
+        const node = ownerOf.get(id)
+        return Boolean(node) && answersText.includes(String(node).split("/").pop().replace(/\.[^.]+$/, "").toLowerCase())
+      }
+      const disputed = new Set(b0.steps.filter((s) => s.disputed).map((s) => s.id))
+      for (const id of disputed) {
+        if (askedSteps.has(id)) continue
+        if (answeredOwner(id)) continue
+        B.push(`F17c шаг ${id} спорный (в наряде ≥2 равноправных кандидата), а вопроса нет — двусмысленность решает оператор: <question step="${id}" subject="какой из кандидатов" why="…"/>`)
+      }
+      // F17d — функция аналога: унаследована владельцем или объяснена вопросом.
+      // ПОКРЫТИЕ ШАГОМ: топ-1 кандидат покрыт, когда КАЖДЫЙ его шаг закрыт владельцем (любым —
+      // выбор сделан явно) или вопросом (решение ушло оператору). Искать имя файла в тексте
+      // вопроса — придирка к форме: приёмка 25.08 дала ложный F17d на шагах, где вопрос УЖЕ
+      // стоял, но называл шаг, а не кандидата.
+      const ownedNodes = new Set(frd.owners.map((o) => String(o.node || "")))
+      for (const f of b0.analogueFunctions || []) {
+        if (ownedNodes.has(f.path)) continue
+        if ((f.steps || []).every((id) => askedSteps.has(id) || ownedSteps.has(id))) continue
+        B.push(`F17d функция аналога «${String(f.path).split("/").pop()}» нужна шагам (${(f.steps || []).join(", ") || "по роли"}), но ни один владелец её не наследует и вопроса нет — либо <owner … node="${f.path}"/>, либо объясни вопросом, почему функция переезжает в новое место`)
+      }
+    }
+  }
+
+  // F17e — ПОДПЛАСТ B2: форма судится ТОЛЬКО на узлах, выбранных в B1. Владелец — подтверждённый
+  // факт предыдущего пласта; дельта мимо него — новая точка, проведённая в обход суда о выборе.
+  if (frd.owners.length && frd.deltas.length) {
+    const ownedNodes = new Set(frd.owners.map((o) => String(o.node || "")).filter(Boolean))
+    for (const d of frd.deltas) {
+      if (d.node && !ownedNodes.has(d.node)) {
+        B.push(`F17e дельта на «${d.node}», которого B1 не выбрал владельцем — выбор точки съехал назад в прозу: верни узел в таблицу B1 (или спроси оператора), потом ставь форму`)
+      }
+    }
+  }
+
+  // F19 — ПОДПЛАСТ contracts: КАЖДЫЙ владелец RTM обязан иметь дельту или touched.
+  //
+  // T67: живой круг 26.08 — contracts МОЛЧА УДАЛИЛ 7 из 14 owner-строк, сохранив только
+  // узлы с дельтами. F17e однонаправленный (дельта мимо владельца — блокер; владелец
+  // без дельты — молчит), F17a зелёный (шаги сохранили других владельцев), F14 зелёный
+  // (в пакете есть хоть один модуль). Результат: RTM заявил 14 узлов, план получил 7.
+  // Правило: если rtm.md доступен (собран owners-скриптом), каждый НЕ-новый узел RTM
+  // обязан иметь <delta node> или <touched path> в ЭТОМ артефакте.
+  if (rtm && Array.isArray(rtm.rows) && rtm.rows.length && frd.deltas.length) {
+    const withForm = new Set([
+      ...frd.deltas.map((d) => String(d.node || "")),
+      ...frd.touched.map((t) => String(t.path || t || "")),
+    ].filter(Boolean))
+    const seen = new Set()
+    for (const row of rtm.rows) {
+      for (const tok of row.dims.owners || []) {
+        if (!tok.path || seen.has(tok.path)) continue
+        seen.add(tok.path)
+        if (tok.flags.has("new")) continue    // new-узел будет в дельтах как Added(new)
+        if (!withForm.has(tok.path)) {
+          B.push(`F19 владелец «${String(tok.path).split("/").pop()}» (${tok.path}) заявлен в rtm.md, но без дельты и без touched — contracts сжал work surface; верни владельца и дай ему форму (или <touched why=…>, или объясни вопросом)`)
+        }
+      }
+    }
+  }
 
   // F3 — the delta's form, and its node when the form claims to know one.
   for (const d of frd.deltas) {
@@ -794,6 +913,40 @@ export function checkFrd({ frd, nodes = new Set(), tests = new Set(), entries = 
   const codes = new Set(frd.failures.map((f) => f.code).filter(Boolean))
   for (const e of errs) if (!codes.has(e)) B.push(`F6 код «${e}» из <ext> не описан в карте отказов. Напиши строку: <failure code="${e}" status="HTTP-код" client="что видит клиент" operator="что видит оператор" from="UC1/1a"/>`)
   for (const c of codes) if (!errs.has(c)) B.push(`F6 код «${c}» карты отказов не встречен ни одним <ext>. Либо назови ветку, которая его поднимает — <ext id="2a" error="${c}" outcome="что наблюдает актёр"/>, либо сними строку отказа: код, который никто не поднимает, реализовать нечем`)
+
+  // F15 — СТАТУС «0» — ЭТО ЗАГЛУШКА, А НЕ КОД ОТКАЗА.
+  //
+  // BUG_FIX_CONTEXT: live run 25.08 (eddi, DOS-535). Три отказа несли status="0" и
+  //   operator="no operator action": что происходит с неразрешённым плейсхолдером
+  //   {{glossary.<term>}} и кто решил «конфликт версий при импорте пропускается» — решения
+  //   оператора, которых в TASK.md нет. Модель молча ВЫДУМАЛА политику вместо вопроса,
+  //   зелёный F6 её принял, и план понёс поведение, которого никто не заказывал. «0» —
+  //   признание роли, что кода у отказа нет: запрос решения, спрятанный в атрибут.
+  for (const f of frd.failures) {
+    if (String(f.status || "").trim() !== "0") continue
+    B.push(`F15 отказ ${f.code || "(без code)"} объявлен со status="0" — у отказа нет кода, а его поведение никто не решал. Это решение оператора: спроси — <question subject="статус и поведение отказа ${f.code || ""}" why="какой код несёт отказ и что видят клиент и оператор"/>; код известен из требования или репозитория — впиши его; отказа с таким поведением никто не заказывал — сними строку`)
+  }
+
+  // F16 — ПОЛЕ ПРОТИВ ЗАМКНУТОГО ПЕРЕЧИСЛЕНИЯ ТРЕБОВАНИЯ.
+  //
+  // BUG_FIX_CONTEXT: live run 25.08 (eddi, DOS-535). R13 закрыла перечень полей словами «only
+  //   id + version + terms», FRD молча дописал resourceType: F5 судил источник числа, F8 — чужую
+  //   сущность, и никто не спросил, кто разрешил поле вне перечня. Перечень замкнуло требование —
+  //   слово «only» пришло из TASK.md, не из вкуса суда, и суд читает его дословно. Матч мягкий
+  //   НАМЕРЕННО: перечислённое в «no description, no category» не входит в names по построению
+  //   (регулярка берёт только список после «only»), а поле сущности, чей перечень требование не
+  //   закрывало, не судится вовсе — молчание здесь честнее шума.
+  const words = (s) => new Set(String(s || "").toLowerCase().split(/[^\w]+/).filter(Boolean))
+  for (const f of frd.fields) {
+    const mine = words(f.in)
+    const name = String(f.name || "").trim().toLowerCase()
+    if (!mine.size || !name) continue
+    for (const c of closed) {
+      if (![...words(c.entity)].some((w) => mine.has(w))) continue
+      if (c.names.has(name)) continue
+      B.push(`F16 поле ${f.name} в «${f.in}» вне замкнутого перечня требования ${c.req}: только ${[...c.names].join(" + ")}. Перечень закрыт словом «only» — поле нужно, но требование его не называет: спроси оператора <question subject="поле ${f.name} в ${f.in}" why="требование ${c.req} перечисляет не всё"/>; поля нет — сними строку`)
+    }
+  }
 
   // F6c — one cause of failure, a different OBSERVATION on every layer. The ends are taken from
   // `endsOf` (above, this module), side `out`: `UCx/post` and every `<ext outcome>` — exactly the

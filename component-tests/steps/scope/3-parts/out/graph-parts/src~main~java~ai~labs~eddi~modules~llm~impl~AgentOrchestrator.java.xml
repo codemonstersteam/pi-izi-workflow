@@ -1,0 +1,7 @@
+<part cell="src~main~java~ai~labs~eddi~modules~llm~impl~AgentOrchestrator.java" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/AgentOrchestrator.java" io="none" tests="none">
+    <role>Core orchestrator for LLM agent execution — manages tool setup, conversation memory, cost tracking, token usage, and human-in-the-loop approval gates</role>
+    <api name="buildToolSetup" kind="lib" scope="internal"/>
+    <api name="collectEnabledTools" kind="lib" scope="internal"/>
+  </module>
+</part>

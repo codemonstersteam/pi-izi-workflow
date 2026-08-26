@@ -1,0 +1,5 @@
+<part cell="docs~conversation-memory.md" kind="survey">
+  <module path="docs/conversation-memory.md" io="none" api="none" tests="none">
+    <role>Documentation describing the Conversation Memory architecture, interfaces, lifecycle, scopes, persistence to MongoDB, and template variable model used across EDDI</role>
+  </module>
+</part>

@@ -34,11 +34,15 @@ test("start: без идентификатора прогона — отказ: 
   assert.match(r.error.detail, /прогона/)
 })
 
-test("start: ЧИСТИТ staging — черновик прошлого круга не судится как ответ этого", () => {
+test("start: staging НЕ чистится — resume видит закрытые подшаги и не перегоняет их", () => {
+  // Приёмка 26.08: чистка staging на каждом запуске заставляла перегонять ВСЕ закрытые подшаги
+  // (+2 вызова на каждую станцию приёмки). Recon уже различает: файл есть → green, нет → todo.
+  // Черновик прошлого круга невозможен по построению: наряд перед вызовом роли чистит СВОЙ
+  // staging-путь (tree.step.mjs::next), а не весь каталог.
   const d = root()
-  writeFileSync(join(d, ".agent/staging/tree~1.xml"), "черновик прошлого прогона")
+  writeFileSync(join(d, ".agent/staging/frd~owners.xml"), "закрытый подшаг прошлого запуска")
   start({ cwd: d, run: "r2" })
-  assert.ok(!existsSync(join(d, ".agent/staging/tree~1.xml")), "staging не вычищен")
+  assert.ok(existsSync(join(d, ".agent/staging/frd~owners.xml")), "staging закрытого подшага стёрт — resume сломан")
 })
 
 test("start: уносит прошлые ответы в .agent/prev, а не удаляет", () => {

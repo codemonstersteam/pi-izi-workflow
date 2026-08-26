@@ -48,7 +48,8 @@ export function next(state) {
   const batch = todo.slice(0, state.budgets.maxParallel)
   const calls = []
   for (const p of batch) {
-    const o = orderText(state, p.id, { previous: readAt(state.cwd, p.staging), feedback: p.blockers, fix: p.round > 1 })
+    // T45 — фикс по НАЛИЧИЮ БЛОКЕРОВ, не по номеру круга (обрыв круг не тратит)
+    const o = orderText(state, p.id, { previous: readAt(state.cwd, p.staging), feedback: p.blockers, fix: Boolean(String(p.blockers || "").trim()) })
     if (o.why) return { do: "err", code: "blocked", subject: o.why }
     const abs = join(state.cwd, o.staging)
     if (existsSync(abs)) rmSync(abs)          // подготовка доставки: черновик прошлого круга не судится как ответ этого

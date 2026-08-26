@@ -1,0 +1,27 @@
+<part cell="src~main~java~ai~labs~eddi~engine~runtime~client" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/engine/runtime/client/agents/AgentStoreClientLibrary.java" io="none" tests="none">
+    <role>CDI-scoped client library implementation that retrieves agents by ID and version from the agent store service</role>
+    <api name="getAgent(agentId, version)" kind="lib" scope="internal"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/engine/runtime/client/agents/IAgentStoreClientLibrary.java" io="none" api="none" tests="none">
+    <role>Interface defining the contract for agent store client operations</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/engine/runtime/client/configuration/IResourceClientLibrary.java" io="none" api="none" tests="none">
+    <role>Interface defining the contract for resource client operations including init, read, duplicate and delete</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/engine/runtime/client/configuration/ResourceClientLibrary.java" io="none" tests="none">
+    <role>CDI-scoped client library that dispatches CRUD operations across all configuration resource types (rules, API calls, LLM, MCP calls, output, parser, property setter, RAG, dictionary) via their respective REST store interfaces</role>
+    <api name="init()" kind="lib" scope="internal"/>
+    <api name="getResource(uri, clazz)" kind="lib" scope="internal"/>
+    <api name="duplicateResource(uri)" kind="lib" scope="internal"/>
+    <api name="deleteResource(uri, permanent)" kind="lib" scope="internal"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/engine/runtime/client/factory/IRestInterfaceFactory.java" io="none" api="none" tests="none">
+    <role>Interface defining the contract for creating REST client interface proxies by class or with a custom server URL</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/engine/runtime/client/factory/RestInterfaceFactory.java" io="none" tests="none">
+    <role>CDI-scoped factory that builds REST client interface proxies using a base URI derived from the quarkus.http.port config property</role>
+    <api name="get(clazz)" kind="lib" scope="internal"/>
+    <api name="get(clazz, serverUrl)" kind="lib" scope="internal"/>
+  </module>
+</part>

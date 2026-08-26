@@ -1,0 +1,5 @@
+<part cell="docs~agent-sync-architecture.md" kind="survey">
+  <module path="docs/agent-sync-architecture.md" io="none" api="none" tests="none">
+    <role>Architecture documentation for agent sync pipeline (import, export, upgrade, live sync)</role>
+  </module>
+</part>

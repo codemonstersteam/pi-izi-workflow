@@ -57,10 +57,17 @@ const PRIMITIVES = {
     s0: () => seat(i.calls, 0), s1: () => seat(i.calls, 1), s2: () => seat(i.calls, 2), s3: () => seat(i.calls, 3),
     s4: () => seat(i.calls, 4), s5: () => seat(i.calls, 5), s6: () => seat(i.calls, 6), s7: () => seat(i.calls, 7),
   }),
-  // checkpoint берёт ОДИН объект и ровно три поля (validation.js:15), prompt ≤ 1024 байт.
-  // ИМЯ КЛЮЧУЕТ ПАУЗУ: два хода с одним именем — одна пауза, и второй вопрос оператор не увидит
-  // никогда. Имя и уже урезанный текст считает ШАГ и кладёт в инструкцию — полоса текстов не собирает.
-  ask:   (i) => checkpoint({ name: i.name, prompt: i.prompt, context: { pending: ".agent/pending.json" } }),
+  // T41 — ASK: текстовые ответы через НАШУ функцию (TUI ui.input), не checkpoint хоста.
+  // checkpoint возвращает ТОЛЬКО boolean (Approve/Reject) — текст ответа через него не проходит.
+  // Наша ask-функция запускается В ХОСТ-ПРОЦЕССЕ, имеет доступ к pi TUI, и для каждого
+  // вопроса показывает ui.input() — оператор печатает ответ прямо в pi. Ответы ложатся в
+  // .agent/answers.md САМА ФУНКЦИЯ (песочница fs не имеет), а здесь остаётся барьер: строка
+  // "approved", если хоть один ответ непуст, — её ждут fold'ы всех шагов (T35). Чат-модель
+  // НЕ участвует: TUI-диалог или файловый протокол, 0 токенов на курьерство.
+  // T60 — СТРОКА, НЕ ОБЪЕКТ: fold'ы сверяют event.result === "approved"; объект от примитива
+  // эту проверку не проходил никогда — вопросный круг повторялся до escalate (приёмка 25.08).
+  ask:   (i) => ask({ items: (i.items || []).map((t) => ({ text: String(t) })) })
+             .then((r) => (r.answers || []).some((a) => a && a.trim()) ? "approved" : ""),
   say:   (i) => log(i.line),
 };
 
@@ -73,7 +80,10 @@ const VOID = { say: true };
 const run = async (id, state) => {
   for (;;) {
     const it = await stepNext({ id, state });
-    if (it.do === "done") return ok({ value: it.state });
+    // STOP-AFTER — станция приёмки (component-tests/test-plan-plan.md): прогон заканчивается
+    // ЗДЕСЬ, следующий запуск продолжает с диска (recon штампует завершённое по артефактам).
+    // Слова «дальше не идём» здесь нет: голова решает только ТРАНСПОРТ, не содержание шага.
+    if (it.do === "done") return (args && args.stopAfter) === id ? ok({ stopped: id, value: it.state }) : ok({ value: it.state });
     if (it.do === "err")  return err(it.code, { subject: it.subject, evidence: it.evidence });
     const primitive = PRIMITIVES[it.do];
     if (!primitive) return err("crashed", { subject: `шаг ${id} просит «${it.do}» — полоса такого не умеет: перезапусти pi` });
@@ -88,17 +98,30 @@ const run = async (id, state) => {
   }
 };
 
+// STOP-AFTER РАСПРОСТРАНЯЕТСЯ, А НЕ ПРОВОЗГЛАШАЕТСЯ. Ворота внутри `run` возвращают ok({stopped}) —
+// для цепочки это УСПЕХ, и без проверки на `stopped` голова шла дальше: первый же приёмочный прогон
+// прошёл станцию task и уехал в brd (замер 26.08). Один предикат на всю цепочку.
+const halt = (r) => r.track === "err" || r.stopped;
+
 // ШАГ 2 — ДВА ПОДШАГА, КАК ШАГ 9 — ТРИ. Обёртка выстраивает порядок и ничего не решает о
 // содержании: таблица действий ложится на диск и живёт дальше, а якоря собираются ПО НЕЙ, а не по
 // сырому заказу. Круги починки у подшагов свои: провал якорей нормализацию не переигрывает.
 async function brd(state) {
-  const rows = await run("brd/normalize", state); if (rows.track === "err") return rows;
+  const rows = await run("brd/normalize", state); if (halt(rows)) return rows;
   return await run("brd/anchors", rows.value);
 }
 
+// ШАГ 3 — ТРИ ПОДШАГА ПО ТОМУ ЖЕ ОБРАЗЦУ (redesign-backlog, T13): план режет дерево по меткам
+// шага 2, фокус решает, что читает рой, части пишет рой. Провал частей не пересчитывает план.
+async function scope(state) {
+  const plan  = await run("scope/plan", state);      if (halt(plan))  return plan;
+  const focus = await run("scope/focus", plan.value); if (halt(focus)) return focus;
+  return await run("scope/parts", focus.value);
+}
+
 async function plan(state) {
-  const values = await run("plan/values", state);      if (values.track === "err") return values;
-  const tree   = await run("plan/tree", values.value); if (tree.track === "err")   return tree;
+  const values = await run("plan/values", state);      if (halt(values)) return values;
+  const tree   = await run("plan/tree", values.value); if (halt(tree))   return tree;
   return await run("plan/flows", tree.value);
 }
 
@@ -110,13 +133,13 @@ try {
   if (started.track === "err") return started;
   const state0 = started.state;
 
-  const task   = await run("task", state0);          if (task.track === "err")   return task;
-  const step2  = await brd(task.value);              if (step2.track === "err")  return step2;
-  const scope  = await run("scope", step2.value);    if (scope.track === "err")  return scope;
-  const graph  = await run("graph", scope.value);    if (graph.track === "err")  return graph;
-  const intake = await run("intake", graph.value);   if (intake.track === "err") return intake;
-  const weight = await run("weight", intake.value);  if (weight.track === "err") return weight;
-  const ripple = await run("ripple", weight.value);  if (ripple.track === "err") return ripple;
+  const task   = await run("task", state0);          if (halt(task))   return task;
+  const step2  = await brd(task.value);              if (halt(step2))  return step2;
+  const step3  = await scope(step2.value);           if (halt(step3))  return step3;
+  const graph  = await run("graph", step3.value);    if (halt(graph))  return graph;
+  const intake = await run("intake", graph.value);   if (halt(intake)) return intake;
+  const weight = await run("weight", intake.value);  if (halt(weight)) return weight;
+  const ripple = await run("ripple", weight.value);  if (halt(ripple)) return ripple;
 
   // ГРАНИЦА ПЕРВОЙ ПОСТАВКИ. plan/book, review и gate1 объявлены с ship="0", и звать их отсюда
   // нельзя: мост на неизвестный шаг обязан вернуть отказ, и прогон кончался бы ошибкой НА УСПЕХЕ.

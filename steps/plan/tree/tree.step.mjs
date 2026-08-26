@@ -17,7 +17,7 @@ import { ok, err } from "../../../core/result.mjs"
 import { put } from "../../../ext/state.mjs"
 import { verdict as newVerdict } from "../../../ext/values.mjs"
 import { inputs } from "./inputs.mjs"
-import { cut, mineOf, familyOf, knownOf, frdOf, readAt } from "./cut.mjs"
+import { cut, mineOf, familyOf, knownOf, frdOf, seedsOf, readAt } from "./cut.mjs"
 import { orderText } from "./order.mjs"
 import { judgePortion, judgeWhole } from "./judge.mjs"
 import { join as joinPortions, addressees, promote } from "./route.mjs"
@@ -67,7 +67,9 @@ export function next(state) {
   const todo = state.portions.find((p) => p.status === "todo")
   if (!todo) return { do: "done", state }
 
-  const o = orderText(state, todo.id, { previous: readAt(state.cwd, todo.staging), feedback: todo.blockers, fix: todo.round > 1 })
+  // T45 — фикс по НАЛИЧИЮ БЛОКЕРОВ, не по номеру круга: круг растёт только от блокеров,
+  // обрыв связи круг НЕ тратит. Единый детектор со всей полосой (brd, intake).
+  const o = orderText(state, todo.id, { previous: readAt(state.cwd, todo.staging), feedback: todo.blockers, fix: Boolean(String(todo.blockers || "").trim()) })
   if (o.why) return { do: "err", code: "blocked", subject: o.why }
 
   // Подготовка доставки: путь очищается ДО вызова, чтобы ответ этого круга нельзя было спутать с
@@ -110,7 +112,7 @@ export function fold(state, event = {}) {
     ? `роль записала «${env.artifact || "ничего"}», а послана была в ${todo.staging} — артефакт это ФАЙЛ по ЭТОМУ пути; запиши его инструментом write и только после этого верни track:"ok"`
     : !staged.trim()
       ? `${todo.staging} пуст — роль вернула track:"ok", ничего не записав`
-      : judgePortion({ text: staged, mine: mineOf(state, todo.id), kin: familyOf(state), known: knownOf(state) }).join("\n  ")
+      : judgePortion({ text: staged, mine: mineOf(state, todo.id), kin: familyOf(state), known: knownOf(state), seeds: seedsOf(state) }).join("\n  ")
 
   const v = newVerdict({ step: id, scope: "portion", id: todo.id, round: todo.round, ok: !blockers, blockers, at: todo.staging })
   if (!v.ok) return v
@@ -142,7 +144,7 @@ function whole(state) {
   const j = joinPortions(state, state.portions)
   if (j.why) return err("fold", j.why)
 
-  const blockers = judgeWhole({ text: readAt(state.cwd, j.at), frd: frdOf(state) }).join("\n  ")
+  const blockers = judgeWhole({ text: readAt(state.cwd, j.at), frd: frdOf(state), seeds: seedsOf(state) }).join("\n  ")
   const round = Math.max(...state.portions.map((p) => p.round))
   const v = newVerdict({ step: id, scope: "whole", id: "", round, ok: !blockers, blockers, at: j.at })
   if (!v.ok) return v

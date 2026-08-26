@@ -7,7 +7,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { parsePart, checkPart, newPart } from "./part.mjs"
-import { SPINE_CELL } from "../survey-plan/plan.mjs"
+import { SPINE_CELL } from "./plan/plan.core.mjs"
 
 const surveyCell = {
   id: "src",
@@ -246,7 +246,7 @@ test("P6: two suites over one folder must be told apart by file name, or step 5 
 //             This assertion is the seam: a unit cannot judge what the role writes, only whether the
 //             order still carries a pattern the role can copy into the wrong attribute.
 test("order.spine.tpl carries no bare file-name pattern — a pattern here lands in match", () => {
-  const tpl = readFileSync(new URL("order.spine.tpl", import.meta.url), "utf8")
+  const tpl = readFileSync(new URL("parts/order.spine.tpl", import.meta.url), "utf8")
   assert.doesNotMatch(tpl, /\*(Test|IT)(?!\.java)/)
 })
 
@@ -275,7 +275,7 @@ test("P7: a toggle without the key a RUNNING instance reads is a blocker; found=
 // question ("name the key"), never as taste. Without the second bullet a model that found no key has
 // no sanctioned way out and invents one, which is exactly what c64dbd32 did.
 test("the spine order defines a toggle by the key a running instance reads, and blesses found=no", () => {
-  const tpl = readFileSync(new URL("order.spine.tpl", import.meta.url), "utf8")
+  const tpl = readFileSync(new URL("parts/order.spine.tpl", import.meta.url), "utf8")
   assert.match(tpl, /<toggles mechanism="…" config="…"\/>/)
   assert.match(tpl, /WITHOUT being\s+rebuilt or redeployed/)
   assert.match(tpl, /a build profile \(`-P…`\), a compiler or packaging flag/)
@@ -286,7 +286,7 @@ test("the spine order defines a toggle by the key a running instance reads, and 
 test("role: scout.md names the machine check behind each of its prohibitions", () => {
   // The role file is named by ROLE, not by step: pi resolves `agent({role: "scout"})` by FILENAME
   // inside the declared roleDirectories (ext/index.mjs), so scope/role.md would install as "role".
-  const role = readFileSync(new URL("scout.md", import.meta.url), "utf8")
+  const role = readFileSync(new URL("parts/scout.md", import.meta.url), "utf8")
   for (const rule of ["S1", "S2", "S3", "S4", "S5", "S6", "S8", "S9", "P4", "P6"]) assert.match(role, new RegExp(`machine-checked as \`${rule}\``))
   assert.match(role, /deps="none"/)   // named ONLY to forbid it: the script owns edges now (LAW 4)
   assert.match(role, /found="no"/)    // "not found" is an answer, not a guess (LAW 5)
@@ -346,8 +346,22 @@ test("P8/P9 без инвентаря молчат — нет источнико
   assert.deepEqual(checkPart({ part: parsePart(SPINE_REAL), cell: spineCell }).filter((l) => /^P[89] /.test(l)), [])
 })
 
+test("P8 судит по ДЕРЕВУ плана, а не по файлам хребтовой клетки (прогон 3c6542e7, T25)", () => {
+  // Три круга хребет писал правильный по смыслу сьют (surefire `*Test.java` под src/test/java) —
+  // и трижды получал «matches no file», потому что вызывающий передал инвентарь ХРЕБТА (pom, README),
+  // в котором тестов не бывает. Инвентарь правил P8/P9 — факты репозитория: дерево плана.
+  const tree = [...INVENTORY, "src/test/java/demo/FooResourceTest.java"]
+  assert.deepEqual(
+    spineOf(SPINE_REAL, tree).filter((l) => l.startsWith("P8 ")), [],
+    "файл под path есть в ДЕРЕВЕ — сьют зелёный, даже если в самой клетке хребта его нет")
+
+  // Реинтродукция дефекта: инвентарь, суженный до файлов хребтовой клетки, роняет правильный ответ.
+  assert.ok(spineOf(SPINE_REAL, ["pom.xml", "README.md"]).some((l) => l.startsWith("P8 ")),
+    "инвентарь из одних файлов хребта роняет правильный сьют — это и был дефект прогона")
+})
+
 test("order.spine.tpl говорит про обёртку и про расширение в match — правило видно роли, не только гардрейлу", () => {
-  const tpl = readFileSync(new URL("order.spine.tpl", import.meta.url), "utf8")
+  const tpl = readFileSync(new URL("parts/order.spine.tpl", import.meta.url), "utf8")
   assert.match(tpl, /`mvnw` or `gradlew` in the root is that runner/)
   assert.match(tpl, /A bare `mvn`\/`gradle` beside a wrapper is rejected/)
   assert.match(tpl, /The file EXTENSION is part of the name a runner matches/)

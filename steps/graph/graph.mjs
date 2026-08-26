@@ -112,8 +112,11 @@ export function suiteFor(path, suites = []) {
 //                 failure: none — total. "The graph is bad" is checkGraph's verdict, not a throw
 //   Purity:       pure
 //   Interface:    mergeGraph({ parts, computed, plan }) -> Graph
-export function mergeGraph({ parts = [], computed = {}, plan = {}, focus = null } = {}) {
+export function mergeGraph({ parts = [], computed = {}, plan = {}, focus = null, samples = [] } = {}) {
   const parsed = parts.map((p) => ({ id: p.id, kind: p.kind, part: parsePart(p.xml) }))
+  // T26: множество файлов-образцов приходит ОДНИМ списком (Set) — принадлежность узла решается
+  // здесь один раз, а не поиском по массиву на каждый узел.
+  const sampleSet = new Set(Array.isArray(samples) ? samples : [])
 
   // The spine's answers and lists. A missing spine cell is not an error — a repository may have no
   // manifest this walk recognised — but it must not become silence either: every unanswered question
@@ -208,6 +211,11 @@ export function mergeGraph({ parts = [], computed = {}, plan = {}, focus = null 
       path,
       role: m.role,
       pkg: pkgOf.get(path) || "",
+      // T26: файлы аналога — ОБРАЗЦЫ, по которым шаг 6 и план пишут новую сущность. Список приходит
+      // из .agent/anchors.json::analogue.files (шаг 2D, греп по тексту дерева) через вход шага;
+      // карте остаётся только ПОМЕТИТЬ узел — искать образец по слову здесь было бы вторым ответом
+      // на вопрос, на который уже ответил шаг 2.
+      sample: sampleSet.has(path) ? "analogue" : "",
       decls: Object.freeze(all.slice(0, DECL_CAP).map((d) => ({ kind: d.kind, name: d.name, sig: d.sig }))),
       declsMore: Math.max(0, all.length - DECL_CAP),
       kind: isTest(path) ? "test" : "",
@@ -387,8 +395,8 @@ export function checkGraph(graph, plan = {}) {
 //                          they reach the operator through err("blocked"), not a role
 //   Purity:       pure
 //   Interface:    newGraph({ parts, computedXml, plan }) -> Result<Graph, "no-suite"|"invalid-graph">
-export function newGraph({ parts = [], computedXml = "", plan = {}, focus = null } = {}) {
-  const graph = mergeGraph({ parts, computed: parseComputed(computedXml), plan, focus })
+export function newGraph({ parts = [], computedXml = "", plan = {}, focus = null, samples = [] } = {}) {
+  const graph = mergeGraph({ parts, computed: parseComputed(computedXml), plan, focus, samples })
   const blockers = checkGraph(graph, plan)
   if (!blockers.length) return ok(graph)
   const onlySuite = blockers.length === 1 && !graph.suites.length
@@ -516,7 +524,7 @@ export function graphXml(graph) {
 
   for (const m of written) {
     const head = `  <module path="${esc(m.path)}"${m.pkg ? attr("pkg", m.pkg) : ""}${m.kind ? attr("kind", m.kind) : ""}${m.kind === "test" ? attr("suite", m.suite) : ""}` +
-      `${m.component ? attr("component", m.component) : ""} level="${m.level}" fanin="${m.fanin}" fanout="${m.fanout}">`
+`${m.sample ? attr("sample", m.sample) : ""}${m.component ? attr("component", m.component) : ""} level="${m.level}" fanin="${m.fanin}" fanout="${m.fanout}">`
     L.push(head)
     if (m.role) L.push(`    <role>${esc(m.role)}</role>`)
     for (const a of m.api) L.push(`    <api${Object.entries(a).filter(([, v]) => v !== "").map(([k, v]) => attr(k, v)).join("")}/>`)

@@ -1,0 +1,35 @@
+<part cell="src~main~java~ai~labs~eddi~configs~descriptors" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/IDocumentDescriptorStore.java" io="none" tests="none">
+    <role>Java interface defining the contract for document descriptor persistence operations</role>
+    <api name="IDocumentDescriptorStore" kind="lib" scope="internal"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/IRestDocumentDescriptorStore.java" io="none" tests="none">
+    <role>JAX-RS REST interface for cross-resource document descriptor management</role>
+    <api name="GET /descriptorstore/descriptors" kind="http" scope="public"/>
+    <api name="GET /descriptorstore/descriptors/{id}" kind="http" scope="public"/>
+    <api name="GET /descriptorstore/descriptors/{id}/simple" kind="http" scope="public"/>
+    <api name="PATCH /descriptorstore/descriptors/{id}" kind="http" scope="public"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/model/DocumentDescriptor.java" io="none" api="none" tests="none">
+    <role>POJO model for document descriptors with name, description, and originId fields</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/model/ResourceDescriptor.java" io="none" api="none" tests="none">
+    <role>POJO base model for resource metadata including audit fields (createdBy, createdOn, lastModifiedBy, lastModifiedOn, deleted)</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/model/SimpleDocumentDescriptor.java" io="none" api="none" tests="none">
+    <role>Lightweight POJO model for simple document descriptors with name and description only</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/mongo/DocumentDescriptorStore.java" io="none" api="none" tests="none">
+    <role>CDI ApplicationScoped MongoDB-backed implementation of IDocumentDescriptorStore</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/ResourceUtilities.java" io="none" api="none" tests="none">
+    <role>Static utility class for validating URIs and creating document descriptors</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/descriptors/rest/RestDocumentDescriptorStore.java" io="none" tests="none">
+    <role>CDI ApplicationScoped implementation of IRestDocumentDescriptorStore delegating to IDocumentDescriptorStore</role>
+    <api name="GET /descriptorstore/descriptors" kind="http" scope="public"/>
+    <api name="GET /descriptorstore/descriptors/{id}" kind="http" scope="public"/>
+    <api name="GET /descriptorstore/descriptors/{id}/simple" kind="http" scope="public"/>
+    <api name="PATCH /descriptorstore/descriptors/{id}" kind="http" scope="public"/>
+  </module>
+</part>

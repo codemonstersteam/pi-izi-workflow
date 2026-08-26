@@ -282,21 +282,44 @@ test("M2: из нескольких домов берётся ПЛОТНЕЙШИ
   assert.equal(r.value.cells.includes("neighbour"), false, "потолок вместил обе клетки — проверка ничего не различает")
 })
 
-test("M2: тест стоит СТРОКУ, и оценка это знает — иначе освободившееся место не доедет до якорей", () => {
-  const many = (n, pre) => Array.from({ length: n }, (_, i) => ({ path: `${pre}/F${i}.java` }))
+test("M2: тест стоит СТРОКУ в ОЦЕНКЕ, но чисто тестовой клетки фокус не покупает (T24)", () => {
+  const many = (n, pre, suf = ".java") => Array.from({ length: n }, (_, i) => ({ path: `${pre}/F${i}${suf}` }))
   const cells = [
     { id: "spine", kind: "spine", files: [{ path: "pom.xml" }] },
-    { id: "t", kind: "code", files: many(8, "src/test/java/app/agent") },
+    // СМЕШАННАЯ клетка: один файл кода и семь тестов — тесты ценятся строками, и она влезает
+    { id: "mixed", kind: "code", files: [{ path: "src/main/java/app/agent/Work.java" }, ...many(7, "src/main/java/app/agent", "Test.java")] },
+    // чисто тестовая клетка рядом — она НЕ покупается, за какую бы цену её ни оценили
+    { id: "pure", kind: "code", files: many(8, "src/test/java/app/agent", "Test.java") },
   ]
-  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 12])))
-  const slices = [{ id: "s", entry: "src/test/java/app/agent/F0.java", kind: "route", nodes: ["src/test/java/app/agent/F0.java"] }]
-  // потолок мал: восемь ПОЛНЫХ узлов в него не влезут, восемь строк — влезут
+  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 4])))
+  const slices = [{ id: "s", entry: "src/main/java/app/agent/Work.java", kind: "route", nodes: ["src/main/java/app/agent/Work.java"] }]
+  // потолок мал: восемь ПОЛНЫХ узлов в него не влезут, смешанная клетка со строками тестов — влезет
   const r = newFocus({ slices, anchors: ["agent"], cells, decls, apis: {}, cap: 3400 })
   assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
-  assert.equal(r.value.cells.includes("t"), true, "тестовая клетка оценена как узлы с объявлениями")
+  assert.equal(r.value.cells.includes("mixed"), true, "тесты в смешанной клетке оценены как строки")
+  assert.equal(r.value.cells.includes("pure"), false, "чисто тестовая клетка куплена — T24 нарушен")
+  assert.ok(r.value.dropped.cells >= 1, "выбытие тестовой клетки не посчитано")
 })
 
-test("M2: ход дома идёт ДО фазы аналога — иначе звонящие аналогу выбирают бюджет", () => {
+test("T22: конус не покупает доковые и тестовые клетки — они ПОСЧИТАНЫ в dropped", () => {
+  const cells = [
+    { id: "spine", kind: "spine", files: [{ path: "pom.xml" }] },
+    { id: "core", kind: "code", files: [{ path: "src/snippets/PromptSnippet.java" }] },
+    { id: "docs", kind: "code", files: [{ path: "docs/snippets.md" }, { path: "docs/guide.md" }] },
+    { id: "suite", kind: "code", files: [{ path: "src/test/java/snippets/PromptSnippetTest.java" }] },
+  ]
+  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 8])))
+  const slices = [{ id: "s", entry: "src/snippets/PromptSnippet.java", kind: "route", nodes: ["src/snippets/PromptSnippet.java"] }]
+  // греп аналога пометил и код, и доки, и тест — покупается только код; потолок тесный,
+  // чтобы ветка «весь план влез» не отвечала вместо конуса
+  const spread = { anchors: [], analogue: { word: "PromptSnippet", files: cells.flatMap((c) => c.files.map((f) => f.path)), packages: {} } }
+  const r = newFocus({ slices, anchors: ["snippet"], spread, cells, edges: [], decls, apis: {}, cap: 5200 })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.deepEqual(r.value.cells.sort(), ["core", "spine"])
+  assert.equal(r.value.dropped.cells, 2, "доки и тест выбыли молча — T24/J18 требует счёт")
+})
+
+test("M2/T22: дом предмета — прерогатива ЗАПАСНОГО пути; при живом аналоге покупает конус", () => {
   const cells = [
     { id: "spine", kind: "spine", files: [{ path: "pom.xml" }] },
     { id: "analog", kind: "code", files: [{ path: "src/snippets/PromptSnippet.java" }] },
@@ -310,10 +333,129 @@ test("M2: ход дома идёт ДО фазы аналога — иначе �
     anchors: [{ word: "agent", files: ["src/configs/agents/AgentConfiguration.java"], packages: { "src/configs/agents": 1 } }],
     analogue: { word: "PromptSnippet", files: ["src/snippets/PromptSnippet.java"], packages: { "src/snippets": 1 } },
   }
-  // места хватает на хребет и ДВЕ клетки: дом обязан быть одной из них
-  const r = newFocus({ slices, anchors: ["agent"], spread, cells, edges, decls, apis: {}, cap: 4600 })
+  // места хватает на хребет + розетку + звонящих (≈8.0К по оценке), но НЕ на четвёртую клетку (дом)
+  // T22: аналог жив — конус (розетка + звонящие) выбирает бюджет, слово «agent» не покупает ничего
+  const cone = newFocus({ slices, anchors: ["agent"], spread, cells, edges, decls, apis: {}, cap: 9000 })
+  assert.equal(cone.ok, true, cone.ok ? "" : cone.error.detail)
+  assert.equal(cone.value.cells.includes("analog"), true, "розетка аналога не взята")
+  assert.equal(cone.value.cells.includes("caller"), true, "звонящие аналога не взяты")
+  assert.equal(cone.value.cells.includes("home"), false, "слово купило клетку при живом аналоге — T22 нарушен")
+  // предмет честно назван непрочитанным — молчания нет (J18)
+  assert.ok((cone.value.uncovered || []).some((u) => u.subject === "agent"))
+
+  // ЗАПАСНОЙ ПУТЬ (analogue: none): дом предмета по-прежнему идёт вперёд упоминаний — прежний
+  // договор M2 жив ровно там, где слову осталось чем покупать
+  const fallback = newFocus({ slices, anchors: ["agent"], cells, decls, apis: {}, cap: 4600,
+    spread: { anchors: spread.anchors, analogue: null } })
+  assert.equal(fallback.ok, true, fallback.ok ? "" : fallback.error.detail)
+  assert.equal(fallback.value.cells.includes("home"), true, "в запасном пути дом предмета потерян")
+})
+
+test("T51: слово инструмент-колонки покупает клетку, которую конус не выбрал", () => {
+  // ДЕФЕКТ прогона 25.08: R1 BRD говорит «as reference, like snippets, in agent config», но в
+  // configs/agents имени аналога нет — конус клетку не взял, AgentConfiguration выпал из карты,
+  // FRD не смог создать дельту, план остался без модуля. Покупатель — слово ИНСТРУМЕНТ-КОЛОНКИ
+  // normalized, матч по СЕГМЕНТУ пути: колонка — фраза («configuration type, agent config»).
+  const cells = [
+    { id: "spine", kind: "spine", files: [{ path: "pom.xml" }] },
+    { id: "analog", kind: "code", files: [{ path: "src/configs/snippets/PromptSnippet.java" }] },
+    { id: "agents", kind: "code", files: [{ path: "src/configs/agents/model/AgentConfiguration.java" }] },
+    { id: "noise", kind: "code", files: Array.from({ length: 3 }, (_, i) => ({ path: `src/main/other/N${i}Service.java` })) },
+  ]
+  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 8])))
+  const slices = [{ id: "s", entry: "src/configs/snippets/PromptSnippet.java", kind: "route", nodes: ["src/configs/snippets/PromptSnippet.java"] }]
+  const spread = { anchors: [], analogue: { word: "PromptSnippet", files: ["src/configs/snippets/PromptSnippet.java"], packages: {} } }
+  const normalized = [
+    "add | Glossary | configuration type, agent config | dictionary of bot terms, as reference, like snippets",
+    "implement | CRUD | Glossary | with versioning, modeled after Prompt Snippet",
+  ].join("\n")
+  // потолок: хребет + аналог + agents входят, noise (3 файла) — нет; иначе ветка «весь план»
+  // ответит вместо конуса и проверка ничего не различит
+  const over = { slices, anchors: ["glossary"], spread, cells, edges: [], decls, apis: {}, cap: 5200 }
+
+  // шов: без normalized дефект воспроизводится — клетка не берётся
+  const defect = newFocus(over)
+  assert.equal(defect.ok, true, defect.ok ? "" : defect.error.detail)
+  assert.equal(defect.value.cells.includes("agents"), false, "клетка взята и без требования — контроль не различает")
+
+  const r = newFocus({ ...over, normalized })
   assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
-  assert.equal(r.value.cells.includes("home"), true, "фаза аналога забрала бюджет раньше дома предмета")
+  assert.equal(r.value.cells.includes("agents"), true, "клетка из требования не куплена — T51 нарушен")
+  assert.equal(r.value.cells.includes("noise"), false, "слово купило постороннюю клетку — шум не ограничен")
+
+  // живой прогон 25.08: слово «agent» купило 9 клеток docs/* и planning/* — проза не носитель кода
+  const docs = newFocus({ ...over,
+    cells: [...cells, { id: "docs", kind: "code", files: [{ path: "docs/agent-configs.md" }] }] })
+  assert.equal(docs.value.cells.includes("docs"), false, "слово купило доковую клетку — конус их не покупает, и слово не должно")
+})
+
+test("T59: конус покупает ПЕРВЫМ — слово не выталкивает его клетки по потолку", () => {
+  // ДЕФЕКТ приёмки 25.08: фаза слов стояла ПЕРЕД конусом и, «дешёвая первой», занимала бюджет —
+  // дом аналога выбрасывался по потолку, фокус состоял из шума. Бюджет вмещает ЛИБО клетку
+  // конуса, ЛИБО словесную — вместе не влезают; словесная матчится КАТАЛОГОМ (src/config/…),
+  // чтобы различал именно ПОРЯДОК, а не запреты из соседних швов. До правки слово покупалось
+  // первым и выталкивало конус; после — конус первый, слово не влезает.
+  const cells = [
+    { id: "spine", kind: "spine", files: [{ path: "pom.xml" }] },
+    { id: "cone", kind: "code", files: [{ path: "src/snippets/PromptSnippet.java" }] },
+    { id: "wordy", kind: "code", files: [{ path: "src/config/ConfigHolder.java" }] },
+  ]
+  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 8])))
+  const slices = [{ id: "s", entry: "src/snippets/PromptSnippet.java", kind: "route", nodes: ["src/snippets/PromptSnippet.java"] }]
+  const spread = { anchors: [], analogue: { word: "PromptSnippet", files: ["src/snippets/PromptSnippet.java"], packages: {} } }
+  const normalized = "add | Glossary | agent config | dictionary of bot terms"
+  // потолок: spine + cone входят; spine + wordy тоже вошли бы; все три — нет
+  const over = { slices, anchors: ["glossary"], spread, cells, edges: [], decls, apis: {}, cap: 3300, normalized }
+
+  const r = newFocus(over)
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.equal(r.value.cells.includes("cone"), true, "конус выторгнут словом — T59 нарушен")
+  assert.equal(r.value.cells.includes("wordy"), false, "слово заняло бюджет конуса")
+})
+
+test("T59: слово матчит КАТАЛОГИ, не имена файлов — инфра-шум не покупается", () => {
+  // замер 25.08: .github куплен через config.yml, helm/k8s — через configmap.yaml, docker — через
+  // seed-demo-agent.sh; ни в одном НЕТ совпадающего КАТАЛОГА. До правки segHit судил имя файла.
+  const cells = [
+    { id: "spine", kind: "spine", files: [{ path: "pom.xml" }] },
+    { id: "analog", kind: "code", files: [{ path: "src/snippets/PromptSnippet.java" }] },
+    { id: "gh", kind: "code", files: [{ path: ".github/workflows/config.yml" }] },
+    { id: "helm", kind: "code", files: [{ path: "helm/configmap.yaml" }] },
+    { id: "docker", kind: "code", files: [{ path: "src/main/docker/seed-demo-agent.sh" }] },
+    // набивка: без неё план влезает ЦЕЛИКОМ и отвечает ветка «весь план», а не конус
+    { id: "filler", kind: "code", files: Array.from({ length: 3 }, (_, i) => ({ path: `src/main/other/F${i}Service.java` })) },
+  ]
+  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 8])))
+  const slices = [{ id: "s", entry: "src/snippets/PromptSnippet.java", kind: "route", nodes: ["src/snippets/PromptSnippet.java"] }]
+  const spread = { anchors: [], analogue: { word: "PromptSnippet", files: ["src/snippets/PromptSnippet.java"], packages: {} } }
+  const normalized = "add | Glossary | agent config | x"
+  const r = newFocus({ slices, anchors: ["glossary"], spread, cells, edges: [], decls, apis: {}, cap: 6500, normalized })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.equal(r.value.cells.includes("analog"), true, "клетка аналога не куплена — проверка ничего не различает")
+  for (const id of ["gh", "helm", "docker"]) {
+    assert.equal(r.value.cells.includes(id), false, `${id} куплен словом по ИМЕНИ файла — T59 нарушен`)
+  }
+})
+
+test("T59: all-data клетка (json/yaml фикстуры) — не носитель, слово её не покупает", () => {
+  // замер 25.08: 12 JSON-фикстур docs/agent-configs/agent-father слово «agent» тащило в карту
+  // мимо md-фильтра — каталог «agent-configs» содержит слово. Основание то же, что у M1.
+  const cells = [
+    { id: "spine", kind: "spine", files: [{ path: "pom.xml" }] },
+    { id: "analog", kind: "code", files: [{ path: "src/snippets/PromptSnippet.java" }] },
+    { id: "fixtures", kind: "code", files: [{ path: "docs/agent-configs/agent-father/a.agent.json" }] },
+    { id: "agents", kind: "code", files: [{ path: "src/configs/agents/AgentConfiguration.java" }] },
+    // набивка: план не должен влезать целиком (иначе ветка «весь план» скупает всё)
+    { id: "filler", kind: "code", files: Array.from({ length: 3 }, (_, i) => ({ path: `src/main/other/F${i}Service.java` })) },
+  ]
+  const decls = Object.fromEntries(cells.flatMap((c) => c.files.map((f) => [f.path, 8])))
+  const slices = [{ id: "s", entry: "src/snippets/PromptSnippet.java", kind: "route", nodes: ["src/snippets/PromptSnippet.java"] }]
+  const spread = { anchors: [], analogue: { word: "PromptSnippet", files: ["src/snippets/PromptSnippet.java"], packages: {} } }
+  const normalized = "add | Glossary | agent config | x"
+  const r = newFocus({ slices, anchors: ["glossary"], spread, cells, edges: [], decls, apis: {}, cap: 6500, normalized })
+  assert.equal(r.ok, true, r.ok ? "" : r.error.detail)
+  assert.equal(r.value.cells.includes("fixtures"), false, "all-data клетка куплена словом — T59 нарушен")
+  assert.equal(r.value.cells.includes("agents"), true, "кодовая клетка требования потеряна вместе с шумом")
 })
 
 // T07 — РОЗЕТКИ ПРИХОДЯТ ГОТОВЫМИ. Файлы аналога считает шаг 2 грепом по ТЕКСТУ и кладёт в

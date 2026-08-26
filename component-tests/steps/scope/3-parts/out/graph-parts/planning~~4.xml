@@ -1,0 +1,5 @@
+<part cell="planning~~4" kind="survey">
+  <module path="planning/langchain4j-recommendations.md" io="none" api="none" tests="none">
+    <role>langchain4j integration analysis and recommendations document for EDDI</role>
+  </module>
+</part>

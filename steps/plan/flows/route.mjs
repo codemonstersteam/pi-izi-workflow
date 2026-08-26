@@ -16,7 +16,11 @@ export function join(state, portions) {
   for (const p of portions) {
     const text = readAt(state.cwd, p.staging)
     if (!text.trim()) return { why: `поток use case ${p.id} не написан: ${p.staging} пуст — склеивать нечего` }
-    blocks.push(...[...text.matchAll(/ {2}<flow[\s\S]*?<\/flow>/g)].map((m) => m[0]))
+  // Отступ перед <flow> НЕ часть контракта: модель пишет как пишет, а склейка читает СОДЕРЖИМОЕ
+  // (замер T29: эталон без отступа давал 26-символьный пустой <flows> — регэксп требовал ровно
+  // два пробела). Порождать отступ здесь тоже нельзя — склеенный файл обязан быть байт в байт
+  // тем, что написали порции.
+  blocks.push(...[...text.matchAll(/<flow[\s\S]*?<\/flow>/g)].map((m) => m[0]))
   }
   mkdirSync(pjoin(state.cwd, ".agent", "staging"), { recursive: true })
   writeFileSync(pjoin(state.cwd, STAGED), `<flows task="">\n${blocks.join("\n")}\n</flows>\n`)

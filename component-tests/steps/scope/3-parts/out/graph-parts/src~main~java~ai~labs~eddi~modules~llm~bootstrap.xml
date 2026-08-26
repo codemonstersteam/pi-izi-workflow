@@ -1,0 +1,6 @@
+<part cell="src~main~java~ai~labs~eddi~modules~llm~bootstrap" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/modules/llm/bootstrap/LlmModule.java" io="none" tests="none">
+    <role>Quarkus startup module that registers LLM type-to-builder mappings and the LlmTask lifecycle task</role>
+    <api name="getLanguageModelApiConnectorBuilders()" kind="lib" scope="internal"/>
+  </module>
+</part>

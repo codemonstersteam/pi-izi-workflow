@@ -1,0 +1,77 @@
+<frd grammar="1" goal="add Glossary configuration type with CRUD, versioning, prompt substitution, export/import, and agent binding">
+
+  <actor name="operator" kind="human" via="HTTP REST"/>
+  <actor name="prompt-renderer" kind="system" via="internal prompt rendering pipeline"/>
+
+  <usecase id="UC1" actor="operator" goal="create a new glossary" via="HTTP POST /glossarystore/glossaries">
+    <pre>operator is authenticated</pre>
+    <post>glossary stored with system-generated id and initial version</post>
+    <step n="1">operator sends POST /glossarystore/glossaries with a list of terms, each term is a key-value pair</step>
+    <step n="2">system validates every term key: up to 64 characters, lowercase, alphanumeric and underscore only</step>
+    <step n="3">system generates a unique id, assigns initial version, and persists the glossary</step>
+    <step n="4">system returns the generated id in the Location header</step>
+    <ext id="2a" error="none" outcome="glossary not created, operator received validation error naming the invalid term key"/>
+  </usecase>
+
+  <usecase id="UC2" actor="operator" goal="read glossary or list glossaries" via="HTTP GET /glossarystore/glossaries">
+    <pre>operator is authenticated</pre>
+    <post>glossary data returned containing id, version, and terms</post>
+    <step n="1">operator sends GET /glossarystore/glossaries to list all glossaries, or GET /glossarystore/glossaries/{id} to read one</step>
+    <step n="2">system returns the glossary or list of glossaries with id, version, and terms</step>
+    <ext id="2a" error="none" outcome="glossary not returned, operator received absence response"/>
+  </usecase>
+
+  <usecase id="UC3" actor="operator" goal="update glossary creating a new version" via="HTTP PUT /glossarystore/glossaries/{id}">
+    <pre>operator is authenticated and glossary exists</pre>
+    <post>new version of glossary stored with incremented version number</post>
+    <step n="1">operator sends PUT /glossarystore/glossaries/{id} with updated terms</step>
+    <step n="2">system validates every term key: up to 64 characters, lowercase, alphanumeric and underscore only</step>
+    <step n="3">system increments the version and persists the updated glossary</step>
+    <step n="4">system confirms the update</step>
+    <ext id="1a" error="none" outcome="update rejected, operator received absence response for unknown glossary id"/>
+    <ext id="2a" error="none" outcome="update rejected, operator received validation error naming the invalid term key"/>
+  </usecase>
+
+  <usecase id="UC4" actor="operator" goal="delete glossary" via="HTTP DELETE /glossarystore/glossaries/{id}">
+    <pre>operator is authenticated and glossary exists</pre>
+    <post>glossary removed from store</post>
+    <step n="1">operator sends DELETE /glossarystore/glossaries/{id}</step>
+    <step n="2">system removes the glossary from the store</step>
+    <ext id="1a" error="none" outcome="glossary not removed, operator received absence response for unknown glossary id"/>
+  </usecase>
+
+  <usecase id="UC5" actor="operator" goal="bind or unbind glossary to agent configuration" via="HTTP agent configuration REST">
+    <pre>operator is authenticated and agent exists</pre>
+    <post>agent configuration glossaries list updated, list order defines substitution priority</post>
+    <step n="1">operator sends agent configuration update with glossary URI added to or removed from the glossaries list</step>
+    <step n="2">system persists the updated agent configuration</step>
+    <step n="3">system confirms the update</step>
+  </usecase>
+
+  <usecase id="UC6" actor="prompt-renderer" goal="substitute glossary terms in prompt" via="internal prompt rendering pipeline">
+    <pre>agent configuration contains at least one glossary URI in its glossaries list and prompt contains at least one glossary placeholder in the glossary template namespace</pre>
+    <post>all glossary placeholders in the prompt resolved with term values from bound glossaries</post>
+    <step n="1">prompt rendering encounters a placeholder in the glossary template namespace</step>
+    <step n="2">system reads the glossaries list from the agent configuration; only glossaries bound to this agent are eligible, no global fallback</step>
+    <step n="3">system loads each bound glossary and resolves the term; on key collision across glossaries the last loaded wins, list order in agent configuration is priority</step>
+    <step n="4">system substitutes the resolved value into the prompt</step>
+    <ext id="2a" error="none" outcome="prompt not rendered, rendering failed because a glossary referenced in agent configuration was removed from the store"/>
+  </usecase>
+
+  <usecase id="UC7" actor="operator" goal="export glossary in agent ZIP archive" via="HTTP export REST">
+    <pre>agent has at least one glossary bound</pre>
+    <post>agent ZIP archive contains glossary resource file and descriptor file for each bound glossary</post>
+    <step n="1">operator triggers agent export</step>
+    <step n="2">system generates a glossary resource file named {id}.glossary.json and a descriptor file named {id}.descriptor.json for each bound glossary</step>
+    <step n="3">system includes the generated files in the agent ZIP archive</step>
+  </usecase>
+
+  <usecase id="UC8" actor="operator" goal="import glossary from agent ZIP archive" via="HTTP import REST">
+    <pre>agent ZIP archive contains glossary resource files</pre>
+    <post>glossary merged into store by resource URI, existing glossary upgraded to imported version</post>
+    <step n="1">operator triggers agent import with a ZIP archive</step>
+    <step n="2">system extracts glossary resource files from the ZIP</step>
+    <step n="3">system merges each glossary by resource URI: if a glossary with the same URI already exists, the imported version upgrades the existing one</step>
+  </usecase>
+
+</frd>

@@ -1,0 +1,5 @@
+<part cell="src~test~java~ai~labs~eddi~engine~runtime~client" kind="survey">
+  <module path="src/test/java/ai/labs/eddi/engine/runtime/client/configuration/ResourceClientLibraryTest.java" io="none" api="none" tests="none">
+    <role>JUnit 5 tests for ResourceClientLibrary routing logic across configuration store types</role>
+  </module>
+</part>

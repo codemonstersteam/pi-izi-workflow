@@ -1,0 +1,50 @@
+<part cell="src~main~java~ai~labs~eddi~configs~agents" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/configs/agents/AgentSigningService.java" io="none" api="none" tests="none">
+    <role>CDI service for Ed25519-based agent key pair generation, signing, verification, and key rotation with vault-backed key storage</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/CapabilityRegistryService.java" io="none" api="none" tests="none">
+    <role>In-memory capability registry for agent skill discovery with round-robin and confidence-based lookup strategies</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/crypto/AgentPublicKey.java" io="none" api="none" tests="none">
+    <role>Record representing an agent's public key with version, validity window, and expiry tracking</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/crypto/JacksonCanonicalizer.java" io="none" api="none" tests="none">
+    <role>Utility for deterministic JSON canonicalization via recursive key sorting for cryptographic signing</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/crypto/NonceCacheService.java" io="none" api="none" tests="none">
+    <role>CDI service for nonce-based replay attack protection with cache-backed nonce tracking and clock skew tolerance</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/crypto/SignedEnvelope.java" io="none" api="none" tests="none">
+    <role>Record for signed message envelopes with sender/recipient IDs, payload, signature, and canonical form computation</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/IAgentStore.java" io="none" api="none" tests="none">
+    <role>Repository interface for agent configuration persistence and workflow-based descriptor lookup</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/IRestAgentStore.java" io="none" tests="none">
+    <role>REST resource interface for agent configuration CRUD, JSON schema retrieval, and descriptor operations</role>
+    <api name="GET /agentstore/agents/jsonSchema" kind="http" scope="public"/>
+    <api name="GET /agentstore/agents/descriptors" kind="http" scope="public"/>
+    <api name="POST /agentstore/agents/descriptors" kind="http" scope="public"/>
+    <api name="GET /agentstore/agents/{id}" kind="http" scope="public"/>
+    <api name="PUT /agentstore/agents/{id}" kind="http" scope="public"/>
+    <api name="PUT /agentstore/agents/{id}/updateResourceUri" kind="http" scope="public"/>
+    <api name="POST /agentstore/agents" kind="http" scope="public"/>
+    <api name="POST /agentstore/agents/{id}" kind="http" scope="public"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/IRestCapabilityRegistry.java" io="none" tests="none">
+    <role>REST resource interface for agent capability discovery and skill listing</role>
+    <api name="GET /capabilities/skills" kind="http" scope="public"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java" io="none" api="none" tests="none">
+    <role>Agent configuration data model with nested types for capabilities, identity, security, memory, guardrails, session management, and HITL</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/mongo/AgentStore.java" io="none" api="none" tests="none">
+    <role>MongoDB-backed agent store implementation providing CRUD operations and workflow-anchored descriptor queries</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/rest/RestAgentStore.java" io="none" api="none" tests="none">
+    <role>REST implementation for agent CRUD operations with capability registry sync, version handling, and security flag validation</role>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/configs/agents/rest/RestCapabilityRegistry.java" io="none" api="none" tests="none">
+    <role>REST implementation for capability registry queries and skill listing backed by CapabilityRegistryService</role>
+  </module>
+</part>

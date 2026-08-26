@@ -30,6 +30,8 @@ export const TEST_PATHS = Object.freeze([
   /(^|\/)tests?\//,                      // src/test/…, tests/… — the directory convention
   /(^|\/)__tests__\//,
   /Tests?\.java$/,                       // JsonResponseFormatThreadingTest.java
+  /IT\.java$/,                           // failsafe's integration convention: GlossaryCrudIT.java —
+                                         // та же пара, которой P8 судит сьюты (surefire *Test, failsafe *IT)
   /_test\.go$/,
   /(^|\/)test_[^/]*\.py$|_test\.py$/,
   /\.(spec|test)\.[jt]sx?$/,

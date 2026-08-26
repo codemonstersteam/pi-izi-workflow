@@ -142,5 +142,12 @@ export function portion(raw) {
   // правило про якоря, ни правило про образец, и лишний блок вытесняет задачу в середину наряда,
   // которую слабая модель читает по диагонали (docs/plan-design.md §1).
   if (raw.classes !== undefined && !Array.isArray(raw.classes)) return fail("portion", `порция ${raw.id}: classes не список`)
-  return ok({ id: raw.id, staging: raw.staging, status: raw.status, round: raw.round, blockers: raw.blockers || "", classes: raw.classes || [] })
+  // T69 — СПРАВКА LOOKUP и её счётчик. `lookup` — текст ответа рельсы (несёт следующий наряд,
+  // очищается конвертом роли); `lookups` — сколько справок выдано, страж budgets.lookupLoops.
+  // До T69 поля выбрасывались здесь молча: fold клал ответ, форма его стирала — и наряд
+  // уходил без путей, а живой круг 26.08 гонял 14 запусков по 488k токенов.
+  if (raw.lookup !== undefined && raw.lookup !== "" && !isStr(raw.lookup)) return fail("portion", `порция ${raw.id}: lookup не строка`)
+  if (raw.lookups !== undefined && (!Number.isInteger(raw.lookups) || raw.lookups < 0))
+    return fail("portion", `порция ${raw.id}: lookups «${raw.lookups}» — целое от 0`)
+  return ok({ id: raw.id, staging: raw.staging, status: raw.status, round: raw.round, blockers: raw.blockers || "", classes: raw.classes || [], lookup: raw.lookup || "", lookups: raw.lookups || 0 })
 }

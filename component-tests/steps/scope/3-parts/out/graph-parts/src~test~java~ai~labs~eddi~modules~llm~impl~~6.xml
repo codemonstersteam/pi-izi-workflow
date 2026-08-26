@@ -1,0 +1,23 @@
+<part cell="src~test~java~ai~labs~eddi~modules~llm~impl~~6" kind="survey">
+  <module path="src/test/java/ai/labs/eddi/modules/llm/impl/LlmTaskAuditLedgerTest.java" io="none" api="none" tests="none">
+    <role>Unit tests for LlmTask audit ledger token usage, cost accumulation, tool calls, cascade costs, HITL resume evidence, and no-collector behaviour</role>
+  </module>
+  <module path="src/test/java/ai/labs/eddi/modules/llm/impl/LlmTaskBranchTest.java" io="none" api="none" tests="none">
+    <role>Unit tests covering LlmTask branch paths: snippet/global-var injection, convertToObject, response metadata, response object name, addToOutput=false, channel tags, history limits, template skip params, token-aware context, model name resolution, summary config, streaming with addToOutput=false, and template exception handling</role>
+  </module>
+  <module path="src/test/java/ai/labs/eddi/modules/llm/impl/LlmTaskConfigureTest.java" io="none" api="none" tests="none">
+    <role>Unit tests for LlmTask configuration paths (URI validation, WorkflowConfigurationException) and execute edge cases (null data, null actions, action matching, task ID fallback, exception wrapping)</role>
+  </module>
+  <module path="src/test/java/ai/labs/eddi/modules/llm/impl/LlmTaskCoverage2Test.java" io="none" api="none" tests="none">
+    <role>Unit tests for LlmTask RAG context injection, vector RAG error handling, null user input, HTTP-call RAG, snippet/vars injection, convertToObject with/without schema, responseObjectName, identity masking and counterweight with channel tags, token-aware context, conversation summarizer (credentials, explicit provider, existing summary, error swallowing), cascade (legacy, agent mode, event sink streaming, token usage surfacing, audit metadata), and HITL resume responseObjectName default</role>
+  </module>
+  <module path="src/test/java/ai/labs/eddi/modules/llm/impl/LlmTaskCoverageTest.java" io="none" api="none" tests="none">
+    <role>Unit tests for LlmTask guards (null actions, action matching, match-all), tool approvals and HITL config overrides, JSON policy threading in agent mode, standard branch paths (agent result null/non-null, legacy fallback, streaming sync fallback, addToOutput=false), cascade disabled/empty steps/agent-mode skip, convertToObject JSON/array/string/null deserialization, tool mode output behaviour, responseMetadataObjectName, and audit collector keys</role>
+  </module>
+  <module path="src/test/java/ai/labs/eddi/modules/llm/impl/LlmTaskDeepBranchTest.java" io="none" api="none" tests="none">
+    <role>Unit tests for LlmTask deep branch coverage: early return paths, wildcard action matching, configure() URI validation, identity and descriptor, audit collector branches, addToOutput logic, extractUserInput, task ID fallback, streaming sync fallback, and convertToObject JSON parsing</role>
+  </module>
+  <module path="src/test/java/ai/labs/eddi/modules/llm/impl/LlmTaskExtendedBranchTest.java" io="none" api="none" tests="none">
+    <role>Unit tests for LlmTask extended branch coverage II: resolveModelName fallbacks, convertToObject plain text fallback, responseMetadataObjectName, addToOutput=false suppressing streaming, prompt snippets injection, global vars injection, channel tag resolution, responseSchema with convertToObject, responseObjectName fallback, conversationHistoryLimit, maxContextTokens token-aware branch, and IOException wrapping</role>
+  </module>
+</part>

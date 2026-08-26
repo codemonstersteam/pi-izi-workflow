@@ -1,0 +1,2 @@
+{"step":"4-data-failures","model":"qwen-token-plan/qwen3.8-max-preview","date":"2026-08-26","rounds":2,"result":"green",
+"notes":"Круг 1: F16 — поле resourceType вне замкнутого перечня R12 (id+version+terms). Круг 2: починено, суд зелёный. 2 failure-строки (IllegalArgumentException/400, ResourceNotFoundException/404), 1 nfr (Caffeine TTL из brd.md)."}

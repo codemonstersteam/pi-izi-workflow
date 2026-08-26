@@ -1,0 +1,9 @@
+<part cell="src~main~java~ai~labs~eddi~backup~IResourceSource.java" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" io="none" tests="none">
+    <role>Interface defining data-source contracts for backup reads of agents, workflows, snippets, and extensions, with nested record types</role>
+    <api name="readAgent()" kind="lib" scope="internal"/>
+    <api name="readWorkflows()" kind="lib" scope="internal"/>
+    <api name="readSnippets()" kind="lib" scope="internal"/>
+    <api name="close()" kind="lib" scope="internal"/>
+  </module>
+</part>

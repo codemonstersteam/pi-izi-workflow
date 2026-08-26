@@ -1,0 +1,6 @@
+<part cell="src~main~java~ai~labs~eddi~modules~llm~impl~CounterweightService.java" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/modules/llm/impl/CounterweightService.java" io="none" tests="none">
+    <role>CDI application-scoped service that applies counterweight safety configurations to LLM system messages using prompt snippets, with activation-level metrics tracking</role>
+    <api name="apply(systemMessage, config, channelTag)" kind="lib" scope="internal"/>
+  </module>
+</part>

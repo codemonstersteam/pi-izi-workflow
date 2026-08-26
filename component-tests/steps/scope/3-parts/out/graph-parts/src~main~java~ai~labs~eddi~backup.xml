@@ -1,0 +1,24 @@
+<part cell="src~main~java~ai~labs~eddi~backup" kind="survey">
+  <module path="src/main/java/ai/labs/eddi/backup/IResourceSource.java" io="none" tests="none">
+    <role>Interface and data records defining the contract for reading agent, workflow, and snippet sources during backup operations</role>
+    <api name="readAgent()" kind="lib" scope="internal"/>
+    <api name="readWorkflows()" kind="lib" scope="internal"/>
+    <api name="readSnippets()" kind="lib" scope="internal"/>
+    <api name="close()" kind="lib" scope="internal"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/IRestExportService.java" io="none" tests="none">
+    <role>JAX-RS interface for exporting agents as zip archives</role>
+    <api name="GET /backup/export/{agentFilename}" kind="http" scope="public"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/IRestImportService.java" io="none" tests="none">
+    <role>JAX-RS interface for importing agents and syncing with remote EDDI instances</role>
+    <api name="POST /backup/import/initialAgents" kind="http" scope="public"/>
+    <api name="POST /backup/import/sync/preview" kind="http" scope="public"/>
+    <api name="POST /backup/import/sync" kind="http" scope="public"/>
+  </module>
+  <module path="src/main/java/ai/labs/eddi/backup/IZipArchive.java" io="none" tests="none">
+    <role>Interface defining zip and unzip operations for backup archive management</role>
+    <api name="createZip()" kind="lib" scope="internal"/>
+    <api name="unzip()" kind="lib" scope="internal"/>
+  </module>
+</part>

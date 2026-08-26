@@ -69,4 +69,12 @@ export function familyOf(state) {
 export const knownOf = (state) =>
   [...String(readAt(state.cwd, GRAPH)).matchAll(/<module\b[^>]*\bpath="([^"]+)"/g)].map((m) => m[1])
 export const frdOf = (state) => parseFrd(readAt(state.cwd, FRD))
+// FUNCTION_CONTRACT: seedsOf — множество seed-модулей из ripple.xml (существующие файлы изменения)
+//   Antecedent:   ripple.xml может отсутствовать или быть пустым — тогда множество пусто и T6 молчит
+//   Consequent:   success: Set<путь> — теги <module path="…" seed="yes"> в любом порядке атрибутов
+//   Purity:       io (fs)
+export const seedsOf = (state) =>
+  new Set([...String(readAt(state.cwd, RIPPLE)).matchAll(/<module\b([^>]*)>/g)]
+    .filter((m) => /\bseed="yes"/.test(m[1]))
+    .map((m) => (m[1].match(/\bpath="([^"]+)"/) || [])[1]).filter(Boolean))
 export { readAt }

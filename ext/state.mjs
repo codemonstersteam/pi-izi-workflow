@@ -22,14 +22,17 @@ import { verdict as newVerdict, portion as newPortion } from "./values.mjs"
 export const STEPS = [
   "task", "brd", "scope", "graph", "intake", "weight", "ripple",
   "brd/normalize", "brd/anchors",
+  "scope/plan", "scope/focus", "scope/parts",
   "plan/values", "plan/tree", "plan/flows",
 ]
 
 // Бюджеты целиком, а не три поля. intakeLoops куплен прогоном e132f0a1; checkpointRetries держит
-// переспрос оператору; maxParallel ПОНИЖАЕТ литеральную ширину роя, поднять её он не может.
+// переспрос оператору; maxParallel ПОНИЖАЕТ литеральную ширину роя, поднять её не может.
+// lookupLoops (T69): lookup-круг «бесплатный» для роли, потому страж intakeLoops его не видел —
+// 14 запусков и 488k токенов одним вечным кругом (26.08); теперь у рельсы свой именованный предел.
 export const DEFAULT_BUDGETS = Object.freeze({
   loops: 3, intakeLoops: 6, questionRounds: 5, checkpointRetries: 2,
-  maxParallel: 8, reviewRounds: 2, orderCap: 800000,
+  maxParallel: 8, reviewRounds: 2, orderCap: 800000, lookupLoops: 2,
 })
 
 const STATE_PATH = ".agent/state.json"
@@ -91,7 +94,7 @@ function shape(raw) {
     const q = raw.question
     if (!isStr(q.name)) return err("state", "вопрос без имени паузы — хост ключует паузу по имени, и второй вопрос до оператора не доедет")
     if (!Array.isArray(q.items) || !q.items.length) return err("state", "вопрос без items — отвечать будет не по чему")
-    question = { of: q.of || "", name: q.name, items: [...q.items], retry: Number.isInteger(q.retry) ? q.retry : 1 }
+    question = { of: q.of || "", name: q.name, items: [...q.items], subject: q.subject || "", retry: Number.isInteger(q.retry) ? q.retry : 1 }
   }
 
   const asked = Number.isInteger(raw.asked) ? raw.asked : 0
@@ -110,21 +113,32 @@ function shape(raw) {
 //   BUG_FIX_CONTEXT: незаконченный черновик, оставшийся на пути доставки, судится как ответ ЭТОГО
 //                 круга — круг потрачен, шаг закрыт непочиненным. Поэтому staging чистится ЗДЕСЬ,
 //                 один раз и до всего, а не «когда-нибудь в шаге».
-export function start({ cwd, run, key = "", budgets = {} } = {}) {
+export function start({ cwd, run, key = "", budgets = {}, resume = false } = {}) {
   const built = shape({ cwd, run, key, budgets, closed: [], at: {}, portions: [], asked: 0, verdicts: [] })
   if (!built.ok) return built
   const carried = []
   const prev = join(cwd, PREV)
   mkdirSync(prev, { recursive: true })
-  for (const rel of [".agent/answers.md", ".agent/pending.json", ".agent/ask.xml", STATE_PATH]) {
+
+  // T39 — ОТВЕТЫ ОПЕРАТОРА НЕ СТИРАЮТСЯ ПРИ RESUME: если на диске есть артефакты (brd.md,
+  // appgraph.xml...), это ПРОДОЛЖЕНИЕ прогона, а не чистый старт. answers.md и pending.json
+  // остаются на месте — оператор не должен отвечать на один вопрос дважды.
+  // ЧИСТЫЙ СТАРТ (нет артефактов): старые ответы уезжают в prev/ — это прошлый прогон.
+  const hasArtifacts = existsSync(join(cwd, ".agent/brd.md")) || existsSync(join(cwd, ".agent/appgraph.xml"))
+  const archive = resume || hasArtifacts ? [] : [".agent/answers.md", ".agent/pending.json", ".agent/ask.xml", STATE_PATH]
+  for (const rel of archive) {
     const src = join(cwd, rel)
     if (!existsSync(src)) continue
     renameSync(src, join(prev, rel.split("/").pop()))
     carried.push(rel)
   }
-  const stg = join(cwd, STAGING)
-  if (existsSync(stg)) { for (const f of readdirSync(stg)) rmSync(join(stg, f), { recursive: true, force: true }) }
-  mkdirSync(stg, { recursive: true })
+
+  // STAGING БОЛЬШЕ НЕ ЧИСТИТСЯ НИКОГДА — resume им и занимается. Приёмка 26.08: каждый запуск
+  // стирал staging → recon видел пустоту → ВСЕ закрытые подшаги перегонялись заново (+2 вызова
+  // на каждую станцию приёмки). Recon уже различает: файл в staging → green (пропусти), нет →
+  // todo (запусти). Мусор прошлого прогона невозможен по построению: либо файл от прошлого
+  // круга (green), либо его нет (todo). Чистое перезадание — удалить staging руками (рунбук).
+  mkdirSync(join(cwd, STAGING), { recursive: true })
   return ok({ ...built.value, carried })
 }
 

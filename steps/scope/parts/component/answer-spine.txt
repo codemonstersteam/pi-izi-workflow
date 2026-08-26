@@ -1,0 +1,9 @@
+<part cell="spine" kind="spine">
+  <artifact name="fruit-demo" root="."/>
+  <suites found="no"/>
+  <build cmd="mvn package"/>
+  <toggles found="no"/>
+  <branching found="no"/>
+  <contract found="no"/>
+  <integrations found="no"/>
+</part>

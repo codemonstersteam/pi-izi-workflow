@@ -25,6 +25,11 @@
 //             newPlan(input) -> Result<Plan, "no-files">
 
 import { ok, err } from "../../../core/result.mjs"
+import { TEST_PATHS } from "../focus/slices.mjs"
+
+// «Тест» как ПУТЬ — правило живёт в slices.mjs (TEST_PATHS) и здесь только подставляется: у плана
+// нет своего определения теста, и второго места, где оно было бы написано, нет.
+const isTestPath = (p) => TEST_PATHS.some((re) => re.test(p))
 
 export const CELL_FILES = 20
 export const CELL_BYTES = 200 * 1024
@@ -205,8 +210,13 @@ export function newPlan({ files = [], spine = [], subjects = [], marked = [], ce
   for (const c of chunks) {
     const hits = c.files.filter(hit)
     if (!hits.length || hits.length > c.files.length * HOME_DENSITY) { sorted.push(c); continue }
-    for (const f of hits) sorted.push({ id: take(cellId(f.path)), files: [f] })
-    const left = c.files.filter((f) => !hit(f))
+    // ПОМЕЧЕННЫЙ ТЕСТ НЕ СТАНОВИТСЯ МИКРО-КЛЕТКОЙ (T24): путь теста модулю даёт его дом-клетка
+    // (`<test path>` в части), команду сьюта — хребет; клетка на один тестовый файл не сообщает
+    // рою ничего нового. Замер 3c6542e7: ~15 тестовых клеток, купленных роем, не дали intake
+    // ни одного факта. Тест остаётся в остатке клетки — план по-прежнему покрывает все файлы.
+    const micro = hits.filter((f) => !isTestPath(f.path))
+    for (const f of micro) sorted.push({ id: take(cellId(f.path)), files: [f] })
+    const left = c.files.filter((f) => !hit(f) || isTestPath(f.path))
     if (left.length) sorted.push({ id: c.id, files: left })     // empty is unreachable: it would be 100% marked
   }
 

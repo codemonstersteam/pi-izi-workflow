@@ -1,0 +1,5 @@
+<part cell="planning~multi-tenancy-plan.md" kind="survey">
+  <module path="planning/multi-tenancy-plan.md" io="none" api="none" tests="none">
+    <role>architecture design document describing current multi-tenancy gaps, siloed/shared deployment strategies, and phased implementation plan for the EDDI system</role>
+  </module>
+</part>

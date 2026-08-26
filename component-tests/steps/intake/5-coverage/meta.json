@@ -1,0 +1,2 @@
+{"step":"5-coverage","model":"qwen-token-plan/qwen3.8-max-preview","date":"2026-08-26","result":"green-с-маршрутом",
+"notes":"Артефакт лёг с первого вызова. RTM-суд: rtm:backward-зеркало (нет model/Glossary.java) и rtm:backward-кластер R1 (11 соседей без со-владельца) → маршрутизация на owners. Owners-починка 16:05 добавила model/Glossary.java и со-владельцев (в т.ч. AbstractBackupService на R3), coverage закрыт при возобновлении."}

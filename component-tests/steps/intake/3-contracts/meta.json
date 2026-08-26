@@ -1,0 +1,8 @@
+{
+  "step": "3-contracts",
+  "model": "qwen-token-plan/qwen3.8-max-preview",
+  "date": "2026-08-24",
+  "rounds": 1,
+  "result": "green",
+  "notes": "13 дельт (7 файлов Added, из них 5 new=yes по образцу PromptSnippet), 8 сценариев сплетены, touched 0. Суд F17/F19 зелёный с первого круга. RTM пересобран из owners-артефакта: 16 строк. F19 подтвердил: у каждого владельца RTM есть дельта."
+}

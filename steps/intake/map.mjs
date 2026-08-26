@@ -211,6 +211,12 @@ export function parseMap(xml) {
   const pkgs = new Map()
   const decls = new Map()
   const nodeSystems = new Map()
+  // T61 — РОЛЬ И API КАК ДАННЫЕ: наряд пласта B (order.mjs::{MAP}) несёт их модели — «что этот
+  // файл делает», а не только путь. До этого наряд обещал карту и доставлял список путей: модель
+  // выдумывала новые сервисы для функций, которые уже лежали в карте в двух шагах (замер 25.08:
+  // GlossarySubstitutionService при живой роли MemoryItemConverter).
+  const roles = new Map()
+  const apis = new Map()
   for (const m of s.matchAll(elem("module"))) {
     const a = attrs(m[1])
     if (!a.path) continue
@@ -219,14 +225,19 @@ export function parseMap(xml) {
     if (a.kind === "test") tests.add(path)
     if (/<api\b/.test(m[2] || "")) entries.add(path)
     if (a.pkg) pkgs.set(path, String(a.pkg))
-    const said = [...String(m[2] || "").matchAll(tag("decl"))]
+    const body = String(m[2] || "")
+    const role = (body.match(/<role>([\s\S]*?)<\/role>/) || ["", ""])[1].replace(/\s+/g, " ").trim()
+    if (role) roles.set(path, role)
+    const said = [...body.matchAll(tag("decl"))]
       .map((d) => attrs(d[1]))
       .filter((d) => d.name)
       .map((d) => Object.freeze({ kind: d.kind || "", name: d.name, sig: d.sig || "" }))
     if (said.length) decls.set(path, Object.freeze(said))
-    const sys = [...new Set([...String(m[2] || "").matchAll(tag("io"))].map((io) => attrs(io[1]).system).filter(Boolean))]
+    const apiNames = [...new Set([...body.matchAll(/<api\b[^>]*\bname="([^"]*)"/g)].map((x) => x[1]).filter(Boolean))]
+    if (apiNames.length) apis.set(path, Object.freeze(apiNames))
+    const sys = [...new Set([...body.matchAll(tag("io"))].map((io) => attrs(io[1]).system).filter(Boolean))]
     if (sys.length) nodeSystems.set(path, Object.freeze(sys))
-    const own = [...String(m[2] || "").matchAll(tag("test"))]
+    const own = [...body.matchAll(tag("test"))]
       .map((t) => attrs(t[1]))
       .filter((t) => t.path)
       .map((t) => Object.freeze({ path: full(t.path), suite: t.suite || "" }))
@@ -292,7 +303,7 @@ export function parseMap(xml) {
   const ba = b ? attrs(b.replace(/^<build\b/, "").replace(/\/?>$/, "")) : {}
   const build = Object.freeze({ cmd: ba.cmd || "", compile: ba.compile || "" })
 
-  return { nodes, tests, entries, edges, count: nodes.size, nodeTests, suites, spine, cycles, pkgs, decls, nodeSystems, langs, build }
+  return { nodes, tests, entries, edges, count: nodes.size, nodeTests, suites, spine, cycles, pkgs, decls, nodeSystems, langs, build, roles, apis }
 }
 
 // FUNCTION_CONTRACT: mapMeasure — the price of handing this map to a role

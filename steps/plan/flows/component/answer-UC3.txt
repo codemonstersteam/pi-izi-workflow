@@ -1,0 +1,18 @@
+<flows task="DOS-535">
+<flow id="S3" uc="UC3" goal="update an existing glossary">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/IRestGlossaryStore.java" in="PUT /glossarystore/glossaries/{id} (terms)" out="PUT /glossarystore/glossaries/{id} (terms)" role="проношу" closes="UC3/1"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="PUT /glossarystore/glossaries/{id} (terms)" out="Glossary (черновик обновления)" role="порождаю" closes="UC3/1"/>
+    <step n="3" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="Glossary (черновик обновления)" out="ключи термина проверены" role="порождаю" closes="UC3/2"/>
+    <step n="4" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="ключи термина проверены" out="Glossary (обновлён, version+1)" role="порождаю" closes="UC3/3"/>
+    <step n="5" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="Glossary (обновлён, version+1)" out="кэш глоссариев сброшен" role="проношу" closes="UC3/3"/>
+    <step n="6" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="кэш глоссариев сброшен" out="200 (terms, version)" role="порождаю" closes="UC3/4"/>
+  </flow>
+<flow id="S3a" uc="UC3" branch="2a" goal="term key rejected on update">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="Glossary (черновик обновления)" out="TERM_KEY_INVALID" role="отвергаю" closes="UC3/2a"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="TERM_KEY_INVALID" out="400 TERM_KEY_INVALID" role="проношу" closes="UC3/2a"/>
+  </flow>
+<flow id="S3b" uc="UC3" branch="3a" goal="glossary to update does not exist">
+    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="ключи термина проверены" out="GLOSSARY_NOT_FOUND" role="отвергаю" closes="UC3/3a"/>
+    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="GLOSSARY_NOT_FOUND" out="404 GLOSSARY_NOT_FOUND" role="порождаю" closes="UC3/3a"/>
+  </flow>
+</flows>
