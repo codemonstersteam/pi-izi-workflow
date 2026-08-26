@@ -47,14 +47,14 @@ test("the eddi etalon: 18 R lines, the analogue's line, four anchors — byte fo
   const rs = numbered(NORMALIZED)
   assert.equal(rs.ok, true)
   assert.equal(rs.value.length, 18, "the table is 18 rows — the assembler lost or invented one")
-  assert.equal(rs.value[0], "R1 add | Glossary | configuration type | dictionary of bot terms, CRUD with " +
-    "versioning, like Prompt Snippet, resource type `eddi://ai.labs.glossary`")
-  assert.equal(rs.value[17].startsWith("R18 export | Glossary | agent ZIP archive |"), true,
+  assert.equal(rs.value[0], "R1 create | Glossary | new configuration type | dictionary of bot terms, CRUD with " +
+    "versioning, based on Prompt Snippet, resource type `eddi://ai.labs.glossary`")
+  assert.equal(rs.value[17].startsWith("R18 define | export file name | agent ZIP archive |"), true,
     "the R number must equal the row number of the table — step 6 quotes `values` of THAT row")
 
   const subs = subjectsOf(NORMALIZED, HITS, ANALOGUE_WORD)
-  assert.deepEqual(subs.value, ["Glossary", "terms", "substitution", "PromptSnippet"],
-    "the measured set of 23.08.2026: 104 files of 1854 marked, coverage 62 of 62")
+  assert.deepEqual(subs.value, ["Glossary", "substitution", "versioning", "collision", "PromptSnippet"],
+    "the etalon's own subjects[] line — the reworked table moved `terms` (32 files) over the threshold and brought `versioning`/`collision` in")
 
   const text = brdText(rs.value, ANALOGUE_LINE, subs.value)
   assert.equal(text.ok, true)

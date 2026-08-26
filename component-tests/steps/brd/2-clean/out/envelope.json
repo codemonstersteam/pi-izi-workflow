@@ -1,5 +1,5 @@
 {
- "track": "ok",
  "artifact": ".agent/staging/normalized.clean.md",
- "requirements": 18
+ "requirements": 18,
+ "track": "ok"
 }

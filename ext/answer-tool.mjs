@@ -10,17 +10,23 @@
 //             остался (тикет T20).
 // Interface:  iziAnswer
 
-import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import { Type } from "typebox"
 import { newExchange, newAnswers, stripOrdinal, looksLikeTemplate } from "../core/answers.mjs"
+import { writeAnswer } from "../bin/write-answer.mjs"
 
-const at = (root, rel) => join(root, rel)
-const readIfExists = (root, rel) => (existsSync(at(root, rel)) ? readFileSync(at(root, rel), "utf8") : "")
-const runRoot = (context) => (context && context.run && context.run.cwd) || process.cwd()
+// T34 — parsedAnswers: парсер exchange-блока из строки параметра тула.
+// newAnswers уже умеет читать текст с <exchange>-блоками (core/answers.mjs:89-103);
+// здесь только подстава: params.exchange может прийти с обёрткой или без.
+const parsedAnswers = (text) => {
+  const raw = String(text || "").trim()
+  const wrapped = raw.startsWith("<exchange>") ? raw : `<exchange>\n${raw}\n</exchange>`
+  return newAnswers(wrapped)
+}
 const ANSWERS_PATH = ".agent/answers.md"
 const PENDING_PATH = ".agent/pending.json"
-const ASK_PATH = ".agent/ask.xml"
+const at = (root, rel) => join(root, rel)
 
 export const iziAnswer = {
   name: "izi_answer",

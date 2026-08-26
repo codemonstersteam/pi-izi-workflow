@@ -29,7 +29,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
-import { skipDir, skipFile } from "../../survey-plan/skip.mjs"
+import { skipDir, skipFile } from "../../scope/skip.mjs"
 import { MAX_BYTES } from "../hits/hits.mjs"
 
 // THE PACKAGE SUMMARY IS WHAT STEP 3 ACTUALLY READS, and an order has room for lines, not for a list

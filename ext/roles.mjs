@@ -30,7 +30,7 @@ import { join } from "node:path"
 export const ROLES = Object.freeze({
   "brd/normalize": Object.freeze(["normalizer", "cleaner"]),
   "brd/anchors":   Object.freeze(["analogue"]),
-  "scope":         Object.freeze(["scout"]),
+  "scope/parts":   Object.freeze(["scout"]),
   "intake":        Object.freeze(["intake"]),
   "plan/tree":     Object.freeze(["tree-designer"]),
   "plan/values":   Object.freeze(["valuer"]),

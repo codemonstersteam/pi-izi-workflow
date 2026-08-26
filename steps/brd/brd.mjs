@@ -13,6 +13,7 @@
 //             place that knows what a row is.
 // Interface:  numbersIn(text) -> Set<string>
 //             parseBrd(text) -> { requirements, subjects, analogue }
+//             closedSets(text) -> [{ req, line, entity, names }] — замкнутые «only … + …» перечни
 //             analogueTerm(text) -> string
 //
 // ЧТО ОТСЮДА УШЛО И ПОЧЕМУ (тикет 03). Здесь жили `newFit`, `newRequirement`, `newSubjects`,
@@ -150,4 +151,28 @@ export function parseBrd(text) {
     if (cur && line.trim() && !service.test(line)) cur.statement = (cur.statement + " " + line.trim()).trim()
   })
   return { requirements, subjects, analogue }
+}
+
+// FUNCTION_CONTRACT: closedSets — замкнутые перечисления из строк требования
+//   Input:        text — байты brd.md
+//   Antecedent:   — (тотален: строк без «only … + …» может быть сколько угодно)
+//   Consequent:   success: [{ req, line, entity, names }] — по одной на строку требования, чей
+//                 столбец values открывается словом «only» и несёт перечень через « + »;
+//                 entity — столбец object (предмет перечня); names приведены к нижнему регистру.
+//                 Пусто — замкнутых перечислений в требовании нет, и суд шага 6 молчит.
+//   Purity:       pure
+// T54: перечень замкнуло САМО требование — слово «only» пришло из TASK.md оператора, не из вкуса
+// суда. Замер 25.08 (eddi): R13 «only id + version + terms» закрыла поля Glossary, а FRD молча
+// дописал resourceType — решение о поле принял никто. Суд читает перечень ДОСЛОВНО и только там,
+// где требование его действительно закрыло.
+export function closedSets(text) {
+  const out = []
+  for (const r of parseBrd(text).requirements) {
+    const cols = String(r.statement || "").split("|").map((c) => c.trim())
+    const m = /\bonly\s+([A-Za-z_][\w-]*(?:\s*\+\s*[A-Za-z_][\w-]*)+)/.exec(cols[3] || "")
+    if (!m) continue
+    out.push({ req: r.id, line: r.line, entity: cols[1] || "",
+      names: new Set(m[1].split("+").map((s) => s.trim().toLowerCase()).filter(Boolean)) })
+  }
+  return out
 }

@@ -54,11 +54,10 @@ test("наряд починки: задача, прошлый ответ и та
   assert.ok(!r.text.includes("EXAMPLE, from another domain"), "пример уже был показан на первом заходе")
 })
 
-test("отказ вместо наряда с дырой: нет таблицы действий · починка без прошлого ответа · слот не подставлен", () => {
+test("отказ вместо наряда с дырой: нет таблицы действий · слот не подставлен", () => {
   const cases = [
     [orderText({ cwd: run({ rows: null }) }), /normalized\.md/],
     [orderText({ cwd: run({ rows: "   \n\n" }) }), /normalized\.md/],
-    [orderText({ cwd: run() }, { feedback: "T4 analogue: …" }), /прошлого ответа/],
     [fill("нужен {WORDS} и {STAGING}", { WORDS: HITS }), /слот/],
   ]
   for (const [r, why] of cases) {
@@ -67,6 +66,15 @@ test("отказ вместо наряда с дырой: нет таблицы 
     assert.match(r.why, why)
   }
   assert.match(fill("нужен {WORDS} и {STAGING}", { WORDS: HITS }).why, /STAGING/, "отказ называет ИМЯ пропавшего слота")
+})
+
+test("починка без прошлого — ПЕРВЫЙ наряд, не отказ (dead-end снят, прогон T31)", () => {
+  // Роль аналога написала пусто → круг починки → previous пуст. Прежний код ОТКАЗЫВАЛ —
+  // и прогон умирал. Теперь строится ПЕРВЫЙ наряд: роль пробует снова с чистого листа.
+  const r = orderText({ cwd: run() }, { feedback: "T4 analogue: …" })
+  assert.ok(!r.why, `ожидался наряд, а приехал отказ: ${r.why}`)
+  assert.ok(r.text, "наряд без текста")
+  assert.equal(r.staging, ".agent/staging/analogue.txt")
 })
 
 test("МОЛЧАНИЕ: таблицы попаданий нет — отказ, а не наряд с пустым разделом", () => {

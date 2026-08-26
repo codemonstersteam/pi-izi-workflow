@@ -66,10 +66,12 @@ export function orderText(state, { rows = "", previous = "", feedback = "" } = {
   if (!lines.ok) {
     return { why: `${NORMALIZED} не разбирается в строки требований (${lines.error.cls}): ${lines.error.detail}` }
   }
-  const fix = Boolean(String(feedback).trim())
-  if (fix && !String(previous).trim()) {
-    return { why: "наряд починки без прошлого ответа роли — чинить нечего: находка называет строку, которой в наряде не будет" }
-  }
+  let fix = Boolean(String(feedback).trim())
+  // DEAD-END ПОЧИНКИ БЕЗ ПРОШЛОГО — НЕ ОТКАЗ, А ПЕРВЫЙ НАРЯД (прогон T31, 24.08.2026):
+  // роль аналога написала пусто → круг починки → previous пуст → отказ → смерть прогона.
+  // Роль ОБЯЗАНА попробовать снова с чистого наряда; находки прошлого круга не пропадают —
+  // они входят в feedback, который полоса передаёт и в первый наряд.
+  if (fix && !String(previous).trim()) fix = false
   const hit = tableAt(cwd, { rows: table, recount: !fix })
   if (!String(hit.text).trim()) {
     return { why: `${HITS} пуста — аналог выбирается ИЗ ТАБЛИЦЫ ПОПАДАНИЙ, а без неё роль назовёт слово, счёт которого никто не считал` }

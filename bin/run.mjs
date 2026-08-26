@@ -24,7 +24,7 @@
 // тратится. Роли модель зовут сами, изнутри прогона. Образец такого вызова — тест самого хоста
 // `packages/core/test/alias-extensions.test.ts:16-24`: рукодельный API из семи методов и контекст из
 // трёх полей.
-import { readFileSync, existsSync } from "node:fs"
+import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
@@ -55,11 +55,11 @@ export function modelRef(settingsPath = join(AGENT_DIR, "settings.json")) {
 //   Purity:       pure
 export function flags(argv = []) {
   const get = (name) => (argv.find((a) => a.startsWith(`--${name}=`)) || "").split("=").slice(1).join("=")
-  return { cwd: get("cwd"), key: get("key"), go: argv.includes("--go") }
+  return { cwd: get("cwd"), key: get("key"), stopAfter: get("stop-after"), go: argv.includes("--go") }
 }
 
 async function main() {
-  const { cwd: rawCwd, key, go } = flags(process.argv.slice(2))
+  const { cwd: rawCwd, key, stopAfter, go } = flags(process.argv.slice(2))
   const cwd = rawCwd ? resolve(rawCwd) : process.cwd()
   if (!existsSync(join(cwd, "workflows", "izi.js"))) {
     console.error(`в ${cwd} нет workflows/izi.js — харнес не установлен: node bin/install.mjs --to=${cwd}`)
@@ -98,13 +98,83 @@ async function main() {
     getAvailable: () => services.modelRuntime.getAvailableSnapshot().map(pair),
   }
 
-  const sessionId = randomUUID()
+  // СЕССИЯ PI: если /izi передал IZI_SESSION_ID, используем ЕГО — runs лягут в pi's
+  // сессионный каталог и /workflow их покажет. Без этого — свой UUID (runs невидимы).
+  const sessionId = process.env.IZI_SESSION_ID || randomUUID()
+
+  // T38 — ФАЙЛОВАЯ ПЕТЛЯ ВОПРОС-ОТВЕТ (вместо чат-модели и TUI).
+  // Хост требует ui.select для checkpoint; мы подменяем его на файловый опросчик:
+  //   вопрос  → .agent/question.txt (оператор читает)
+  //   ответ   ← .agent/answer.txt   (оператор пишет: echo "..." > .agent/answer.txt)
+  // Появился ответ → "Approve" → пауза снята → полоса продолжает с ответом в answers.md.
+  // Чат-модель НЕ участвует нигде.
+  const QUESTION_FILE = join(cwd, ".agent/question.txt")
+  const ANSWER_FILE = join(cwd, ".agent/answer.txt")
+  const CHECKPOINT_TIMEOUT_MS = 10 * 60 * 1000  // 10 минут
+  const ASK_TIMEOUT_MS = 30 * 60 * 1000         // вопрос рельсы ask — 30 минут (оператор не рядом)
+
+  const fileSelect = async (prompt, options) => {
+    mkdirSync(join(cwd, ".agent"), { recursive: true })
+    writeFileSync(QUESTION_FILE, `[${new Date().toISOString()}]\n${prompt}\n\nОтветь: echo "твой ответ" > .agent/answer.txt\n`)
+    console.log(`\n${"═".repeat(60)}\n🔒 CHECKPOINT — вопрос оператору:\n${prompt}\n${"═".repeat(60)}\nОтветь: echo "твой ответ" > .agent/answer.txt\n`)
+    const t0 = Date.now()
+    while (true) {
+      await new Promise((r) => setTimeout(r, 2000))
+      if (existsSync(ANSWER_FILE)) {
+        const answer = readFileSync(ANSWER_FILE, "utf8").trim()
+        rmSync(ANSWER_FILE, { force: true })  // consumed — следующий вопрос не увидит старый ответ
+        console.log(`\n✅ Ответ получен (${answer.length} симв) — полоса продолжает\n`)
+        return "Approve"
+      }
+      if (Date.now() - t0 > CHECKPOINT_TIMEOUT_MS) {
+        console.log(`\n⏰ Таймаут ${CHECKPOINT_TIMEOUT_MS / 60000} мин — checkpoint отклонён\n`)
+        return "Reject"
+      }
+    }
+  }
+
+  // T41 — ASK-РЕЛЬСА В HEADLESS. Наша ask-функция (ext/index.mjs) зовёт ctx.ui.input ПО ВОПРОСУ
+  // на каждый item; без input она молча возвращала пусто, и шаг умирал «не отвечен за 2 паузы»
+  // за 32 секунды (приёмка 25.08, станция intake). Тот же файловый протокол, что у select, но
+  // ответы нумерованные: вопрос N снят, когда в answer.txt есть строка «N. …» (или «N) …»).
+  // Несколько вопросов одного ask-вызова пишутся в question.txt подряд.
+  let askSeq = 0
+  const fileInput = async (prompt) => {
+    mkdirSync(join(cwd, ".agent"), { recursive: true })
+    askSeq += 1
+    if (askSeq === 1) { rmSync(ANSWER_FILE, { force: true }); writeFileSync(QUESTION_FILE, "") }
+    const q = `[${new Date().toISOString()}]\n${askSeq}. ${prompt}`
+    appendFileSync(QUESTION_FILE, q + `\nОтветь: echo "${askSeq}. твой ответ" >> .agent/answer.txt\n\n`)
+    console.log(`\n🔒 ВОПРОС ${askSeq}: ${prompt}\nОтветь: echo "${askSeq}. твой ответ" >> .agent/answer.txt`)
+    const t0 = Date.now()
+    while (true) {
+      await new Promise((r) => setTimeout(r, 2000))
+      if (existsSync(ANSWER_FILE)) {
+        const m = readFileSync(ANSWER_FILE, "utf8").match(new RegExp(`^\\s*${askSeq}[).]\\s*(.*)$`, "m"))
+        if (m) {
+          console.log(`\n✅ Ответ ${askSeq} получен: ${m[1].trim().slice(0, 120)}\n`)
+          return m[1].trim()
+        }
+      }
+      if (Date.now() - t0 > ASK_TIMEOUT_MS) {
+        console.log(`\n⏰ Таймаут вопроса ${askSeq} (${ASK_TIMEOUT_MS / 60000} мин) — пустой ответ\n`)
+        return ""
+      }
+    }
+  }
+
   const context = {
-    cwd, model: modelRef(), mode: "print", hasUI: false, headless: true,
+    cwd, model: modelRef(), mode: "print",
+    hasUI: true,           // есть "UI" — наш файловый опросчик
+    headless: false,       // НЕ headless — checkpoint работает (host.ts:638)
+    ui: { select: fileSelect, input: fileInput },
     modelRegistry, sessionManager: { getSessionId: () => sessionId },
     isProjectTrusted: () => settingsManager.isProjectTrusted(),
   }
-  const params = { name: "izi", scriptPath: "workflows/izi.js", foreground: true, ...(key ? { args: { key } } : {}) }
+  // STOP-AFTER — станция приёмки: id подшага, после которого полоса возвращает ok({stopped}) и
+  // заканчивается. Словарь id — литералы workflows/izi.js (task, brd/normalize, …, plan/flows).
+  const args = { ...(key ? { key } : {}), ...(stopAfter ? { stopAfter } : {}) }
+  const params = { name: "izi", scriptPath: "workflows/izi.js", foreground: true, ...(Object.keys(args).length ? { args } : {}) }
 
   console.log(`каталог прогона: ${cwd}`)
   console.log(`модель-ссылка:   ${context.model.provider}/${context.model.id} (запуск её НЕ зовёт)`)

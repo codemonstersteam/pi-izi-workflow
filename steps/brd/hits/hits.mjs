@@ -24,7 +24,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { skipDir, skipFile } from "../../survey-plan/skip.mjs"
+import { skipDir, skipFile } from "../../scope/skip.mjs"
 import { HITS } from "../paths.mjs"
 
 export const MAX_BYTES = 512 * 1024      // файл крупнее не читается: это не исходник, а данные

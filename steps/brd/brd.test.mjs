@@ -5,7 +5,7 @@
 // прогоном, и переписывать их вместе с ролью `gilb` было бы потерей улик.
 import test from "node:test"
 import assert from "node:assert/strict"
-import { numbersIn, parseBrd, analogueTerm } from "./brd.mjs"
+import { numbersIn, parseBrd, analogueTerm, closedSets } from "./brd.mjs"
 import { parseRows } from "./normalize/normalize.mjs"
 
 // --- numbersIn: обозначение формата против числа-меры -----------------------------------------------
@@ -113,4 +113,23 @@ test("analogueTerm: имя до тире, объявленное отсутст�
   assert.equal(analogueTerm("PromptSnippet — CRUD и версионирование по его образцу"), "PromptSnippet")
   assert.equal(analogueTerm("none — ничего похожего нет"), "")
   assert.equal(analogueTerm(null), "")
+})
+
+// T54 — ЗАМКНУТЫЕ ПЕРЕЧИСЛЕНИЯ. Эталон живого прогона несёт три «only»: R7 и R13 — перечни полей
+// (их читает F16 шага 6), R11 — «only for glossaries bound» — перечень НЕ поля, и регулярка его
+// не берёт: список после «only» связан « + », а не пробелом. Молчание здесь честнее шума.
+test("closedSets: перечень полей после «only … + …» вынут дословно; не-перечень и пустота молчат", () => {
+  const etalon = [
+    "R7 define | Term | Glossary | only key + value, no description, no category",
+    "R11 constrain | substitution scope | Glossary | only for glossaries bound to agent, no global",
+    "R13 define | Glossary fields | Glossary resource | only id + version + terms",
+  ].join("\n")
+  const sets = closedSets(etalon)
+  assert.equal(sets.length, 2, "R11 — не перечень полей: список не связан « + »")
+  assert.deepEqual(sets[0], { req: "R7", line: 1, entity: "Term", names: new Set(["key", "value"]) })
+  assert.deepEqual(sets[1], { req: "R13", line: 3, entity: "Glossary fields", names: new Set(["id", "version", "terms"]) })
+
+  assert.deepEqual(closedSets(""), [], "пустой brd — пустой ответ, не ошибка")
+  assert.deepEqual(closedSets("R1 add | Glossary | new type | dictionary of terms"), [],
+    "«only» нет — правило молчит: перечень замкнуло требование, не суд")
 })

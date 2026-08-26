@@ -2,12 +2,19 @@
   "files": 1854,
   "marked": [
     "AGENTS.md",
+    "GOVERNANCE.md",
     "HANDOFF.md",
     "TASK.md",
+    "docs/README.md",
+    "docs/SUMMARY.md",
     "docs/agent-sync-architecture.md",
     "docs/agent-sync-guide.md",
+    "docs/architecture.md",
     "docs/audit-ledger.md",
     "docs/conversation-memory.md",
+    "docs/project-philosophy.md",
+    "docs/release-signing.md",
+    "docs/release-versioning.md",
     "docs/secrets-vault.md",
     "install.ps1",
     "install.sh",
@@ -29,6 +36,8 @@
     "src/main/java/ai/labs/eddi/configs/snippets/model/PromptSnippet.java",
     "src/main/java/ai/labs/eddi/configs/snippets/mongo/PromptSnippetStore.java",
     "src/main/java/ai/labs/eddi/configs/snippets/rest/RestPromptSnippetStore.java",
+    "src/main/java/ai/labs/eddi/configs/variables/mongo/GlobalVariableStore.java",
+    "src/main/java/ai/labs/eddi/datastore/HistorizedResourceStore.java",
     "src/main/java/ai/labs/eddi/engine/audit/AuditHmac.java",
     "src/main/java/ai/labs/eddi/engine/caching/CacheFactory.java",
     "src/main/java/ai/labs/eddi/engine/mcp/McpApiToolBuilder.java",
@@ -66,6 +75,7 @@
     "src/test/java/ai/labs/eddi/backup/impl/ZipResourceSourceExtendedTest.java",
     "src/test/java/ai/labs/eddi/backup/impl/ZipResourceSourceTest.java",
     "src/test/java/ai/labs/eddi/configs/snippets/mongo/PromptSnippetStoreTest.java",
+    "src/test/java/ai/labs/eddi/datastore/HistorizedResourceStoreTest.java",
     "src/test/java/ai/labs/eddi/engine/audit/AuditHmacTest.java",
     "src/test/java/ai/labs/eddi/engine/mcp/McpApiToolBuilderTest.java",
     "src/test/java/ai/labs/eddi/engine/mcp/McpToolFilterTest.java",
@@ -134,6 +144,30 @@
         "src/test/java/ai/labs/eddi/engine/mcp": 1,
         "src/test/java/ai/labs/eddi/modules/nlp/extensions/corrections/similarities": 1,
         "src/test/java/ai/labs/eddi/modules/templating": 1
+      },
+      "share": 0.0059
+    },
+    {
+      "word": "versioning",
+      "files": [
+        "GOVERNANCE.md",
+        "docs/README.md",
+        "docs/SUMMARY.md",
+        "docs/architecture.md",
+        "docs/audit-ledger.md",
+        "docs/project-philosophy.md",
+        "docs/release-signing.md",
+        "docs/release-versioning.md",
+        "src/main/java/ai/labs/eddi/configs/variables/mongo/GlobalVariableStore.java",
+        "src/main/java/ai/labs/eddi/datastore/HistorizedResourceStore.java",
+        "src/test/java/ai/labs/eddi/datastore/HistorizedResourceStoreTest.java"
+      ],
+      "packages": {
+        "docs": 7,
+        ".": 1,
+        "src/main/java/ai/labs/eddi/configs/variables/mongo": 1,
+        "src/main/java/ai/labs/eddi/datastore": 1,
+        "src/test/java/ai/labs/eddi/datastore": 1
       },
       "share": 0.0059
     },
