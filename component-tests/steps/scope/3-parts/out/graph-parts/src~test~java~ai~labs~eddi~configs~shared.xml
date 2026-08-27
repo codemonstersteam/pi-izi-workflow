@@ -1,5 +1,0 @@
-<part cell="src~test~java~ai~labs~eddi~configs~shared" kind="survey">
-  <module path="src/test/java/ai/labs/eddi/configs/shared/RetryConfigurationTest.java" io="none" api="none" tests="none">
-    <role>Unit tests for RetryConfiguration retry logic, backoff, and error classification</role>
-  </module>
-</part>

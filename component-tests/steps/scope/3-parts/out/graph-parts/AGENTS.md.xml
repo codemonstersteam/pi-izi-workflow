@@ -1,5 +1,0 @@
-<part cell="AGENTS.md" kind="survey">
-  <module path="AGENTS.md" io="none" api="none" tests="none">
-    <role>AI agent instructions and development guidelines for the EDDI repository</role>
-  </module>
-</part>

@@ -1,6 +1,0 @@
-<part cell="src~main~java~ai~labs~eddi~modules~templating~rest~RestTemplatePreview.java" kind="survey">
-  <module path="src/main/java/ai/labs/eddi/modules/templating/rest/RestTemplatePreview.java" io="none" tests="none">
-    <role>CDI bean implementing the template preview service — resolves Qute templates against real conversation memory or built-in sample data, injecting prompt snippets</role>
-    <api name="previewTemplate(TemplatePreviewRequest)" kind="lib" scope="internal"/>
-  </module>
-</part>

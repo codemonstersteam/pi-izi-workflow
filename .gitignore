@@ -1,12 +1,4 @@
 .agent/
 .DS_Store
-ext/node_modules/
-
-.claude/
-
-# Эталонный пакет плана и сверщик к нему — НЕ состояние прогона, а справочник:
-# component-tests/etalon-eddi/ хранит то, к чему конвейер обязан прийти, и сверяется десятью
-# проверками check.mjs. Пути внутри него — `.agent/…`, потому что сверщик запускается из корня
-# прогона и другой раскладки не знает; поэтому исключение точечное, а не отмена правила.
-!component-tests/etalon-eddi/.agent/
-!component-tests/etalon-eddi/.agent/**
+node_modules/
+.DS_Store

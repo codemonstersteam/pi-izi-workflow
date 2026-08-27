@@ -1,8 +1,0 @@
-<part cell="src~main~java~ai~labs~eddi~backup~impl~~2" kind="survey">
-  <module path="src/main/java/ai/labs/eddi/backup/impl/ZipResourceSource.java" io="none" tests="none">
-    <role>reads agent, workflow, and snippet backup data from an unzipped ZIP directory, implementing IResourceSource for restore operations</role>
-    <api name="readAgent()" kind="lib" scope="internal"/>
-    <api name="readWorkflows()" kind="lib" scope="internal"/>
-    <api name="readSnippets()" kind="lib" scope="internal"/>
-  </module>
-</part>

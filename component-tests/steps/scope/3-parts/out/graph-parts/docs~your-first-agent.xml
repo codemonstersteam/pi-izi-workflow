@@ -1,8 +1,0 @@
-<part cell="docs~your-first-agent" kind="survey">
-  <module path="docs/your-first-agent/README.md" io="none" api="none" tests="none">
-    <role>User guide for deploying the Agent Father to create a first ChatGPT-based agent in EDDI</role>
-  </module>
-  <module path="docs/your-first-agent/understanding-your-first-agent.md" io="none" api="none" tests="none">
-    <role>Documentation explaining the components and resource flow of generated EDDI agents</role>
-  </module>
-</part>

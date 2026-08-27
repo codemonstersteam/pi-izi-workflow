@@ -1,5 +1,0 @@
-<part cell="src~main~java~ai~labs~eddi~engine~rest" kind="survey">
-  <module path="src/main/java/ai/labs/eddi/engine/rest/RestAgentSetup.java" io="none" api="none" tests="none">
-    <role>REST implementation of IRestAgentSetup, delegates setupAgent and createApiAgent to AgentSetupService</role>
-  </module>
-</part>

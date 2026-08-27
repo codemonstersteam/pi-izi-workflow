@@ -1,8 +1,0 @@
-<flows task="DOS-535">
-<flow id="S1" uc="UC1" goal="list all glossaries">
-    <step n="1" module="src/main/java/ai/labs/eddi/configs/glossaries/IRestGlossaryStore.java" in="GET /glossarystore/glossaries" out="GET /glossarystore/glossaries" role="проношу" closes="UC1/1"/>
-    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="GET /glossarystore/glossaries" out="GET /glossarystore/glossaries" role="проношу" closes="UC1/1"/>
-    <step n="3" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="GET /glossarystore/glossaries" out="список Glossary" role="порождаю" closes="UC1/2"/>
-    <step n="4" module="src/main/java/ai/labs/eddi/configs/glossaries/rest/RestGlossaryStore.java" in="список Glossary" out="200 (glossaries)" role="порождаю" closes="UC1/3"/>
-  </flow>
-</flows>

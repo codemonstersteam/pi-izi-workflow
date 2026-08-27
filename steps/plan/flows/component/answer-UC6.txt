@@ -1,8 +1,0 @@
-<flows task="DOS-535">
-<flow id="S6" uc="UC6" goal="include glossaries in agent export archive">
-    <step n="1" module="src/main/java/ai/labs/eddi/configs/agents/model/AgentConfiguration.java" in="конфигурация агента" out="ссылки на глоссарии (порядок значим)" role="порождаю" closes="UC6/1"/>
-    <step n="2" module="src/main/java/ai/labs/eddi/configs/glossaries/mongo/GlossaryStore.java" in="ссылки на глоссарии (порядок значим)" out="Glossary (по ссылке)" role="порождаю" closes="UC6/1"/>
-    <step n="3" module="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" in="Glossary (по ссылке)" out="файлы id.glossary.json и id.descriptor.json" role="порождаю" closes="UC6/2"/>
-    <step n="4" module="src/main/java/ai/labs/eddi/backup/impl/RestExportService.java" in="файлы id.glossary.json и id.descriptor.json" out="ZIP агента" role="порождаю" closes="UC6/3"/>
-  </flow>
-</flows>

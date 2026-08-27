@@ -1,5 +1,0 @@
-<part cell="src~test~java~ai~labs~eddi~integration~PromptSnippetCrudIT.java" kind="survey">
-  <module path="src/test/java/ai/labs/eddi/integration/PromptSnippetCrudIT.java" io="none" api="none" tests="none">
-    <role>Integration test for Prompt Snippet CRUD operations against Quarkus HTTP endpoints</role>
-  </module>
-</part>

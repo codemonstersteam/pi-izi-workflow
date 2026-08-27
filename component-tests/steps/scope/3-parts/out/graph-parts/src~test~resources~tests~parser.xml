@@ -1,8 +1,0 @@
-<part cell="src~test~resources~tests~parser" kind="survey">
-  <module path="src/test/resources/tests/parser/parserConfiguration.json" io="none" api="none" tests="none">
-    <role>Test fixture defining parser extensions (dictionaries and corrections) with resource URIs</role>
-  </module>
-  <module path="src/test/resources/tests/parser/simpleDictionary.json" io="none" api="none" tests="none">
-    <role>Test fixture providing a simple dictionary with words, regex patterns, and phrases for parser tests</role>
-  </module>
-</part>

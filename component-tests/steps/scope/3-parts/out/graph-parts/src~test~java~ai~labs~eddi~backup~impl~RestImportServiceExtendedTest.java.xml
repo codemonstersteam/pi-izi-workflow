@@ -1,5 +1,0 @@
-<part cell="src~test~java~ai~labs~eddi~backup~impl~RestImportServiceExtendedTest.java" kind="survey">
-  <module path="src/test/java/ai/labs/eddi/backup/impl/RestImportServiceExtendedTest.java" io="none" api="none" tests="none">
-    <role>Extended test suite for RestImportService covering vault reference normalization, sync operations, preview functionality, and import strategies</role>
-  </module>
-</part>

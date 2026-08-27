@@ -1,6 +1,0 @@
-<part cell="src~main~java~ai~labs~eddi~engine~memory~MemoryItemConverter.java" kind="survey">
-  <module path="src/main/java/ai/labs/eddi/engine/memory/MemoryItemConverter.java" io="none" tests="none">
-    <role>CDI bean implementing IMemoryItemConverter to transform conversation memory into a flat Map of data objects (snippets, vars, context, info)</role>
-    <api name="convert(IConversationMemory)" kind="lib" scope="internal"/>
-  </module>
-</part>

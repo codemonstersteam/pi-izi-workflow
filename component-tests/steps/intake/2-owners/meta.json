@@ -1,1 +1,0 @@
-{"substep":"owners","date":"2026-08-26","model":"qwen3.8-max-preview","verdict":"1 блокер F17c (UC6/1 спорный без вопроса)","out":{"owners":25,"nodes":9,"questions":0,"bytes":9774},"note":"AgentConfiguration доехала (T68); LlmTask добавлен как проводник (T68-2)"}

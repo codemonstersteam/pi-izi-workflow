@@ -1,9 +1,0 @@
-
-         
-
-         
-
-         
-
-         
-{"id":"gen-1787575466-83bom3WbhzvuqmVi6ZKu","object":"chat.completion","created":1787575466,"model":"qwen/qwen3.6-27b","provider":"Venice","system_fingerprint":null,"service_tier":null,"choices":[{"index":0,"logprobs":null,"finish_reason":"tool_calls","native_finish_reason":"tool_calls","message":{"role":"assistant","content":"\n\n","refusal":null,"reasoning":null,"tool_calls":[{"type":"function","index":0,"id":"call_48e1f7db9cfe45f4ab49a660","function":{"name":"workflow_result","arguments":"{\"track\": \"ok\", \"artifact\": \".agent/staging/part~root.xml\", \"modules\": \"3\", \"gaps\": \"0\"}"}}]}}],"usage":{"prompt_tokens":7307,"completion_tokens":71,"total_tokens":7378,"cost":0.002605525,"is_byok":false,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.002605525,"upstream_inference_prompt_cost":0.002374775,"upstream_inference_completions_cost":0.00023075},"completion_tokens_details":{"reasoning_tokens":0,"image_tokens":0,"audio_tokens":0}}}

@@ -1,5 +1,0 @@
-<part cell="src~test~java~ai~labs~eddi~engine~memory~MemoryItemConverterNamespacesTest.java" kind="survey">
-  <module path="src/test/java/ai/labs/eddi/engine/memory/MemoryItemConverterNamespacesTest.java" io="none" api="none" tests="none">
-    <role>JUnit 5 test for MemoryItemConverter namespace injection of prompt snippets and global variables into the template data model</role>
-  </module>
-</part>

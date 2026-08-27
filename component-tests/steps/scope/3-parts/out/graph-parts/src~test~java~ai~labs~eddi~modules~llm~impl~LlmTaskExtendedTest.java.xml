@@ -1,6 +1,0 @@
-<part cell="src~test~java~ai~labs~eddi~modules~llm~impl~LlmTaskExtendedTest.java" kind="survey">
-  <module path="src/test/java/ai/labs/eddi/modules/llm/impl/LlmTaskExtendedTest.java" io="none" api="none">
-    <role>Extended unit tests for LlmTask covering template parameter skipping, response object name fallbacks, metadata handling, addToOutput, multiple task execution, channel tags, structured JSON output, prompt snippet injection, empty messages, and conversation history limits</role>
-    <test path="src/test/java/ai/labs/eddi/modules/llm/impl/LlmTaskExtendedTest.java"/>
-  </module>
-</part>
