@@ -17,14 +17,14 @@ import { execSync } from "node:child_process"
 const LOOPS = 3
 
 const ENVELOPE = {
-  type: object,
+  type: "object",
   properties: {
-    track: { type: string, enum: [ok, err] },
-    artifact: { type: string },
-    kind: { type: string, enum: [blocked, invalid, crashed] },
-    subject: { type: string },
+    track: { type: "string", enum: ["ok", "err"] },
+    artifact: { type: "string" },
+    kind: { type: "string", enum: ["blocked", "invalid", "crashed"] },
+    subject: { type: "string" },
   },
-  required: [track],
+  required: ["track"],
   additionalProperties: false,
 }
 
