@@ -1,5 +1,5 @@
 ---
-description: Critic — judges the plan's meaning against the checklist and the real code
+description: "Critic — judges the plan's meaning against the checklist and the real code"
 model: judgment
 thinking: high
 contextFiles: []

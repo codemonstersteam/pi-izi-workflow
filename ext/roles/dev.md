@@ -1,5 +1,5 @@
 ---
-description: Dev — implements the plan row by row: iteration = Ф row = commit
+description: "Dev — implements the plan row by row: iteration = Ф row = commit"
 model: execution
 thinking: high
 contextFiles: []

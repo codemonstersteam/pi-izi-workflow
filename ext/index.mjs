@@ -12,7 +12,30 @@
 import { join } from "node:path"
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { registerWorkflowExtension } from "pi-extensible-workflows"
-import { soloNext, soloFold, soloStart } from "./stations.mjs"
+import { soloNext as _soloNext, soloFold as _soloFold, soloStart as _soloStart } from "./stations.mjs"
+
+const ANY = { type: "object", additionalProperties: true }
+
+// Функции каталога: хост валидирует форму (registry.ts:63 — description/run обязательны);
+// cwd/run берутся из КОНТЕКСТА ХОСТА, не из входа — сандбокс не знает ни пути, ни id прогона.
+export const soloStart = {
+  description: "First act of a solo run: build the state from the project's TASK.md (or refuse with a name). cwd and run come from the HOST CONTEXT. Returns {track, state, from}.",
+  input: { type: "object", properties: { key: { type: "string" } }, additionalProperties: false },
+  output: ANY,
+  run: (input, ctx) => _soloStart(input, ctx),
+}
+export const soloNext = {
+  description: "Ask the current station for its next instruction — role | ask | done | err. Refusals carry do:'err' WITH a kind and subject, never a TypeError in the rail.",
+  input: { type: "object", properties: { state: ANY }, required: ["state"], additionalProperties: false },
+  output: ANY,
+  run: (input) => _soloNext(input),
+}
+export const soloFold = {
+  description: "Hand a station the answer to its instruction. Returns {track:'ok', value: state} or {track:'err', …} — the rail MUST check the track before touching the state.",
+  input: { type: "object", properties: { state: ANY, event: ANY }, required: ["state", "event"], additionalProperties: false },
+  output: ANY,
+  run: (input) => _soloFold(input),
+}
 import { newExchange } from "./answers.mjs"
 
 const ASK_TIMEOUT_MS = 30 * 60 * 1000
@@ -86,4 +109,4 @@ export default function register(pi) {
 }
 
 // для тестов и headless-раннера
-export { soloStart, soloNext, soloFold, ask }
+export { ask }

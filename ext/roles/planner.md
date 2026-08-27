@@ -1,5 +1,5 @@
 ---
-description: Planner — writes the development plan by the artifact spec, reading the repository itself
+description: "Planner — writes the development plan by the artifact spec, reading the repository itself"
 model: execution
 thinking: high
 contextFiles: []

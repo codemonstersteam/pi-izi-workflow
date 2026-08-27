@@ -78,11 +78,19 @@ test("зелёный путь: draft→critic→approve(да)→solve→done; PL
     // critic: APPROVE
     r = run(r.s, [{ do: "role", result: { track: "ok", verdict: "APPROVE" } }])
     assert.equal(r.s.station, "approve")
+    // approve: СНАЧАЛА карточка презентации (say), потом ask
+    const card = soloNext({ state: r.s })
+    assert.equal(card.do, "say", "карточка презентации не напечатана")
+    assert.match(card.line, /ПЛАН ГОТОВ/)
+    assert.match(card.line, /Синтез: \d+ требований/)
+    assert.match(card.line, /\.agent\/PLAN\.md/)
+    const afterCard = soloFold({ state: r.s, event: { do: "say", instruction: card, result: null } })
+    assert.ok(afterCard.track === "ok")
     // approve: ask да → promote + solve
-    const approveOrder = soloNext({ state: r.s })
+    const approveOrder = soloNext({ state: afterCard.value })
     assert.equal(approveOrder.do, "ask")
     writeFileSync(join(cwd, ".agent/answers.md"), "<exchange>\n  <question_1>Согласен?</question_1>\n  <answer_1>да, ведём</answer_1>\n</exchange>\n")
-    const f = soloFold({ state: r.s, event: { do: "ask", instruction: approveOrder, result: ["да, ведём"] } })
+    const f = soloFold({ state: afterCard.value, event: { do: "ask", instruction: approveOrder, result: ["да, ведём"] } })
     assert.ok(f.track === "ok" && f.value.station === "solve", "approve не перевёл в solve")
     assert.ok(existsSync(join(cwd, ".agent/PLAN.md")), "PLAN.md не продвинут")
     // solve: dev «сделал» — коммит с Ф1

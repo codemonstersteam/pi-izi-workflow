@@ -19,6 +19,32 @@ const err = (kind, subject) => ({ track: "err", kind, subject })
 const readAt = (cwd, rel) => (existsSync(join(cwd, rel)) ? readFileSync(join(cwd, rel), "utf8") : "")
 const here = (p) => new URL(p, import.meta.url).pathname
 
+
+// summarizePlan — верхнеуровневый синтез для карточки approve: оператор видит,
+// ЧТО он утверждает, не открывая файл. Считает строки таблиц и зовёт первые вопросы.
+const rowsIn = (plan, name) => {
+  const m = plan.match(new RegExp(`^#+\\s*(\\d+\\.\\s*)?${name}\\s*$`, "mi"))
+  if (!m) return []
+  const after = plan.slice(m.index + m[0].length)
+  const next = after.match(/^#+\\s/m)
+  const sec = next ? after.slice(0, next.index) : after
+  return sec.split("\n").filter((l) => l.trim().startsWith("|")).filter((l) => !/^\s*\|[\s\-:|]+\|\s*$/.test(l)).slice(1)
+}
+const summarizePlan = (plan) => {
+  const req = rowsIn(plan, "ТРЕБОВАНИЯ"), chg = rowsIn(plan, "ИЗМЕНЕНИЯ"), val = rowsIn(plan, "ВЕЛИЧИНЫ")
+  const scen = (plan.match(/^#{2,4}\s*(Сценарий|Сценарии|###?\s*С\d)/gmi) || []).length
+  const guar = (plan.slice((plan.match(/^#+\s*(\d+\.)?\s*ГАРАНТИИ/mi) || { index: 0 }).index).match(/^\s*\d+\./gm) || []).length
+  const files = chg.map((l) => (l.split("|")[2] || "").replace(/`/g, "").trim()).filter(Boolean)
+  const newFiles = files.filter((f) => !existsSync(join(CWD_NOW, f))).length
+  const qs = rowsIn(plan, "ОТКРЫТЫЕ ВОПРОСЫ").slice(0, 3).map((l) => "  · " + (l.split("|").slice(1).map((c) => c.trim()).join(" — ") || l.replace(/^\\s*\\|/, "")).slice(0, 110))
+  return [
+    `Синтез: ${req.length} требований (цитаты TASK) · ${chg.length} строк изменений (${newFiles} новых файлов, ${files.length - newFiles} существующих) · ${scen} сценариев · ${val.length} величин с источниками · ${guar} гарантий · вопросов оператору: ${rowsIn(plan, "ОТКРЫТЫЕ ВОПРОСЫ").length}`,
+    files.length ? `Файлы: ${[...new Set(files)].slice(0, 6).join("; ")}` : "",
+    qs.length ? `Открытые вопросы (первые):\n${qs.join("\n")}` : "",
+  ].filter(Boolean).join("\n")
+}
+let CWD_NOW = ""
+
 const STATIONS = ["draft", "critic", "approve", "solve"]
 const DRAFT_STAGING = ".agent/staging/PLAN~draft.md"
 const PLAN = ".agent/PLAN.md"
@@ -33,7 +59,7 @@ export function soloStart({ key = "" } = {}, ctx = {}) {
   return ok({
     state: {
       cwd, key: String(key || "").trim(),
-      station: "draft", round: 1, blockers: "", question: null,
+      station: "draft", round: 1, blockers: "", question: null, cardShown: false,
       loops: DEFAULT_LOOPS, solveStart: null, answers: "",
     },
     from: "fresh",
@@ -127,6 +153,20 @@ $END_OUTPUT`
   }
 
   if (s.station === "approve") {
+    // КАРТОЧКА ПРЕЗЕНТАЦИИ: план готов · что делать · путь · синтез. Скажена ОДИН раз —
+    // до вопроса; оператор утверждает осознанно, а не вслепую по однострочному вопросу.
+    if (!s.cardShown) {
+      CWD_NOW = s.cwd
+      const plan = readAt(s.cwd, DRAFT_STAGING)
+      const card = [
+        "═══ ПЛАН ГОТОВ — ждём решения оператора ═══",
+        `Что делать: прочитай план по пути ${PLAN} (или .agent/staging/PLAN~draft.md),`,
+        "затем ответь на следующий вопрос: да (approve) / нет + причина.",
+        `Критик: ${s.criticVerdict || "APPROVE"}.`,
+        summarizePlan(plan),
+      ].join("\n")
+      return { do: "say", line: card }
+    }
     return { do: "ask", name: "solo-approve", prompt: "План лежит в .agent/PLAN.md — прочитай. Согласен?", items: ["План лежит в .agent/PLAN.md — прочитай его. Согласен вести разработку по нему? Ответь: да (approve) / нет (reject + причина)"] }
   }
 
@@ -170,6 +210,9 @@ export function soloFold({ state, event = {} } = {}) {
   const s = state
   if (!s || !s.cwd) return err("state", "soloFold получил состояние без cwd")
 
+  // карточка презентации напечатана — следующим ходом вопрос
+  if (event.do === "say") return put(s, { cardShown: true })
+
   // ask вернулся: снимаем вопрос, ответы уже в answers.md (их записала ask-функция)
   if (event.do === "ask") {
     const answers = readAt(s.cwd, ".agent/answers.md").trim()
@@ -186,7 +229,7 @@ export function soloFold({ state, event = {} } = {}) {
       return put(s, { station: "draft", round: 1, blockers: `оператор отклонил план: ${(event.result || []).join(" ") || "без причины"}`, question: null })
     }
     // вопрос критика/плана: ответы уехали в answers.md — круг draft с ANSWERED
-    return put(s, { station: "draft", round: 1, blockers: "", question: null, answers })
+    return put(s, { station: "draft", round: 1, blockers: "", question: null, cardShown: false, answers })
   }
 
   if (event.do !== "role") return err("fold", `solo не знает, что делать с событием «${event.do}»`)
@@ -206,7 +249,7 @@ export function soloFold({ state, event = {} } = {}) {
   }
 
   if (s.station === "critic") {
-    if (env.verdict === "APPROVE") return put(s, { station: "approve", round: 1, blockers: "" })
+    if (env.verdict === "APPROVE") return put(s, { station: "approve", round: 1, blockers: "", criticVerdict: `APPROVE${(env.questions || []).length ? ` (+${(env.questions || []).length} вопросов оператору — в разделе 6 плана)` : ""}` })
     const qs = (env.questions || []).filter(Boolean)
     if (qs.length) return put(s, { question: { name: `solo-critic-q${s.round}`, items: qs } })
     return put(s, { station: "draft", round: s.roundDraft || 1, blockers: (env.blockers || ["критик отверг без блокеров"]).join("\n") })
