@@ -294,14 +294,25 @@ test("T70: F19 на критике → contracts todo с FEEDBACK, круг кр
 // коду правила (F3c → contracts), круг головы не тратится. Пере-внедрение дефекта: выключи
 // ветку p.id === "one» в fold — второй тест краснеет (F3c остаётся на one, порций шесть нет).
 
-// МАЛЕНКАЯ ФОРМА — класс quarkus по калибровке isSmall: 9 узлов карты, 3 R-строки brd.
+// МАЛЕНКАЯ ФОРМА — ЖИВАЯ карта quarkus-класса по калибровке isSmall: 24 узла — каждый файл
+// в ДВУХ префиксных вариантах, как их кладёт сборка appgraph (замер прогона 27.08:
+// именно эта форма ушла в полный путь при пороге 12, посчитанном по java-файлам), 3 R-строки.
+// Реинтродукция инцидента: с MAX_NODES=12 тест ниже краснеет («24 узла не попали в fast»).
 function smallForm() {
   const cwd = mkdtempSync(join(tmpdir(), "intake-one-"))
   mkdirSync(join(cwd, ".agent/staging"), { recursive: true })
+  const files = ["pom.xml", "README.md",
+    "src/main/java/org/acme/rest/json/Fruit.java", "src/main/java/org/acme/rest/json/FruitResource.java",
+    "src/main/java/org/acme/rest/json/Legume.java", "src/main/java/org/acme/rest/json/LegumeResource.java",
+    "src/main/java/org/acme/rest/json/LoggingFilter.java",
+    "src/main/resources/META-INF/resources/fruits.html", "src/main/resources/META-INF/resources/legumes.html",
+    "src/main/docker/Dockerfile.jvm", "src/main/docker/Dockerfile.native", "src/main/docker/Dockerfile.legacy-jar"]
+  const mod = (p) => `  <module path="${p}" pkg="p"/>`
   const map = `<appgraph grammar="4">
-  <module path="src/FruitResource.java" pkg="p"><role>expose fruit entities over REST</role>
+  <module path="src/main/java/org/acme/rest/json/FruitResource.java" pkg="p"><role>expose fruit entities over REST</role>
     <api name="fruits" kind="rest" scope="public"/></module>
-${Array.from({ length: 8 }, (_, i) => `  <module path="src/pkg/Mod${i}.java" pkg="p"/>`).join("\n")}
+${files.map(mod).join("\n")}
+${files.map((p) => mod(`quarkus-rest-json-app-v2-t1-3/${p}`)).join("\n")}
 </appgraph>`
   nodeFs.writeFileSync(join(cwd, ".agent/appgraph.xml"), map)
   nodeFs.writeFileSync(join(cwd, ".agent/brd.md"),
@@ -332,9 +343,9 @@ const FRD_ONE_GREEN = `<frd grammar="1" goal="хранить, читать и у
     <post>фрукты хранятся, читаются и удаляются по URI</post>
     <step n="1">оператор хранит, читает и удаляет фрукты</step>
   </usecase>
-  <owner step="UC1/1" node="src/FruitResource.java"/>
-  <delta op="fruits" form="Added" node="src/FruitResource.java"/>
-  <scenario id="S1" uc="UC1" before="фруктов нет" after="фрукты хранятся и читаются" nodes="src/FruitResource.java"/>
+  <owner step="UC1/1" node="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <delta op="fruits" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java"/>
+  <scenario id="S1" uc="UC1" before="фруктов нет" after="фрукты хранятся и читаются" nodes="src/main/java/org/acme/rest/json/FruitResource.java"/>
   <failures found="no" why="чистое добавление сущностей, отказных веток нет"/>
   <carried req="R1" by="UC1/1"/>
   <carried req="R2" by="S1"/>
@@ -373,8 +384,8 @@ test("T76: красный one → ПАДЕНИЕ НА ПОЛНЫЙ ПУТЬ: ш�
   assert.equal(it2.do, "role")
   // артефакт с дырой: вторая дельта БЕЗ сценария → F3c (форма тикета: delta без сценария)
   nodeFs.writeFileSync(join(state.cwd, ".agent/staging/frd~one.xml"), FRD_ONE_GREEN.replace(
-    `<delta op="fruits" form="Added" node="src/FruitResource.java"/>`,
-    `<delta op="fruits" form="Added" node="src/FruitResource.java"/>\n  <delta op="store" form="Added" node="src/pkg/Mod0.java"/>`))
+    `<delta op="fruits" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java"/>`,
+    `<delta op="fruits" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java"/>\n  <delta op="store" form="Added" node="src/pkg/Mod0.java"/>`))
   const r = fold(st1.value, { do: "role", instruction: it2, result: { track: "ok", artifact: ".agent/staging/frd~one.xml" } })
   assert.ok(r.ok, r.error?.detail)
   assert.deepEqual(r.value.portions.map((p) => p.id),
