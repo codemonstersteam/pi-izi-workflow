@@ -17,7 +17,7 @@
 import { parseRows } from "./normalize.mjs"
 
 // Rule codes. The class IS the code the role reads at the head of a blocker — one place, one name.
-export const CLASSES = Object.freeze(["duplicate-row", "lost-value", "invented-value"])
+export const CLASSES = Object.freeze(["duplicate-row", "lost-value", "invented-value", "constraint-row"])
 
 // FUNCTION_CONTRACT: literalsOf — the things in a text that may not be reworded
 //   Input:        text — any of: the request, a table, one row
@@ -100,5 +100,59 @@ export function judgeClean(before = "", after = "", task = "") {
       `The pass copies, merges and deletes — it never writes a value of its own. Remove it.` })
   }
 
+  blockers.push(...constraintRows(task, after))
+
   return { blockers, judged: rowsAfter.length, silent: false }
+}
+
+// T79 — ПРЕДЛОЖЕНИЕ-ОГРАНИЧЕНИЕ ЗАКАЗА ОБЯЗАНО ИМЕТЬ СТРОКУ. Живой прогон FRUIT-1 (27.08):
+// «Существующие вызовы ломать нельзя» не стало строкой — наряд просил «things the request
+// CREATES», ограничение не создание; lost-value слеп вдвойне: literalsOf не видит кириллицу
+// (по тому TASK литералы = {ui, fruit, 1}), а общий «каждое предложение — строка» невозможен:
+// таблица пишется на английском с русского заказа, лексического пересечения нет. Покрываем
+// ИМЕНОВАННЫЙ класс детектируемыми МАРКЕРАМИ (замкнутый список, оба языка): предложение с
+// маркером проходит, если в таблице есть строка-носитель — глагол preserve/keep/maintain
+// ИЛИ строка, делящая с предложением ≥2 слова (строка-цитата; наряд велит цитировать
+// ограничение дословно). Чистая функция над текстами — судит и первый проход косвенно:
+// чистка «Never add a row» не добавит потерянное, круг починки вернёт его в проход 1.
+const CONSTRAINT_MARKERS = Object.freeze([
+  "нельзя", "ломать", "не трогать", "не менять", "не изменять", "сохранить", "сохранять",
+  "должно остаться", "остаётся без", "без изменения", "не нарушить", "не нарушать",
+  "must not", "do not break", "don't break", "without breaking", "preserve", "keep the existing",
+  "shall not break", "не ломаться",
+])
+const CARRIER_VERBS = new Set(["preserve", "keep", "maintain", "сохранить", "не_трогать"])
+
+// FUNCTION_CONTRACT: constraintRows — предложения-ограничения без строки-носителя
+//   Input:        task — заказ оператора; table — итоговая таблица (текст)
+//   Dependencies: —
+//   Antecedent:   любые значения
+//   Consequent:   success: [{ cls: "constraint-row", text }] — по блокеру на каждое
+//                 предложение-ограничение, не нашедшее носителя; пусто — все закрыты
+//   Purity:       pure
+//   Interface:    constraintRows(task, table) -> findings[]
+export function constraintRows(task = "", table = "") {
+  const lower = String(task ?? "").toLowerCase()
+  const sentences = lower
+    .split(/(?<=[.!?;])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 3 && !s.startsWith("task:"))
+  const wordsOf = (s) => new Set([...s.matchAll(/\p{L}{4,}/gu)].map((m) => m[0].toLowerCase()))
+  const tableLower = String(table ?? "").toLowerCase()
+  const hasCarrier = wordsOf(tableLower)
+  const carrierRow = [...CARRIER_VERBS].some((v) => tableLower.includes(`| ${v} |`)) || tableLower.includes("preserve |")
+  const out = []
+  for (const s of sentences) {
+    if (!CONSTRAINT_MARKERS.some((m) => s.includes(m))) continue
+    if (carrierRow) break
+    const w = wordsOf(s)
+    let shared = 0
+    for (const x of w) if (hasCarrier.has(x)) shared += 1
+    if (shared >= 2) continue
+    out.push({ cls: "constraint-row", text:
+      `constraint-row «${s}»: the request CONSTRAINS the change and no table row carries it. ` +
+      `Write it as its own row: preserve | <what must stay> | the change | <constraint verbatim>. ` +
+      `A constraint sentence is a requirement, not context.` })
+  }
+  return out
 }

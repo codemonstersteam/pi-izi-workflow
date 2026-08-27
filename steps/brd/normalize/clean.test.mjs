@@ -87,10 +87,39 @@ test("literalsOf: копируется то, что человек скопир�
 
 test("шов: каждый класс модуля возвращается хотя бы одним правилом", () => {
   const rows = AFTER.trim().split("\n")
+  const Q_TASK = "UI тянет весь список фруктов, чтобы найти один. Нужен поиск по части имени,\nс ограничением на размер ответа. Существующие вызовы ломать нельзя.\n"
   const seen = new Set([
     ...cls(judgeClean(BEFORE, `${rows.join("\n")}\n${rows[0]}\n`, TASK)),
     ...cls(judgeClean(BEFORE, AFTER.split("\n").filter((l) => !l.includes("glossarystore")).join("\n"), TASK)),
     ...cls(judgeClean(BEFORE, `${AFTER.trim()}\ncache | Glossary | Redis | with TTL 300 seconds\n`, TASK)),
+    ...cls(judgeClean("x | y | z | w\n", "x | y | z | w\n", Q_TASK)),  // T79: constraint-row
   ])
   for (const c of CLASSES) assert.ok(seen.has(c), `класс «${c}» объявлен, а вернуть его не может ни одно правило`)
+})
+
+// T79 — CONSTRAINT-ROW: предложение-ограничение заказа обязано иметь строку-носитель.
+// Кейс живого прогона FRUIT-1 (27.08): TASK с «Существующие вызовы ломать нельзя», таблица
+// без preserve-строки. Реинтродукция: убрать constraintRows из judgeClean — первые два краснеют.
+const Q_TASK = "UI тянет весь список фруктов, чтобы найти один. Нужен поиск по части имени,\nс ограничением на размер ответа. Существующие вызовы ломать нельзя.\n"
+const Q_TWO = "search | fruits | partial name | by part of name\nlimit | response size | search | with a limit on response size\n"
+
+test("T79: ограничение заказа без строки — блокер цитирует предложение", () => {
+  const r = judgeClean(Q_TWO, Q_TWO, Q_TASK)
+  assert.ok(r.blockers.some((b) => b.cls === "constraint-row"), "потерянное ограничение прошло молча")
+  const b = r.blockers.find((x) => x.cls === "constraint-row")
+  assert.match(b.text, /существующие вызовы ломать нельзя/, "блокер не цитирует предложение поимённо")
+})
+
+test("T79: preserve-строка и строка-цитата закрывают ограничение", () => {
+  const withPreserve = Q_TWO + "preserve | existing calls | the change | must not break them — «существующие вызовы ломать нельзя»\n"
+  assert.equal(judgeClean(withPreserve, withPreserve, Q_TASK).blockers.filter((b) => b.cls === "constraint-row").length, 0)
+  const withQuote = Q_TWO + "keep | существующие вызовы | изменение | не ломать\n"
+  assert.equal(judgeClean(withQuote, withQuote, Q_TASK).blockers.filter((b) => b.cls === "constraint-row").length, 0)
+})
+
+test("T79: эталон eddi — маркерных предложений нет, суд молчит", () => {
+  const t = readFileSync(join(HERE, "../../../component-tests/steps/brd/1-normalize/in/TASK.md"), "utf8")
+  const tab = readFileSync(join(HERE, "../../../component-tests/steps/brd/1-normalize/out/normalized.md"), "utf8")
+  assert.equal(judgeClean(tab, tab, t).blockers.filter((b) => b.cls === "constraint-row").length, 0,
+    "ложное срабатывание на эталоне")
 })

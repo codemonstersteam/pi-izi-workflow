@@ -120,6 +120,16 @@ export const SCENARIOS = Object.freeze([
            "таблица НЕ продвинута — подшаг не закрылся дублем",
            "круг прохода 1 не тронут: чинится чистка, а не нормализация"],
     expect: { fixOrder: true, promoted: false } },
+
+  { n: 10, kind: "adapter", branch: "constraint-row", fixture: "quarkus-constraint",
+    name: "строка-ограничение заказа потеряна — constraint-row возвращает её нарядом починки",
+    given: "TASK с предложением-ограничением («Существующие вызовы ломать нельзя»); оба прохода вернули таблицу без preserve-строки",
+    when: "подшаг выдал следующий наряд",
+    then: ["вердикт назвал constraint-row и процитировал предложение-ограничение",
+           "наряд починки адресован ЧИСТКЕ и несёт находку",
+           "таблица НЕ продвинута",
+           "живой прогон FRUIT-1 27.08: R3 так и умер — наряд просил «creates», суд не видел кириллицу"],
+    expect: { fixOrder: true, promoted: false } },
 ])
 
 // FUNCTION_CONTRACT: gherkin — таблица как текст для человека
@@ -373,3 +383,29 @@ test("подшаг 2A · формула: на каждую ветвь кода �
 })
 
 if (!process.env.NODE_TEST_CONTEXT) process.stdout.write(gherkin())
+
+// T79 — СТРОКА-ОГРАНИЧЕНИЕ ЗАКАЗА НЕ ТЕРЯЕТСЯ. Живой прогон FRUIT-1 (27.08): «Существующие
+// вызовы ломать нельзя» не стало строкой (наряд просил «things the request CREATES»), lost-value
+// слеп (literalsOf не видит кириллицу) — R3 умер на шаге 2, intake честно унёс 2 требования из 3.
+// Реинтродукция: убери constraintRows из judgeClean — сценарий краснеет («гардрейл пропустил»).
+test(`подшаг 2A · сценарий 10 [constraint-row] ${SCENARIOS[9].name}`, () => {
+  const s0 = arrange("quarkus-constraint")
+  const TWO = "search | fruits | partial name | by part of name\nlimit | response size | search | with a limit on response size\n"
+  let n = 0
+  // состав → проход 1 (2 строки) → чистка (те же 2 строки) → НАРЯД ПОЧИНКИ с constraint-row
+  const run = drive(s0, (it) => {
+    if (it.do !== "role") return null
+    writeFileSync(join(s0.cwd, it.staging), TWO)
+    return { track: "ok", artifact: it.staging }
+  }, 4)
+  const v = run.state.verdicts.find((x) => !x.ok)
+  assert.ok(v, "гардрейл чистки пропустил потерянное ограничение")
+  assert.match(v.blockers, /^constraint-row «существующие вызовы ломать нельзя/m,
+    "находка не цитирует предложение-ограничение поимённо")
+  assert.equal(laid(run.state), null, "таблица продвинута при красном вердикте чистки")
+  const fix = run.trace.filter((i) => i.do === "role")[2]
+  assert.ok(fix, "наряда починки чистки не было")
+  assert.equal(fix.role, "cleaner")
+  assert.match(fix.text, /constraint-row/, "FEEDBACK не донёс класс находки")
+  assert.match(fix.text, /preserve \|/, "наряд починки не показывает форму preserve-строки")
+})

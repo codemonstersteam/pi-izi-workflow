@@ -21,10 +21,16 @@ $START_FORM
 Write in English. Keep names, paths and placeholders as they stand in the request.
 Name the things the request creates — one row each.
 
+A REQUIREMENT IS ALSO A CONSTRAINT the request puts on the change — «не ломать», «сохранить»,
+«должно остаться», "must not", "do not break". A sentence like that is NOT context: it is a row
+of its own, verb `preserve`, and its values QUOTE the constraint verbatim (the quote is the
+anchor later checks match on). Dropping it silently changes the order.
+
 EXAMPLE, from another domain
 add | rotation | audit log | keeps the last 90 days
 export | archive | audit log | as {id}.archive.csv plus {id}.manifest.json
 write | manifest | archive | as {id}.manifest.json
+preserve | existing calls | the change | must not break them — «существующие вызовы ломать нельзя»
 $END_FORM
 
 $START_OUTPUT
