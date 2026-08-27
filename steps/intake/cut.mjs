@@ -11,7 +11,8 @@ import { join } from "node:path"
 import { parseMap } from "./map.mjs"
 import { parseComputed } from "../scope/computed.mjs"
 import { FRD_FORM, parseFrd } from "./frd.mjs"
-import { candidatesOf } from "./b0.mjs"
+import { candidatesOf } from "./owners/b0.mjs"
+import { newAnswers } from "../../core/answers.mjs"
 
 const readAt = (cwd, rel) => (existsSync(join(cwd, rel)) ? readFileSync(join(cwd, rel), "utf8") : "")
 
@@ -23,9 +24,15 @@ export function mapOf(state) {
 }
 
 // FUNCTION_CONTRACT: answersText — ответы оператора (пустая строка если файла нет)
+//   Consequent:   success: string — по строке «N. ответ» на ОТПРАВЛЕННЫЙ вопрос; файл в
+//                 <exchange>-грамматике (T75) рендерится из обменов, неразобранное — как есть
 //   Purity:       io (fs)
 export function answersText(state) {
-  return readAt(state.cwd, ".agent/answers.md").trim()
+  const raw = readAt(state.cwd, ".agent/answers.md").trim()
+  // T75 — answers.md пишется обменами; наряду и судьям (F17c ищет имена в тексте ответа)
+  // нужны СТРОКИ-ОТВЕТЫ, не разметка файла
+  const said = newAnswers(raw)
+  return said.ok && said.value.length ? said.value.map((a) => `${a.n}. ${a.text}`).join("\n") : raw
 }
 
 // FUNCTION_CONTRACT: typesOf — таблица типов `name · path · kind` из graph-computed
@@ -44,7 +51,7 @@ export function typesOf(state) {
 
 // FUNCTION_CONTRACT: b0Of — кандидатная таблица подпласта B1: шаги × карта + аналог + рёбра
 //   Antecedent:   слоя A ещё нет — пустая таблица (B1 раньше A не случается, но тотальность дороже)
-//   Consequent:   success: { steps, analogueFunctions } — форма steps/intake/b0.mjs::candidatesOf;
+//   Consequent:   success: { steps, analogueFunctions } — форма steps/intake/owners/b0.mjs::candidatesOf;
 //                 кладётся в .agent/intake-b0.json НАРЯДОМ (order.mjs, пласт B1), а судья читает
 //                 его ЖЕ — модель видит то, по чему её судят
 //   Purity:       io (fs)

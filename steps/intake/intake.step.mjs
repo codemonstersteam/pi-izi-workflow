@@ -24,6 +24,7 @@ import { promote } from "./route.mjs"
 import { lookupAnswer } from "./lookup.mjs"
 import { PASSES, parseFrd } from "./frd.mjs"
 import { parseBrd, closedSets } from "../brd/brd.mjs"
+import { newAnswers } from "../../core/answers.mjs"
 
 export const id = "intake"
 
@@ -100,7 +101,14 @@ export function fold(state, event = {}) {
     const q = state.question
     if (!q) return err("fold", `шаг ${id} получил ask без открытого вопроса`)
     const answers = readAt(state.cwd, ".agent/answers.md")
-    const answered = q.items.every((_, i) => new RegExp(`^\\s*${i + 1}[).]`, "m").test(answers))
+    // T75 — СВЕРКА ПО ТЕКСТУ ВОПРОСА, НЕ ПО НОМЕРУ СТРОКИ: answers.md пишется обменами
+    // <exchange><question_n>…</question_n><answer_n> (core/answers.mjs), и «строка N»
+    // в этом файле больше не существует. Живой прогон quarkus 26.08: сырой «N. ответ»
+    // не читался НИ ОДНИМ потребителем — вопросный круг до смерти бюджета.
+    const said = newAnswers(answers)
+    const answered = (said.ok ? said.value : []).length > 0
+      && q.items.every((item) => (said.ok ? said.value : []).some(
+        (a) => a.question === String(item || "").trim() && a.text))
     // pending.json УДАЛЯЕТСЯ ТОЛЬКО КОГДА ВОПРОС ЗАКРЫТ: при re-ask файл нужен izi_answer
     // для следующей паузы (дефект izi-live 24.08: модель звала izi_answer после re-ask —
     // файл был уже удалён, тул упал «pending.json отсутствует»).

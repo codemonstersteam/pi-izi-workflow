@@ -17,6 +17,7 @@ import { ok, err } from "../../../core/result.mjs"
 import { put } from "../../../ext/state.mjs"
 import { verdict as newVerdict } from "../../../ext/values.mjs"
 import { inputs } from "./inputs.mjs"
+import { newAnswers } from "../../../core/answers.mjs"
 import { cut, mineOf, familyOf, knownOf, frdOf, seedsOf, readAt } from "./cut.mjs"
 import { orderText } from "./order.mjs"
 import { judgePortion, judgeWhole } from "./judge.mjs"
@@ -196,7 +197,12 @@ function answered(state, result) {
     return put(state, { question: null, portions: state.portions.map((p) => ({ ...p, status: "todo" })) })
   }
   const text = readAt(state.cwd, ".agent/answers.md")
-  const answered = q.items.every((_, i) => new RegExp(`^\\s*${i + 1}[).]`, "m").test(text))
+  // T75 — СВЕРКА ПО ТЕКСТУ ВОПРОСА: answers.md пишется <exchange>-блоками, номерных
+  // строк в нём нет. Сырой формат умер вместе с прогоном quarkus 26.08 (вопросный круг).
+  const said = newAnswers(text)
+  const answered = (said.ok ? said.value : []).length > 0
+    && q.items.every((item) => (said.ok ? said.value : []).some(
+      (a) => a.question === String(item || "").trim() && a.text))
   if (answered) return put(state, { question: null })
   if (q.retry >= state.budgets.checkpointRetries) {
     return err("fold", `на вопросы шага ${id} нет ответов после ${q.retry} переспросов — .agent/answers.md их не содержит`)

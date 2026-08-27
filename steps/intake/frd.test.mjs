@@ -491,7 +491,7 @@ test("role: intake.md names the machine check behind each of its prohibitions", 
 // inherited from gilb ("ONE closed question") forbade exactly the batch, so its absence is the seam.
 test("role and order: questions travel in a BATCH, not one per exchange", () => {
   const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
-  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`${x}/order-${x}.tpl`, import.meta.url), "utf8")
   const tpl = ["scenarios", "owners", "contracts", "data-failures", "coverage"].map(TPL).join("\n")
   assert.match(role, /"items"/)             // the questions travel as a LIST, unnumbered
   // Live run 6350f09b: the role sent one question in `items` and `questions: 3` — the number copied
@@ -514,7 +514,7 @@ test("role and order: questions travel in a BATCH, not one per exchange", () => 
 })
 
 test("the form the order substitutes is the SAME data the guardrail judges by", () => {
-  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`${x}/order-${x}.tpl`, import.meta.url), "utf8")
   const tpl = ["scenarios", "owners", "contracts", "data-failures", "coverage"].map(TPL).join("\n")
   assert.doesNotMatch(tpl, /Added \| Changed \| Removed/)              // substituted, never retyped
   assert.deepEqual([...FRD_FORM.deltaForms], ["Added", "Changed", "Removed", "Fixed", "Unknown"])
@@ -549,7 +549,7 @@ test("the form the order substitutes is the SAME data the guardrail judges by", 
 // and this goes red.
 test("role and order: a FEEDBACK line names its source, and the two are repaired differently", () => {
   const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
-  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`${x}/order-${x}.tpl`, import.meta.url), "utf8")
   const tpl = ["scenarios", "owners", "contracts", "data-failures", "coverage"].map(TPL).join("\n")
   // Роль несёт таблицу целиком — она одна на все четыре прохода, и второй её копии быть не должно.
   assert.match(role, /guardrail:/, "role must name the guardrail as a source of feedback")
@@ -916,7 +916,7 @@ test("F6d молчит там, где судит F6: код вне карты о
 // был в словах.
 test("роль и наряд: у каждого кода критика свой ремонт, и удаление разрешено ровно одному", () => {
   const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
-  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`${x}/order-${x}.tpl`, import.meta.url), "utf8")
   const tpl = ["scenarios", "owners", "contracts", "data-failures", "coverage"].map(TPL).join("\n")
   // Таблица «код → ремонт» живёт В РОЛИ и только там: она одна на четыре прохода, а наряд прохода
   // отсылает к ней строкой `critic:` (шов выше). Копия таблицы в четырёх нарядах разошлась бы с ролью
@@ -937,7 +937,7 @@ test("роль и наряд: у каждого кода критика свой
 
 test("роль и наряд велят закрыть ВСЕ строки FEEDBACK за один круг", () => {
   const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
-  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`${x}/order-${x}.tpl`, import.meta.url), "utf8")
   const tpl = ["scenarios", "owners", "contracts", "data-failures", "coverage"].map(TPL).join("\n")
   assert.match(role, /CLOSE EVERY LINE OF THE FEEDBACK IN THIS ONE ANSWER/)
   assert.match(tpl, /COUNT THE LINES AND CLOSE THEM ALL IN THIS ANSWER/)
@@ -950,7 +950,7 @@ test("роль и наряд велят закрыть ВСЕ строки FEEDB
 
 test("роль и наряд несут свои строки про F6c/F6d", () => {
   const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
-  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`${x}/order-${x}.tpl`, import.meta.url), "utf8")
   const tpl = ["scenarios", "owners", "contracts", "data-failures", "coverage"].map(TPL).join("\n")
   assert.match(role, /Branch `outcome` is the negation of that use case’s own `<post>`/)
   assert.match(role, /Do not describe one layer’s failure in the words of another layer[\s\S]*?`F6c`/)
@@ -1162,7 +1162,7 @@ test("F2/F3/F4: путь, известный вычисленному графу
 // Расхождение инструкции с состоянием — наша ошибка формулировки, и ловится она здесь.
 test("роль и наряд: пустой PREVIOUS означает write, даже когда FEEDBACK не пуст", () => {
   const role = readFileSync(new URL("intake.md", import.meta.url), "utf8")
-  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`${x}/order-${x}.tpl`, import.meta.url), "utf8")
   const tpl = ["scenarios", "owners", "contracts", "data-failures", "coverage"].map(TPL).join("\n")
   assert.match(role, /THE PREVIOUS BLOCK DECIDES/)
   assert.match(role, /`write` when PREVIOUS is empty/)
@@ -1341,7 +1341,7 @@ test("F0: роль и наряд пласта B предупреждают о з
   // 19.08.2026: пласт B, у которого пара была, прошёл с первого круга; пласты A и C, у которых её не
   // было, встали на F0 — при том что закон 7a в роли действовал для всех троих. Правило рядом с
   // местом письма работает, правило в общем тексте — нет.
-  const orders = ["scenarios", "owners", "contracts", "data-failures", "coverage"].map((x) => [`наряд ${x.toUpperCase()}`, readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")])
+  const orders = ["scenarios", "owners", "contracts", "data-failures", "coverage"].map((x) => [`наряд ${x.toUpperCase()}`, readFileSync(new URL(`${x}/order-${x}.tpl`, import.meta.url), "utf8")])
   for (const [what, text] of [["роль", role], ...orders]) {
     assert.match(text, /ATTRIBUTE VALUES ARE PLAIN WORDS/, `${what} не несёт правила о значении атрибута`)
     assert.match(text, /WRONG\s+\w+="/, `${what} не показывает НЕВЕРНУЮ строку`)
@@ -1527,7 +1527,7 @@ test("normalized.md как источник: нет файла — молчан�
 })
 
 test("наряды scenarios и data-failures подают третий документ — таблицу значений — своим блоком и своим слотом", () => {
-  const TPL = (x) => readFileSync(new URL(`order-${x}.tpl`, import.meta.url), "utf8")
+  const TPL = (x) => readFileSync(new URL(`${x}/order-${x}.tpl`, import.meta.url), "utf8")
   for (const x of ["scenarios", "data-failures"]) {
     const t = TPL(x)
     assert.match(t, /path: \.agent\/normalized\.md/, `наряд ${x} не объявляет документ`)

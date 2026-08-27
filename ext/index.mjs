@@ -68,10 +68,20 @@ const ask = {
     // как единственный источник (T35: «approved» — барьер над фактом, НЕ факт), а песочница fs не
     // имеет. До этой записи ответы оператора умирали в объекте результата: fold ждал строку,
     // примитив возвращал объект — вопросный круг повторялся до escalate (приёмка 25.08, intake).
+    // T75 — ОБМЕННЫМ ФОРМАТОМ. Живой прогон quarkus 26.08: ask писал сырые строки «N. текст»,
+    // читатель core/answers.mjs::newAnswers понимает только <exchange>-блоки — ответ ЛЕЖАЛ НА
+    // ДИСКЕ и не существовал для читателя: шаг task переспросил трижды и умер на бюджете.
+    // Писатель один — newExchange; пустые ответы в обмен не идут (обмен — свершившийся факт).
     const dir = join(String(ctx?.run?.cwd || process.cwd()), ".agent")
-    if (answers.some((a) => a && a.trim())) {
-      mkdirSync(dir, { recursive: true })
-      appendFileSync(join(dir, "answers.md"), answers.map((a, i) => `${i + 1}. ${String(a || "").trim()}`).join("\n") + "\n")
+    const pairs = (input.items || [])
+      .map((item, i) => ({ n: i + 1, question: String(item.text || "").trim(), text: answers[i] }))
+      .filter((p) => p.question && p.text)
+    if (pairs.length) {
+      const block = newExchange(pairs)
+      if (block.ok) {
+        mkdirSync(dir, { recursive: true })
+        appendFileSync(join(dir, "answers.md"), block.value)
+      } else console.log(`\n⚠ ответ не записан: ${block.error.detail}`)
     }
     return { answers }
   },
@@ -107,6 +117,7 @@ import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { rmSync, existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs"
+import { newExchange } from "../core/answers.mjs"
 import { roleDirsOf } from "./roles.mjs"
 
 const STEPS_ROOT = fileURLToPath(new URL("../steps/", import.meta.url))

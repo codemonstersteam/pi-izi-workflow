@@ -1,27 +1,49 @@
-// MODULE_CONTRACT: order — наряд роли intake на ОДИН пласт
-// Purpose:    одно решение: как пласт становится текстом наряда. Четыре шаблона — ДАННЫЕ
-//             (order-{a,b,c,d}.tpl), подстановка слотов; PREVIOUS несёт staging предыдущего
-//             пласта, FEEDBACK — блокеры прошлого круга ЭТОГО пласта.
-// io:         fs (чтение шаблона — module-relative)
-// EXTERNAL_DEPENDENCY: cut.mjs — карта, ответы, brd, normalized; frd.mjs::FRD_FORM.
+// MODULE_CONTRACT: order — ГОЛОВА-СБОРЩИК наряда intake над шестью слайсами пластов
+// Purpose:    одно решение: КАК пласт становится текстом наряда. Голова подставляет ОБЩИЕ слоты
+//             ({STAGING} {PREVIOUS} {FEEDBACK} {CLOSED} {ANSWERED} {ANSWERS} {CHECK}), зовёт
+//             слайс своего пласта (<pass>/order.mjs::orderSlice) по карте pass→модуль ниже,
+//             проверяет ТОТАЛЬНОСТЬ подстановки (дыра слота — отказ) и дописывает справку
+//             lookup (T69) отдельным документом в конце. Содержание пластов голове НЕ
+//             принадлежит — каждый слот пласта кладёт свой слайс; шов S4 (ext/design.test.mjs)
+//             читает слоты именно из слайсов, поэтому слайс обязан носить basename order.mjs.
+// io:         fs (чтение шаблона — module-relative; дисковую работу пластов делают слайсы)
+// EXTERNAL_DEPENDENCY: cut.mjs — ответы оператора; шесть <pass>/order.mjs — слоты пластов по
+//             карте SLICES; шаблон <pass>/order-<pass>.tpl — папка своего пласта. Нет шаблона
+//             (пласт вне карты) — ENOENT чтения, наряд не собирается.
 // Invariants: ТОТАЛЕН; непоставленный слот — отказ, а не текст с дырой.
 // Interface: orderText
-import { readFileSync, writeFileSync, existsSync } from "node:fs"
-import { join } from "node:path"
-import { FRD_FORM, parseFrd } from "./frd.mjs"
-import { mapOf, answersText, typesOf, b0Of, blueprintOf, brdText, normalizedText } from "./cut.mjs"
+import { readFileSync } from "node:fs"
+import { answersText } from "./cut.mjs"
+import { orderSlice as scenariosSlice } from "./scenarios/order.mjs"
+import { orderSlice as ownersSlice } from "./owners/order.mjs"
+import { orderSlice as contractsSlice } from "./contracts/order.mjs"
+import { orderSlice as datafailuresSlice } from "./data-failures/order.mjs"
+import { orderSlice as coverageSlice } from "./coverage/order.mjs"
+import { orderSlice as criticSlice } from "./critic/order.mjs"
 
-const tpl = (pass) => readFileSync(new URL(`./order-${pass.toLowerCase()}.tpl`, import.meta.url), "utf8")
+// Карта пласт→слайс: единственное место, где голова знает о существовании пластов (но не об
+// их содержании). Имена — PASSES из frd.mjs; слой слайса лежит в папке своего пласта.
+const SLICES = new Map([
+  ["scenarios", scenariosSlice],
+  ["owners", ownersSlice],
+  ["contracts", contractsSlice],
+  ["data-failures", datafailuresSlice],
+  ["coverage", coverageSlice],
+  ["critic", criticSlice],
+])
+
+const tpl = (pass) => readFileSync(new URL(`./${pass}/order-${pass.toLowerCase()}.tpl`, import.meta.url), "utf8")
 
 // FUNCTION_CONTRACT: orderText — наряд по пласту
-//   Input:        state; pass — буква пласта; { previous, feedback, closed } — прошлый ответ,
-//                 находки и список закрытых пластов
-//   Consequent:   success: { text, staging }; failure: { why }
+//   Input:        state; pass — имя пласта (PASSES из frd.mjs); { previous, feedback, closed,
+//                 lookup } — прошлый ответ (staging предыдущего СВОЕГО пласта по режиму T44),
+//                 блокеры прошлого круга, список закрытых пластов, справка lookup (T69)
+//   Dependencies: cut.mjs::answersText; SLICES — слайс пласта; tpl — шаблон папки пласта
+//   Consequent:   success: { text, staging }; failure: { why } — дыра слота или ENOENT шаблона
 //   Purity:       io (fs)
 export function orderText(state, pass, { previous = "", feedback = "", closed = "", lookup = "" } = {}) {
   const staging = `.agent/staging/frd~${pass}.xml`
   const answers = answersText(state)
-  const map = mapOf(state)
   const slots = {
     "{STAGING}": staging,
     "{PREVIOUS}": previous,
@@ -35,75 +57,8 @@ export function orderText(state, pass, { previous = "", feedback = "", closed = 
     "{ANSWERS}": answers,
     "{CHECK}": `the script judges the file you write at ${staging} by the FRD guardrail for pass ${pass}`,
   }
-  if (pass === "scenarios") slots["{BRD}"] = brdText(state), slots["{NORMALIZED}"] = normalizedText(state)
-  if (pass === "owners") {
-    // V2 МАТЕРИАЛЫ: кандидаты + чертёж + СКЕЛЕТ RTM — прожарка судится двусторонней матрицей
-    // (rtm.mjs): строки-требования из brd.md, владельцы дописываются в неё этим подшагом.
-    const b0 = b0Of(state)
-    writeFileSync(join(state.cwd, ".agent/intake-b0.json"), JSON.stringify(b0, null, 1))
-    const rIds = [...brdText(state).matchAll(/^R\d+ /gm)].map((m) => m[0].trim())
-    if (rIds.length && !existsSync(join(state.cwd, ".agent/rtm.md"))) {
-      writeFileSync(join(state.cwd, ".agent/rtm.md"), rIds.map((r) => `${r} | owners:`).join("\n") + "\n")
-    }
-    const rows = []
-    for (const s of b0.steps) {
-      rows.push(`${s.id}${s.disputed ? "  DISPUTED" : ""}  «${s.text}»`)
-      if (!s.candidates.length) rows.push("    (нет кандидатов — новый модуль или вопрос оператору)")
-      // T63 — ТОП-4; роль ПОЛНАЯ у топ-2 (решение о владельце читает её), урезана у остальных.
-      // Наряд с полными ролями × шаги × кандидаты разбух до 107К и замедлял модель (замер 25.08).
-      s.candidates.slice(0, 4).forEach((c, i) => {
-        const role = i < 2 ? (c.role || "") : (c.role || "").slice(0, 120)
-        rows.push(`    ${c.path} · ${c.score}${c.via ? ` · via edge of ${c.via}` : ""}${role ? ` — ${role}` : ""}`)
-      })
-    }
-    slots["{CANDIDATES}"] = rows.join("\n") || "(скрипт кандидатов не нашёл — каждый шаг вопрос или new=yes)"
-    // T63-0 — ЧЕРТЁЖ АНАЛОГА: связное ядро с ролями и вызовами. Функции отвечают «кто что
-    // делает», чертёж — «из каких слоёв состоит образец»: новые модули заводятся по его
-    // структуре, а не выдуманной архитектуре (замер 25.08: GlossaryResource/GlossaryLoader
-    // вместо квинтета модель-интерфейс-REST-mongo-rest).
-    const bp = blueprintOf(state)
-    slots["{BLUEPRINT}"] = bp.length ? bp.join("\n") : "(у аналога нет связного ядра в карте — структуры нет, только функции)"
-    slots["{ANALOGUE}"] = b0.analogueFunctions.length
-      ? b0.analogueFunctions.map((f) => `${f.path}${f.steps.length ? ` · нужен шагам: ${f.steps.join(", ")}` : " · роль пересекается с шагами"} — ${f.role.slice(0, 160)}`).join("\n")
-      : "(аналог не сопоставился ни с одним шагом)"
-    // T61 — ТИПЫ ТАБЛИЦЕЙ (выпали из наряда при разложении T62 — вернули): конвенция имён видна.
-    const types = typesOf(state)
-    slots["{TYPES}"] = types.slice(0, 80).join("\n") || "(the repository declares no types)"
-  }
-  if (pass === "contracts") {
-    // T62 — ФОРМЫ ТОЛЬКО НА ПОДТВЕРЖДЁННЫХ УЗЛАХ: таблица владельцев машиной из staging B1,
-    // срез карты — роль/api каждого выбранного узла.
-    const owners = parseFrd(previous).owners
-    slots["{OWNERS}"] = owners.length
-      ? owners.map((o) => `${o.step} → ${o.node}${o.new === "yes" ? " (new)" : ""}`).join("\n")
-      : "(B1 не оставил владельцев — сначала закрой его)"
-    const slice = []
-    for (const o of owners) {
-      const p = String(o.node || "")
-      const role = map.roles?.get(p) || "(нет в карте — новый файл)"
-      const api = (map.apis?.get(p) || []).slice(0, 3).join(", ")
-      slice.push(`${p} — ${role}${api ? ` — api: ${api}` : ""}`)
-    }
-    slots["{MAPSLICE}"] = slice.join("\n") || "(пусто)"
-    slots["{DELTA_FORMS}"] = FRD_FORM.deltaForms.join(" · ")
-  }
-  if (pass === "data-failures") {
-    slots["{BRD}"] = brdText(state)
-    slots["{NORMALIZED}"] = normalizedText(state)
-    slots["{SOURCES}"] = FRD_FORM.sources ? Object.entries(FRD_FORM.sources).map(([k, v]) => `${k}: ${v}`).join("\n") : ""
-  }
-  if (pass === "critic") {
-    // V2-4 — КРИТИК: последний взгляд перед планом; рубрика в шаблоне, данные — артефакт целиком
-    slots["{BRD}"] = ""
-  }
-  if (pass === "coverage") {
-    // T50 — СПИСОК ДОЛНЫХ ТРЕБОВАНИЙ из brd.md: модель видит КАЖДЫЙ id и копирует его
-    // в <carried req="…">. Без списка модель не знает, что закрыть (замер 25.08: D круг 1 —
-    // F11 на ВСЕ требования, потому что {OWED} был пуст).
-    const brd = brdText(state)
-    const ids = [...brd.matchAll(/^R\d+ /gm)].map((m) => m[0].trim())
-    slots["{OWED}"] = ids.length ? ids.join("\n") : "(нет требований в brd.md — проверь формат)"
-  }
+  const slice = SLICES.get(pass)
+  if (slice) Object.assign(slots, slice(state, previous))
   let text = tpl(pass)
   for (const [k, v] of Object.entries(slots)) text = text.split(k).join(v)
   const hole = text.match(/\{([A-Z_]+)\}/)

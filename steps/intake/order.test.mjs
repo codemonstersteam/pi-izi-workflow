@@ -34,7 +34,11 @@ const arrange = () => {
   writeFileSync(join(cwd, ".agent/anchors.json"), JSON.stringify({
     analogue: { word: "Snippet", files: ["src/llm/SnippetService.java", "src/engine/Converter.java"] },
   }))
-  writeFileSync(join(cwd, ".agent/answers.md"), "1. Binding — a list of URI glossaries in the agent configuration model itself.\n")
+  writeFileSync(join(cwd, ".agent/answers.md"), `<exchange>
+  <question_1>Where do the glossaries of an agent live?</question_1>
+  <answer_1>Binding — a list of URI glossaries in the agent configuration model itself.</answer_1>
+</exchange>
+`)
   writeFileSync(join(cwd, ".agent/staging/frd~scenarios.xml"), FRD_A)
   writeFileSync(join(cwd, ".agent/staging/frd~owners.xml"), FRD_A + `
   <owner step="UC7/1" node="src/engine/Converter.java"/>
@@ -86,5 +90,20 @@ test("T62: пустой стенд — именованные пустоты, н
     const b2 = orderText({ cwd }, "contracts", { previous: "<frd/>" })
     assert.equal(b2.why, undefined, b2.why)
     assert.match(b2.text, /B1 не оставил владельцев/)
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})
+
+test("тотальность: {WORD}-остаток в собранном наряде — ОТКАЗ {why}, а не текст с дырой", () => {
+  // Дыра делается ЗНАЧЕНИЕМ слота: brd.md с токеном {OWED} внутри доедет до текста наряда
+  // как есть, и остаток обязан быть пойман тем же стражем, что ловит неподставленный слот.
+  // Убери проверку остатка — этот тест краснеет: наряд уедет роли с «{OWED}» в тексте.
+  const cwd = mkdtempSync(join(tmpdir(), "izi-order-"))
+  try {
+    mkdirSync(join(cwd, ".agent"), { recursive: true })
+    writeFileSync(join(cwd, ".agent/brd.md"), "R1 держит величину {OWED} в самом тексте\n")
+    const r = orderText({ cwd }, "scenarios", {})
+    assert.equal(r.text, undefined, "наряд с дырой уехал роли текстом")
+    assert.match(r.why, /слот \{OWED\} не подставлен — наряд уходит роли с дырой/,
+      "остаток слота найден, но отказ не назван")
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })
