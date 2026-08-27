@@ -375,7 +375,13 @@ test("T76: маленькая задача → ОДИН наряд one; зелё
   assert.equal(r.value.portions.find((x) => x.id === "one").status, "green")
 })
 
-test("T76: красный one → ПАДЕНИЕ НА ПОЛНЫЙ ПУТЬ: шесть порций, F3c на contracts, круги целы", () => {
+// T77 — КРАСНЫЙ one ЧИНИТСЯ НА МЕСТЕ. Живой прогон 27.08: артефакт один-вызов был хорош на
+// 95% (одна дыра R3-без-владельца), а падение на полный путь с нуля стоило 1+6 вызовов —
+// хуже полного пути вовсе. Теперь чинимый красный даёт КРУГ ПОЧИНКИ (round+1, blockers как
+// FEEDBACK, previous = свой черновик), и только исчерпание кругов роняет на полный путь.
+// Реинтродукция: убери repair-ветку (p.round < intakeLoops) в fold — первый сценарий
+// краснеет («круг починки не выдан»), второй остаётся зелёным.
+test("T77: красный one с чинимым блокером → КРУГ ПОЧИНКИ, не падение", () => {
   const state = smallForm()
   const it1 = next(state)
   const st1 = fold(state, { do: "say", instruction: it1, result: null })
@@ -388,9 +394,37 @@ test("T76: красный one → ПАДЕНИЕ НА ПОЛНЫЙ ПУТЬ: ш�
     `<delta op="fruits" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java"/>\n  <delta op="store" form="Added" node="src/pkg/Mod0.java"/>`))
   const r = fold(st1.value, { do: "role", instruction: it2, result: { track: "ok", artifact: ".agent/staging/frd~one.xml" } })
   assert.ok(r.ok, r.error?.detail)
+  assert.deepEqual(r.value.portions.map((p) => p.id), ["one"], "чинимый красный сработал как падение — работа уничтожена")
+  const one = r.value.portions[0]
+  assert.equal(one.round, 2, "круг починки не выдан")
+  assert.match(one.blockers, /F3c/, "F3c не вернулся FEEDBACK'ом — роль починит вслепую")
+  assert.equal(one.status, "todo")
+  assert.ok(!nodeFs.existsSync(join(state.cwd, ".agent/frd.xml")), "красный one продвинул FRD")
+  // следующий наряд несёт СВОЙ черновик как PREVIOUS (T44) — модель правит названное, не пишет с нуля
+  const it3 = next(r.value)
+  assert.equal(it3.do, "role", "после круга починки — роль, а не падение")
+  assert.match(it3.text, /F3c/, "FEEDBACK не доехал до наряда починки")
+})
+
+test("T77: круги one исчерпаны → ПАДЕНИЕ НА ПОЛНЫЙ ПУТЬ: шесть порций, F3c на contracts", () => {
+  const state = smallForm()
+  const it1 = next(state)
+  const st1 = fold(state, { do: "say", instruction: it1, result: null })
+  // порция one уже на последнем круге бюджета — следующего круга починки нет
+  const stLast = put(st1.value, {
+    portions: st1.value.portions.map((x) => ({ ...x, round: st1.value.budgets.loops })),
+  })
+  assert.ok(stLast.ok, stLast.error?.detail)
+  const it2 = next(stLast.value)
+  assert.equal(it2.do, "role")
+  nodeFs.writeFileSync(join(state.cwd, ".agent/staging/frd~one.xml"), FRD_ONE_GREEN.replace(
+    `<delta op="fruits" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java"/>`,
+    `<delta op="fruits" form="Added" node="src/main/java/org/acme/rest/json/FruitResource.java"/>\n  <delta op="store" form="Added" node="src/pkg/Mod0.java"/>`))
+  const r = fold(stLast.value, { do: "role", instruction: it2, result: { track: "ok", artifact: ".agent/staging/frd~one.xml" } })
+  assert.ok(r.ok, r.error?.detail)
   assert.deepEqual(r.value.portions.map((p) => p.id),
     ["scenarios", "owners", "contracts", "data-failures", "coverage", "critic"],
-    "красный one не упал на полный путь")
+    "исчерпанные круги не уронили one на полный путь")
   const contracts = r.value.portions.find((x) => x.id === "contracts")
   assert.match(contracts.blockers, /F3c/, "F3c не доехал до contracts — блокер потерян при падении")
   assert.ok(r.value.portions.every((x) => x.round === 1), "круг головы потрачен на падение")
