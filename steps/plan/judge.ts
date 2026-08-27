@@ -46,11 +46,13 @@ export function judgeForm(plan: string, task: string, cwd: string): string[] {
   }
 
   for (const c of chgRows) {
-    const path = (c[1] || "").replace(/`/g, "").trim()
-    const what = `${c[3] || ""} ${c[2] || ""} ${c[4] || ""}`
-    if (!path) { B.push(`ИЗМЕНЕНИЯ «${(c[0] || "?").slice(0, 12)}»: колонка файла пуста`); continue }
-    if (cwd && !existsSync(join(cwd, path)) && !/образ/i.test(what))
-      B.push(`ИЗМЕНЕНИЯ «${path}»: файла нет и образец не назван`)
+    const cell = (c[1] || "").replace(/`/g, "").trim()
+    const what = `${c[3] || ""} ${c[2] || ""} ${c[4] || ""} ${cell}`
+    if (!cell) { B.push(`ИЗМЕНЕНИЯ «${(c[0] || "?").slice(0, 12)}»: колонка файла пуста`); continue }
+    // planner пишет путь с пояснением в ячейке — извлечь путь, а не брать cell целиком
+    const path = extractPath(cell)
+    if (cwd && path && !existsSync(join(cwd, path)) && !/образ/i.test(what))
+      B.push(`ИЗМЕНЕНИЯ «${path || cell.slice(0, 60)}»: файла нет и образец не назван`)
   }
 
   for (const c of tableRows(sectionOf(plan, "ВЕЛИЧИНЫ"))) {
@@ -63,3 +65,13 @@ export function judgeForm(plan: string, task: string, cwd: string): string[] {
 
 export const countReqs = (plan: string): number => tableRows(sectionOf(plan, "ТРЕБОВАНИЯ")).length
 export const countRows = (plan: string): number => tableRows(sectionOf(plan, "ИЗМЕНЕНИЯ")).filter((c) => /^Ф\d+/.test(c[0] || "")).length
+
+// extractPath — извлечь путь из ячейки таблицы: planner пишет путь + пояснение в скобках.
+// Ищем подстроку, которая выглядит как путь (содержит / и расширение) и обрезаем по
+// первому пробелу/скобке ЗА ним.
+export function extractPath(cell: string): string {
+  const cleaned = cell.replace(/`/g, "").trim()
+  // путь в кавычках или без — берём часть до первого пробела/скобки после последнего /
+  const m = cleaned.match(/((?:[\w.-]+\/)+[\w.-]+\.\w+)/)
+  return m ? m[1] : cleaned.split(/[\s(]/)[0] || ""
+}
