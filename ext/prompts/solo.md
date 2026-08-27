@@ -34,6 +34,7 @@ for (;;) {
   if (it.do === "done") return ok({ station: "done", value: it.state });
   if (it.do === "err") return err(it.kind || "crashed", it.subject || "");
   let result = null;
+  if (it.do === "say") { log(it.line); continue; }
   if (it.do === "role") result = await agent(it.text, { role: it.role, outputSchema: ENVELOPE }, "solo:agent");
   else if (it.do === "ask") {
     const r = await ask({ items: (it.items || []).map((t) => ({ text: String(t) })) });
