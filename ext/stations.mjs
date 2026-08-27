@@ -55,11 +55,12 @@ const feedbackBlock = (blockers, answers) => {
 
 // soloNext — ЧТО делать: role | ask | done | err.
 export function soloNext({ state } = {}) {
-  if (!state || !state.cwd) return err("state", "soloNext получил состояние без cwd")
+  if (!state || !state.cwd) return { do: "err", ...err("state", "soloNext получил состояние без cwd") }
   const s = state
   if (s.round > (s.loops || DEFAULT_LOOPS)) {
-    return err("escalate", `станция ${s.station} не чинится за ${s.loops} круга`)
+    return { do: "err", ...err("escalate", `станция ${s.station} не чинится за ${s.loops} круга`) }
   }
+  if (s.station === "done") return { do: "done", state: s }
   if (s.question) {
     return { do: "ask", name: s.question.name, prompt: s.question.items[0], items: s.question.items }
   }
@@ -158,7 +159,7 @@ $END_OUTPUT`
     return { do: "role", role: "dev", text, staging: PLAN }
   }
 
-  return err("state", `неизвестная станция «${s.station}»`)
+  return { do: "err", ...err("state", `неизвестная станция «${s.station}»`) }
 }
 
 const put = (state, patch) => ok({ value: { ...state, ...patch } })
@@ -174,7 +175,7 @@ export function soloFold({ state, event = {} } = {}) {
     const answers = readAt(s.cwd, ".agent/answers.md").trim()
     if (s.station === "approve") {
       const yes = String((event.result || []).join(" ")).toLowerCase()
-      if (/\b(да|yes|approve|согласен|ok)\b/.test(yes)) {
+      if (/(да|yes|approve|согласен|ok)/i.test(yes)) { // без \b: JS-границы не знают кириллицы (повтор урока draft-judge)
         mkdirSync(dirname(join(s.cwd, PLAN)), { recursive: true })
         copyFileSync(join(s.cwd, DRAFT_STAGING), join(s.cwd, PLAN))
         return put(s, {
@@ -214,7 +215,7 @@ export function soloFold({ state, event = {} } = {}) {
   if (s.station === "solve") {
     const findings = judgeSolve({ cwd: s.cwd, plan: readAt(s.cwd, PLAN), since: s.solveStart })
     if (findings.length) return put(s, { round: s.round + 1, blockers: findings.join("\n") })
-    return { do: "done", state: { ...s, station: "done" } }
+    return put(s, { station: "done", blockers: "" })
   }
 
   return err("state", `fold на неизвестной станции «${s.station}»`)
