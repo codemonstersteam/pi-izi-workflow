@@ -100,7 +100,7 @@ const dirOf = (p) => String(p).split("/").slice(0, -1).join("/")
 //       b3 «кластер»: существующий owner из ядра чертежа делит строку с соседями ядра или вопросом;
 //       b4 «ответ назвал»: узел карты, названный в ответах, не-аналог и не owners.
 //   Purity: pure
-export function rtmJudge({ rtm = { rows: [] }, requirements = [], requirementStatements = [], analogueFiles = new Set(), blueprint = new Map(), answers = "", nodes = [] } = {}) {
+export function rtmJudge({ rtm = { rows: [] }, requirements = [], requirementStatements = [], analogueFiles = new Set(), blueprint = new Map(), answers = "", nodes = [], carriedBy = new Set() } = {}) {
   const B = []
   const byRow = new Map(rtm.rows.map((r) => [r.req, r]))
   const mods = modulesOf(rtm)
@@ -122,7 +122,13 @@ export function rtmJudge({ rtm = { rows: [] }, requirements = [], requirementSta
     const row = byRow.get(req)
     const owners = (row && row.dims.owners) || []
     const asked = (row && row.dims.questions) || []
-    if (!owners.length && !asked.length) {
+    // T78 — CARRIED-BY-NFR — НОСИТЕЛЬ. Ограничение («не ломать существующее») не имеет
+    // владельца-модуля В ПРИНЦИПЕ: это не действие. Правильная форма для него — нфр-гарантия,
+    // и артефакт её уже пишет: <carried req="R3" by="nfr:backward-compatibility"/>. Живой
+    // тупик 27.08 (FRUIT-1): 44 красных круга one↔coverage, 269k токенов — суд требовал
+    // невозможного. Носителем считается ТОЛЬКО by="nfr:…": by="UC1/2" — не гарантия (F11 и
+    // так требует carried на каждое R, иначе forward опустел бы вовсе).
+    if (!owners.length && !asked.length && !carriedBy.has(req)) {
       B.push(`rtm:forward ${req} без носителя и без вопроса — требование никто не понесёт: назначь owners (кандидаты в материалах) или спроси оператора`)
     }
   }

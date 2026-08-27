@@ -221,7 +221,7 @@ export function fold(state, event = {}) {
   // которой не хватало: пустая строка матрицы = упущено, колонка без обоснования = выдумано.
   // T76 — ПОРЦИЯ one судится матрицей ТАК ЖЕ: один вызов меняет число вызовов модели, НЕ число
   // проверок.
-  const rtmBlockers = (p.id === "coverage" || p.id === "one") ? rtmJudge(rtmArgs(state)) : []
+  const rtmBlockers = (p.id === "coverage" || p.id === "one") ? rtmJudge(rtmArgs(state, staged)) : []
   const blockers = env.artifact !== p.staging
     ? `invalid: роль записала «${env.artifact || "ничего"}», а послана была в ${p.staging}`
     : !staged.trim()
@@ -347,7 +347,7 @@ export function fold(state, event = {}) {
 }
 
 // Аргументы судьи: карта как данные + значения из brd
-function rtmArgs(state) {
+function rtmArgs(state, staged = "") {
   const map = mapOf(state)
   const doc = parseBrd(readAt(state.cwd, ".agent/brd.md"))
   let analogueFiles = []
@@ -374,6 +374,13 @@ function rtmArgs(state) {
     const callers = [...new Set(computed.edges.filter((e) => e.to === path).map((e) => e.from))]
     bp.set(path, { package: pkg, callers })
   }
+  // T78 — CARRIED-BY-NFR суду forward: ограничение без владельца-модуля закрывается
+  // нфр-гарантией артефакта (<carried req by="nfr:…"/>); собрано из staged СТРОК артефакта,
+  // судимого этим ходом. by="UC…" носителем НЕ считается — см. rtm.mjs (тупик FRUIT-1 27.08).
+  const carriedBy = new Set(
+    (parseFrd(staged).carried || [])
+      .filter((c) => String(c.by || "").startsWith("nfr:"))
+      .map((c) => String(c.req || "").trim()))
   return {
     rtm: parseRtm(readAt(state.cwd, ".agent/rtm.md")),
     requirements: (doc.requirements || []).map((r) => r && r.id).filter(Boolean),
@@ -382,6 +389,7 @@ function rtmArgs(state) {
     blueprint: bp,
     answers: readAt(state.cwd, ".agent/answers.md"),
     nodes: [...map.nodes],
+    carriedBy,
   }
 }
 const dirOf = (p) => String(p).split("/").slice(0, -1).join("/")

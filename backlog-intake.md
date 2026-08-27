@@ -338,3 +338,38 @@ RemoteApi/StructuralMatcher — merge лёг на RestImportService+UpgradeExecu
 4. Полный intake v2 (6 подшагов с нуля) на новом провайдере
 5. Мониторинг по 6 сигналам
 6. Анализ: ≥12 дельт, MemoryItemConverter + квинтета + синк в плане, эталон ≥14/19
+
+---
+
+## T78: forward-суд признаёт carried-by-nfr носителем (тупик quarkus 27.08, 44 красных круга)
+
+### Замер дефекта
+
+Живой прогон FRUIT-1 (после падения fast-трека в полный путь): R3 «preserve | existing calls»
+красный **44 раза**, пинг-понг one↔coverage↔owners, 24 агента, 269k токенов, frd.xml нет.
+
+Логическая цепочка тупика:
+1. Артефакт несёт `<carried req="R3" by="nfr:backward-compatibility"/>` — требование унесено
+   нфр-гарантией, и это ПРАВИЛЬНАЯ форма для ограничения «не ломать существующее».
+2. forward-суд (`rtm.mjs`) признаёт носителем только owners ИЛИ questions — carried он не видит.
+3. Глагол `preserve` не входит в PROPERTY_VERBS (define/set/name/constrain/restrict/limit) —
+   exemption не спасает.
+4. Модель не может назначить владельца на «сохранить как есть» — это не действие; каждый
+   owners-круг зелёный, coverage краснеет снова. Два правила требуют несовместимого = ТУПИК.
+
+Прогон 26.08 прошёл случайно: его глагол попал в exemption-список.
+
+### Правка
+
+- `rtm.mjs::rtmJudge` — новый параметр `carriedBy: Set<req>`; forward проходит при
+  owners ИЛИ questions ИЛИ `carriedBy.has(req)`. НЕ любой carried: by="UC1/2" носителем
+  НЕ считается (F11 и так требует carried на каждое R — иначе forward пуст; работу делает
+  owner, UC-ссылка — не гарантия). Носитель — только `by="nfr:…"`: ограничение, унесенное
+  гарантией.
+- `intake.step.mjs::rtmArgs(state, staged)` — собирает carriedBy из parseFrd(staged).carried
+  (фильтр `by` начинается с `nfr:`); оба вызова rtmJudge (coverage, one) передают staged.
+
+### Seam
+
+Юнит rtm.test.mjs: R без owners/questions + carried by="nfr:x" → блокера НЕТ; carried
+by="UC1/2" → блокер ЕСТЬ. Реинтродукция: убрать carriedBy из условия — первый красный.

@@ -143,3 +143,16 @@ test("b2: проводник = звонящий из ДРУГОГО катало
   const b3 = rtmJudge({ rtm: parseRtm("R1 | owners: src/llm/GlossaryService.java(new, after=src/llm/SnippetService.java)"), requirements: ["R1"], blueprint: samePkg })
   assert.ok(!b3.some((x) => x.startsWith("rtm:backward-вызов")), "все звонящие в том же каталоге — b2 обязан молчать")
 })
+
+// T78 — CARRIED-BY-NFR — НОСИТЕЛЬ forward-суда. Живой тупик FRUIT-1 (27.08): ограничение
+// «preserve | existing calls» краснело 44 круга — владельца-модуля у «не ломать» не бывает,
+// carried by="nfr:…" суд не видел. Носитель — ТОЛЬКО nfr-гарантия: by="UC…" не считается
+// (иначе F11, требующий carried на каждое R, опустошил бы forward вовсе).
+// Реинтродукция: убрать carriedBy из условия forward — оба первых ассерта краснеют.
+test("T78: carried by nfr закрывает forward; carried by UC — нет", () => {
+  const rtm = parseRtm("R1 | owners:")   // R1 без владельцев и без вопросов
+  const b1 = rtmJudge({ rtm, requirements: ["R1"], carriedBy: new Set(["R1"]) })
+  assert.ok(!b1.some((x) => x.startsWith("rtm:forward")), "carried by nfr не закрыл forward — тупик FRUIT-1 жив")
+  const b2 = rtmJudge({ rtm, requirements: ["R1"], carriedBy: new Set() })
+  assert.ok(b2.some((x) => x.startsWith("rtm:forward R1")), "без carried блокер исчез — forward ослеп")
+})
