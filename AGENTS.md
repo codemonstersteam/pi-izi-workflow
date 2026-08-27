@@ -9,7 +9,7 @@ $END_GOAL
 $START_CONTEXT
 - Это ПАКЕТ расширения pi-extensible-workflows, не пайплайн с файлами в проекте.
 - `ext/` — всё: хост-функции станций (`soloStart/soloNext/soloFold/ask`), команда `/solo`
-  (`ext/prompts/solo.md`, inline-скрипт полосы), роли (`ext/roles/`), судьи.
+  (`ext/prompts/solo.md`, inline-скрипт полосы), роли (в папках шагов `steps/*/`), судьи.
 - В проект оператора не кладётся НИЧЕГО харнессного: только его TASK.md [+ PROMPT.md] и
   рантайм `.agent/`.
 - Установка: `pi install ./ext` — один раз на машину; правка под `ext/` живая после
@@ -38,7 +38,7 @@ $END_CONSTRAINTS
 $START_FORBIDDEN
 - Не возвращать копирование харнесса в проекты (преждений bin/install.mjs).
 - Не кормить роли срезами вместо кода: planner/dev читают репозиторий сами.
-- Не запускать полосу в фоне: каждый вопрос в фоне стоит ход чат-модели.
+- Не запускать полосу в foreground: он держит сессию и глушит чат-реле ответов.
 $END_FORBIDDEN
 
 $START_SUCCESS
