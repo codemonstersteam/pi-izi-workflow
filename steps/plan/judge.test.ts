@@ -1,10 +1,10 @@
-// Units of the draft judge. Both sides of every rule; fixtures are strings.
+// Units of the plan judge: both sides of every rule; fixtures are strings.
 import test from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { judgeDraft } from "./draft.mjs"
+import { judgeDraft } from "./judge.ts"
 
 const TASK = "Нужен поиск по части имени. Существующие вызовы ломать нельзя.\n"
 
@@ -22,9 +22,9 @@ const GREEN = `# План
 | Ф1 | src/App.java | Changed | новый метод search | Т1, Т2 |
 
 ## 3. СЦЕНАРИИ
-### С1
+### Сценарий 1
 - До: нет поиска.
-- После: GET /search возвращает совпадения.
+- После: поиск есть.
 
 ## 4. ВЕЛИЧИНЫ
 | Величина | Значение | Источник |
@@ -35,11 +35,13 @@ const GREEN = `# План
 1. Существующие вызовы не меняются — src/App.java только расширяется.
 
 ## 6. ОТКРЫТЫЕ ВОПРОСЫ
-1. Лимит по умолчанию? Предлагаю 20.
+| Вопрос | Рекомендация |
+|---|---|
+| Лимит по умолчанию? | 20 |
 `
 
 const stand = (files = { "src/App.java": "class App {}\n" }) => {
-  const cwd = mkdtempSync(join(tmpdir(), "solo-draft-"))
+  const cwd = mkdtempSync(join(tmpdir(), "solo-judge-"))
   for (const [p, c] of Object.entries(files)) {
     mkdirSync(join(cwd, p, ".."), { recursive: true })
     writeFileSync(join(cwd, p), c)
@@ -47,31 +49,27 @@ const stand = (files = { "src/App.java": "class App {}\n" }) => {
   return cwd
 }
 
-test("зелёный план проходит молча", () => {
+test("зелёный план проходит молча (включая цитату в бэктиках)", () => {
   const cwd = stand()
-  try { assert.deepEqual(judgeDraft({ plan: GREEN, task: TASK, cwd }), []) }
-  finally { rmSync(cwd, { recursive: true, force: true }) }
+  try {
+    const withTicks = GREEN.replace("«Нужен поиск по части имени»", "`Нужен поиск по части имени`")
+    assert.deepEqual(judgeDraft({ plan: withTicks, task: TASK, cwd }), [])
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
 })
 
-test("потерянное требование: цитата не из TASK — блокер", () => {
+test("потерянное требование и выдуманный путь — блокеры", () => {
   const cwd = stand()
   try {
     const bad = GREEN.replace("«Нужен поиск по части имени»", "поиск по подстроке имени")
     assert.ok(judgeDraft({ plan: bad, task: TASK, cwd }).some((b) => b.includes("не подстрока TASK")))
-  } finally { rmSync(cwd, { recursive: true, force: true }) }
-})
-
-test("выдуманный путь без «новый» — блокер; «новый» без образца — блокер", () => {
-  const cwd = stand()
-  try {
-    const bad = GREEN.replace("src/App.java | Changed", "src/Nope.java | Changed")
-    assert.ok(judgeDraft({ plan: bad, task: TASK, cwd }).some((b) => b.includes("файла нет в репозитории")))
+    const noPath = GREEN.replace("src/App.java | Changed", "src/Nope.java | Changed")
+    assert.ok(judgeDraft({ plan: noPath, task: TASK, cwd }).some((b) => b.includes("файла нет в репозитории")))
     const noPat = GREEN.replace("| Ф1 | src/App.java | Changed |", "| Ф1 | src/New.java | Changed | новый модуль |")
-    assert.ok(judgeDraft({ plan: noPat, task: TASK, cwd }).some((b) => b.includes("образец не назван")), "новый файл без образца прошёл")
+    assert.ok(judgeDraft({ plan: noPat, task: TASK, cwd }).some((b) => b.includes("образец не назван")))
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })
 
-test("величина без источника — блокер; отсутствие раздела — блокер", () => {
+test("величина без источника и отсутствующий раздел — блокеры; пустой план", () => {
   const cwd = stand()
   try {
     const noSrc = GREEN.replace("| путь | /search | TASK: «поиск» |", "| путь | /search |  |")

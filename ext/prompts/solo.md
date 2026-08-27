@@ -1,5 +1,5 @@
 ---
-description: Запустить воркфлоу solo — план по спеке и разработка (foreground, без участия чат-модели после запуска)
+description: Запустить воркфлоу solo — план по спеке, вопросы в чат, разработка по строкам (foreground)
 ---
 
 $START_TASK
@@ -7,7 +7,8 @@ Call the `workflow` tool NOW, exactly once, with exactly these parameters and no
 `name: "solo"`, `foreground: true`, and `script` set to the inline script between the fences
 below, verbatim. Pass `args: { "key": "<KEY>" }` if the operator named a task key this turn;
 otherwise omit `args`. Do not pass `scriptPath`. When the launch completes — finished: no code,
-no tests, no file edits of your own.
+no tests, no file edits of your own. When the workflow asks the operator questions in chat,
+relay the operator's reply through the `solo_answer` tool exactly once per batch.
 
 ```js
 const ok = (v) => ({ track: "ok", value: v });
@@ -39,6 +40,8 @@ for (;;) {
   else if (it.do === "ask") {
     const r = await ask({ items: (it.items || []).map((t) => ({ text: String(t) })) });
     result = (r && r.answers) || [];
+  } else if (it.do === "checkpoint") {
+    result = await checkpoint({ name: it.name, prompt: it.prompt });
   }
   const folded = await soloFold({ state, event: { do: it.do, instruction: it, result } });
   if (folded.track === "err") return folded;
@@ -48,7 +51,9 @@ for (;;) {
 $END_TASK
 
 $START_LAW
-- `foreground: true` обязателен: вопросы оператора идут через TUI без твоего участия.
-- Один tool call. После его возвращения (итоговая карточка воркфлоу) — ответ закончен:
-  перескажи карточку одним абзацем, если оператор спросит, но не предпринимай действий.
+- `foreground: true` обязателен: подтверждение плана — модалка Approve/Reject в панели,
+  вопросы — сообщениями в чат (ответ оператора оформи инструментом `solo_answer`,
+  сверяя номера с .agent/pending.json; показывай возвращённую таблицу оператору).
+- Один tool call запуска. Ответы на вопросы воркфлоу — единственные твои действия
+  после запуска: реле, не исполнитель.
 $END_LAW
