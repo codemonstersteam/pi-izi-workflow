@@ -10,12 +10,18 @@ import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { SoloState, Instruction, StepHead } from "../../ext/types.ts"
 import { judgeSolve, doneCard } from "./judges.ts"
+import { tableRows, sectionOf } from "../plan/judge.ts"
 
 const readAt = (cwd: string, rel: string): string =>
   existsSync(join(cwd, rel)) ? readFileSync(join(cwd, rel), "utf8") : ""
 
 export const step: StepHead = {
   next(state: SoloState): Instruction {
+    // ПЕРВОЕ сообщение фазы — оператор видит старт разработки
+    if (!state.cardShown) {
+      const rows = tableRows(sectionOf(readAt(state.cwd, ".agent/PLAN.md"), "ИЗМЕНЕНИЯ")).filter((c) => /^Ф\d+/.test(c[0] || "")).length
+      return { do: "say", line: `ПРИСТУПАЮ К РАЗРАБОТКЕ ПО ПЛАНУ — ${rows} строк Ф, итерация = строка = коммит` }
+    }
     const plan = readAt(state.cwd, ".agent/PLAN.md")
     const text = [
       `$START_TASK\nРазработай по плану ниже. Правила:\n1. работай маленькими итерациями с тестами; итерация = строка Ф = коммит\n   (сообщение коммита — со ссылками на §плана и принятыми решениями)\n2. величины — только из раздела 4; гарантии раздела 5 нерушимы\n3. существующие тесты не переписывать\nБаг плана нашёл по мелочи (пример/опечатка) — правь PLAN.md с обоснованием в коммите.\nНужно изменить поведение/требование/гарантию — верни err-конверт kind="blocked" с вопросом.\n$END_TASK`,
