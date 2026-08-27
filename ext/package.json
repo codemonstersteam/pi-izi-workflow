@@ -1,0 +1,13 @@
+{
+  "name": "solo-pi-ext",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": ["./index.mjs"],
+    "prompts": ["./prompts"]
+  },
+  "dependencies": {
+    "pi-extensible-workflows": "5.1.1"
+  }
+}
