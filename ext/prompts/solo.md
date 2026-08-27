@@ -1,5 +1,5 @@
 ---
-description: Запустить воркфлоу solo — план по спеке, вопросы в чат, разработка по строкам (foreground)
+description: Запустить воркфлоу solo — план по спеке, вопросы в чат, разработка по строкам (background)
 ---
 
 $START_TASK
@@ -42,8 +42,6 @@ for (;;) {
     state = sf.value;
     continue;
   }
-  if (it.do === "role") log("→ фаза " + state.phase + ": наряд роли " + it.role + (state.round > 1 ? " (круг " + state.round + ")" : ""));
-  if (it.do === "ask") log("⏸ фаза " + state.phase + ": вопросы оператору (" + (it.items || []).length + ") — жду ответа в чате");
   if (it.do === "role") result = await agent(it.text, { role: it.role, outputSchema: ENVELOPE }, "solo:agent");
   else if (it.do === "ask") {
     const r = await ask({ items: (it.items || []).map((t) => ({ text: String(t) })) });
@@ -65,4 +63,7 @@ $START_LAW
   Подтверждение плана — тоже слова оператора («да»/«нет: причина») через solo_answer.
 - Один tool call запуска. Ответы на вопросы воркфлоу — единственные твои действия
   после запуска: реле, не исполнитель.
+- НЕ ПИШИ в чат ничего сверх необходимого: ни статусов, ни пересказа хода полосы.
+  Полоса сама печатает карточки через log(). Твои слова — только когда оператор
+  спросил тебя или когда нужно передать его ответ через solo_answer.
 $END_LAW
