@@ -84,7 +84,10 @@ export async function soloNext({ state }: { state: SoloState }): Promise<Instruc
         const hc = await head("plan-check")
         const updated = hc.applyAnswers?.(plan, answers) ?? plan
         writeFileSync(join(state.cwd, PLAN), updated)
-        return { do: "say", line: `resume: ответы оператора вписаны в план (${(updated.match(/→ РЕШЕНО/g) || []).length}); переход в confirm` }
+        // ПЕРЕХОД, не только сообщение: say не меняет состояние — без перехода
+        // ветка крутилась бы один и тот же ход вечно (живой цикл 27.08)
+        state = { ...state, phase: "confirm", cardShown: false }
+        return { do: "say", line: `resume: ответы оператора вписаны в план (${(updated.match(/→ РЕШЕНО/g) || []).length}); фаза confirm` }
       }
       if (pending) {
         try {

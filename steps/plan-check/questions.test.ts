@@ -39,3 +39,9 @@ test("applyAnswers: ответ без своего вопроса — план �
   const alien = `<exchange>\n  <question_1>Чужой вопрос?</question_1>\n  <answer_1>х</answer_1>\n</exchange>\n`
   assert.equal(applyAnswers(PLAN, alien), PLAN)
 })
+
+test("applyAnswers: вопрос с припиской «— рекомендация» находит свою строку", () => {
+  const withRec = "<exchange>\n  <question_1>Лимит по умолчанию? — рекомендация: 20</question_1>\n  <answer_1>30</answer_1>\n</exchange>\n"
+  const out = applyAnswers(PLAN, withRec)
+  assert.match(out, /Лимит по умолчанию\? → РЕШЕНО: 30/)
+})

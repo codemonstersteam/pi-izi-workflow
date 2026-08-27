@@ -29,7 +29,9 @@ export function applyAnswers(plan: string, answersMd: string): string {
   if (!r.ok) return plan
   let out = plan
   for (const a of r.value) {
-    const needle = a.question.trim()
+    // вопрос в answers.md мог приехать с припиской «— рекомендация: …» (pending
+    // собирал вопрос+рекомендацию одной строкой) — сверяем по тексту ДО приписки
+    const needle = a.question.split("— рекомендация")[0].trim()
     if (!needle) continue
     // строка таблицы раздела 6, первая колонка которой совпадает с вопросом
     const re = new RegExp(`^(\\|\\s*)${escapeRe(needle)}(\\s*\\|.*)$`, "m")
