@@ -30,17 +30,19 @@ export const step: StepHead = {
     }
 
     if (state.phase === "questions") {
-      // эту фазу движок обслуживает ask-рельсой (state.question); сюда попадаем, только
-      // если вопросов нет — тогда сразу карточка и подтверждение
+      // движок обслуживает эту фазу ask-рельсой (state.question); сюда попадаем,
+      // только если вопросов нет — тогда сразу confirm
       const plan = readAt(state.cwd, ".agent/PLAN.md")
       if (!state.cardShown) return { do: "say", line: buildCard(plan, state.cwd) }
-      return { do: "checkpoint", name: "solo-confirm", prompt: "План прочитан, вопросы решены. Запускаем разработку (execute)?" }
+      return { do: "ask", name: "solo-confirm", items: ["План прочитан, вопросы решены. Запускаем разработку (execute)? Ответь: да / нет: причина"] }
     }
 
     if (state.phase === "confirm") {
       const plan = readAt(state.cwd, ".agent/PLAN.md")
       if (!state.cardShown) return { do: "say", line: buildCard(plan, state.cwd) }
-      return { do: "checkpoint", name: "solo-confirm", prompt: "План прочитан, вопросы решены. Запускаем разработку (execute)?" }
+      // ПОДТВЕРЖДЕНИЕ СЛОВАМИ через ask-канал: «да» — execute, «нет: причина» — круг plan.
+      // Модалки checkpoint несовместимы с background (чат-реле); слова читаем из ответа.
+      return { do: "ask", name: "solo-confirm", items: ["План прочитан, вопросы решены. Запускаем разработку (execute)? Ответь: да / нет: причина"] }
     }
 
     return { do: "err", kind: "state", subject: `plan-check получил фазу «${state.phase}»` }

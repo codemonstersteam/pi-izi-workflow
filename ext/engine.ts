@@ -25,6 +25,20 @@ const QUESTION_ROUNDS = 2
 const readAt = (cwd: string, rel: string): string =>
   existsSync(join(cwd, rel)) ? readFileSync(join(cwd, rel), "utf8") : ""
 
+// ── resume (образец step9-rework recon; урок T71: существование ≠ принято) ───
+// Маркер пишется на КАЖДОМ переходе фазы; soloStart верит маркеру, а не фактам
+// «файл лежит»: PLAN.md без маркера «план принят» — ещё черновик круга починки.
+const PROGRESS = ".agent/progress.json"
+function mark(cwd: string, patch: Record<string, unknown>) {
+  let p: any = {}
+  try { p = JSON.parse(readAt(cwd, PROGRESS) || "{}") } catch {}
+  mkdirSync(join(cwd, ".agent"), { recursive: true })
+  writeFileSync(join(cwd, PROGRESS), JSON.stringify({ ...p, ...patch, reachedAt: new Date().toISOString() }, null, 1))
+}
+function readMark(cwd: string): any {
+  try { return JSON.parse(readAt(cwd, PROGRESS) || "{}") } catch { return {} }
+}
+
 const heads: Partial<Record<StepId, StepHead>> = {}
 async function head(id: StepId): Promise<StepHead> {
   if (!heads[id]) heads[id] = (await import(MODULES[id])).step as StepHead
@@ -37,12 +51,19 @@ export function soloStart({ key = "" }: { key?: string } = {}, ctx: { run?: { cw
   if (!existsSync(cwd)) return { track: "err" as const, kind: "state", subject: `каталог прогона «${cwd}» не существует` }
   if (!readAt(cwd, "TASK.md").trim())
     return { track: "err" as const, kind: "no-task", subject: "TASK.md в корне проекта пуст или отсутствует — solo не с чего начать" }
+  const m = readMark(cwd)
+  const resumed = existsSync(join(cwd, ".agent")) && m.phase
   const state: SoloState = {
     cwd, key: String(key || "").trim(),
-    phase: "plan", round: 1, blockers: "", answers: "",
-    question: null, cardShown: false, solveStart: "", loops: DEFAULT_LOOPS,
+    phase: resumed ? m.phase : "plan",
+    round: resumed ? (m.round || 1) : 1,
+    blockers: resumed ? (m.blockers || "") : "",
+    answers: resumed ? (m.answers || "") : "",
+    question: null, cardShown: false,
+    solveStart: resumed ? (m.solveStart || "") : "",
+    loops: DEFAULT_LOOPS,
   }
-  return { track: "ok" as const, state, from: "fresh" }
+  return { track: "ok" as const, state, from: resumed ? "resumed" : "fresh" }
 }
 
 // ── next ─────────────────────────────────────────────────────────────────────
@@ -50,6 +71,33 @@ export async function soloNext({ state }: { state: SoloState }): Promise<Instruc
   if (!state || !state.cwd) return { do: "err", kind: "state", subject: "soloNext получил состояние без cwd" }
   if (state.phase !== "done" && state.round > state.loops)
     return { do: "err", kind: "escalate", subject: `фаза ${state.phase} не чинится за ${state.loops} круга` }
+  // RESUME-СВЕРКА: фаза questions/confirm по маркеру, но вопросы ещё открыты
+  // (pending жив) или ответы не вписаны — восстановить состояние паузы из диска.
+  if (state.phase === "questions" && !state.question) {
+    const pending = readAt(state.cwd, ".agent/pending.json").trim()
+    const plan = readAt(state.cwd, PLAN)
+    const applied = (plan.match(/→ РЕШЕНО/g) || []).length
+    if (applied === 0) {
+      // ответы могли прийти до остановки — применяем и идём в confirm
+      const answers = readAt(state.cwd, ".agent/answers.md").trim()
+      if (answers) {
+        const hc = await head("plan-check")
+        const updated = hc.applyAnswers?.(plan, answers) ?? plan
+        writeFileSync(join(state.cwd, PLAN), updated)
+        return { do: "say", line: `resume: ответы оператора вписаны в план (${(updated.match(/→ РЕШЕНО/g) || []).length}); переход в confirm` }
+      }
+      if (pending) {
+        try {
+          const items = JSON.parse(pending).items.map((x: any) => x.text)
+          state = { ...state, question: { name: "solo-questions-resume", items, retry: 0 } }
+        } catch { /* битый pending — зададим заново извлечением из плана */ }
+      }
+    }
+    if (!state.question) return { do: "say", line: "resume: ответы уже в плане; переход в confirm" }
+  }
+  if (state.phase === "confirm" && !state.cardShown) {
+    // карточку покажет ветка ниже (head plan-check) — просто идём дальше
+  }
   if (state.question)
     return { do: "ask", name: state.question.name, items: state.question.items }
   if (state.doneCard && !state.doneShown) return { do: "say", line: state.doneCard }
@@ -62,7 +110,12 @@ export async function soloNext({ state }: { state: SoloState }): Promise<Instruc
 // ── fold ─────────────────────────────────────────────────────────────────────
 export async function soloFold({ state, event }: { state: SoloState; event: any }): Promise<any> {
   const it = event.instruction || {}
-  const put = (patch: Partial<SoloState>) => ({ track: "ok" as const, value: { ...state, ...patch } })
+  const put = (patch: Partial<SoloState>) => {
+    const next = { ...state, ...patch }
+    if (patch.phase && patch.phase !== state.phase) mark(state.cwd, { phase: next.phase, round: next.round, blockers: next.blockers, solveStart: next.solveStart, answers: next.answers })
+    else if (patch.round) mark(state.cwd, { round: next.round, blockers: next.blockers })
+    return { track: "ok" as const, value: next }
+  }
 
   if (event.do === "say") {
     if (state.phase === "done") return put({ doneShown: true })
@@ -71,7 +124,8 @@ export async function soloFold({ state, event }: { state: SoloState; event: any 
 
   if (event.do === "ask") {
     const answers = readAt(state.cwd, ".agent/answers.md").trim()
-    const got = (event.result || []).some((a: string) => a && String(a).trim())
+    const said: string[] = Array.isArray(event.result) ? event.result : [event.result]
+    const got = said.some((a: string) => a && String(a).trim())
     // ПУСТОЙ ОТВЕТ — ПЕРЕСПРОС, НЕ ОТВЕРЖЕНИЕ (дырка proof-прогона 27.08: таймаут уводил в reject)
     if (!got) {
       const retry = (state.question?.retry || 0) + 1
@@ -79,13 +133,24 @@ export async function soloFold({ state, event }: { state: SoloState; event: any 
         return { track: "err" as const, kind: "escalate", subject: `вопросы «${state.question?.name}» не отвечены за ${QUESTION_ROUNDS} паузы` }
       return put({ question: { ...state.question!, name: `${state.question!.name}-retry${retry}`, retry } })
     }
+    if (state.phase === "confirm") {
+      // подтверждение словами: «да» → execute; иначе причина → круг plan
+      const words = (Array.isArray(event.result) ? event.result : [event.result]).join(" ").trim().toLowerCase()
+      if (/^(да|yes|ok|согласен|апрув|approve|подтверждаю)/.test(words)) {
+        const solveStart = gitHead(state.cwd)
+        return put({ phase: "execute", round: 1, blockers: "", solveStart, question: null })
+      }
+      return put({ phase: "plan", round: 1, blockers: `оператор не подтвердил план: ${words || "без причины"}`, question: null })
+    }
     if (state.phase === "questions") {
       // ответы оператора вписываются В ПЛАН, затем — карточка и подтверждение
       const hc = await head("plan-check")
       const plan = hc.applyAnswers?.(readAt(state.cwd, PLAN), answers) ?? readAt(state.cwd, PLAN)
       mkdirSync(join(state.cwd, ".agent"), { recursive: true })
       writeFileSync(join(state.cwd, PLAN), plan)
-      return put({ phase: "confirm", question: null, answers, cardShown: false })
+      const applied = (plan.match(/→ РЕШЕНО/g) || []).length
+      return put({ phase: "confirm", question: null, answers, cardShown: false,
+        doneCardNote: `ответы вписаны (${applied})` } as any)
     }
     // причина отклонения с подтверждения → круг плана
     return put({ phase: "plan", round: 1, blockers: `оператор отклонил: ${(event.result || []).join(" ")}`, question: null })
@@ -108,7 +173,11 @@ export async function soloFold({ state, event }: { state: SoloState; event: any 
   }
 
   const h = await head(state.phase === "plan" ? "plan" : state.phase === "execute" ? "execute" : "plan-check")
-  return h.fold(state, it, env, { PLAN_DRAFT, PLAN, gitHead })
+  const res = await h.fold(state, it, env, { PLAN_DRAFT, PLAN, gitHead })
+  if (res && res.track === "ok" && res.value && res.value.phase !== state.phase) {
+    mark(state.cwd, { phase: res.value.phase, round: res.value.round, blockers: res.value.blockers, solveStart: res.value.solveStart, answers: res.value.answers })
+  }
+  return res
 }
 
 function gitHead(cwd: string): string {

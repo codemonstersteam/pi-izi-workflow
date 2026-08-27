@@ -128,22 +128,65 @@ test("красный план → круг починки; пустой отве
     assert.equal(empty.state.question.name.includes("-retry1"), true, "пустой ответ не переспросил")
     assert.equal(empty.state.phase, "questions", "пустой ответ отверг план")
 
-    // checkpoint reject → вопрос-причина → план с причиной
+    // reject словами: причина сразу уезжает в круг plan (без отдельного вопроса-причины)
     writeFileSync(join(cwd, ".agent/answers.md"), "<exchange>\n  <question_1>Лимит по умолчанию?</question_1>\n  <answer_1>30</answer_1>\n</exchange>\n")
     let q = await step(empty.state, ["30"])
     assert.equal(q.state.phase, "confirm")
     const card = await soloNext({ state: q.state })
     const afterCard: any = await soloFold({ state: q.state, event: { do: "say", instruction: card, result: null } })
-    q = await step(afterCard.value, "rejected")
-    assert.ok(q.state.question, "reject не спросил причину")
-    writeFileSync(join(cwd, ".agent/answers.md"), "<exchange>\n  <question_1>План отклонён — что изменить?</question_1>\n  <answer_1>добавь лимит потолка</answer_1>\n</exchange>\n")
-    const back = await step(q.state, ["добавь лимит потолка"])
-    assert.equal(back.state.phase, "plan")
-    assert.match(back.state.blockers, /лимит потолка/)
+    q = await step(afterCard.value, ["нет: добавь лимит потолка"])
+    assert.equal(q.state.phase, "plan", "отклонение словами не вернуло в plan")
+    assert.match(q.state.blockers, /лимит потолка/, "причина отклонения не дошла до планировщика")
+    const back = q
 
     // бюджет: round > loops → escalate
     const esc: any = await soloNext({ state: { ...back.state, round: 99 } })
     assert.equal(esc.do, "err")
     assert.equal(esc.kind, "escalate")
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})
+
+// T81 — ПОДТВЕРЖДЕНИЕ СЛОВАМИ и RESUME. Швы: «да»/«да, …» подтверждают, «нет: …» уводит
+// в круг plan; перезапуск после остановки продолжает с маркера (ответы применяются).
+test("confirm словами: «да, ведём» → execute; «нет: причина» → круг plan", async () => {
+  const cwd = stand()
+  try {
+    const start: any = soloStart({}, { run: { cwd } })
+    writeFileSync(join(cwd, ".agent/staging/PLAN~draft.md"), PLAN)
+    let r = await step(start.state, { track: "ok", artifact: ".agent/staging/PLAN~draft.md" })
+    r = await step(r.state, { track: "ok", verdict: "APPROVE" })
+    writeFileSync(join(cwd, ".agent/answers.md"), "<exchange>\n  <question_1>Лимит по умолчанию?</question_1>\n  <answer_1>30</answer_1>\n</exchange>\n")
+    r = await step(r.state, ["30"])
+    assert.equal(r.state.phase, "confirm")
+    const card = await soloNext({ state: r.state })
+    const afterCard: any = await soloFold({ state: r.state, event: { do: "say", instruction: card, result: null } })
+    const ask = await soloNext({ state: afterCard.value })
+    assert.equal(ask.do, "ask", "подтверждение не стало ask-вопросом")
+    const yes: any = await soloFold({ state: afterCard.value, event: { do: "ask", instruction: ask, result: ["да, ведём"] } })
+    assert.equal(yes.value.phase, "execute", "«да, ведём» не подтвердило")
+    const no: any = await soloFold({ state: afterCard.value, event: { do: "ask", instruction: ask, result: ["нет: нет лимита"] } })
+    assert.equal(no.value.phase, "plan")
+    assert.match(no.value.blockers, /нет лимита/)
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})
+
+test("resume: маркер фазы — новый soloStart продолжает, ответы применяются к плану", async () => {
+  const cwd = stand()
+  try {
+    const start: any = soloStart({}, { run: { cwd } })
+    writeFileSync(join(cwd, ".agent/staging/PLAN~draft.md"), PLAN)
+    let r = await step(start.state, { track: "ok", artifact: ".agent/staging/PLAN~draft.md" })
+    r = await step(r.state, { track: "ok", verdict: "APPROVE" })
+    writeFileSync(join(cwd, ".agent/answers.md"), "<exchange>\n  <question_1>Лимит по умолчанию?</question_1>\n  <answer_1>30</answer_1>\n</exchange>\n")
+    // «прогон умер» здесь; маркер на диске говорит questions; ответы пришли
+    const again: any = soloStart({}, { run: { cwd } })
+    assert.equal(again.from, "resumed", "прогон начался заново вместо продолжения")
+    assert.equal(again.state.phase, "questions")
+    const it = await soloNext({ state: again.state })
+    assert.equal(it.do, "say", "resume не применил ответы")
+    assert.match(readFileSync(join(cwd, ".agent/PLAN.md"), "utf8"), /→ РЕШЕНО: 30/, "ответ не вписан при resume")
+    const afterSay: any = await soloFold({ state: again.state, event: { do: "say", instruction: it, result: null } })
+    const card = await soloNext({ state: { ...afterSay.value, phase: "confirm", cardShown: false } })
+    assert.match(card.line ?? "", /ПЛАН ГОТОВ|confirm/)
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })

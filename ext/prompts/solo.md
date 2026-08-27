@@ -4,7 +4,7 @@ description: Запустить воркфлоу solo — план по спек
 
 $START_TASK
 Call the `workflow` tool NOW, exactly once, with exactly these parameters and no others:
-`name: "solo"`, `foreground: true`, and `script` set to the inline script between the fences
+`name: "solo"`, `foreground: false`, and `script` set to the inline script between the fences
 below, verbatim. Pass `args: { "key": "<KEY>" }` if the operator named a task key this turn;
 otherwise omit `args`. Do not pass `scriptPath`. When the launch completes — finished: no code,
 no tests, no file edits of your own. When the workflow asks the operator questions in chat,
@@ -36,6 +36,8 @@ for (;;) {
   if (it.do === "err") return err(it.kind || "crashed", it.subject || "");
   let result = null;
   if (it.do === "say") { log(it.line); continue; }
+  if (it.do === "role") log("→ фаза " + state.phase + ": наряд роли " + it.role + (state.round > 1 ? " (круг " + state.round + ")" : ""));
+  if (it.do === "ask") log("⏸ фаза " + state.phase + ": вопросы оператору (" + (it.items || []).length + ") — жду ответа в чате");
   if (it.do === "role") result = await agent(it.text, { role: it.role, outputSchema: ENVELOPE }, "solo:agent");
   else if (it.do === "ask") {
     const r = await ask({ items: (it.items || []).map((t) => ({ text: String(t) })) });
@@ -51,9 +53,10 @@ for (;;) {
 $END_TASK
 
 $START_LAW
-- `foreground: true` обязателен: подтверждение плана — модалка Approve/Reject в панели,
-  вопросы — сообщениями в чат (ответ оператора оформи инструментом `solo_answer`,
-  сверяя номера с .agent/pending.json; показывай возвращённую таблицу оператору).
+- `foreground: false` обязателен: foreground держит сессию и глушит чат-реле ответов.
+  В фоне вопросы приходят сообщениями в чат; ответ оператора оформи инструментом
+  `solo_answer` (сверяя номера с .agent/pending.json; показывай таблицу оператору).
+  Подтверждение плана — тоже слова оператора («да»/«нет: причина») через solo_answer.
 - Один tool call запуска. Ответы на вопросы воркфлоу — единственные твои действия
   после запуска: реле, не исполнитель.
 $END_LAW
