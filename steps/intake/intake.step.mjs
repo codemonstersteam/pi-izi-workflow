@@ -22,7 +22,8 @@ import { parseRtm, rtmJudge } from "./rtm.mjs"
 import { writeRtmFromArtifact } from "./rtm-build.mjs"
 import { promote } from "./route.mjs"
 import { lookupAnswer } from "./lookup.mjs"
-import { PASSES, parseFrd } from "./frd.mjs"
+import { PASSES, parseFrd, passOfBlocker } from "./frd.mjs"
+import { isSmall } from "./one/small.mjs"
 import { parseBrd, closedSets } from "../brd/brd.mjs"
 import { newAnswers } from "../../core/answers.mjs"
 
@@ -49,6 +50,18 @@ export function next(state) {
   }
 
   if (!state.portions.length) {
+    // T76 — РАЗВИЛКА УКОРОЧЕННОГО ТРЕКА НА ПЕРВОМ ХОДУ: скрипт isSmall (0 токенов) решает по
+    // двум фактам диска (узлы карты, R-строки brd), ДО любого наряда. Маленькая задача идёт
+    // ОДНОЙ порцией «one» — слайс one/order.mjs несёт материалы всех шести пластов разом,
+    // наряд order-one.tpl просит весь FRD целиком, суд — полный двор одним прогоном. Красный —
+    // падение на полный путь в fold (ниже). Большая — как сегодня.
+    if (isSmall(state)) {
+      return {
+        do: "say",
+        line: `intake: маленькая задача: один вызов — порция one несёт весь FRD, полный двор одним прогоном, красный падает на шесть пластов; роль ${ROLE}`,
+        portions: [{ id: "one", staging: ".agent/staging/frd~one.xml", status: "todo", round: 1, blockers: "" }],
+      }
+    }
     return {
       do: "say",
       line: `intake: ${PASSES.join(" → ")} — каждый подшаг закрывает своё решение, судится своей механикой; роль ${ROLE}`,
@@ -74,10 +87,14 @@ export function next(state) {
   const prevStaging = p.blockers
     ? p.staging                                                            // ПОЧИНКА: свой ответ
     : prevPass ? `.agent/staging/frd~${prevPass}.xml` : p.staging       // ПЕРВЫЙ: прошлый слой
+  // T76 — ПОРЦИЯ one ВНЕ PASSES: у неё нет предыдущего пласта (prevPass выше — undefined), её
+  // предыдущий ответ — СВОЙ черновик frd~one.xml (круг вопроса T64 / resume после сбоя), а
+  // закрытых пластов у неё НЕТ — slice(0, -1) молча назвал бы пять закрытых, которых не было.
+  const passAt = PASSES.indexOf(p.id)
   const o = orderText(state, p.id, {
     previous: readAt(state.cwd, prevStaging),
     feedback: p.blockers,
-    closed: PASSES.slice(0, PASSES.indexOf(p.id)).join(", ") || "none",
+    closed: passAt < 0 ? "none" : PASSES.slice(0, passAt).join(", ") || "none",
     lookup: p.lookup || "",
   })
   if (o.why) return { do: "err", code: "blocked", subject: o.why }
@@ -193,10 +210,18 @@ export function fold(state, event = {}) {
   if (p.id === "contracts" && staged.trim()) {
     try { writeRtmFromArtifact(state.cwd, staged) } catch { /* F19 скажет именем */ }
   }
+  // T76 — ПОРЦИЯ one: матрица собирается ИЗ ЕЁ артефакта тем же конвейером — скелет положил
+  // слайс one/order.mjs, owner-строки конвертирует скрипт. Судить one матрицей без пересборки
+  // значило бы судить по скелету с пустыми owners.
+  if (p.id === "one" && staged.trim()) {
+    try { writeRtmFromArtifact(state.cwd, staged) } catch { /* битый артефакт — суд ниже скажет именем */ }
+  }
   // V2 — ПОДШАГ coverage СУДИТСЯ И МАТРИЦЕЙ: двусторонний суд rtm.md (forward «требование без
   // носителя», backward «зеркало/точка вызова/кластер/ответ назвал») — классика IEEE 29148,
   // которой не хватало: пустая строка матрицы = упущено, колонка без обоснования = выдумано.
-  const rtmBlockers = p.id === "coverage" ? rtmJudge(rtmArgs(state)) : []
+  // T76 — ПОРЦИЯ one судится матрицей ТАК ЖЕ: один вызов меняет число вызовов модели, НЕ число
+  // проверок.
+  const rtmBlockers = (p.id === "coverage" || p.id === "one") ? rtmJudge(rtmArgs(state)) : []
   const blockers = env.artifact !== p.staging
     ? `invalid: роль записала «${env.artifact || "ничего"}», а послана была в ${p.staging}`
     : !staged.trim()
@@ -208,6 +233,28 @@ export function fold(state, event = {}) {
 
   const swap = (patch) => state.portions.map((x) => (x.staging === p.staging ? { ...x, ...patch } : x))
   if (blockers) {
+    // T76 — КРАСНАЯ ПОРЦИЯ one: ПАДЕНИЕ НА ПОЛНЫЙ ПУТЬ. Укороченный трек не прячет дефект:
+    // порция one гаснет (ни одно из её шести решений не подтверждено), встают все шесть
+    // пластов. Блокеры разносятся ПО КОДУ ПРАВИЛА: passOfBlocker даёт пласт строки (F3c →
+    // contracts, F5 → data-failures, F11 → coverage…); `rtm:`-строки едут на owners — тем же
+    // маршрутом, что и у coverage (пробел владения закрывает owners-слой); строка без
+    // распознанного кода — первому пласту (scenarios) с пометкой [one]. Круг головы НЕ
+    // тратится: все шесть начинают с round 1; черновик frd~one.xml остаётся на диске — resume
+    // видит его (recon, тикет 05).
+    if (p.id === "one") {
+      const lines = blockers.split("\n").map((x) => x.trim()).filter(Boolean)
+      const own = new Map(PASSES.map((x) => [x, []]))
+      for (const line of lines) {
+        const pass = line.startsWith("rtm:") ? "owners" : passOfBlocker(line)
+        const known = PASSES.includes(pass)
+        own.get(known ? pass : "scenarios").push(known ? line : `[one] ${line}`)
+      }
+      const portions = PASSES.map((x) => ({
+        id: x, staging: `.agent/staging/frd~${x}.xml`, status: "todo", round: 1,
+        blockers: own.get(x).join("\n  ") || "",
+      }))
+      return put(state, { verdicts: [...state.verdicts, v.value], portions })
+    }
     // V2 — RTM-БЛОКЕРЫ ЧИНИТ OWNERS, НЕ COVERAGE. Обратный суд матрицы (rtm:backward-*) находит
     // пробелы ВЛАДЕНИЯ: точку вызова, кластер, ответ назвал. Модель на coverage пишет carried-
     // строки — она не может закрыть «назначь владельца»; это owners-работа. Живой круг 26.08:
@@ -268,6 +315,17 @@ export function fold(state, event = {}) {
           JSON.stringify({ items: items.map((text, i) => ({ n: i + 1, text })), subject: `артефактные вопросы пласта ${p.id}` }, null, 1))
       } catch { /* диск не дал — пауза умрёт видимо, не молча */ }
       return put(state, { question: { of: p.id, name, items, subject: "artifact questions" } })
+    }
+    // T76 — ЗЕЛЁНАЯ ПОРЦИЯ one: ЕЁ зелёный продвигает весь FRD — тот же promote, что у critic.
+    // Порция одна, решений шесть: вопросов нет — все шесть подтверждены одним прогоном суда.
+    if (p.id === "one") {
+      const moved = promote(state, staged)
+      if (moved.why) return err("fold", moved.why)
+      return put(state, {
+        verdicts: [...state.verdicts, v.value],
+        portions: swap({ status: "green", blockers: "" }),
+        at: { ...state.at, frd: moved },
+      })
     }
     return put(state, { verdicts: [...state.verdicts, v.value], portions: swap({ status: "green", blockers: "" }) })
   }

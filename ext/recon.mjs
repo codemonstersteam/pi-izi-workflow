@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { sha1of } from "./state.mjs"
-import { PASSES as INTAKE_PASSES } from "../steps/intake/frd.mjs"
+import { PASSES as INTAKE_PASSES, PASSES_ONE } from "../steps/intake/frd.mjs"
 
 const read = (cwd, rel) => (existsSync(join(cwd, rel)) ? readFileSync(join(cwd, rel), "utf8") : "")
 const stamp = (cwd, rel) => {
@@ -68,10 +68,27 @@ export function recon(cwd) {
 
   // ШАГ 5: intake — frd.xml (все пласты) ИЛИ staging по пластам. T62: пласт B разложен на
   // B1/B2/B3 — список пластов живёт ОДНО место (frd.mjs::PASSES), резюм читает его же.
+  // T76: укороченный трек — frd~one.xml без frd.xml значит, что полоса шла ОДНИМ вызовом и
+  // умерла ДО продвижения (сбой, пауза, красный без круга). Resume продолжает ТОТ ЖЕ трек:
+  // порция one todo, черновик — артефакт круга починки (next понесёт его роли как {PREVIOUS});
+  // без этой ветки resume молча начал бы полный путь с scenarios и черновик стал бы мусором.
   const frd = stamp(cwd, ".agent/frd.xml")
   if (frd) {
     at.frd = frd
   } else {
+    const one = stamp(cwd, ".agent/staging/frd~one.xml")
+    if (one) {
+      return {
+        at, key,
+        portions: PASSES_ONE.map((p) => ({
+          id: p,
+          staging: `.agent/staging/frd~${p}.xml`,
+          status: "todo",
+          round: 1,
+          blockers: "",
+        })),
+      }
+    }
     const portions = []
     for (const pass of INTAKE_PASSES) {
       const staging = stamp(cwd, `.agent/staging/frd~${pass}.xml`)

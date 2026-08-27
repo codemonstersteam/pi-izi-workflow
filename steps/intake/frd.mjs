@@ -20,6 +20,7 @@
 //             checkFrd({ frd, nodes, tests, entries, edges, known, pass }) -> string[]  — blockers, empty = green
 //             newFrd({ xml, nodes, tests, entries, edges, sources, pass }) -> Result<Frd, "invalid-frd">
 //             RULE_PASS / PASSES — какому пласту принадлежит правило (steps/intake/docs/passes-data-flow.md)
+//             PASSES_ONE — состав укороченного трека (порция one замещает все шесть пластов)
 //             passOfBlocker(blocker) -> "A"|"B"|"C"|"D"|"*"
 //             forPass(blockers, pass) -> string[]  — что этот проход имеет право показать роли
 //             entryPass(blockers) -> "A"|"B"|"C"|"D"  — откуда переигрывать после красного полного суда
@@ -365,6 +366,11 @@ function provenance(at, value, source, known) {
 //   по готовым узлам (F3-семейство + F17e), B3 — сценарии и touched (F2/F4/F10/F14). Порядок
 //   «решение → суд» один: каждый следующий наряд несёт ПОДТВЕРЖДЁННОЕ предыдущим, машина подаёт.
 export const PASSES = Object.freeze(["scenarios", "owners", "contracts", "data-failures", "coverage", "critic"])
+// T76 — СОСТАВ УКОРОЧЕННОГО ТРЕКА: «one» замещает все шесть пластов ОДНИМ вызовом
+// (backlog-small-task.md). Живёт рядом с PASSES по той же причине: состав шага читается ОДНИМ
+// местом на записавшего и одним — на поднимающего (ext/recon.mjs); второй список, собранный
+// руками там, разошёлся бы с первым в первый же прогон после сбоя.
+export const PASSES_ONE = Object.freeze(["one"])
 export const RULE_PASS = Object.freeze({
   F1: "scenarios",   // цель, актёр, гарантия, шаги
   F6c: "scenarios",  // два конца с одним текстом — концы объявляет пласт A

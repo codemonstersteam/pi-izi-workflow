@@ -1,4 +1,5 @@
-// MODULE_CONTRACT: order — ГОЛОВА-СБОРЩИК наряда intake над шестью слайсами пластов
+// MODULE_CONTRACT: order — ГОЛОВА-СБОРЩИК наряда intake над шестью слайсами пластов (+ седьмой
+//             слайс укороченного трека «one», замещающий все шесть на маленьких задачах)
 // Purpose:    одно решение: КАК пласт становится текстом наряда. Голова подставляет ОБЩИЕ слоты
 //             ({STAGING} {PREVIOUS} {FEEDBACK} {CLOSED} {ANSWERED} {ANSWERS} {CHECK}), зовёт
 //             слайс своего пласта (<pass>/order.mjs::orderSlice) по карте pass→модуль ниже,
@@ -20,9 +21,12 @@ import { orderSlice as contractsSlice } from "./contracts/order.mjs"
 import { orderSlice as datafailuresSlice } from "./data-failures/order.mjs"
 import { orderSlice as coverageSlice } from "./coverage/order.mjs"
 import { orderSlice as criticSlice } from "./critic/order.mjs"
+import { orderSlice as oneSlice } from "./one/order.mjs"
 
 // Карта пласт→слайс: единственное место, где голова знает о существовании пластов (но не об
 // их содержании). Имена — PASSES из frd.mjs; слой слайса лежит в папке своего пласта.
+// "one" — НЕ член PASSES: укороченный трек замещает все шесть пластов одним вызовом (isSmall),
+// portions для него строит голова шага (intake.step.mjs::next), staging — frd~one.xml.
 const SLICES = new Map([
   ["scenarios", scenariosSlice],
   ["owners", ownersSlice],
@@ -30,6 +34,7 @@ const SLICES = new Map([
   ["data-failures", datafailuresSlice],
   ["coverage", coverageSlice],
   ["critic", criticSlice],
+  ["one", oneSlice],
 ])
 
 const tpl = (pass) => readFileSync(new URL(`./${pass}/order-${pass.toLowerCase()}.tpl`, import.meta.url), "utf8")

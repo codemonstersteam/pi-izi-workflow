@@ -11,7 +11,9 @@ import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { tmpdir } from "node:os"
 import { start, put, sha1of } from "../../../ext/state.mjs"
+import { recon } from "../../../ext/recon.mjs"
 import { next, fold } from "../intake.step.mjs"
+import { isSmall } from "../one/small.mjs"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ETALON = join(HERE, "../../../component-tests/etalon-eddi/.agent")
@@ -282,4 +284,137 @@ test("T70: F19 на критике → contracts todo с FEEDBACK, круг кр
   assert.equal(critic.round, 1, "круг критика потрачен на чужую работу")
   // frd не продвинут — пласты ещё todo
   assert.equal(r.value.at && r.value.at.frd, undefined)
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T76 — УКОРОЧЕННЫЙ ТРЕК (backlog-small-task.md). Маленькая задача идёт ОДНОЙ порцией
+// «one» вместо шести пластов: развилка на первом next() решается скриптом isSmall (0 токенов),
+// наряд one/order-one.tpl несёт материалы всех пластов разом, суд — полный двор одним прогоном,
+// зелёное продвигается тем же promote, красное ПАДАЕТ НА ПОЛНЫЙ ПУТЬ: блокеры разносятся по
+// коду правила (F3c → contracts), круг головы не тратится. Пере-внедрение дефекта: выключи
+// ветку p.id === "one» в fold — второй тест краснеет (F3c остаётся на one, порций шесть нет).
+
+// МАЛЕНКАЯ ФОРМА — класс quarkus по калибровке isSmall: 9 узлов карты, 3 R-строки brd.
+function smallForm() {
+  const cwd = mkdtempSync(join(tmpdir(), "intake-one-"))
+  mkdirSync(join(cwd, ".agent/staging"), { recursive: true })
+  const map = `<appgraph grammar="4">
+  <module path="src/FruitResource.java" pkg="p"><role>expose fruit entities over REST</role>
+    <api name="fruits" kind="rest" scope="public"/></module>
+${Array.from({ length: 8 }, (_, i) => `  <module path="src/pkg/Mod${i}.java" pkg="p"/>`).join("\n")}
+</appgraph>`
+  nodeFs.writeFileSync(join(cwd, ".agent/appgraph.xml"), map)
+  nodeFs.writeFileSync(join(cwd, ".agent/brd.md"),
+    "R1 хранить | фрукты | карта | values: список целиком\nR2 читать | фрукты | URI | values: один URI\nR3 удалять | фрукты | URI | values: нет\n")
+  nodeFs.writeFileSync(join(cwd, ".agent/normalized.md"),
+    "R1 | хранить | фрукты | карта\nR2 | читать | фрукт | URI\nR3 | удалять | фрукт | URI\n")
+  // anchors.json — часть закрытого шага 2: без него recon не штампует brd (resume-тест ниже)
+  nodeFs.writeFileSync(join(cwd, ".agent/anchors.json"), "{}")
+  const s = start({ cwd, run: "component-one", key: "T76", budgets: {} })
+  assert.ok(s.ok, s.error?.detail)
+  const st = put(s.value, {
+    at: {
+      appgraph: { path: ".agent/appgraph.xml", sha1: sha1of(map) },
+      brd: { path: ".agent/brd.md", sha1: sha1of(readFileSync(join(cwd, ".agent/brd.md"), "utf8")) },
+    },
+  })
+  assert.ok(st.ok, st.error?.detail)
+  return st.value
+}
+
+// Валидный FRD одного вызова: полный двор зелён (F1..F19 + rtm-суд), вопросов нет.
+// Слова UC (хранить/читать/удалять/фрукты) пересекаются с каждой R-строкой ≥2 словами —
+// матрица rtm.md собирается из owner-строки, forward-суд молчит.
+const FRD_ONE_GREEN = `<frd grammar="1" goal="хранить, читать и удалять фрукты (R1 R2 R3)">
+  <actor name="operator" kind="human" via="REST"/>
+  <usecase id="UC1" actor="operator" goal="хранить, читать и удалять фрукты">
+    <pre>стенд поднят</pre>
+    <post>фрукты хранятся, читаются и удаляются по URI</post>
+    <step n="1">оператор хранит, читает и удаляет фрукты</step>
+  </usecase>
+  <owner step="UC1/1" node="src/FruitResource.java"/>
+  <delta op="fruits" form="Added" node="src/FruitResource.java"/>
+  <scenario id="S1" uc="UC1" before="фруктов нет" after="фрукты хранятся и читаются" nodes="src/FruitResource.java"/>
+  <failures found="no" why="чистое добавление сущностей, отказных веток нет"/>
+  <carried req="R1" by="UC1/1"/>
+  <carried req="R2" by="S1"/>
+  <carried req="R3" by="UC1"/>
+</frd>`
+
+test("T76: маленькая задача → ОДИН наряд one; зелёный артефакт → promote .agent/frd.xml", () => {
+  const state = smallForm()
+  const it1 = next(state)
+  assert.equal(it1.do, "say", "первый ход — состав")
+  assert.match(it1.line, /маленькая задача: один вызов/, "say не назвал укороченный трек")
+  assert.deepEqual(it1.portions.map((p) => p.id), ["one"], "порций не одна")
+  assert.equal(it1.portions[0].staging, ".agent/staging/frd~one.xml")
+  const st1 = fold(state, { do: "say", instruction: it1, result: null })
+  assert.ok(st1.ok, st1.error?.detail)
+  const it2 = next(st1.value)
+  assert.equal(it2.do, "role", "второй ход — порция one, а не пласт scenarios")
+  assert.equal(it2.staging, ".agent/staging/frd~one.xml")
+  assert.match(it2.text, /CANDIDATES — computed by script/, "наряд one не несёт блок кандидатов ({CANDIDATES})")
+  assert.match(it2.text, /THE REQUIREMENTS OWED/, "наряд one не несёт список требований ({OWED})")
+  assert.match(it2.text, /R1\nR2\nR3/, "R-строки не доехали до наряда one")
+  nodeFs.writeFileSync(join(state.cwd, ".agent/staging/frd~one.xml"), FRD_ONE_GREEN)
+  const r = fold(st1.value, { do: "role", instruction: it2, result: { track: "ok", artifact: ".agent/staging/frd~one.xml" } })
+  assert.ok(r.ok, r.error?.detail)
+  assert.ok(r.value.at && r.value.at.frd, "зелёная порция one не продвинула FRD")
+  assert.ok(nodeFs.existsSync(join(state.cwd, ".agent/frd.xml")), ".agent/frd.xml не записан")
+  assert.equal(r.value.portions.find((x) => x.id === "one").status, "green")
+})
+
+test("T76: красный one → ПАДЕНИЕ НА ПОЛНЫЙ ПУТЬ: шесть порций, F3c на contracts, круги целы", () => {
+  const state = smallForm()
+  const it1 = next(state)
+  const st1 = fold(state, { do: "say", instruction: it1, result: null })
+  assert.ok(st1.ok, st1.error?.detail)
+  const it2 = next(st1.value)
+  assert.equal(it2.do, "role")
+  // артефакт с дырой: вторая дельта БЕЗ сценария → F3c (форма тикета: delta без сценария)
+  nodeFs.writeFileSync(join(state.cwd, ".agent/staging/frd~one.xml"), FRD_ONE_GREEN.replace(
+    `<delta op="fruits" form="Added" node="src/FruitResource.java"/>`,
+    `<delta op="fruits" form="Added" node="src/FruitResource.java"/>\n  <delta op="store" form="Added" node="src/pkg/Mod0.java"/>`))
+  const r = fold(st1.value, { do: "role", instruction: it2, result: { track: "ok", artifact: ".agent/staging/frd~one.xml" } })
+  assert.ok(r.ok, r.error?.detail)
+  assert.deepEqual(r.value.portions.map((p) => p.id),
+    ["scenarios", "owners", "contracts", "data-failures", "coverage", "critic"],
+    "красный one не упал на полный путь")
+  const contracts = r.value.portions.find((x) => x.id === "contracts")
+  assert.match(contracts.blockers, /F3c/, "F3c не доехал до contracts — блокер потерян при падении")
+  assert.ok(r.value.portions.every((x) => x.round === 1), "круг головы потрачен на падение")
+  assert.ok(r.value.portions.every((x) => x.status === "todo"), "порции полного пути встали не в todo")
+  assert.equal(r.value.portions.some((x) => x.id === "one"), false, "порция one не погасла")
+  assert.ok(!nodeFs.existsSync(join(state.cwd, ".agent/frd.xml")), "красный one продвинул FRD")
+})
+
+test("T76: большая задача (эталон eddi) → полный путь: isSmall false, шесть порций", () => {
+  const state = form()
+  assert.equal(isSmall(state), false, "эталон eddi ошибочно признан маленькой задачей")
+  const it = next(state)
+  assert.equal(it.do, "say")
+  assert.equal(it.portions.length, 6, "большая задача пошла укороченным треком")
+  assert.equal(it.portions[0].id, "scenarios")
+})
+
+// T76 (тикет 05) — RESUME ВИДИТ УКОРОЧЕННЫЙ ТРЕК. Прежде recon поднимал порции только по
+// INTAKE_PASSES (шесть имён): frd~one.xml после сбоя был невидим, и resume молча начинал
+// полный путь с scenarios — черновик одного вызова становился мусором. Пере-внедрение
+// дефекта: убери ветку PASSES_ONE в ext/recon.mjs — assert про id порции падает (scenarios).
+test("T76: resume — frd~one.xml без frd.xml → роль one (не scenarios), черновик едет как {PREVIOUS}", () => {
+  const state = smallForm()
+  // сбой посреди укороченного трека: черновик на диске, артефакт не продвинут
+  nodeFs.writeFileSync(join(state.cwd, ".agent/staging/frd~one.xml"), FRD_ONE_GREEN)
+  const found = recon(state.cwd)
+  assert.equal(found.portions.length, 1, "recon не поднял укороченный трек — пошёл бы полный путь")
+  assert.equal(found.portions[0].id, "one")
+  assert.equal(found.portions[0].status, "todo")
+  // мост клеит штампы и порции — как ext/bridge.mjs::stepStart
+  const merged = put(state, { at: { ...state.at, ...found.at }, portions: found.portions })
+  assert.ok(merged.ok, merged.error?.detail)
+  const it = next(merged.value)
+  assert.equal(it.do, "role", "resume начал не с того трека")
+  assert.equal(it.staging, ".agent/staging/frd~one.xml")
+  assert.equal(it.staging.includes("scenarios"), false)
+  assert.match(it.text, /YOUR OWN ARTIFACT/, "черновик круга починки не поехал в наряд как {PREVIOUS}")
 })

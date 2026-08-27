@@ -45,6 +45,9 @@ steps/intake/
   data-failures/ order-data-failures.tpl · order.mjs ({BRD}{NORMALIZED}{SOURCES}) · тест
   coverage/      order-coverage.tpl · order.mjs ({OWED}) · тест
   critic/        order-critic.tpl · order.mjs ({BRD}="") · тест
+  one/           small.mjs (порог isSmall) · order-one.tpl · order.mjs (слайс {CANDIDATES}
+                 {BLUEPRINT}{ANALOGUE}{TYPES}{OWED}{SOURCES}{BRD}{NORMALIZED} + запись
+                 intake-b0.json и скелета rtm.md) · тесты — укороченный трек, раздел ниже
   component/     intake.component.test.mjs — ОДИН компонентный тест на шаг
   docs/          passes.md, passes-data-flow.md — грамматики пластов
 ```
@@ -183,24 +186,68 @@ lookup-рельса → справка СКРИПТОМ: resolveItems → <excha
 
 ---
 
-## Маленькая задача (T76, backlog-small-task.md) — место будущего форка
+## Маленькая задача (T76, backlog-small-task.md) — укороченный трек intake
 
-Разработка ПОСЛЕ этой раскладки. Развилка живёт на ПЕРВОМ `next()` головы, до любого наряда:
+СДЕЛАНО (тикеты 01–06; линия 553/553). Повод — замер `component-tests/quarkus-rest-json-app-v2-t1-3-test.md`:
+тривиальная задача (3 строки заказа, 9 java-файлов) прошла всю механику шести пластов — 15 вызовов
+LLM, ~203k биллинговых токенов, ~45 мин. Раскладка:
 
 ```
-normalized.md + дерево файлов
-  │  скрипт isSmall (0 токенов): java-файлы ≤ 12 И строк-требований ≤ 5 ?
-  ├─ НЕТ → шесть модулей-пластов, как описано выше (ничего не меняется)
-  └─ ДА  → order-one.tpl: ОДИН вызов — все шесть решений сразу
-              → staging/frd~one.xml → ПОЛНЫЙ двор одним прогоном
-              (checkFrd все F-правила + rtmJudge — тот же суд, меньше вызовов)
-              зелёный → promote (тот же route.mjs → .agent/frd.xml)
-              красный → ПАДЕНИЕ НА ПОЛНЫЙ ПУТЬ: блокеры по RULE_PASS на свои пласты
+steps/intake/one/
+  small.mjs (small.test)   порог isSmall(state): узлов карты ≤ 12 И R-строк brd.md ≤ 5;
+                            пустая карта или пустой brd → false — нет данных решать,
+                            идём полным путём (отсутствие — случай, а не пустое значение)
+  order.mjs (order.test)   слайс порции one: {CANDIDATES}{BLUEPRINT}{ANALOGUE}{TYPES} (как
+                            owners) + {OWED} (как coverage) + {SOURCES} (как data-failures)
+                            + {BRD}{NORMALIZED} (как scenarios); побочно пишет материалы
+                            суда: .agent/intake-b0.json (b0Of) и скелет .agent/rtm.md из
+                            R-строк, БЕЗ затирания начатого
+  order-one.tpl            наряд одного вызова: «принеси весь FRD целиком» — use cases,
+                            владельцы (или <question> на спорных), дельты-формы,
+                            величины/отказы, carried-строка на каждое R; «закрытых слоёв
+                            нет — файл твой целиком»; самокритика в конце (как critic)
 ```
 
-Инварианты форка: слияние — файл и суд (потребители не знают, каким путём собран frd.xml);
-быстрый путь не прячет дефект. Модули-папки этой раскладки дают T76 готовые границы:
-`order-one` станет седьмым слайсом в карте SLICES головы-сборщика.
+Пороги — константы в коде (`MAX_NODES = 12`, `MAX_REQUIREMENTS = 5`), откалиброваны двумя
+эталонами: quarkus-rest-json-app-v2-t1-3 (9 java-файлов, 3 строки → true) и eddi (1854 файла,
+16 строк → false). Конфигом не являются: число, которое можно подкрутить без нового эталона,
+не имеет источника.
+
+Развилка — на ПЕРВОМ `next()` головы (`intake.step.mjs`), до любого наряда, 0 токенов:
+
+```
+isSmall(state)?
+  ├─ НЕТ → шесть пластов, как описано выше (ничего не меняется)
+  └─ ДА  → say «маленькая задача: один вызов», portions = [one] (staging frd~one.xml;
+           список порций укороченного трека — frd.mjs::PASSES_ONE, читает его же и recon)
+           → наряд order-one.tpl (слайс в карте SLICES головы-сборщика — седьмой)
+           → ПОЛНЫЙ двор одним прогоном: judgePass("one") не сужает (forPass не знает
+             «one» → судит всеми F-правилами) + rtmJudge (матрица пересобирается из
+             owner-строк артефакта тем же writeRtmFromArtifact)
+           зелёный → тот же promote (route.mjs) → .agent/frd.xml; <question> в артефакте —
+                     та же ask-рельса T64: круг НЕ тратится, круг 2 несёт {ANSWERED}
+                     и свой черновик как {PREVIOUS}
+           красный → ПАДЕНИЕ НА ПОЛНЫЙ ПУТЬ: portions = шесть пластов, все todo и round 1
+                     (круг головы НЕ тратится); блокеры разносятся по passOfBlocker —
+                     код правила даёт пласт (F3c → contracts, F5 → data-failures, …),
+                     rtm:-строки → owners (маршрут coverage), строки без распознанного
+                     кода → scenarios с пометкой [one]; черновик frd~one.xml остаётся
+                     на диске
+```
+
+resume: `frd~one.xml` на диске без `.agent/frd.xml` — полоса шла одним вызовом и умерла до
+продвижения (сбой, пауза). `ext/recon.mjs` поднимает порцию one todo (список `PASSES_ONE` из
+frd.mjs — то же место, что и PASSES), черновик едет роли как {PREVIOUS} — resume не молчит и
+не начинает полный путь с scenarios.
+
+Инварианты (нарушить нельзя): суд один и тот же — меняется число вызовов модели, НЕ число
+проверок; артефакт и потребители одни (weight/ripple/plan не знают, каким путём собран
+frd.xml); быстрый путь не прячет дефект — красный уходит на полный путь.
+
+Целевые метры (живой прогон — за пределами бэклога, отдельное решение оператора): на
+quarkus-классе задач ожидание ≤ ⅓ токенов и ≤ ⅓ времени intake против замера 26.08 (15
+вызовов LLM, ~203k токенов, ~45 мин; цель — вызовов intake ≤ 2). Сверка метров по правилам
+приёмки `component-tests/steps/intake/test-plan.md`.
 
 ---
 
