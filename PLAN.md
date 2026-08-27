@@ -1,149 +1,135 @@
-# План: перенос шагов `task` и `brd` из izi-flow-v2 в pi-workflow
+# PLAN — воркфлоу «solo»: планирование и разработка как у pi, гардрейлы конвейера
 
-## 0. Что уже проверено на живом стенде (не гипотеза)
+Обновлён аналитикой живых прогонов 27.08: pi-планирование (quarkus 26k/3,5 мин; eddi
+166k/15 мин — выше izi-базы по всем трём структурным элементам T74) и **pi-разработка по
+плану** (quarkus: 42k/5,5 мин, 2 коммита ↔ 2 строки плана, 9/9 тестов зелёные, самоустранил
+конфликт правок, нашёл и поправил баг плана). Полный pi-конвейер: 68k биллинговых, ~9 мин.
 
-- `pi install npm:pi-extensible-workflows` → v5.1.1, стоит глобально (`~/.pi/agent/npm`).
-- Запуск: **только через tool `workflow` внутри сессии pi**. CLI `piewf` (`run`, `doctor`, `bundle`)
-  в опубликованной 5.1.1 **отсутствует** — в пакете нет `bin`. Значит headless-раннер строим сами.
-- `workflows/smoke.js` — `shell()` + `agent()` → вернул `{"exitCode":0,"stdout":"hello-from-shell","say":"PONG"}`.
-- `workflows/smoke2b.js` — `outputSchema` работает: агент вернул валидированный объект `{word,letters:8}`.
-- `workflows/smoke2a.js` — роль подхватывается из **глобального** каталога
-  `~/.pi/agent/pi-extensible-workflows/roles/<name>.md`. Роль из **проектного**
-  `.pi/pi-extensible-workflows/roles/` не подхватилась (запуск не создал run) — проект не «trusted»;
-  `--approve` не помог.
-- Результат прогона всегда лежит на диске:
-  `~/.pi/workflows/projects/<slug>-<hash>/sessions/<sid>/runs/<rid>/{state,result,journal,summary}.json`.
-  Это надёжный канал чтения результата — печать модели-запускатора ненадёжна (`pi -p` дважды повис,
-  хотя сам прогон был `completed`).
-- `checkpoint()` в headless-режиме не применяем (документация прямо говорит: headless-запуск
-  воркфлоу с чекпоинтами не исполняет).
+Принцип: **модель работает как pi (глаза на код, артефакт-спека), проверяет как конвейер
+(судьи-скрипты для вычислимого, критик для смысла, паузы для решений оператора).**
 
-## 0.1 Решения оператора (акцепт плана)
+---
 
-- Конверт роли — **`outputSchema`**, а не текстовый IZI/1: форму валидирует хост,
-  `core/envelope.mjs` и его парсер не переносим. Поля конверта сохранены.
-- Модели — **как в `pipeline.json`**: все три тира `openrouter/qwen/qwen3.6-27b`
-  (модель подтверждена в инвентаре pi).
+## 0. Ветка и чистый лист
 
-## 1. Что переносим
+Ветка `workflow-solo` от `main`. Остаётся:
+- `standards/` — весь (code, workflow, role, component-test, guardrail, live-run, llm);
+- `standards/solo-workflow.md` — НОВЫЙ стандарт целевого вида (утверждается до кода);
+- `AGENTS.md` — переписанный, короткий.
 
-Два первых шага `pipeline.json`:
+Удаляется всё прочее (`steps/ workflows/ core/ bin/ component-tests/` бэклоги, `.zcode/`).
+Старый код не переезжает — solo пишется с нуля по standards.
 
-| шаг | род | вход | выход | гардрейл |
-|---|---|---|---|---|
-| `task` | human | оператор | `TASK.md` | `steps/task/validate-task.mjs` (≤300 строк, непуст) |
-| `brd` | role `gilb` | `TASK.md` + `.agent/answers.md` | `.agent/brd.md` | `steps/brd/validate-brd.mjs` → ядро `brd.mjs` |
+## 1. Установка — нативная pi-extensible-workflows, НОЛЬ харнесс-файлов в проекте
 
-Несущие контракты, которые обязаны выжить дословно:
+Факты хоста: `scriptPath` резолвится от cwd проекта (validation.ts:801) — копирование
+`workflows/` в проект было обходом; нативный путь — **inline-скрипт + зарегистрированные
+функции каталога** («Registered catalog functions are available as globals inside the
+script»); роли — из `roleDirectories` пакета; промпты-команды — из пакета (`pi.prompts`).
 
-1. **Квитанция закрывает шаг**, а не наличие `out` (`.agent/receipts/<id>.json`).
-2. **Промоут staging→out только на зелёном чеке**; чек исполняется по staging-пути ДО промоута.
-3. **Число в `fit` обязано иметь источник** (`TASK.md` или ЗНАЧЕНИЕ ответа оператора, не текст вопроса).
-4. **Улика (`advice`) не роняет приёмку** — печатается, уходит оператору.
-5. **Ключ `--q="<subject>"` дословно равен `subject`** — единственная связь вопрос→ответ.
-6. **Красный чек на `task` уходит оператору** (код 10), а не в пере-делегацию.
-7. **Язык артефакта = язык наряда** (LAW 4 роли).
+```
+ОДИН РАЗ на машину: pi install ./ext   → в пакете (system-prompts pi остаются тут):
+  · prompts/solo.md    команда /solo: один tool call workflow({name:"solo",
+    script:"return await soloMain(args)", foreground:true}) — скрипт inline,
+    персистится в run (резюмится), в проект НЕ кладётся
+  · roles/             planner · critic · dev (системные промпты ролей)
+  · judges/            судьи-скрипты станций
+  · host-functions     soloMain (цепочка станций) + ask
+В ПРОЕКТЕ: только TASK.md (заказ) + PROMPT.md (опционально — артефакт-спека;
+нет файла — берётся дефолтная спека пакета) + .agent/ (рантайм).
+```
 
-## 2. Отображение izi-flow → pi-extensible-workflows
+Прежний `bin/install.mjs` (копии workflows/steps/core/bin в каждый проект) умирает.
 
-| izi-flow-v2 | izi-pi-v2 | почему |
+## 2. Запуск: foreground, чат-модель = кнопка
+
+В фоне каждый вопрос стоит ход чат-модели (workflow_respond по follow-up); в foreground
+прогон — прикреплённый tool call: модель отзвала и больше не зовётся, вопросы — TUI
+`ui.input` в хост-процессе (0 токенов), результат печатает карточка. `/solo` = ~100 токенов,
+последний ход модели. Фолбэк — headless-раннер в пакете.
+
+## 3. Станции — четыре (нарезка тикетов УДАЛЕНА по аналитике)
+
+Урок прогона разработки: **модель нарезает работу сама по нумерации плана** (Ф2.1→коммит,
+Ф2.2→коммит, трассировка §-ссылками в сообщениях) — отдельная роль-нарезчик не нужна;
+покрытие контролирует СУДЬЯ. Станция tickets заменена станцией solve.
+
+```
+/solo (TASK.md [+ PROMPT.md] в корне проекта)
+  │ кнопка: tool call workflow(solo, foreground:true) — единственный ход чат-модели
+  ▼
+stepStart → state (cwd, key)                                        0 токенов
+  ▼
+1 · solo/draft — план пишет роль с глазами на код
+     роль planner: execution, thinking high, tools [read, bash, write]
+     наряд = PROMPT-спека ДОСЛОВНО + TASK.md + staging .agent/staging/PLAN~draft.md
+     НЕТ карт/срезов — роль сама читает репозиторий (read/bash), как pi
+     судья-скрипт: 6 разделов · таблицы парсятся · цитаты разд.1 — подстроки TASK ·
+       пути разд.2 существуют (test -e) или «новый»+образец · источники разд.4 непусты
+     красное → круг починки (FEEDBACK, previous = свой черновик, бюджет)
+  ▼
+2 · solo/critic — смысл судит модель
+     роль critic (read): чек-лист 6 разделов + выборочная сверка с кодом; ≤3 блокера;
+     вопросы плана (разд.6) → ask-рельса → answers.md → круг draft несёт ответы
+  ▼
+3 · пауза оператора (ask): «.agent/PLAN.md — прочитай. Согласен?»
+     approve → promote; reject → круг draft с причиной оператора
+  ▼
+4 · solo/solve — разработка по строкам раздела 2 (замена tickets)
+     роль dev: tools [read, bash, edit, write]; работает ПО НОМЕРУ строки Ф:
+       одна строка Ф = одна единица работы = ОДИН коммит; сообщение коммита несёт
+       ссылки на §плана и принятые решения (образец — коммиты ddc4201/02762e0)
+     проверка НА ТИКЕТ: build/test-команда из плана (или найденная в репо) после
+       каждой Ф — дёшево и достаточно (урок: 2 прогона на весь dev)
+     ОБРАТНАЯ СВЯЗЬ ПЛАН←КОД (урок: dev нашёл баг сценария 1 и поправил план):
+       dev вправе править PLAN.md, только с обоснованием в коммите; судья отмечает
+       такие правки в итоговой карточке оператору
+     судья-скрипты станции:
+       (a) покрытие: каждая строка Ф ↔ коммит (git log с момента старта станции);
+       (b) «тесты не переписаны под зелёное»: существующие тест-файлы в диффе —
+           только расширены, удаление/правки строк существующих тестов = красный;
+       (c) гарантии §5: дифф аддитивен там, где план требует «не трогать»
+           (сверка по списку гарантируемого)
+     красное → круг dev с адресом строки
+  ▼
+done → итоговая карточка: таблица Ф↔коммиты, прогоны тестов, правки плана,
+       решения О-вопросов — оператору
+```
+
+## 4. План ↔ воркфлоу (кто что гарантирует)
+
+| раздел PLAN.md | механизм | гарант |
 |---|---|---|
-| `izi.md` роутер + `bin/next-step.mjs` + `bin/accept.mjs` | `workflows/izi.js` — детерминированный скрипт DSL | порядок и ветвление становятся кодом, а не суждением модели |
-| конверт `IZI/1` (текст) + `core/envelope.mjs` + парсер | `outputSchema` у `agent()` | хост валидирует форму сам; парсер и его тесты уходят |
-| `pipeline.json.loops` | `for`-цикл в скрипте, число приходит из `args` | воркфлоу-JS не имеет fs — конфиг подаёт раннер |
-| `pipeline.json.models` (тиры) | `modelAliases` в `~/.pi/agent/pi-extensible-workflows/settings.json` + `model:` во фронтматтере роли | тир остаётся объявленным один раз |
-| `steps/brd/role.md` (frontmatter permission-карта) | `roles/gilb.md` (pi-формат: `model`, `thinking`, `tools`) | пер-путевых прав в pi нет — держат те же два шва: квитанция и чек по staging (izi-flow это уже признаёт вслух) |
-| `bin/compose.mjs` + `order.tpl` | `prompt(tpl, {...})` в скрипте, шаблон приходит через `args` | плейсхолдеры резолвит хост, неразрешённый роняет сборку |
-| `bin/stall-watch.mjs` | `agent(..., { timeoutMs, retries })` | сторож встроен в рантайм |
-| `bin/answer.mjs` + `.agent/answers.md` | **остаётся как есть** | вопрос оператору = терминальный возврат прогона; ответ пишется на диск, прогон перезапускается |
-| `bin/run-script.mjs` | `shell()` | |
+| 1 ТРЕБОВАНИЯ цитаты | судья draft: подстрока в TASK + critic | потеря = красный круг |
+| 2 ИЗМЕНЕНИЯ пути | судья: test -e / «новый»+образец + critic | выдумка = красный круг |
+| 3 СЦЕНАРИИ | critic; на solve — приёмка в тестах (урок: сценарии→тесты 1:1) | «мечта без до» = блокер |
+| 4 ВЕЛИЧИНЫ | судья: источник непуст + critic; solve берёт только отсюда | invented = вопрос/круг |
+| 5 ГАРАНТИИ | critic + судья solve (c): аддитивность | класс T79 закрыт |
+| 6 ВОПРОСЫ | ask-рельса → answers.md → круг; решения — в коммитах | молчаливых допущений нет |
+| строки Ф → код | solve: Ф↔коммит; судья (a) покрытие | план↔разработка 1:1 |
+| баги плана | правка PLAN.md с обоснованием (обратная связь) | дефект не едет дальше |
 
-**Цикл вопроса оператору (без `checkpoint`):** прогон, упёршийся в `err(question)`, завершается
-терминальным значением с `subject`/`evidence`/`answer_cmd`. Оператор исполняет `node bin/answer.mjs
---q="…" --text="…"`, перезапускает — накопленные ответы приезжают в наряд. Это ровно та механика,
-что уже есть в izi-flow, и она headless-совместима.
+## 5. Целевые метры (из живых экспериментов 27.08)
 
-## 3. Целевая раскладка репозитория
+| фаза | pi-эталон | цель solo |
+|---|---|---|
+| план (quarkus-класс) | 26k / 3,5 мин | те же ±30% (накладные судей/критика) |
+| план (eddi-класс) | 166k / 15 мин | те же ±30% |
+| разработка | 42k / 5,5 мин, Ф↔коммит 1:1 | те же ±30% + судейские карточки |
 
-```
-izi-pi-v2/
-  TASK.md                      вход конвейера (кладёт оператор)
-  pipeline.json                порядок, loops, тиры моделей — данные
-  workflows/izi.js             скрипт воркфлоу: шаги task → brd
-  roles/gilb.md                роль шага brd (pi-формат)
-  steps/task/validate-task.mjs гардрейл входа (порт 1:1)
-  steps/brd/brd.mjs            чистое ядро: newFit · newRequirement · newSubjects · adviceFor · newBrd
-  steps/brd/brd.test.mjs       порт тестов
-  steps/brd/validate-brd.mjs   io-гардрейл
-  steps/brd/order.tpl          наряд роли
-  core/answers.mjs (+test)     разбор .agent/answers.md
-  bin/answer.mjs               накопитель ответов оператора
-  bin/install.mjs              роль → ~/.pi/agent/.../roles/, тиры → settings.json
-  bin/run.mjs                  раннер: запустить прогон и прочитать result.json со стенда
-  .agent/                      состояние прогона: staging/ receipts/ answers.md decisions.log
-  standards/                   protocol.md (две рельсы) + code.md — переносим как есть
-```
+## 6. Порядок работ
 
-## 4. Скелет `workflows/izi.js`
+1. Ветка `workflow-solo` от main; чистка; AGENTS.md заново.
+2. `standards/solo-workflow.md` — стандарт (нуль файлов в проекте, inline-скрипт из
+   команды, foreground-кнопка, роли read/bash, solve без нарезчика, обратная связь
+   план←код, судьи a/b/c) — на утверждение оператору.
+3. Минимальный `ext/` (soloMain, ask, roleDirectories) + `prompts/solo.md`.
+4. Станции draft/critic/solve: роли, наряды, судьи, юниты — по standards.
+5. Компонентные тесты полосы (зелёный путь; потерянное требование → круг; правка
+   существующего теста → красный судьи (b); Ф без коммита → красный (a)); линия зелёная.
+6. Живой proof на quarkus-форме (в проекте до запуска — только TASK.md; после — .agent/,
+   PLAN.md, коммиты): план ≥ pi-плана по чек-листу, разработка Ф↔коммит 1:1, тесты зелёные
+   моими руками, ноль ходов чат-модели после кнопки.
 
-```js
-// args = { pipeline, orderTpl }  — подаёт bin/run.mjs
-log("izi: start");
-
-// ── шаг task ─────────────────────────────────────────────
-const t = await shell("node steps/task/validate-task.mjs TASK.md");
-if (t.exitCode !== 0) return { step: "task", track: "err", kind: "blocked",
-                               subject: t.stderr.trim(), code: 10 };
-await shell("node bin/receipt.mjs --step=task");
-
-// ── шаг brd ──────────────────────────────────────────────
-const TASK = (await shell("cat TASK.md")).stdout;
-let feedback = "";
-for (let i = 0; i < args.pipeline.loops.brd; i++) {
-  const ANSWERS = (await shell("cat .agent/answers.md || true")).stdout || "(no operator answers yet)";
-  const order = prompt(args.orderTpl, { TASK, ANSWERS, feedback });
-  const env = await agent(order, { role: "gilb", outputSchema: ENVELOPE, timeoutMs: 180000 });
-
-  if (env.track === "err") return { step: "brd", ...env, code: 10 };   // вопрос оператору
-
-  const check = await shell("node steps/brd/validate-brd.mjs .agent/staging/brd.md" +
-                            " --task=TASK.md --answers=.agent/answers.md");
-  if (check.exitCode === 0) {
-    await shell("node bin/promote.mjs --step=brd");   // staging→out, потом квитанция
-    return { step: "brd", track: "ok", artifact: ".agent/brd.md", advice: check.stdout, code: 0 };
-  }
-  feedback = check.stderr;                            // пере-делегация с уликами
-}
-return { step: "brd", track: "err", kind: "escalate", subject: "повторы исчерпаны", code: 10 };
-```
-
-`ENVELOPE` — JSON Schema, повторяющая конверт: `track ∈ {ok,err}`, при `ok` — `artifact`,
-`requirements`, `questions`; при `err` — `kind ∈ {blocked,invalid,question,escalate,crashed}`,
-`subject`, `evidence`, `answer_cmd`.
-
-## 5. Порядок работ (субагенты, sonnet)
-
-- **S1 — ядро и гардрейлы.** Порт `steps/task/validate-task.mjs`, `steps/brd/{brd.mjs,validate-brd.mjs,brd.test.mjs,order.tpl}`,
-  `core/answers.mjs(+test)`, `standards/`. Критерий: `node --test` зелёный целиком; `MODULE_CONTRACT`/`FUNCTION_CONTRACT`
-  на месте; ни одной новой зависимости.
-- **S2 — воркфлоу и роль.** `workflows/izi.js`, схема конверта, `roles/gilb.md` (перенос LAW/STRATEGY/FORBIDDEN/EXAMPLE
-  без permission-карты), `pipeline.json`. Критерий: скрипт проходит preflight (запуск с фиктивным `TASK.md`
-  доходит до первого агента).
-- **S3 — обвязка прогона.** `bin/{install,run,answer,receipt,promote}.mjs` + `.agent/` контракт + тесты на них.
-  Критерий: `node bin/run.mjs` возвращает JSON результата прогона, читая `result.json` со стенда,
-  а не печать модели.
-- **S4 — живой прогон и приёмка.** Фикстура `TASK.md` без числа → ждём `err(question)`; `bin/answer.mjs`;
-  повторный прогон → `.agent/brd.md` + квитанция + advice. Негатив: `TASK.md` >300 строк → шаг 1 красный,
-  квитанции нет. Плюс `README.md`/`CLAUDE.md` репозитория.
-
-S1 и S2 идут параллельно, S3 после S2, S4 последним.
-
-## 6. Риски, объявленные вслух
-
-1. **Проектные роли не подхватились** — работаем через глобальный каталог + `bin/install.mjs`.
-   Задача S3: перепроверить проектный путь после установления trust проекта.
-2. **Запуск опосредован моделью** (tool `workflow` вызывает агент-запускатор). `bin/run.mjs` снимает риск,
-   читая результат с диска; повисание `pi -p` при этом уже наблюдалось при живом `completed` прогоне.
-3. **Прав «писать только в staging» в pi нет** — держат квитанция и чек по staging-пути. Тот же долг,
-   что и в izi-flow, переносим осознанно, а не молча.
-4. Репозиторий не под git — первым делом `git init`.
+Фаза 2 (после proof): приёмка кода критиком-ревьюером и интеграция станций по
+зависимостям Ф — отдельным решением.
