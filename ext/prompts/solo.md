@@ -35,7 +35,13 @@ for (;;) {
   if (it.do === "done") return ok({ station: "done", value: it.state });
   if (it.do === "err") return err(it.kind || "crashed", it.subject || "");
   let result = null;
-  if (it.do === "say") { log(it.line); continue; }
+  if (it.do === "say") {
+    log(it.line);
+    const sf = await soloFold({ state, event: { do: "say", instruction: it, result: null } });
+    if (sf.track === "err") return sf;
+    state = sf.value;
+    continue;
+  }
   if (it.do === "role") log("→ фаза " + state.phase + ": наряд роли " + it.role + (state.round > 1 ? " (круг " + state.round + ")" : ""));
   if (it.do === "ask") log("⏸ фаза " + state.phase + ": вопросы оператору (" + (it.items || []).length + ") — жду ответа в чате");
   if (it.do === "role") result = await agent(it.text, { role: it.role, outputSchema: ENVELOPE }, "solo:agent");
