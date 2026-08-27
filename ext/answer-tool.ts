@@ -17,6 +17,7 @@ const PENDING = ".agent/pending.json"
 const ANSWERS = ".agent/answers.md"
 
 export const soloAnswer = {
+  name: "solo_answer",
   description: "Record the operator's reply to the currently open solo questions in .agent/answers.md. Read the open questions and their numbers from .agent/pending.json (field items), then call with ONE xml block pairing every question with its answer: <exchange><question_1>…</question_1><answer_1>…</answer_1>…</exchange>. Every question must get an answer — a partial call is refused. Copy each question TEXT from pending.json verbatim. SHOW the returned table to the operator.",
   input: { type: "object", properties: { exchange: { type: "string" } }, required: ["exchange"] },
   run: async (input: { exchange: string }, ctx: any) => {
