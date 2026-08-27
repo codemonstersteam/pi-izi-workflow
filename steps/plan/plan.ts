@@ -15,6 +15,19 @@ import { askWithRetry } from "../../ext/engine/ask-retry.ts"
 
 const LOOPS = 3
 
+// конверт роли: хост валидирует форму — код читает track/kind/artifact
+const ENVELOPE = {
+  type: object,
+  properties: {
+    track: { type: string, enum: [ok, err] },
+    artifact: { type: string },
+    kind: { type: string, enum: [blocked, invalid, crashed] },
+    subject: { type: string },
+  },
+  required: [track],
+  additionalProperties: false,
+}
+
 export interface PlanInput { cwd: string; key: string }
 
 export async function writePlan(input: PlanInput, ctx: FunctionContext): Promise<Result<string>> {

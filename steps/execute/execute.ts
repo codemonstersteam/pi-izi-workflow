@@ -16,6 +16,18 @@ import { execSync } from "node:child_process"
 
 const LOOPS = 3
 
+const ENVELOPE = {
+  type: object,
+  properties: {
+    track: { type: string, enum: [ok, err] },
+    artifact: { type: string },
+    kind: { type: string, enum: [blocked, invalid, crashed] },
+    subject: { type: string },
+  },
+  required: [track],
+  additionalProperties: false,
+}
+
 export async function executePlan(
   plan: string,
   input: PlanInput,

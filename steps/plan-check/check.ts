@@ -32,7 +32,11 @@ export async function checkPlan(
   for (let round = 1; round <= LOOPS; round++) {
     // ── критик ──
     ctx.log("проверка: критик")
-    const verdict = await ctx.agent(criticOrder(current), { role: "critic" }, "solo:critic")
+    const verdict = await ctx.agent(
+      criticOrder(current),
+      { role: "critic", outputSchema: VERDICT_SCHEMA },
+      "solo:critic",
+    )
 
     if (verdict && verdict.verdict === "APPROVE") {
       // ── вопросы плана оператору ──
@@ -80,4 +84,17 @@ function criticOrder(plan: string): string {
     `$START_DATA\n$START_CONTENT\n${plan}$END_CONTENT\n$END_DATA`,
     `$START_OUTPUT\n{ "track": "ok", "verdict": "APPROVE" } или { "track": "ok", "verdict": "REJECT", "blockers": ["…"] }\n$END_OUTPUT`,
   ].join("\n\n")
+}
+
+// outputSchema для критика: хост валидирует и возвращает объект, не текст
+const VERDICT_SCHEMA = {
+  type: "object",
+  properties: {
+    track: { type: "string", enum: ["ok", "err"] },
+    verdict: { type: "string", enum: ["APPROVE", "REJECT"] },
+    blockers: { type: "array", items: { type: "string" } },
+    questions: { type: "array", items: { type: "string" } },
+  },
+  required: ["track", "verdict"],
+  additionalProperties: false,
 }
