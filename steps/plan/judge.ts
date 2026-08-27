@@ -1,10 +1,6 @@
 // MODULE_CONTRACT: judge — судья плана: вычислимое о шести разделах
-// Purpose:    одно решение: что о ФОРМЕ плана говорит скрипт. Смысл судит критик; здесь —
-//             грамматика: разделы на месте, таблицы парсятся, цитаты — подстроки заказа,
-//             пути существуют или «новые» с образцом, у величин источник.
-// io:         fs (проверка существования путей раздела 2)
-// Invariants: ТОТАЛЕН; каждый блокер называет раздел и строку; пустой план = блокер формы.
-// Interface:  judgeDraft
+// io:         fs (проверка существования путей)
+// Interface:  judgeForm, countReqs, countRows, tableRows, sectionOf
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 
@@ -14,7 +10,7 @@ export function tableRows(sectionText: string): string[][] {
   return sectionText
     .split("\n").filter((l) => l.trim().startsWith("|"))
     .filter((l) => !/^\s*\|[\s\-:|]+\|\s*$/.test(l))
-    .slice(1) // шапка
+    .slice(1)
     .map((l) => l.split("|").slice(1, -1).map((c) => c.trim()))
 }
 
@@ -26,43 +22,44 @@ export function sectionOf(plan: string, name: string): string {
   return next ? after.slice(0, next.index) : after
 }
 
-// нормализация цитат: без кавычек ЛЮБОГО рода (обратные тоже — дырка proof-прогона:
-// цитата `task: solo-1` не совпала с TASK только из-за бэктиков), пробелы сжаты, нижний регистр
 const norm = (t: string): string =>
   t.replace(/[«»"'`]/g, "").replace(/\s+/g, " ").trim().toLowerCase()
 
-export function judgeDraft({ plan, task, cwd }: { plan: string; task: string; cwd: string }): string[] {
+export function judgeForm(plan: string, task: string, cwd: string): string[] {
   const B: string[] = []
   if (!plan.trim()) return ["формы нет: план пуст"]
 
   const heads = SECTIONS.filter((h) => !new RegExp(`^#+\\s*(\\d+\\.\\s*)?${h}`, "mi").test(plan))
-  if (heads.length) B.push(`раздел(ы) отсутствуют: ${heads.join(", ")} — спека требует все шесть заголовками`)
+  if (heads.length) B.push(`раздел(ы) отсутствуют: ${heads.join(", ")}`)
 
   const reqRows = tableRows(sectionOf(plan, "ТРЕБОВАНИЯ"))
   const chgRows = tableRows(sectionOf(plan, "ИЗМЕНЕНИЯ"))
-  if (!reqRows.length) B.push("раздел ТРЕБОВАНИЯ: таблица не парится — нужны строки «| № | Цитата | Где закрыто |»")
-  if (!chgRows.length) B.push("раздел ИЗМЕНЕНИЯ: таблица не парится — нужны строки «| № | Файл | A/C | Контракт | Требование |»")
+  if (!reqRows.length) B.push("ТРЕБОВАНИЯ: таблица не парится")
+  if (!chgRows.length) B.push("ИЗМЕНЕНИЯ: таблица не парится")
 
   const taskNorm = norm(task)
   for (const c of reqRows) {
     const quote = norm(c[1] || "")
-    if (!quote) { B.push(`ТРЕБОВАНИЯ, строка «${(c[0] || "?").slice(0, 12)}»: колонка цитаты пуста`); continue }
+    if (!quote) { B.push(`ТРЕБОВАНИЯ «${(c[0] || "?").slice(0, 12)}»: колонка цитаты пуста`); continue }
     if (taskNorm && !taskNorm.includes(quote.slice(0, Math.min(60, quote.length))))
-      B.push(`ТРЕБОВАНИЯ «${quote.slice(0, 50)}…» — не подстрока TASK.md: цитируй заказ дословно, не пересказом`)
+      B.push(`ТРЕБОВАНИЯ «${quote.slice(0, 50)}…» — не подстрока TASK.md: цитируй дословно`)
   }
 
   for (const c of chgRows) {
     const path = (c[1] || "").replace(/`/g, "").trim()
     const what = `${c[3] || ""} ${c[2] || ""} ${c[4] || ""}`
-    if (!path) { B.push(`ИЗМЕНЕНИЯ, строка «${(c[0] || "?").slice(0, 12)}»: колонка файла пуста`); continue }
+    if (!path) { B.push(`ИЗМЕНЕНИЯ «${(c[0] || "?").slice(0, 12)}»: колонка файла пуста`); continue }
     if (cwd && !existsSync(join(cwd, path)) && !/образ/i.test(what))
-      B.push(`ИЗМЕНЕНИЯ «${path}»: файла нет в репозитории и образец не назван — либо путь существует (проверь), либо честно пометь «новый» и назови, по образцу какого файла создаётся`)
+      B.push(`ИЗМЕНЕНИЯ «${path}»: файла нет и образец не назван`)
   }
 
   for (const c of tableRows(sectionOf(plan, "ВЕЛИЧИНЫ"))) {
     if (c.length >= 3 && !c[2])
-      B.push(`ВЕЛИЧИНЫ «${(c[1] || c[0] || "?").slice(0, 30)}»: колонка источника пуста — источник обязателен (цитата TASK или файл кода)`)
+      B.push(`ВЕЛИЧИНЫ «${(c[1] || c[0] || "?").slice(0, 30)}»: источник пуст`)
   }
 
   return B
 }
+
+export const countReqs = (plan: string): number => tableRows(sectionOf(plan, "ТРЕБОВАНИЯ")).length
+export const countRows = (plan: string): number => tableRows(sectionOf(plan, "ИЗМЕНЕНИЯ")).filter((c) => /^Ф\d+/.test(c[0] || "")).length

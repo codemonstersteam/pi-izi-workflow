@@ -7,7 +7,7 @@
 // Invariants: вопрос и ответ разделены машиной, не глазом; порядок сохранён; писатель
 //             ОТКАЗЫВАЕТСЯ писать значение, которое формат не унесёт.
 // Interface:  newExchange, newAnswers
-import { ok, err, type Result } from "./result.ts"
+import { ok, fail, type Result } from "./result.ts"
 
 export interface Answer { n: number; question: string; text: string }
 
@@ -17,16 +17,16 @@ const FORBIDDEN = /<\/(question|answer)_\d+>/i
 //   Consequent: success: строка `<exchange>…</exchange>\n`; failure: "invalid-exchange"
 //   Purity:     pure
 export function newExchange(pairs: { n: number; question: string; text: string }[]): Result<string> {
-  if (!Array.isArray(pairs) || !pairs.length) return err("invalid-exchange", "нет ни одной пары вопрос-ответ")
+  if (!Array.isArray(pairs) || !pairs.length) return fail("invalid-exchange", "нет ни одной пары вопрос-ответ")
   const seen = new Set<number>()
   for (const p of pairs) {
-    if (!Number.isInteger(p.n) || p.n < 1) return err("invalid-exchange", `номер «${p.n}» — ожидалось целое ≥ 1`)
-    if (seen.has(p.n)) return err("invalid-exchange", `номер ${p.n} повторяется`)
+    if (!Number.isInteger(p.n) || p.n < 1) return fail("invalid-exchange", `номер «${p.n}» — ожидалось целое ≥ 1`)
+    if (seen.has(p.n)) return fail("invalid-exchange", `номер ${p.n} повторяется`)
     seen.add(p.n)
-    if (!String(p.question || "").trim()) return err("invalid-exchange", `вопрос ${p.n} пуст`)
-    if (!String(p.text || "").trim()) return err("invalid-exchange", `ответ на вопрос ${p.n} пуст`)
+    if (!String(p.question || "").trim()) return fail("invalid-exchange", `вопрос ${p.n} пуст`)
+    if (!String(p.text || "").trim()) return fail("invalid-exchange", `ответ на вопрос ${p.n} пуст`)
     if (FORBIDDEN.test(p.question) || FORBIDDEN.test(p.text)) {
-      return err("invalid-exchange", `вопрос или ответ ${p.n} содержит закрывающий тег формата — такой текст answers.md не переживёт`)
+      return fail("invalid-exchange", `вопрос или ответ ${p.n} содержит закрывающий тег формата — такой текст answers.md не переживёт`)
     }
   }
   const body = pairs
@@ -46,7 +46,7 @@ export function newAnswers(text: string): Result<Answer[]> {
     for (const m of b.matchAll(/<question_(\d+)>([\s\S]*?)<\/question_\1>/g)) {
       const n = Number(m[1])
       const a = b.match(new RegExp(`<answer_${n}>([\\s\\S]*?)</answer_${n}>`))
-      if (!a) return err("malformed", `вопрос ${n} без ответа: «${m[2].trim().slice(0, 40)}»`)
+      if (!a) return fail("malformed", `вопрос ${n} без ответа: «${m[2].trim().slice(0, 40)}»`)
       out.push({ n, question: m[2].trim(), text: a[1].trim() })
     }
   }
