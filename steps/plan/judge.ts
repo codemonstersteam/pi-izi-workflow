@@ -23,7 +23,7 @@ export function sectionOf(plan: string, name: string): string {
 }
 
 const norm = (t: string): string =>
-  t.replace(/[«»"'`]/g, "").replace(/\s+/g, " ").trim().toLowerCase()
+  t.replace(/[«»"'`]/g, "").replace(/\s*\([^)]*\)\s*$/g, "").replace(/\s+/g, " ").trim().toLowerCase()
 
 export function judgeForm(plan: string, task: string, cwd: string): string[] {
   const B: string[] = []
