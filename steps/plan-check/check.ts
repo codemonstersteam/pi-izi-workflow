@@ -45,7 +45,9 @@ export async function checkPlan(
       const open = extractQuestions(current)
       if (open.length > 0) {
         ctx.log(`проверка: вопросы оператору (${open.length})`)
-        const answers = await askWithRetry(open, ctx)
+        const askR = await askWithRetry(open, ctx)
+        if (!askR.ok) return askR
+        const answers = askR.value
         current = applyAnswers(current, readAt(input.cwd, ".agent/answers.md"))
       }
 
@@ -55,11 +57,12 @@ export async function checkPlan(
 
       // ── подтверждение ──
       ctx.log("проверка: подтверждаю у оператора")
-      const reply = await askWithRetry(
+      const replyR = await askWithRetry(
         [`${card(current, input.cwd)}\nЗапускаем разработку? да / нет: причина`],
         ctx,
       )
-      const said = reply.join(" ").trim().toLowerCase()
+      if (!replyR.ok) return replyR
+      const said = replyR.value.join(" ").trim().toLowerCase()
       if (/^(да|yes|ok|согласен|approve)/.test(said)) {
         writeAt(input.cwd, CONFIRMED, new Date().toISOString())
         ctx.log("проверка: план утверждён")
@@ -84,11 +87,8 @@ export async function checkPlan(
 }
 
 function criticOrder(plan: string): string {
-  return [
-    `$START_TASK\nТы критик плана. Прочитай план ниже и проверь по чек-листу — выборочно сверяй с кодом (read):\n1. ТРЕБОВАНИЯ: каждая строка — цитата из TASK, и место закрытия реально закрывает её.\n2. ИЗМЕНЕНИЯ: пути существуют или честно «новый» с образцом; контракт соответствует коду.\n3. СЦЕНАРИИ: до и после различны; «до» — текущий код.\n4. ВЕЛИЧИНЫ: у каждой источник.\n5. ГАРАНТИИ: поимённы и правдоподобны.\n6. ОТКРЫТЫЕ ВОПРОСЫ: решения оператора, не молчаливые допущения.\nВердикт: APPROVE или REJECT с ≤3 блокеров (адрес + что сломает).\n$END_TASK`,
-    `$START_DATA\n$START_CONTENT\n${plan}$END_CONTENT\n$END_DATA`,
-    `$START_OUTPUT\n{ "track": "ok", "verdict": "APPROVE" } или { "track": "ok", "verdict": "REJECT", "blockers": ["…"] }\n$END_OUTPUT`,
-  ].join("\n\n")
+  const tpl = readFileSync(new URL("./order-critic.tpl", import.meta.url).pathname, "utf8")
+  return tpl.replace("{PLAN}", plan)
 }
 
 const ENVELOPE = {

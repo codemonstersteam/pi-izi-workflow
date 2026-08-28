@@ -13,6 +13,7 @@ import { judgeSolve, doneCard } from "./judges.ts"
 import { askWithRetry } from "../../ext/engine/ask-retry.ts"
 import type { PlanInput } from "../plan/plan.ts"
 import { execSync } from "node:child_process"
+import { readFileSync } from "node:fs"
 
 const LOOPS = 3
 
@@ -44,7 +45,9 @@ export async function executePlan(
 
     // dev упёрся — вопрос оператору
     if (answer && answer.track === "err" && answer.kind === "blocked") {
-      const resolved = await askWithRetry([String(answer.subject || "")], ctx)
+      const askR = await askWithRetry([String(answer.subject || "")], ctx)
+    if (!askR.ok) return askR
+    const resolved = askR.value
       findings = `ответ оператора: ${resolved.join(" ")}`
       continue
     }
@@ -67,14 +70,10 @@ export async function executePlan(
 }
 
 function devOrder(plan: string, findings: string): string {
-  const parts = [
-    `$START_TASK\nРазработай по плану ниже. Правила:\n1. работай маленькими итерациями с тестами; итерация = строка Ф = коммит\n2. величины — только из раздела 4; гарантии раздела 5 нерушимы\n3. существующие тесты не переписывать\nБаг плана нашёл по мелочи — правь PLAN.md с обоснованием в коммите.\nНужно изменить поведение/требование/гарантию — верни err-конверт kind="blocked" с вопросом.\n$END_TASK`,
-    `$START_DATA\n$START_DOCUMENT\npath: ${PLAN}\nУтверждённый план — единственная инструкция. Вопросы оператора решены («→ РЕШЕНО»).\n$END_DOCUMENT\n$START_CONTENT\n${plan}$END_CONTENT\n$END_DATA`,
-  ]
-  if (findings.trim())
-    parts.push(`$START_FEEDBACK\n${findings}\n$END_FEEDBACK`)
-  parts.push(`$START_OUTPUT\nРаботай read/bash/edit/write; коммить сам (git add -A && git commit).\nЗакончив ВСЕ строки Ф — workflow_result: { "track": "ok" }.\n$END_OUTPUT`)
-  return parts.join("\n\n")
+  const tpl = readFileSync(new URL("./order-dev.tpl", import.meta.url).pathname, "utf8")
+  return tpl
+    .replace("{PLAN}", plan)
+    .replace("{FEEDBACK}", findings.trim() ? `$START_FEEDBACK\n${findings}\n$END_FEEDBACK` : "")
 }
 
 function gitHead(cwd: string): string {
