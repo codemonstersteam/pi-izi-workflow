@@ -8,7 +8,7 @@ export async function askWithRetry(items: string[], ctx: FunctionContext): Promi
   for (let retry = 1; retry <= 2; retry++) {
     const r = await ctx.invoke("ask", { items: items.map((t) => ({ text: t })) })
     const answers = (r as any)?.answers || []
-    if (answers.some((a: string) => a && String(a).trim())) return ok(answers)
+    if (answers.every((a: string) => a && String(a).trim())) return ok(answers)
   }
   return fail("escalate", `вопросы не отвечены за 2 паузы: ${items[0]?.slice(0, 60)}`)
 }

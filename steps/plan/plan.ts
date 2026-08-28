@@ -1,9 +1,6 @@
 // MODULE_CONTRACT: plan — шаг 1: planner пишет план, судья формы проверяет
-// Purpose:    одно решение: как рождается принимаемый план. Planner (роль с глазами на код)
-//             пишет по спеке; судья-скрипт проверяет форму (6 разделов, цитаты, пути, источники);
-//             красное → круг починки с FEEDBACK; blocked → вопрос оператору.
-// io:         fs (чтение TASK/спеки, запись staging); agent (planner); invoke (ask)
-// Invariants: круг тратится только на красный судью; обрыв не тратит; выход — план или escalate.
+// io:         fs; agent (planner); invoke (ask)
+// Invariants: круг тратится только на красный судью; обрыв НЕ тратит; blocked → вопрос.
 // Interface:  writePlan(input, ctx) -> Result<string>
 import { ok, fail, type Result } from "../../ext/result.ts"
 import type { FunctionContext } from "../../ext/context.ts"
@@ -15,7 +12,6 @@ import { askWithRetry } from "../../ext/engine/ask-retry.ts"
 
 const LOOPS = 3
 
-// конверт роли: хост валидирует форму — код читает track/kind/artifact
 const ENVELOPE = {
   type: "object",
   properties: {
@@ -34,34 +30,37 @@ export async function writePlan(input: PlanInput, ctx: FunctionContext): Promise
   const { cwd } = input
   ctx.log("план: пишу")
 
-  // resume: план уже принят → пропустить шаг
   if (existsAt(cwd, PLAN)) {
     ctx.log(`план: уже готов — ${countReqs(readAt(cwd, PLAN))} требований, ${countRows(readAt(cwd, PLAN))} строк Ф`)
     return ok(readAt(cwd, PLAN))
   }
 
-  let draft = readAt(cwd, PLAN_DRAFT) // resume: свой черновик как PREVIOUS
-  let blockers: string[] = []          // блокеры прошлого круга — FEEDBACK следующего
+  let draft = readAt(cwd, PLAN_DRAFT)
+  let blockers: string[] = []
+  let round = 1
 
-  for (let round = 1; round <= LOOPS; round++) {
+  // INVARIANT: обрыв (err без blocked) и blocked НЕ тратят круг —
+  // round++ только при красном судье. Цикл — while, не for.
+  while (round <= LOOPS) {
     // круг 1 — первичный наряд; круг ≥ 2 — наряд починки с FEEDBACK
-    const order = round === 1
-      ? planOrder(input, draft)
-      : repairOrder(input, draft, blockers)
+    // PRECONDITION repairOrder: blockers непусты (иначе — первичный наряд)
+    const order = round > 1 && blockers.length > 0
+      ? repairOrder(input, draft, blockers)
+      : planOrder(input, draft)
 
     const answer = await ctx.agent(
       order,
-      { role: "planner" },
+      { role: "planner", outputSchema: ENVELOPE },
       "solo:plan",
     )
 
-    // planner упёрся — вопрос оператору, ответ в следующий круг
+    // planner упёрся — вопрос оператору, круг НЕ тратится
     if (answer && answer.track === "err" && answer.kind === "blocked") {
       const askR = await askWithRetry([String(answer.subject || "")], ctx)
-    if (!askR.ok) return askR
-    const resolved = askR.value
+      if (!askR.ok) return askR
+      const resolved = askR.value
       draft += `\n\n$START_ANSWERED\n${resolved.join("\n")}\n$END_ANSWERED`
-      continue
+      continue // round НЕ меняется
     }
     // обрыв — круг НЕ тратится
     if (answer && answer.track === "err") continue
@@ -75,9 +74,10 @@ export async function writePlan(input: PlanInput, ctx: FunctionContext): Promise
     }
 
     ctx.log(`план: круг ${round}/${LOOPS} — ${blockers.length} замечаний`)
+    round++ // круг потрачен ТОЛЬКО на красный судью
   }
 
-  return fail("escalate", `план не прошёл судью за ${LOOPS} круга`)
+  return fail("escalate", `план не прошёл судью за ${LOOPS} круга: ${blockers.join("; ").slice(0, 200)}`)
 }
 
 // repairPlan — planner получает существующий план + блокеры, правит названное
@@ -88,16 +88,20 @@ export async function repairPlan(
   ctx: FunctionContext,
 ): Promise<Result<string>> {
   const { cwd } = input
-  writeAt(cwd, PLAN_DRAFT, plan) // план в staging для правки
+  writeAt(cwd, PLAN_DRAFT, plan)
 
   const answer = await ctx.agent(
     repairOrder(input, plan, blockers),
-    { role: "planner" },
+    { role: "planner", outputSchema: ENVELOPE },
     "solo:repair",
   )
-  if (answer && answer.track === "err") return fail("blocked", String(answer.subject || "planner недоступен"))
+  if (answer && answer.track === "err")
+    return fail("blocked", String(answer.subject || "planner недоступен"))
 
   const repaired = readAt(cwd, PLAN_DRAFT)
+  if (!repaired.trim())
+    return fail("blocked", "planner не написал план — починка не состоялась")
+
   const form = judgeForm(repaired, readAt(cwd, TASK), cwd)
   if (form.length > 0) return fail("escalate", form.join("\n"))
 

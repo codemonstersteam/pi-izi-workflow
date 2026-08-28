@@ -46,10 +46,16 @@ const stand = () => {
   const cwd = mkdtempSync(join(tmpdir(), "solo-run-"))
   mkdirSync(join(cwd, "src"), { recursive: true })
   mkdirSync(join(cwd, ".agent/staging"), { recursive: true })
+  writeFileSync(join(cwd, ".gitignore"), ".agent/\n")
   writeFileSync(join(cwd, "TASK.md"), TASK)
   writeFileSync(join(cwd, "src/App.java"), "class App {}\n")
   writeFileSync(join(cwd, "src/Legacy.java"), "class Legacy {}\n")
-  try { execSync("git init -q && git add -A && git commit -q -m base", { cwd, encoding: "utf8" }) } catch {}
+  try {
+    execSync("git init -q", { cwd, encoding: "utf8" })
+    execSync("git config user.email test@test", { cwd, encoding: "utf8" })
+    execSync("git config user.name test", { cwd, encoding: "utf8" })
+    execSync("git add -A && git commit -q -m base", { cwd, encoding: "utf8" })
+  } catch {}
   return cwd
 }
 
@@ -120,7 +126,7 @@ test("красный план → круг починки → зелёный", a
       return { track: "ok" }
     },
     critic: () => ({ track: "ok", verdict: "APPROVE" }),
-    dev: () => { execSync("git add -A && git commit -q -m 'Ф1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
+    dev: () => { writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n"); execSync("git add -A && git commit -q -m 'Ф1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
   }, [["да"]])
   try {
     const r = await run({}, ctx)
@@ -136,7 +142,7 @@ test("критик REJECT → repairPlan → APPROVE → done", async () => {
   const { ctx, logs } = mockCtx(cwd, {
     planner: () => { writeFileSync(join(cwd, ".agent/staging/PLAN~draft.md"), PLAN); return { track: "ok" } },
     critic: () => { criticCall++; return criticCall === 1 ? { track: "ok", verdict: "REJECT", blockers: ["ТРЕБОВАНИЯ Т2: цитата не закрывает"] } : { track: "ok", verdict: "APPROVE" } },
-    dev: () => { execSync("git add -A && git commit -q -m 'Ф1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
+    dev: () => { writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n"); execSync("git add -A && git commit -q -m 'Ф1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
   }, [["да"]])
   try {
     const r = await run({}, ctx)
@@ -150,7 +156,7 @@ test("оператор «нет» → repairPlan → «да» → done", async (
   const { ctx, logs } = mockCtx(cwd, {
     planner: () => { writeFileSync(join(cwd, ".agent/staging/PLAN~draft.md"), PLAN); return { track: "ok" } },
     critic: () => ({ track: "ok", verdict: "APPROVE" }),
-    dev: () => { execSync("git add -A && git commit -q -m 'Ф1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
+    dev: () => { writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n"); execSync("git add -A && git commit -q -m 'Ф1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
   }, [["нет: добавь лимит"], ["да"]])
   try {
     const r = await run({}, ctx)

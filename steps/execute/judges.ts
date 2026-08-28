@@ -23,8 +23,11 @@ function lostLines(diff: string, cwd: string, file: string): number {
 }
 
 export function judgeSolve({ cwd, plan, since }: { cwd: string; plan: string; since: string }): string[] {
+  // PRECONDITION: since непуст (git HEAD получен). Пустой = git недоступен:
+  // судьи (b)/(c) не могут работать → блокер, НЕ молчаливая зелёность
+  if (!since) return ["git недоступен — HEAD не получен, судьи (b)/(c) не могут работать"]
   const B: string[] = []
-  const range = since ? `${since}..HEAD` : ""
+  const range = `${since}..HEAD`
   const commits = (range ? git(cwd, `log --format=%s ${range}`) : git(cwd, "log --format=%s -50")).split("\n").filter(Boolean)
   if (range && !commits.length) B.push("(a) от отметки старта разработки нет НИ ОДНОГО коммита — работа не начата")
 
@@ -32,7 +35,7 @@ export function judgeSolve({ cwd, plan, since }: { cwd: string; plan: string; si
   if (!rows.length) B.push("(a) в плане не найдено строк Ф — судить покрытие не по чему")
   for (const c of rows) {
     const id = (c[0] || "").split(/\s+/)[0]
-    if (!commits.some((s) => s.includes(id)))
+    if (!commits.some((s) => new RegExp(`(?<![\\p{L}\\p{N}])${id}(?![\\p{L}\\p{N}])`, "u").test(s)))
       B.push(`(a) строка ${id} («${(c[1] || "").slice(0, 50)}») не покрыта коммитом — итерация = строка Ф = коммит`)
   }
 
