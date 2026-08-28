@@ -1,11 +1,10 @@
 // MODULE_CONTRACT: execute — шаг 3: dev по строкам Ф, судьи a/b/c
-// Purpose:    одно решение: как план становится коммитами. Dev (роль) работает по строкам
-//             Ф (итерация = строка = коммит); судьи проверяют покрытие/тесты/гарантии;
-//             нарушения → круг починки с FEEDBACK.
-// io:         fs (чтение PLAN); agent (dev); proc (git для судей)
+// io:         fs; agent (dev); proc (git)
+// Invariants: круг тратится только на красный судью; обрыв НЕ тратит.
 // Interface:  executePlan(plan, input, ctx) -> Result<string>
 import { ok, fail, type Result } from "../../ext/result.ts"
 import type { FunctionContext } from "../../ext/context.ts"
+import { readFileSync } from "node:fs"
 import { readAt } from "../../ext/io.ts"
 import { PLAN } from "../../ext/paths.ts"
 import { countRows } from "../plan/judge.ts"
@@ -13,7 +12,6 @@ import { judgeSolve, doneCard } from "./judges.ts"
 import { askWithRetry } from "../../ext/engine/ask-retry.ts"
 import type { PlanInput } from "../plan/plan.ts"
 import { execSync } from "node:child_process"
-import { readFileSync } from "node:fs"
 
 const LOOPS = 3
 
@@ -39,19 +37,21 @@ export async function executePlan(
   ctx.log(`разработка: ${rows} строк Ф`)
 
   let findings = ""
+  let round = 1
 
-  for (let round = 1; round <= LOOPS; round++) {
-    const answer = await ctx.agent(devOrder(plan, findings), { role: "dev" }, "solo:dev")
+  while (round <= LOOPS) {
+    const answer = await ctx.agent(
+      devOrder(plan, findings),
+      { role: "dev", outputSchema: ENVELOPE },
+      "solo:dev",
+    )
 
-    // dev упёрся — вопрос оператору
     if (answer && answer.track === "err" && answer.kind === "blocked") {
       const askR = await askWithRetry([String(answer.subject || "")], ctx)
-    if (!askR.ok) return askR
-    const resolved = askR.value
-      findings = `ответ оператора: ${resolved.join(" ")}`
+      if (!askR.ok) return askR
+      findings = `ответ оператора: ${askR.value.join(" ")}`
       continue
     }
-    // обрыв — круг НЕ тратится
     if (answer && answer.track === "err") continue
 
     const violations = judgeSolve({ cwd: input.cwd, plan, since: before })
@@ -64,6 +64,7 @@ export async function executePlan(
 
     ctx.log(`разработка: круг ${round}/${LOOPS} — ${violations.length} нарушений`)
     findings = violations.join("\n")
+    round++
   }
 
   return fail("escalate", `разработка не прошла судей за ${LOOPS} круга: ${findings.slice(0, 200)}`)

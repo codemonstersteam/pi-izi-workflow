@@ -9,10 +9,10 @@ import { ok, fail, type Result } from "../../ext/result.ts"
 import type { FunctionContext } from "../../ext/context.ts"
 import { readFileSync } from "node:fs"
 import { readAt, writeAt, existsAt } from "../../ext/io.ts"
-import { PLAN, CONFIRMED } from "../../ext/paths.ts"
+import { PLAN, CONFIRMED, PLAN_DRAFT, TASK } from "../../ext/paths.ts"
 import { extractQuestions, applyAnswers } from "./questions.ts"
-import { judgeForm, countRows } from "../plan/judge.ts"
 import { card } from "./card.ts"
+import { judgeForm, countRows } from "../plan/judge.ts"
 import { askWithRetry } from "../../ext/engine/ask-retry.ts"
 import { repairPlan, type PlanInput } from "../plan/plan.ts"
 
@@ -48,7 +48,7 @@ export async function checkPlan(
         const askR = await askWithRetry(open, ctx)
         if (!askR.ok) return askR
         const answers = askR.value
-        current = applyAnswers(current, readAt(input.cwd, ".agent/answers.md"))
+        current = applyAnswersToPlan(current, readAt(input.cwd, ".agent/answers.md"), input, ctx)
       }
 
       // ── сверка: planner проверяет РЕШЕНО против ВСЕХ разделов ──
@@ -86,6 +86,53 @@ export async function checkPlan(
   return fail("escalate", `проверка не прошла за ${LOOPS} круга`)
 }
 
+// applyAnswersToPlan — применить ответы с проверкой постусловия «вписаны ВСЕ»
+function applyAnswersToPlan(plan: string, answersMd: string, input: PlanInput, ctx: FunctionContext): string {
+  const r = applyAnswers(plan, answersMd)
+  if (!r.ok) {
+    ctx.log(`проверка: ОТВЕТЫ НЕ ВПИСАНЫ — ${r.error.detail}`)
+    return plan // продолжаем с исходным планом, вопрос повторится на следующем круге
+  }
+  if (r.value.applied < r.value.total)
+    ctx.log(`проверка: вписано ${r.value.applied}/${r.value.total} ответов`)
+  return r.value.plan
+}
+
+// plannerReconcile — после применения ответов planner сверяет РЕШЕНО со ВСЕМИ разделами
+async function plannerReconcile(
+  plan: string,
+  input: PlanInput,
+  ctx: FunctionContext,
+): Promise<string> {
+  const tpl = readFileSync(new URL("./order.reconcile.tpl", import.meta.url).pathname, "utf8")
+  const text = tpl.replace("{PLAN}", plan).replace("{STAGING}", PLAN_DRAFT)
+
+  // Записать ТЕКУЩИЙ план (с РЕШЕНО) в staging ДО вызова planner:
+  // без этого planner пишет СВОЙ вариант в staging и стирает отметки ответов.
+  writeAt(input.cwd, PLAN_DRAFT, plan)
+
+  await ctx.agent(text, { role: "planner", outputSchema: ENVELOPE }, "solo:reconcile")
+
+  const updated = readAt(input.cwd, PLAN_DRAFT)
+  if (!updated.trim()) return plan
+
+  // Если planner переписал план БЕЗ РЕШЕНО — ответы потеряны, вернуть исходный
+  const hadResolved = (plan.match(/→ РЕШЕНО/g) || []).length
+  const hasResolved = (updated.match(/→ РЕШЕНО/g) || []).length
+  if (hadResolved > 0 && hasResolved < hadResolved) {
+    ctx.log(`сверка: planner потерял ${hadResolved - hasResolved} РЕШЕНО — использую исходный`)
+    return plan
+  }
+
+  const blockers = judgeForm(updated, readAt(input.cwd, TASK), input.cwd)
+  if (blockers.length > 0) return plan
+
+  const was = countRows(plan)
+  const now = countRows(updated)
+  if (now !== was) ctx.log(`сверка: ${was} → ${now} строк Ф`)
+  return updated
+}
+
 function criticOrder(plan: string): string {
   const tpl = readFileSync(new URL("./order-critic.tpl", import.meta.url).pathname, "utf8")
   return tpl.replace("{PLAN}", plan)
@@ -103,30 +150,6 @@ const ENVELOPE = {
   additionalProperties: false,
 }
 
-// plannerReconcile — после применения ответов planner сверяет РЕШЕНО со ВСЕМИ разделами
-async function plannerReconcile(
-  plan: string,
-  input: PlanInput,
-  ctx: FunctionContext,
-): Promise<string> {
-  const tpl = readFileSync(new URL("./order.reconcile.tpl", import.meta.url).pathname, "utf8")
-  const text = tpl.replace("{PLAN}", plan).replace("{STAGING}", ".agent/staging/PLAN~draft.md")
-
-  await ctx.agent(text, { role: "planner", outputSchema: ENVELOPE }, "solo:reconcile")
-
-  const updated = readAt(input.cwd, ".agent/staging/PLAN~draft.md")
-  if (!updated.trim()) return plan
-
-  const blockers = judgeForm(updated, readAt(input.cwd, "TASK.md"), input.cwd)
-  if (blockers.length > 0) return plan
-
-  const was = countRows(plan)
-  const now = countRows(updated)
-  if (now !== was) ctx.log(`сверка: ${was} → ${now} строк Ф`)
-  return updated
-}
-
-// outputSchema для критика: хост валидирует и возвращает объект, не текст
 const VERDICT_SCHEMA = {
   type: "object",
   properties: {
