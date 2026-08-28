@@ -112,10 +112,22 @@ async function plannerReconcile(
   const tpl = readFileSync(new URL("./order.reconcile.tpl", import.meta.url).pathname, "utf8")
   const text = tpl.replace("{PLAN}", plan).replace("{STAGING}", ".agent/staging/PLAN~draft.md")
 
+  // Записать ТЕКУЩИЙ план (с РЕШЕНО) в staging ДО вызова planner:
+  // без этого planner пишет СВОЙ вариант в staging и стирает отметки ответов.
+  writeAt(input.cwd, ".agent/staging/PLAN~draft.md", plan)
+
   await ctx.agent(text, { role: "planner", outputSchema: ENVELOPE }, "solo:reconcile")
 
   const updated = readAt(input.cwd, ".agent/staging/PLAN~draft.md")
   if (!updated.trim()) return plan
+
+  // Если planner переписал план БЕЗ РЕШЕНО — ответы потеряны, вернуть исходный
+  const hadResolved = (plan.match(/→ РЕШЕНО/g) || []).length
+  const hasResolved = (updated.match(/→ РЕШЕНО/g) || []).length
+  if (hadResolved > 0 && hasResolved < hadResolved) {
+    ctx.log(`сверка: planner потерял ${hadResolved - hasResolved} РЕШЕНО — использую исходный`)
+    return plan
+  }
 
   const blockers = judgeForm(updated, readAt(input.cwd, "TASK.md"), input.cwd)
   if (blockers.length > 0) return plan
