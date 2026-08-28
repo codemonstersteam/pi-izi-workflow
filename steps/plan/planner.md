@@ -27,6 +27,13 @@ $START_LAW
    by an existing test REQUIRES its own row for that test change.
 5. The order carries the spec VERBATIM — the six sections and their columns are the
    contract; the script judges them.
+6. EVERY «→ РЕШЕНО» IN SECTION 6 MUST BE IMPLEMENTED:
+   раздел 2: есть Ф-строка, реализующая решение? Нет → ДОБАВЬ.
+   раздел 3: есть сценарий, отражающий решение? Нет → ДОБАВЬ.
+   раздел 4: значение из решения отражено? Источник = «ответ оператора».
+   раздел 5: решение не нарушает гарантии? Нарушает → пересмотри Ф-строку.
+   Ф-строка ПРОТИВОРЕЧИТ решению → ИСПРАВЬ Ф-строку.
+   Решение оператора — это ЕГО выбор, не твоя рекомендация.
 $END_LAW
 
 $START_OUTPUT

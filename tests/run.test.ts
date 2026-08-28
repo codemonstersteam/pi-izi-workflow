@@ -126,7 +126,7 @@ test("красный план → круг починки → зелёный", a
     const r = await run({}, ctx)
     assert.equal(r.track, "ok")
     assert.ok(logs.some((l) => l.includes("план: круг 1/3")), "круг починки не залогирован")
-    assert.equal(call, 2, "planner позван не 2 раза")
+    assert.ok(call >= 2, `planner позван ${call} раз — меньше 2 (начало + сверка)`)
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })
 
@@ -156,5 +156,50 @@ test("оператор «нет» → repairPlan → «да» → done", async (
     const r = await run({}, ctx)
     assert.equal(r.track, "ok")
     assert.ok(logs.some((l) => l.includes("оператор отклонил")))
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})
+
+// СВЕРКА: planner добавляет Ф-строку для решения без реализации
+test("сверка: РЕШЕНО «fruits.html» без Ф-строки → planner добавляет Ф3", async () => {
+  const cwd = stand()
+  // план с РЕШЕНО, но БЕЗ Ф-строки для fruits.html
+  const planWithSolved = PLAN.replace(
+    "| Лимит? → РЕШЕНО: 20 | — |",
+    "| Лимит? → РЕШЕНО: 20 | — |\n| Перевести fruits.html? → РЕШЕНО: Да, перевести | — |",
+  )
+  const planWithF3 = planWithSolved.replace(
+    "| Ф1 | src/App.java |",
+    "| Ф1 | src/App.java |",
+  ).replace(
+    "## 3. СЦЕНАРИИ",
+    "| Ф3 | src/page.html | Changed | поиск в UI | Т1 |\n\n## 3. СЦЕНАРИИ",
+  )
+
+  let plannerCalls = 0
+  const { ctx, logs } = mockCtx(cwd, {
+    planner: (text: string) => {
+      plannerCalls++
+      // первый вызов — обычный план; второй — сверка (добавляет Ф3)
+      const isReconcile = text.includes("СВЕРЬ")
+      const plan = isReconcile ? planWithF3 : PLAN
+      writeFileSync(join(cwd, ".agent/staging/PLAN~draft.md"), plan)
+      return { track: "ok" }
+    },
+    critic: () => ({ track: "ok", verdict: "APPROVE" }),
+    dev: () => {
+      writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n")
+      writeFileSync(join(cwd, "src/page.html"), "<html>search</html>")
+      execSync("git add -A && git commit -q -m 'Ф1+Ф3'", { cwd, encoding: "utf8" })
+      return { track: "ok" }
+    },
+  }, [["да"]])
+  // создать src/page.html чтобы судья не блокировал
+  writeFileSync(join(cwd, "src/page.html"), "<html>old</html>")
+
+  try {
+    const r = await run({ key: "T" }, ctx)
+    assert.equal(r.track, "ok", JSON.stringify(r).slice(0, 200))
+    assert.ok(plannerCalls >= 2, "planner не позван для сверки")
+    assert.ok(logs.some((l) => l.includes("сверка")), "сверка не залогирована")
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })
