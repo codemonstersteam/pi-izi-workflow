@@ -29,9 +29,17 @@ value with no slash is resolved against `modelAliases` of the workflow settings
 `routing`, `execution`, `judgment`. A provider id — what every role here carries today — pins the
 repository to one vendor's one model, and the machine's settings then have no say at all.
 
-Which of the two this pipeline should use is an OPEN DECISION, deliberately not taken here. What is
-not open is the trap, and it cost two runs on 2026-08-13: with an id in the frontmatter, editing
-`modelAliases` changes NOTHING, silently — and the status line shows the CHAT model, so the screen
+**РЕШЕНО 21.08.2026 оператором: роли этого репозитория несут АЛИАС, а не идентификатор.** Кто
+судит — `judgment` (критик требования, критик плана), кто пишет артефакт — `execution` (все
+остальные). Третий алиас, `routing`, ОСТАВЛЕН ПУСТЫМ намеренно: маршрут находки (план · дизайн ·
+требование) разводит скрипт `planRoute`, и роли с этим смыслом в конвейере нет — модель здесь не
+нужна. Под обоими занятыми алиасами сегодня лежит один и тот же `qwen3.6-27b`; смысл перевода в том, что
+модель кругов починки 4-5 поднимается тиром выше ОДНОЙ строкой в машинных настройках, а не правкой
+семи файлов ролей (`docs/plan-design.md` §6). Шов держит это за язык: роль с идентификатором в
+`model:` краснит тест.
+
+Ловушка, которая и заставила решать, стоила двух прогонов 2026-08-13: с идентификатором во
+frontmatter правка `modelAliases` не делает НИЧЕГО, молча — and the status line shows the CHAT model, so the screen
 does not contradict the assumption either. The same silence follows an alias pointing at a model the
 session does not have: execution falls back with no message. **The only honest check is the run's own
 `state.json`** (`"model":…`) against `snapshot.json`'s `models` — both are on disk after every run. **There is no per-path permission map in pi** — "writes only to staging" is
@@ -62,8 +70,22 @@ $START_CONSTRAINTS
    order. This has happened in a live run.
 4. **The order carries the data; the role does not go looking for files.** If the role has `read`,
    say explicitly what it may read and why — otherwise it will browse.
-5. **The artifact speaks the order's language**, not the role's. Write the role in English and say
-   this out loud; a Russian request must yield a Russian artifact.
+5. **ЯЗЫК РОЛИ — ЭТО ЕЁ ЗРЕЛОСТЬ, А НЕ ВКУС.** Решение оператора 21.08.2026, и оно описывает уже
+   сложившийся факт: роли, которые месяцами правили руками (`scout`, `intake`, `critic`,
+   `plan-critic`, `plan-fixer`), давно английские; роли, написанные машиной и с тех пор не тронутые
+   (`gilb`, `valuer`, `flow-designer`), русские.
+
+   | язык файла | что это значит |
+   |---|---|
+   | русский | роль и её наряд написаны МАШИНОЙ и через руки оператора не проходили |
+   | английский | оператор проработал шаг вручную: перевёл, вычитал каждую строку, оставил только инструкции |
+
+   Перевод здесь не косметика, а **отметка о ревизии**: переводя, оператор обязан прочитать каждую
+   строку и выбросить всё, что не является инструкцией. Поэтому «перевести роль» и «доработать
+   роль» — одно действие, и второго признака зрелости в репозитории нет.
+
+   **Артефакта это не касается: он говорит языком ЗАКАЗА**, а не роли. Русский `TASK.md` даёт
+   русский BRD и при английской роли; гардрейл языка — `core/lang.mjs`.
 6. **The role never self-certifies.** "Done" is the guardrail's exit code. A role that found a
    blocker succeeded — a negative verdict is data, not an error.
 7. **A line of a role is an INSTRUCTION, not an account.** What to do and in what form — nothing

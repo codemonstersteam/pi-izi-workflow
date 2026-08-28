@@ -31,6 +31,11 @@ for that reader, and nothing else decides how much comment is enough.
 
 Every module carries `MODULE_CONTRACT`; every exported function carries `FUNCTION_CONTRACT`.
 
+Как пишется ГАРДРЕЙЛ и его блокер — `standards/guardrail.md`. Как вести живой прогон и по каким
+признакам искать ошибку В ТЕКСТЕ, а не в модели — `standards/live-run.md`. Коротко: блокер это
+наряд на правку — код правила, элемент и ОБРАЗЕЦ строки, которую надо написать; блокер без выхода
+запрещён.
+
 ```js
 // MODULE_CONTRACT: <name> — one line, what it is
 // Purpose:    the single decision hidden here
@@ -87,22 +92,33 @@ $START_CONSTRAINTS
 8. **Machines read English, the operator reads Russian.** Code, comments, contracts, order templates,
    host-function descriptions and test names are English — a model reads them. Russian stays where
    the operator reads: the `subject` of a question, a `blocked` diagnosis, `log()`, `docs/*.md`,
-   `backlog.md`. **Role files are the exception, and they are Russian** — every one of them since
-   commit `36663ef`: a role is executed by a 27B model on a Russian request, and an instruction it
-   must obey word for word is written in the language of the artifact it produces. The rule that once
-   said otherwise was a constant with no consumer and no lint behind it; it is deleted, not relaxed.
-   This says nothing about artifacts either: a role's LAW "the artifact speaks the language of the ORDER" is untouched —
-   a Russian `TASK.md` still yields a Russian BRD, and the guardrail for that is `core/lang.mjs`.
+   `backlog.md`. **У файла роли язык означает ЗРЕЛОСТЬ, а не вкус автора**
+   (решение оператора 21.08.2026; подробно — `standards/role.md`, ограничение 5). Машина пишет роль и
+   её наряд по-русски; оператор, проработав шаг вручную, переводит их на английский — и перевод здесь
+   отметка о ревизии, а не косметика: переводя, читают каждую строку и выбрасывают всё, что не
+   инструкция. Русский файл роли читается как «через руки не проходил».
+   Артефактов это не касается: LAW роли «артефакт говорит языком ЗАКАЗА» не тронут — русский
+   `TASK.md` даёт русский BRD и при английской роли, а гардрейл языка — `core/lang.mjs`.
 $END_CONSTRAINTS
 
 $START_TESTS
 ```
 N_units(pure module) = 1 happy path + Σ antecedent branches with a DISTINGUISHABLE consequent
+                       + 1 silence per external operand
 ```
 
+The formula lives in `standards/workflow-design.md` and is quoted here, not owned here. **Silence is
+a mandatory branch** (`standards/guardrail.md`): with the operand absent a rule must stay SILENT —
+not red (a dead-end blocker the role cannot close) and not green (rubbish went through).
+
 - More than three units on one module means the module is under-decomposed: split it, do not write
-  the fourth test.
+  the fourth test. A guardrail is no exception and gets no waiver: a judge carrying 49 branches is a
+  dump, not a module. Cut it into a judge PER RULE, each with its own units, and leave the step's
+  `judge.mjs` as the head that adds them up.
 - Heads, io pipes and adapters are not unit-tested — a live run of the slice proves them.
+- **A STEP is proven by a component test, not by units and not by a live run** — the rail's own path
+  (fixture → order → recorded model answer → guardrail → promotion), offline, in milliseconds. How to
+  write one: `standards/component-test.md`. Worked example: `steps/plan/tree/component/`.
 - A new rule needs a **seam**: a lint or test that turns red when the rule is broken. Prove the seam
   by reintroducing the defect, watching it go red, then restoring it.
 - A test that no code change can turn red is a comment. Do not write it.

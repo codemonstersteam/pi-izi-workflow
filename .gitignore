@@ -1,5 +1,5 @@
 .agent/
 .DS_Store
-ext/node_modules/
-
-.claude/
+node_modules/
+.DS_Store
+.zcode
