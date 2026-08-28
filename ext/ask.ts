@@ -73,7 +73,10 @@ function collect(dir: string, items: string[]): string[] | null {
     const pairs: { n: number; question: string; text: string }[] = []
     for (const m of raw.matchAll(/^\s*(\d+)[).]\s*(.+)$/gm)) {
       const n = Number(m[1])
-      if (items[n - 1] && !said.some((a) => a.n === n)) pairs.push({ n, question: items[n - 1], text: m[2].trim() })
+      // Проверка по ТЕКСТУ вопроса, не по номеру: обмены прошлых раундов имеют
+      // те же номера, но другие тексты — номер не может быть ключём (живой баг:
+      // confirm «да» блокировался обменом №1 из фазы вопросов)
+      if (items[n - 1] && !said.some((a) => a.question === items[n - 1])) pairs.push({ n, question: items[n - 1], text: m[2].trim() })
     }
     if (pairs.length) {
       const block = newExchange(pairs)
