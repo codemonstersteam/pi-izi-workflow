@@ -84,11 +84,8 @@ export async function checkPlan(
 }
 
 function criticOrder(plan: string): string {
-  return [
-    `$START_TASK\nТы критик плана. Прочитай план ниже и проверь по чек-листу — выборочно сверяй с кодом (read):\n1. ТРЕБОВАНИЯ: каждая строка — цитата из TASK, и место закрытия реально закрывает её.\n2. ИЗМЕНЕНИЯ: пути существуют или честно «новый» с образцом; контракт соответствует коду.\n3. СЦЕНАРИИ: до и после различны; «до» — текущий код.\n4. ВЕЛИЧИНЫ: у каждой источник.\n5. ГАРАНТИИ: поимённы и правдоподобны.\n6. ОТКРЫТЫЕ ВОПРОСЫ: решения оператора, не молчаливые допущения.\nВердикт: APPROVE или REJECT с ≤3 блокеров (адрес + что сломает).\n$END_TASK`,
-    `$START_DATA\n$START_CONTENT\n${plan}$END_CONTENT\n$END_DATA`,
-    `$START_OUTPUT\n{ "track": "ok", "verdict": "APPROVE" } или { "track": "ok", "verdict": "REJECT", "blockers": ["…"] }\n$END_OUTPUT`,
-  ].join("\n\n")
+  const tpl = readFileSync(new URL("./order-critic.tpl", import.meta.url).pathname, "utf8")
+  return tpl.replace("{PLAN}", plan)
 }
 
 const ENVELOPE = {
