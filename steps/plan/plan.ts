@@ -51,7 +51,9 @@ export async function writePlan(input: PlanInput, ctx: FunctionContext): Promise
 
     // planner упёрся — вопрос оператору, ответ в следующий круг
     if (answer && answer.track === "err" && answer.kind === "blocked") {
-      const resolved = await askWithRetry([String(answer.subject || "")], ctx)
+      const askR = await askWithRetry([String(answer.subject || "")], ctx)
+    if (!askR.ok) return askR
+    const resolved = askR.value
       draft += `\n\n$START_ANSWERED\n${resolved.join("\n")}\n$END_ANSWERED`
       continue
     }

@@ -45,7 +45,9 @@ export async function checkPlan(
       const open = extractQuestions(current)
       if (open.length > 0) {
         ctx.log(`проверка: вопросы оператору (${open.length})`)
-        const answers = await askWithRetry(open, ctx)
+        const askR = await askWithRetry(open, ctx)
+        if (!askR.ok) return askR
+        const answers = askR.value
         current = applyAnswers(current, readAt(input.cwd, ".agent/answers.md"))
       }
 
@@ -55,11 +57,12 @@ export async function checkPlan(
 
       // ── подтверждение ──
       ctx.log("проверка: подтверждаю у оператора")
-      const reply = await askWithRetry(
+      const replyR = await askWithRetry(
         [`${card(current, input.cwd)}\nЗапускаем разработку? да / нет: причина`],
         ctx,
       )
-      const said = reply.join(" ").trim().toLowerCase()
+      if (!replyR.ok) return replyR
+      const said = replyR.value.join(" ").trim().toLowerCase()
       if (/^(да|yes|ok|согласен|approve)/.test(said)) {
         writeAt(input.cwd, CONFIRMED, new Date().toISOString())
         ctx.log("проверка: план утверждён")

@@ -45,7 +45,9 @@ export async function executePlan(
 
     // dev упёрся — вопрос оператору
     if (answer && answer.track === "err" && answer.kind === "blocked") {
-      const resolved = await askWithRetry([String(answer.subject || "")], ctx)
+      const askR = await askWithRetry([String(answer.subject || "")], ctx)
+    if (!askR.ok) return askR
+    const resolved = askR.value
       findings = `ответ оператора: ${resolved.join(" ")}`
       continue
     }
