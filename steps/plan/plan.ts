@@ -41,10 +41,16 @@ export async function writePlan(input: PlanInput, ctx: FunctionContext): Promise
   }
 
   let draft = readAt(cwd, PLAN_DRAFT) // resume: свой черновик как PREVIOUS
+  let blockers: string[] = []          // блокеры прошлого круга — FEEDBACK следующего
 
   for (let round = 1; round <= LOOPS; round++) {
+    // круг 1 — первичный наряд; круг ≥ 2 — наряд починки с FEEDBACK
+    const order = round === 1
+      ? planOrder(input, draft)
+      : repairOrder(input, draft, blockers)
+
     const answer = await ctx.agent(
-      planOrder(input, draft),
+      order,
       { role: "planner" },
       "solo:plan",
     )
@@ -61,7 +67,7 @@ export async function writePlan(input: PlanInput, ctx: FunctionContext): Promise
     if (answer && answer.track === "err") continue
 
     draft = readAt(cwd, PLAN_DRAFT)
-    const blockers = judgeForm(draft, readAt(cwd, TASK), cwd)
+    blockers = judgeForm(draft, readAt(cwd, TASK), cwd)
     if (blockers.length === 0) {
       copyAt(cwd, PLAN_DRAFT, PLAN)
       ctx.log(`план: готов — ${countReqs(draft)} требований, ${countRows(draft)} строк Ф`)
