@@ -186,7 +186,7 @@ test("сверка: РЕШЕНО «fruits.html» без Ф-строки → plan
     planner: (text: string) => {
       plannerCalls++
       // первый вызов — обычный план; второй — сверка (добавляет Ф3)
-      const isReconcile = text.includes("СВЕРЬ")
+      const isReconcile = text.includes("RECONCILE")
       const plan = isReconcile ? planWithF3 : PLAN
       writeFileSync(join(cwd, ".agent/staging/PLAN~draft.md"), plan)
       return { track: "ok" }

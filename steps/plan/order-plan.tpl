@@ -1,11 +1,11 @@
 $START_TASK
-Ты планировщик. {SPEC}
+You are the planner. {SPEC}
 $END_TASK
 
 $START_DATA
 $START_DOCUMENT
 path: TASK.md
-Заказ оператора, байты как есть. Единственный источник требований.
+The operator's order, bytes as-is. The only source of requirements.
 $END_DOCUMENT
 $START_CONTENT
 {TASK}
@@ -16,6 +16,6 @@ $END_DATA
 
 $START_OUTPUT
 path: {STAGING}
-Пиши файл по этому пути инструментом write, затем один раз workflow_result:
+Write the file at this path with the write tool, then one workflow_result call:
 { "track": "ok", "artifact": "{STAGING}" }
 $END_OUTPUT

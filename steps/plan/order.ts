@@ -26,7 +26,7 @@ const specOf = (cwd: string): string => {
 
 export function planOrder(input: PlanInput, draft: string): string {
   const previous = draft.trim()
-    ? `$START_PREVIOUS\npath: ${STAGING}\nТВОЙ ЧЕРНОВИК. FEEDBACK называет что чинить — правь названное, остальное не трогай.\n$START_CONTENT\n${draft}$END_CONTENT\n$END_PREVIOUS`
+    ? `$START_PREVIOUS\npath: ${STAGING}\nYOUR DRAFT. FEEDBACK names what to fix — fix only what is named, touch nothing else.\n$START_CONTENT\n${draft}$END_CONTENT\n$END_PREVIOUS`
     : ""
   return fill(tpl("order-plan.tpl"), {
     SPEC: specOf(input.cwd).trim(),

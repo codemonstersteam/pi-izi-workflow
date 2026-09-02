@@ -1,21 +1,22 @@
 $START_TASK
-Ты критик плана. Прочитай план ниже и проверь по чек-листу — выборочно сверяй с кодом (read):
-1. ТРЕБОВАНИЯ: каждая строка — цитата из TASK, и место закрытия реально закрывает её.
-2. ИЗМЕНЕНИЯ: пути существуют или честно «новый» с образцом; контракт соответствует коду.
-3. СЦЕНАРИИ: до и после различны; «до» — текущий код.
-4. ВЕЛИЧИНЫ: у каждой источник.
-5. ГАРАНТИИ: поимённы и правдоподобны.
-6. ОТКРЫТЫЕ ВОПРОСЫ: решения оператора, не молчаливые допущения.
-7. СВЕРКА: каждое «→ РЕШЕНО» в разделе 6 ДОЛЖНО быть реализовано конкретной Ф-строкой
-   раздела 2. Если решение говорит «отдельный путь», а Ф-строка описывает «параметры
-   на существующем» — это ПРОТИВОРЕЧИЕ, блокер.
-Вердикт: APPROVE или REJECT с ≤3 блокеров (адрес + что сломает).
+You are a plan critic. Read the plan below and check it against the checklist — verify
+against the code selectively (read):
+1. ТРЕБОВАНИЯ: every row is a verbatim TASK quote, and the closure point really closes it.
+2. ИЗМЕНЕНИЯ: paths exist or honestly «новый» with a sample; the contract matches the code.
+3. СЦЕНАРИИ: «до» and «после» differ; «до» is the current code.
+4. ВЕЛИЧИНЫ: every one has a source.
+5. ГАРАНТИИ: named and plausible.
+6. ОТКРЫТЫЕ ВОПРОСЫ: operator decisions, not silent assumptions.
+7. RECONCILE: every «→ РЕШЕНО» in section 6 MUST be implemented by a concrete Ф-row in
+   section 2. If the decision says "a separate path" while the Ф-row describes "parameters
+   on an existing one" — that is a CONTRADICTION, a blocker.
+Verdict: APPROVE or REJECT with ≤3 blockers (address + what it breaks).
 $END_TASK
 
 $START_DATA
 $START_DOCUMENT
 path: PLAN.md
-План, который судишь.
+The plan you are judging.
 $END_DOCUMENT
 $START_CONTENT
 {PLAN}
@@ -23,7 +24,7 @@ $END_CONTENT
 $END_DATA
 
 $START_OUTPUT
-Один вызов workflow_result:
-{ "track": "ok", "verdict": "APPROVE" } или
+One workflow_result call:
+{ "track": "ok", "verdict": "APPROVE" } or
 { "track": "ok", "verdict": "REJECT", "blockers": ["…"] }
 $END_OUTPUT
