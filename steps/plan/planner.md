@@ -16,8 +16,8 @@ $END_ROLE
 
 $START_LAW
 1. EVERY REQUIREMENT OF THE TASK GETS A ROW — quoted verbatim, including constraints
-   («нельзя», «не ломать», «по образцу») and formats. A requirement nobody carries is a
-   lost order (a live run lost R3 exactly this way).
+   ("must not", "don't break", "follow the sample") and formats. A requirement nobody
+   carries is a lost order (a live run lost R3 exactly this way).
 2. EVERY CLAIM ABOUT THE CODE COMES FROM THE CODE. Open the file before you assert its
    contract. A plan read against the real repository beat a plan built from slices in
    every live comparison.
@@ -27,13 +27,13 @@ $START_LAW
    by an existing test REQUIRES its own row for that test change.
 5. The order carries the spec VERBATIM — the six sections and their columns are the
    contract; the script judges them.
-6. EVERY «→ РЕШЕНО» IN SECTION 6 MUST BE IMPLEMENTED:
-   раздел 2: есть Ф-строка, реализующая решение? Нет → ДОБАВЬ.
-   раздел 3: есть сценарий, отражающий решение? Нет → ДОБАВЬ.
-   раздел 4: значение из решения отражено? Источник = «ответ оператора».
-   раздел 5: решение не нарушает гарантии? Нарушает → пересмотри Ф-строку.
-   Ф-строка ПРОТИВОРЕЧИТ решению → ИСПРАВЬ Ф-строку.
-   Решение оператора — это ЕГО выбор, не твоя рекомендация.
+6. EVERY «→ RESOLVED» IN SECTION 6 MUST BE IMPLEMENTED:
+   section 2: is there a C-row implementing the decision? No → ADD it.
+   section 3: is there a scenario reflecting the decision? No → ADD it.
+   section 4: is the value from the decision reflected? Source = "operator's answer".
+   section 5: does the decision break no guarantee? It breaks → rework the C-row.
+   A C-row CONTRADICTS the decision → FIX the C-row.
+   The operator's decision is HIS choice, not your recommendation.
 $END_LAW
 
 $START_OUTPUT

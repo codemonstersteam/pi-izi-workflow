@@ -18,7 +18,7 @@ const ANSWERS = ".agent/answers.md"
 // НЕ input/run (живой урок 27.08: input-схема → undefined.properties → инструмент мёртв)
 export const soloAnswer = {
   name: "solo_answer",
-  label: "solo: оператор ответил",
+  label: "solo: operator answered",
   description:
     "Record the operator's reply to the currently open solo questions in .agent/answers.md. " +
     "Read the open questions and their numbers from .agent/pending.json (field items), then call with ONE xml block " +
@@ -39,21 +39,21 @@ export const soloAnswer = {
   async execute(_id: string, params: { exchange: string }, _signal: any, _onUpdate: any, ctx: any) {
     const root = (ctx && ctx.cwd) || process.cwd()
     const pendingPath = join(root, PENDING)
-    if (!existsSync(pendingPath)) throw new Error(".agent/pending.json отсутствует — нет открытых вопросов solo")
+    if (!existsSync(pendingPath)) throw new Error(".agent/pending.json is missing — no open solo questions")
     let pending: any
-    try { pending = JSON.parse(readFileSync(pendingPath, "utf8")) } catch (e) { throw new Error(`pending.json не читается: ${e}`) }
+    try { pending = JSON.parse(readFileSync(pendingPath, "utf8")) } catch (e) { throw new Error(`pending.json is unreadable: ${e}`) }
     const items: { n: number; text: string }[] = (pending.items || []).map((x: any, i: number) => ({ n: x.n ?? i + 1, text: String(x.text || "") }))
 
     const parsed = newAnswers(
       String(params.exchange).includes("<exchange>") ? params.exchange : `<exchange>\n${params.exchange}\n</exchange>`,
     )
-    if (!parsed.ok) throw new Error(`разбор exchange: ${parsed.error.detail}`)
+    if (!parsed.ok) throw new Error(`exchange parse: ${parsed.error.detail}`)
     const byNumber = new Map(parsed.value.map((a) => [a.n, a.text]))
 
     for (const it of items) if (!byNumber.has(it.n))
-      throw new Error(`нет ответа на вопрос ${it.n}: «${it.text.slice(0, 60)}» — частичный вызов отвергнут, ответь на ВСЕ вопросы одним exchange`)
+      throw new Error(`no answer for question ${it.n}: «${it.text.slice(0, 60)}» — a partial call is refused, answer ALL questions in one exchange`)
     for (const n of byNumber.keys()) if (!items.some((it) => it.n === n))
-      throw new Error(`вопрос ${n} не открыт (в pending.json вопросов: ${items.length}) — сверяй номера с .agent/pending.json`)
+      throw new Error(`question ${n} is not open (pending.json has ${items.length} questions) — match numbers against .agent/pending.json`)
 
     const block = newExchange(items.map((it) => ({ n: it.n, question: it.text, text: byNumber.get(it.n)! })))
     if (!block.ok) throw new Error(block.error.detail)
@@ -62,7 +62,7 @@ export const soloAnswer = {
 
     const table = items.map((it) => `${it.n}. ${it.text.slice(0, 80)} → ${byNumber.get(it.n)!.slice(0, 80)}`).join("\n")
     return {
-      content: [{ type: "text", text: `solo_answer: записано ответов ${items.length}. ПОКАЖИ оператору это разложение:\n${table}` }],
+      content: [{ type: "text", text: `solo_answer: recorded ${items.length} answers. SHOW this breakdown to the operator:\n${table}` }],
       details: { answered: items.map((it) => it.n) },
     }
   },

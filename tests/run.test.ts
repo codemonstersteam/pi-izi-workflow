@@ -11,35 +11,37 @@ import { run } from "../ext/run.ts"
 
 const TASK = "task: TEST-1\n\nНужен поиск. Ломать нельзя.\n"
 
-const PLAN = `# П
+// TASK русский, план английского формата с русскими дословными цитатами —
+// доказательство языковой нейтральности механизма цитат.
+const PLAN = `# Plan
 
-## 1. ТРЕБОВАНИЯ
-| № | Цитата | Где |
+## 1. REQUIREMENTS
+| № | Quote | Where |
 |---|---|---|
-| Т1 | «Нужен поиск» | Ф1 |
-| Т2 | «Ломать нельзя» | Ф1 |
+| R1 | «Нужен поиск» | C1 |
+| R2 | «Ломать нельзя» | C1 |
 
-## 2. ИЗМЕНЕНИЯ
-| № | Файл | A/C | К | Тр |
+## 2. CHANGES
+| № | File | A/C | What | Req |
 |---|---|---|---|---|
-| Ф1 | src/App.java | Changed | search | Т1,Т2 |
+| C1 | src/App.java | Changed | search | R1,R2 |
 
-## 3. СЦЕНАРИИ
-### Сценарий 1
-- До: нет. После: есть.
+## 3. SCENARIOS
+### Scenario 1
+- Before: none. After: exists.
 
-## 4. ВЕЛИЧИНЫ
-| В | З | Источник |
+## 4. VALUES
+| Q | V | Source |
 |---|---|---|
-| путь | /s | TASK |
+| path | /s | TASK |
 
-## 5. ГАРАНТИИ
-1. Не трогаем.
+## 5. GUARANTEES
+1. Not touched.
 
-## 6. ОТКРЫТЫЕ ВОПРОСЫ
-| Вопрос | Рекомендация |
+## 6. OPEN QUESTIONS
+| Question | Recommendation |
 |---|---|
-| Лимит? → РЕШЕНО: 20 | — |
+| Limit? → RESOLVED: 20 | — |
 `
 
 const stand = () => {
@@ -102,7 +104,7 @@ test("зелёный путь: план→критик→вопрос→да→d
     critic: () => ({ track: "ok", verdict: "APPROVE" }),
     dev: () => {
       writeFileSync(join(cwd, "src/App.java"), "class App { void search() {} }\n")
-      execSync("git add -A && git commit -q -m 'Ф1: search'", { cwd, encoding: "utf8" })
+      execSync("git add -A && git commit -q -m 'C1: search'", { cwd, encoding: "utf8" })
       return { track: "ok" }
     },
   }, [["да"]]) // ответ на confirm
@@ -121,12 +123,12 @@ test("красный план → круг починки → зелёный", a
   const { ctx, logs } = mockCtx(cwd, {
     planner: () => {
       call++
-      const plan = call === 1 ? PLAN.replace("## 5. ГАРАНТИИ", "## 5. Прочее") : PLAN
+      const plan = call === 1 ? PLAN.replace("## 5. GUARANTEES", "## 5. Other") : PLAN
       writeFileSync(join(cwd, ".agent/staging/PLAN~draft.md"), plan)
       return { track: "ok" }
     },
     critic: () => ({ track: "ok", verdict: "APPROVE" }),
-    dev: () => { writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n"); execSync("git add -A && git commit -q -m 'Ф1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
+    dev: () => { writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n"); execSync("git add -A && git commit -q -m 'C1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
   }, [["да"]])
   try {
     const r = await run({}, ctx)
@@ -141,8 +143,8 @@ test("критик REJECT → repairPlan → APPROVE → done", async () => {
   let criticCall = 0
   const { ctx, logs } = mockCtx(cwd, {
     planner: () => { writeFileSync(join(cwd, ".agent/staging/PLAN~draft.md"), PLAN); return { track: "ok" } },
-    critic: () => { criticCall++; return criticCall === 1 ? { track: "ok", verdict: "REJECT", blockers: ["ТРЕБОВАНИЯ Т2: цитата не закрывает"] } : { track: "ok", verdict: "APPROVE" } },
-    dev: () => { writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n"); execSync("git add -A && git commit -q -m 'Ф1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
+    critic: () => { criticCall++; return criticCall === 1 ? { track: "ok", verdict: "REJECT", blockers: ["REQUIREMENTS R2: quote does not close"] } : { track: "ok", verdict: "APPROVE" } },
+    dev: () => { writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n"); execSync("git add -A && git commit -q -m 'C1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
   }, [["да"]])
   try {
     const r = await run({}, ctx)
@@ -156,7 +158,7 @@ test("оператор «нет» → repairPlan → «да» → done", async (
   const { ctx, logs } = mockCtx(cwd, {
     planner: () => { writeFileSync(join(cwd, ".agent/staging/PLAN~draft.md"), PLAN); return { track: "ok" } },
     critic: () => ({ track: "ok", verdict: "APPROVE" }),
-    dev: () => { writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n"); execSync("git add -A && git commit -q -m 'Ф1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
+    dev: () => { writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n"); execSync("git add -A && git commit -q -m 'C1'", { cwd, encoding: "utf8" }); return { track: "ok" } },
   }, [["нет: добавь лимит"], ["да"]])
   try {
     const r = await run({}, ctx)
@@ -165,20 +167,20 @@ test("оператор «нет» → repairPlan → «да» → done", async (
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })
 
-// СВЕРКА: planner добавляет Ф-строку для решения без реализации
-test("сверка: РЕШЕНО «fruits.html» без Ф-строки → planner добавляет Ф3", async () => {
+// СВЕРКА: planner добавляет C-строку для решения без реализации
+test("сверка: RESOLVED «fruits.html» без C-строки → planner добавляет C3", async () => {
   const cwd = stand()
-  // план с РЕШЕНО, но БЕЗ Ф-строки для fruits.html
+  // план с RESOLVED, но БЕЗ C-строки для fruits.html
   const planWithSolved = PLAN.replace(
-    "| Лимит? → РЕШЕНО: 20 | — |",
-    "| Лимит? → РЕШЕНО: 20 | — |\n| Перевести fruits.html? → РЕШЕНО: Да, перевести | — |",
+    "| Limit? → RESOLVED: 20 | — |",
+    "| Limit? → RESOLVED: 20 | — |\n| Перевести fruits.html? → RESOLVED: Да, перевести | — |",
   )
   const planWithF3 = planWithSolved.replace(
-    "| Ф1 | src/App.java |",
-    "| Ф1 | src/App.java |",
+    "| C1 | src/App.java |",
+    "| C1 | src/App.java |",
   ).replace(
-    "## 3. СЦЕНАРИИ",
-    "| Ф3 | src/page.html | Changed | поиск в UI | Т1 |\n\n## 3. СЦЕНАРИИ",
+    "## 3. SCENARIOS",
+    "| C3 | src/page.html | Changed | search in UI | R1 |\n\n## 3. SCENARIOS",
   )
 
   let plannerCalls = 0
@@ -186,7 +188,7 @@ test("сверка: РЕШЕНО «fruits.html» без Ф-строки → plan
     planner: (text: string) => {
       plannerCalls++
       // первый вызов — обычный план; второй — сверка (добавляет Ф3)
-      const isReconcile = text.includes("СВЕРЬ")
+      const isReconcile = text.includes("RECONCILE")
       const plan = isReconcile ? planWithF3 : PLAN
       writeFileSync(join(cwd, ".agent/staging/PLAN~draft.md"), plan)
       return { track: "ok" }
@@ -195,7 +197,7 @@ test("сверка: РЕШЕНО «fruits.html» без Ф-строки → plan
     dev: () => {
       writeFileSync(join(cwd, "src/App.java"), "class App { void s() {} }\n")
       writeFileSync(join(cwd, "src/page.html"), "<html>search</html>")
-      execSync("git add -A && git commit -q -m 'Ф1+Ф3'", { cwd, encoding: "utf8" })
+      execSync("git add -A && git commit -q -m 'C1+C3'", { cwd, encoding: "utf8" })
       return { track: "ok" }
     },
   }, [["да"]])

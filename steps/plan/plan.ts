@@ -31,7 +31,7 @@ export async function writePlan(input: PlanInput, ctx: FunctionContext): Promise
   ctx.log("план: пишу")
 
   if (existsAt(cwd, PLAN)) {
-    ctx.log(`план: уже готов — ${countReqs(readAt(cwd, PLAN))} требований, ${countRows(readAt(cwd, PLAN))} строк Ф`)
+    ctx.log(`план: уже готов — ${countReqs(readAt(cwd, PLAN))} требований, ${countRows(readAt(cwd, PLAN))} строк C`)
     return ok(readAt(cwd, PLAN))
   }
 
@@ -69,7 +69,7 @@ export async function writePlan(input: PlanInput, ctx: FunctionContext): Promise
     blockers = judgeForm(draft, readAt(cwd, TASK), cwd)
     if (blockers.length === 0) {
       copyAt(cwd, PLAN_DRAFT, PLAN)
-      ctx.log(`план: готов — ${countReqs(draft)} требований, ${countRows(draft)} строк Ф`)
+      ctx.log(`план: готов — ${countReqs(draft)} требований, ${countRows(draft)} строк C`)
       return ok(draft)
     }
 

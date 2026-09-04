@@ -5,6 +5,7 @@
 import { ok, fail, type Result } from "../../ext/result.ts"
 import type { FunctionContext } from "../../ext/context.ts"
 import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { readAt } from "../../ext/io.ts"
 import { PLAN } from "../../ext/paths.ts"
 import { countRows } from "../plan/judge.ts"
@@ -34,7 +35,7 @@ export async function executePlan(
 ): Promise<Result<string>> {
   const rows = countRows(plan)
   const before = gitHead(input.cwd)
-  ctx.log(`разработка: ${rows} строк Ф`)
+  ctx.log(`разработка: ${rows} строк C`)
 
   let findings = ""
   let round = 1
@@ -47,9 +48,10 @@ export async function executePlan(
     )
 
     if (answer && answer.track === "err" && answer.kind === "blocked") {
+      ctx.log(`⏳ ЖДУ ОТВЕТ В ЧАТЕ: ${String(answer.subject || "").slice(0, 120)} · план: ${join(input.cwd, ".agent/PLAN.md")}`)
       const askR = await askWithRetry([String(answer.subject || "")], ctx)
       if (!askR.ok) return askR
-      findings = `ответ оператора: ${askR.value.join(" ")}`
+      findings = `operator's answer: ${askR.value.join(" ")}`
       continue
     }
     if (answer && answer.track === "err") continue

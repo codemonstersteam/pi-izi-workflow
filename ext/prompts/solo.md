@@ -1,5 +1,5 @@
 ---
-description: Запустить воркфлоу solo — план, проверка, разработка (background)
+description: Run the solo workflow — plan, review, development (background)
 ---
 
 $START_TASK
@@ -14,13 +14,15 @@ return await solo({ key: (args && args.key) || "" });
 $END_TASK
 
 $START_LAW
-- `foreground: false` обязателен: foreground держит сессию и глушит чат-реле ответов.
-- В фоне вопросы приходят сообщениями в чат; ответ оператора оформи инструментом
-  `solo_answer` (сверяя номера с .agent/pending.json; показывай таблицу оператору).
-- Один tool call запуска. Ответы на вопросы воркфлоу — единственные твои действия.
-- ВЫВОДИ ТОЛЬКО вызов инструмента `solo_answer`. НИКАКОГО текста до или после.
-  Не пересказывай вопросы, не дублируй ответы словами, не выводи их построчно —
-  solo_answer сам покажет таблицу. Твой вывод = один tool call, ноль текста.
-- Полоса сама печатает карточки через log(). Если оператор спросил — ответь одним
-  предложением, затем снова только tool call.
+- `foreground: false` is mandatory: foreground holds the session and silences the chat
+  relay of answers.
+- In the background, questions arrive as chat messages; format the operator's reply with
+  the `solo_answer` tool (matching numbers against .agent/pending.json; show the table
+  to the operator).
+- One tool call to start. Answering workflow questions is your only action.
+- OUTPUT ONLY the `solo_answer` tool call. NO text before or after. Do not paraphrase
+  the questions, do not echo the answers in prose, do not print them line by line —
+  solo_answer shows the table itself. Your output = one tool call, zero text.
+- The workflow prints its cards via log() itself. If the operator asks — answer in one
+  sentence, then again only the tool call.
 $END_LAW

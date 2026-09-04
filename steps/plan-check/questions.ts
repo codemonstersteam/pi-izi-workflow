@@ -6,9 +6,9 @@ import { newAnswers } from "../../ext/answers.ts"
 import { tableRows, sectionOf } from "../plan/judge.ts"
 
 export function extractQuestions(plan: string): string[] {
-  return tableRows(sectionOf(plan, "ОТКРЫТЫЕ ВОПРОСЫ"))
+  return tableRows(sectionOf(plan, "OPEN QUESTIONS"))
     .map((c) => c[0] || "")
-    .filter((q) => q && !/РЕШЕНО/.test(q))
+    .filter((q) => q && !/RESOLVED/.test(q))
 }
 
 // FUNCTION_CONTRACT: applyAnswers — вписать ответы оператора в план
@@ -26,12 +26,12 @@ export function applyAnswers(plan: string, answersMd: string): Result<{ plan: st
   const total = r.value.length
 
   for (const a of r.value) {
-    const needle = a.question.split("— рекомендация")[0].trim()
+    const needle = a.question.split("— recommendation")[0].trim()
     if (!needle) continue
     const re = new RegExp(`^(\\|\\s*)${escapeRe(needle)}(\\s*\\|.*)$`, "m")
     const before = out
     out = out.replace(re, (_m: string, b: string, rest: string) =>
-      `${b}${needle} → РЕШЕНО: ${a.text}${rest}`)
+      `${b}${needle} → RESOLVED: ${a.text}${rest}`)
     if (out !== before) applied++
   }
 

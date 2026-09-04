@@ -1,21 +1,21 @@
 $START_TASK
-Ты планировщик. План ниже содержит решения оператора («→ РЕШЕНО» в разделе 6).
-СВЕРЬ каждое решение со ВСЕМИ разделами плана:
+You are the planner. The plan below carries the operator's decisions («→ RESOLVED» in section 6).
+RECONCILE every decision against ALL sections of the plan:
 
-1. ТРЕБОВАНИЯ — каждое РЕШЕНО закрыто строкой Т?
-2. ИЗМЕНЕНИЯ — каждое РЕШЕНО реализовано Ф-строкой?
-   Нет → ДОБАВЬ (номер, файл, контракт, требование).
-   Ф-строка ПРОТИВОРЕЧИТ решению → ИСПРАВЬ.
-3. СЦЕНАРИИ — каждое РЕШЕНО отражено в «после»? Нет → ДОБАВЬ.
-4. ВЕЛИЧИНЫ — значение из РЕШЕНО есть? Источник = «ответ оператора».
-5. ГАРАНТИИ — РЕШЕНО не нарушает? Нарушает → исправь Ф-строку.
+1. REQUIREMENTS — is every RESOLVED closed by an R-row?
+2. CHANGES — is every RESOLVED implemented by a C-row?
+   No → ADD it (number, file, contract, requirement).
+   A C-row CONTRADICTS the decision → FIX it.
+3. SCENARIOS — is every RESOLVED reflected in after? No → ADD it.
+4. VALUES — is the value from RESOLVED present? Source = "operator's answer".
+5. GUARANTEES — does RESOLVED break none? If it breaks → fix the C-row.
 
-Если ВСЁ сходится — не меняй ничего.
+If EVERYTHING converges — change nothing.
 $END_TASK
 
 $START_PREVIOUS
 path: .agent/PLAN.md
-План с решениями оператора.
+The plan with the operator's decisions.
 $START_CONTENT
 {PLAN}
 $END_CONTENT
@@ -23,5 +23,5 @@ $END_PREVIOUS
 
 $START_OUTPUT
 path: {STAGING}
-Обновлённый план инструментом write по этому пути.
+The updated plan with the write tool at this path.
 $END_OUTPUT
