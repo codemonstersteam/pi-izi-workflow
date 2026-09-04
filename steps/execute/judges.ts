@@ -6,6 +6,7 @@
 // Invariants: ТОТАЛЕН; пусто = зелёный; каждый блокер называет строку Ф или файл.
 // Interface:  judgeSolve, doneCard
 import { execSync } from "node:child_process"
+import { join } from "node:path"
 import { tableRows, sectionOf } from "../plan/judge.ts"
 
 const git = (cwd: string, args: string): string => {
@@ -66,6 +67,7 @@ export function doneCard(cwd: string, plan: string, since: string): string {
   const covered = rows.filter((c) => commits.some((s) => s.includes((c[0] || "").split(/\s+/)[0])))
   return [
     "═══ РАЗРАБОТКА ЗАВЕРШЕНА ═══",
+    `План: ${join(cwd, ".agent/PLAN.md")}`,
     `Строк плана: ${rows.length} · покрыто коммитами: ${covered.length} · коммитов: ${commits.length}`,
     ...commits.slice(0, 12).map((s) => `  · ${s.slice(0, 90)}`),
     "Проверь тесты проекта своими руками (стандарт приёмки).",

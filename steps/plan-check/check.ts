@@ -8,6 +8,7 @@
 import { ok, fail, type Result } from "../../ext/result.ts"
 import type { FunctionContext } from "../../ext/context.ts"
 import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { readAt, writeAt, existsAt } from "../../ext/io.ts"
 import { PLAN, CONFIRMED, PLAN_DRAFT, TASK } from "../../ext/paths.ts"
 import { extractQuestions, applyAnswers } from "./questions.ts"
@@ -45,6 +46,7 @@ export async function checkPlan(
       const open = extractQuestions(current)
       if (open.length > 0) {
         ctx.log(`проверка: вопросы оператору (${open.length})`)
+        ctx.log(`⏳ ЖДУ ${open.length} ОТВЕТОВ В ЧАТЕ (формат: «1. …», можно одним сообщением) · план: ${join(input.cwd, ".agent/PLAN.md")}`)
         const askR = await askWithRetry(open, ctx)
         if (!askR.ok) return askR
         const answers = askR.value
@@ -56,7 +58,8 @@ export async function checkPlan(
       writeAt(input.cwd, PLAN, current)
 
       // ── подтверждение ──
-      ctx.log("проверка: подтверждаю у оператора")
+      ctx.log(card(current, input.cwd))
+      ctx.log(`⏳ ЖДУ ОТВЕТ В ЧАТЕ: «да» — запуск разработки · «нет: причина» — починка плана · план: ${join(input.cwd, ".agent/PLAN.md")} (дубль: .agent/question.txt)`)
       const replyR = await askWithRetry(
         [`${card(current, input.cwd)}\nЗапускаем разработку? да / нет: причина`],
         ctx,
@@ -129,7 +132,7 @@ async function plannerReconcile(
 
   const was = countRows(plan)
   const now = countRows(updated)
-  if (now !== was) ctx.log(`сверка: ${was} → ${now} строк Ф`)
+  if (now !== was) ctx.log(`сверка: ${was} → ${now} строк C`)
   return updated
 }
 
