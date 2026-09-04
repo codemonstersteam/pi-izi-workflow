@@ -1,29 +1,28 @@
-Напиши файл плана разработки. Разделы обязательны, все шесть, в этом порядке:
+Write the development plan file. The sections are mandatory, all six, in this order:
 
-1. ТРЕБОВАНИЯ — таблица: каждый пункт TASK.md ДОСЛОВНО (цитата) → где в плане он закрыт
-   (ссылка на строку раздела 2 или 3). Ни один пункт не должен остаться без строки,
-   включая ограничения («нельзя», «не ломать», «по образцу») и форматы.
+1. REQUIREMENTS — table: every TASK.md item VERBATIM (a quote) → where the plan closes it
+   (a reference to a row of section 2 or 3). No item may be left without a row, including
+   constraints ("must not", "don't break", "follow the sample") and formats.
 
-2. ИЗМЕНЕНИЯ — таблица: № (Ф1, Ф2, …) | файл (полный путь) | Added или Changed | что
-   именно меняется в его контракте | какое требование закрывает. Файл либо существует
-   в репозитории (проверь), либо помечен «новый» с указанием, по образцу какого
-   существующего файла создаётся. СТРОКИ УПОРЯДОЧЕНЫ ПО ЗАВИСИМОСТЯМ (фундамент раньше
-   потребителя). Если строка меняет поведение, проверяемое СУЩЕСТВУЮЩИМ тестом, —
-   ОБЯЗАТЕЛЬНА отдельная строка на изменение этого теста.
+2. CHANGES — table: № (C1, C2, …) | file (full path) | Added or Changed | what exactly
+   changes in its contract | which requirement it closes. The file either exists in the
+   repository (verify it), or is marked new with the sample file it follows. ROWS ARE
+   ORDERED BY DEPENDENCIES (foundation before consumer). A row changing behavior asserted
+   by an EXISTING test REQUIRES its own row for that test change.
 
-3. СЦЕНАРИИ — для каждого нового поведения: как сейчас (до) → как станет (после),
-   с путями и параметрами вызовов.
+3. SCENARIOS — for every new behavior: how it works now (before) → how it will work
+   (after), with paths and call parameters.
 
-4. ВЕЛИЧИНЫ — таблица: величина | значение | источник. Каждое число, предел, формат,
-   имя параметра: значение и откуда оно взято (цитата из TASK.md или имя файла кода).
-   Ничего «по умолчанию 20» без источника.
+4. VALUES — table: quantity | value | source. Every number, limit, format, parameter
+   name: the value and where it came from (a TASK.md quote or a code file name). Nothing
+   "defaults to 20" without a source.
 
-5. ГАРАНТИИ — что НЕ должно сломаться после изменения, поимённо (какие существующие
-   вызовы/поведения/файлы остаются неизменными и почему план их не трогает; файлы —
-   в обратных кавычках).
+5. GUARANTEES — what must NOT break after the change, by name (which existing
+   calls/behaviors/files stay unchanged and why the plan does not touch them; files go
+   in backticks).
 
-6. ОТКРЫТЫЕ ВОПРОСЫ — таблица: вопрос | рекомендация. Что тебе неизвестно — переспрашивай,
-   а не придумывай молча; у каждого вопроса — твоя рекомендация.
+6. OPEN QUESTIONS — table: question | recommendation. What you do not know — ask instead
+   of inventing silently; every question carries your recommendation.
 
-Читай код репозитория сам (read/bash): утверждения плана обязаны сверяться с реальными
-файлами, а не с догадками. Не пиши код. Пиши файл по указанному пути инструментом write.
+Read the repository code yourself (read/bash): plan claims must be verified against real
+files, not guesses. Do not write code. Write the file at the named path with the write tool.

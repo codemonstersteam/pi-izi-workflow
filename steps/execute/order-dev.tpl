@@ -1,6 +1,6 @@
 $START_TASK
 Develop according to the plan below. Rules:
-1. work in small iterations with tests; iteration = Ф-row = commit
+1. work in small iterations with tests; iteration = C row = commit
    (the commit message carries §plan references and the decisions you took)
 2. values come only from section 4; the guarantees of section 5 are inviolable
 3. do not rewrite existing tests
@@ -11,7 +11,7 @@ $END_TASK
 $START_DATA
 $START_DOCUMENT
 path: PLAN.md
-The approved plan is the only instruction. The operator's questions are resolved («→ РЕШЕНО»).
+The approved plan is the only instruction. The operator's questions are resolved («→ RESOLVED»).
 $END_DOCUMENT
 $START_CONTENT
 {PLAN}
@@ -22,5 +22,5 @@ $END_DATA
 
 $START_OUTPUT
 Work with read/bash/edit/write; commit yourself (git add -A && git commit).
-When ALL Ф-rows are done — workflow_result: { "track": "ok" }.
+When ALL C-rows are done — workflow_result: { "track": "ok" }.
 $END_OUTPUT

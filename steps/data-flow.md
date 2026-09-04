@@ -17,7 +17,7 @@ stepStart: маркер .agent/progress.json — есть? → resume (фаза 
 │  роль planner (read/bash/write, thinking high)                                  │
 │  наряд: PROMPT-спека ДОСЛОВНО + TASK.md + свой черновик как PREVIOUS на починке │
 │  выход: .agent/staging/PLAN~draft.md                                            │
-│  судья judge.ts: 6 разделов · цитаты — подстроки TASK · пути существуют/образец │
+│  судья judge.ts: 6 разделов (EN) · цитаты — подстроки TASK · пути/new+sample    │
 │  красное → круг починки (FEEDBACK = блокеры судьи)                              │
 │  зелёное → promote → .agent/PLAN.md                                             │
 └─────────────────────────────────────────────────────────────────────────────────┘
@@ -32,7 +32,7 @@ stepStart: маркер .agent/progress.json — есть? → resume (фаза 
 │  фаза questions:                                                                │
 │    вопросы раздела 6 плана → .agent/pending.json → В ЧАТ (followUp)             │
 │    оператор отвечает сообщением → чат-модель зовёт solo_answer → answers.md     │
-│    ответы ВПИСЫВАЮТСЯ В ПЛАН (questions.ts applyAnswers: «→ РЕШЕНО: …»)        │
+│    ответы ВПИСЫВАЮТСЯ В ПЛАН (questions.ts applyAnswers: «→ RESOLVED: …»)       │
 │                                                                                 │
 │  фаза confirm:                                                                  │
 │    карточка-синтез (card.ts) → say → log() в чат                                │
@@ -42,14 +42,14 @@ stepStart: маркер .agent/progress.json — есть? → resume (фаза 
   ▼
 ┌─ steps/execute ─────────────────────────────────────────────────────────────────┐
 │  роль dev (read/bash/edit/write, thinking high)                                 │
-│  наряд: .agent/PLAN.md (с «→ РЕШЕНО») + три правила                             │
-│  работает по строкам Ф: итерация = строка Ф = коммит                            │
+│  наряд: .agent/PLAN.md (с «→ RESOLVED») + три правила                          │
+│  работает по строкам C: итерация = строка C = коммит                            │
 │  выход: коммиты в git проекта (от solveStart-HEAD)                              │
 │  судьи judges.ts:                                                               │
-│    (a) каждая строка Ф ↔ коммит (git log от solveStart)                         │
+│    (a) каждая строка C ↔ коммит (git log от solveStart)                         │
 │    (b) существующие тест-файлы только расширены (lostLines: токен-проверка)      │
 │    (c) гарантии §5 аддитивны (дифф не удаляет строки гарантированных файлов)    │
-│  зелёное → done-карточка (Ф↔коммиты таблицей) → say → done                      │
+│  зелёное → done-карточка (C↔коммиты таблицей) → say → done                      │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -96,7 +96,7 @@ stepStart: маркер .agent/progress.json — есть? → resume (фаза 
 | next(critic) | наряд критику (план + TASK + чек-лист) |
 | fold(APPROVE) | promote staging→PLAN.md; extractQuestions; вопросы → state.question |
 | next(questions) | (движок ask-рельсой) — state.question.items в чат |
-| fold(ask answers) | applyAnswers(plan, answers) — «→ РЕШЕНО» в план; phase 'confirm' |
+| fold(ask answers) | applyAnswers(plan, answers) — «→ RESOLVED» в план; phase 'confirm' |
 | next(confirm) | say карточка → ask «да/нет» |
 | fold(confirm) | «да» → phase 'execute' (solveStart=HEAD); «нет: …» → причина в план |
 

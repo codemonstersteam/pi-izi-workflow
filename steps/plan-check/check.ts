@@ -70,7 +70,7 @@ export async function checkPlan(
       }
 
       ctx.log(`проверка: круг ${round}/${LOOPS} — оператор отклонил`)
-      const repaired = await repairPlan(current, [`оператор отклонил: ${said}`], input, ctx)
+      const repaired = await repairPlan(current, [`operator rejected: ${said}`], input, ctx)
       if (!repaired.ok) return repaired
       current = repaired.value
       continue
@@ -78,7 +78,7 @@ export async function checkPlan(
 
     // ── критик REJECT → planner с блокерами ──
     ctx.log(`проверка: круг ${round}/${LOOPS} — критик отклонил (${(verdict?.blockers || []).length})`)
-    const repaired = await repairPlan(current, verdict?.blockers || ["критик отверг без блокеров"], input, ctx)
+    const repaired = await repairPlan(current, verdict?.blockers || ["critic rejected with no blockers"], input, ctx)
     if (!repaired.ok) return repaired
     current = repaired.value
   }
@@ -116,11 +116,11 @@ async function plannerReconcile(
   const updated = readAt(input.cwd, PLAN_DRAFT)
   if (!updated.trim()) return plan
 
-  // Если planner переписал план БЕЗ РЕШЕНО — ответы потеряны, вернуть исходный
-  const hadResolved = (plan.match(/→ РЕШЕНО/g) || []).length
-  const hasResolved = (updated.match(/→ РЕШЕНО/g) || []).length
+  // Если planner переписал план БЕЗ RESOLVED — ответы потеряны, вернуть исходный
+  const hadResolved = (plan.match(/→ RESOLVED/g) || []).length
+  const hasResolved = (updated.match(/→ RESOLVED/g) || []).length
   if (hadResolved > 0 && hasResolved < hadResolved) {
-    ctx.log(`сверка: planner потерял ${hadResolved - hasResolved} РЕШЕНО — использую исходный`)
+    ctx.log(`сверка: planner потерял ${hadResolved - hasResolved} RESOLVED — использую исходный`)
     return plan
   }
 

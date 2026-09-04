@@ -4,7 +4,7 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 
-const SECTIONS = ["ТРЕБОВАНИЯ", "ИЗМЕНЕНИЯ", "СЦЕНАРИИ", "ВЕЛИЧИНЫ", "ГАРАНТИИ", "ОТКРЫТЫЕ ВОПРОСЫ"]
+const SECTIONS = ["REQUIREMENTS", "CHANGES", "SCENARIOS", "VALUES", "GUARANTEES", "OPEN QUESTIONS"]
 
 export function tableRows(sectionText: string): string[][] {
   return sectionText
@@ -27,44 +27,44 @@ const norm = (t: string): string =>
 
 export function judgeForm(plan: string, task: string, cwd: string): string[] {
   const B: string[] = []
-  if (!plan.trim()) return ["формы нет: план пуст"]
+  if (!plan.trim()) return ["no form: the plan is empty"]
 
   const heads = SECTIONS.filter((h) => !new RegExp(`^#+\\s*(\\d+\\.\\s*)?${h}`, "mi").test(plan))
-  if (heads.length) B.push(`раздел(ы) отсутствуют: ${heads.join(", ")}`)
+  if (heads.length) B.push(`section(s) missing: ${heads.join(", ")}`)
 
-  const reqRows = tableRows(sectionOf(plan, "ТРЕБОВАНИЯ"))
-  const chgRows = tableRows(sectionOf(plan, "ИЗМЕНЕНИЯ"))
-  if (!reqRows.length) B.push("ТРЕБОВАНИЯ: таблица не парится")
-  if (!chgRows.length) B.push("ИЗМЕНЕНИЯ: таблица не парится")
+  const reqRows = tableRows(sectionOf(plan, "REQUIREMENTS"))
+  const chgRows = tableRows(sectionOf(plan, "CHANGES"))
+  if (!reqRows.length) B.push("REQUIREMENTS: table does not parse")
+  if (!chgRows.length) B.push("CHANGES: table does not parse")
 
   const taskNorm = norm(task)
   for (const c of reqRows) {
     const quote = norm(c[1] || "")
-    if (!quote) { B.push(`ТРЕБОВАНИЯ «${(c[0] || "?").slice(0, 12)}»: колонка цитаты пуста`); continue }
+    if (!quote) { B.push(`REQUIREMENTS «${(c[0] || "?").slice(0, 12)}»: quote column empty`); continue }
     if (taskNorm && !taskNorm.includes(quote.slice(0, Math.min(60, quote.length))))
-      B.push(`ТРЕБОВАНИЯ «${quote.slice(0, 50)}…» — не подстрока TASK.md: цитируй дословно`)
+      B.push(`REQUIREMENTS «${quote.slice(0, 50)}…» — not a substring of TASK.md: quote verbatim`)
   }
 
   for (const c of chgRows) {
     const cell = (c[1] || "").replace(/`/g, "").trim()
     const what = `${c[3] || ""} ${c[2] || ""} ${c[4] || ""} ${cell}`
-    if (!cell) { B.push(`ИЗМЕНЕНИЯ «${(c[0] || "?").slice(0, 12)}»: колонка файла пуста`); continue }
+    if (!cell) { B.push(`CHANGES «${(c[0] || "?").slice(0, 12)}»: file column empty`); continue }
     // planner пишет путь с пояснением в ячейке — извлечь путь, а не брать cell целиком
     const path = extractPath(cell)
-    if (cwd && path && !existsSync(join(cwd, path)) && !/образ/i.test(what))
-      B.push(`ИЗМЕНЕНИЯ «${path || cell.slice(0, 60)}»: файла нет и образец не назван`)
+    if (cwd && path && !existsSync(join(cwd, path)) && !/(sample|after)/i.test(what))
+      B.push(`CHANGES «${path || cell.slice(0, 60)}»: file does not exist and no sample named`)
   }
 
-  for (const c of tableRows(sectionOf(plan, "ВЕЛИЧИНЫ"))) {
+  for (const c of tableRows(sectionOf(plan, "VALUES"))) {
     if (c.length >= 3 && !c[2])
-      B.push(`ВЕЛИЧИНЫ «${(c[1] || c[0] || "?").slice(0, 30)}»: источник пуст`)
+      B.push(`VALUES «${(c[1] || c[0] || "?").slice(0, 30)}»: source empty`)
   }
 
   return B
 }
 
-export const countReqs = (plan: string): number => tableRows(sectionOf(plan, "ТРЕБОВАНИЯ")).length
-export const countRows = (plan: string): number => tableRows(sectionOf(plan, "ИЗМЕНЕНИЯ")).filter((c) => /^Ф\d+/.test(c[0] || "")).length
+export const countReqs = (plan: string): number => tableRows(sectionOf(plan, "REQUIREMENTS")).length
+export const countRows = (plan: string): number => tableRows(sectionOf(plan, "CHANGES")).filter((c) => /^C\d+/.test(c[0] || "")).length
 
 // extractPath — извлечь путь из ячейки таблицы: planner пишет путь + пояснение в скобках.
 // Ищем подстроку, которая выглядит как путь (содержит / и расширение) и обрезаем по
